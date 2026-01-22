@@ -141,7 +141,7 @@ partial def rewriteBottomUp (rules : List (RewriteRule α)) : Expr α → Expr �
       rewriteAtRoot rules (mul e1' e2')
 
 /-- Reescritura iterativa hasta punto fijo (con límite) -/
-partial def rewriteToFixpoint (rules : List (RewriteRule α)) (fuel : Nat) (e : Expr α) : Expr α :=
+partial def rewriteToFixpoint [BEq (Expr α)] (rules : List (RewriteRule α)) (fuel : Nat) (e : Expr α) : Expr α :=
   if fuel == 0 then e
   else
     let e' := rewriteBottomUp rules e
@@ -197,21 +197,21 @@ def one : Expr Int := const 1
 def two : Expr Int := const 2
 
 -- Ejemplo 1: x + 0 debería simplificarse a x
-#eval simplify (add x zero)  -- Esperado: var 0
+#eval! simplify (add x zero)  -- Esperado: var 0
 
 -- Ejemplo 2: 0 * x debería simplificarse a 0
-#eval simplify (mul zero x)  -- Esperado: const 0
+#eval! simplify (mul zero x)  -- Esperado: const 0
 
 -- Ejemplo 3: 1 * (x + 0) debería simplificarse a x
-#eval simplify (mul one (add x zero))  -- Esperado: var 0
+#eval! simplify (mul one (add x zero))  -- Esperado: var 0
 
 -- Ejemplo 4: Expresión más compleja
 -- (x + 0) * (1 * y) + 0 debería simplificarse a x * y
-#eval simplify (add (mul (add x zero) (mul one y)) zero)
+#eval! simplify (add (mul (add x zero) (mul one y)) zero)
 
 -- Ejemplo 5: Distributividad
 -- x * (y + z) debería expandirse a x*y + x*z
-#eval expand (mul x (add y z))
+#eval! expand (mul x (add y z))
 
 end Examples
 

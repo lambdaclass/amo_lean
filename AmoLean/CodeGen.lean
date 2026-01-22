@@ -1,9 +1,11 @@
 /-
   AMO-Lean Toy Model - Generación de Código (Fase 3 Preview)
-  
+
   Este archivo muestra cómo generar código C desde expresiones
   optimizadas. Es un preview de la fase de code extraction.
 -/
+
+import AmoLean.Basic
 
 namespace AmoLean
 
@@ -19,7 +21,7 @@ inductive LowLevelExpr where
   | litInt : Int → LowLevelExpr
   | varRef : String → LowLevelExpr
   | binOp : String → LowLevelExpr → LowLevelExpr → LowLevelExpr
-  deriving Repr
+  deriving Repr, Inhabited
 
 /-- Instrucción de asignación -/
 structure Assignment where
@@ -39,6 +41,7 @@ structure LowLevelProgram where
 structure CodeGenState where
   nextVar : Nat := 0
   assignments : List Assignment := []
+  deriving Inhabited
 
 /-- Generar nombre de variable temporal fresco -/
 def freshVar (s : CodeGenState) : (String × CodeGenState) :=
@@ -122,26 +125,26 @@ section Examples
 -- Ejemplo 1: x + 0 → x, debería generar código trivial
 def example1 : Expr Int := add (var 0) (const 0)
 
-#eval exprToC "add_zero_example" ["x"] example1
+#eval! exprToC "add_zero_example" ["x"] example1
 -- Esperado: int64_t add_zero_example(int64_t x) { return x; }
 -- (después de optimización)
 
 -- Ejemplo 2: (x + y) * z
 def example2 : Expr Int := mul (add (var 0) (var 1)) (var 2)
 
-#eval exprToC "mul_add" ["x", "y", "z"] example2
+#eval! exprToC "mul_add" ["x", "y", "z"] example2
 
 -- Ejemplo 3: x * (y + 0) * 1
 def example3 : Expr Int := mul (mul (var 0) (add (var 1) (const 0))) (const 1)
 
-#eval exprToC "complex_example" ["x", "y"] example3
+#eval! exprToC "complex_example" ["x", "y"] example3
 
 -- Ejemplo 4: Expresión tipo Horner para polinomio
 -- p(x) = 3 + x*(2 + x*1) = 3 + 2x + x²
-def horner_poly : Expr Int := 
+def horner_poly : Expr Int :=
   add (const 3) (mul (var 0) (add (const 2) (mul (var 0) (const 1))))
 
-#eval exprToC "horner_poly" ["x"] horner_poly
+#eval! exprToC "horner_poly" ["x"] horner_poly
 
 end Examples
 
@@ -154,15 +157,12 @@ En el sistema completo, tendríamos:
 4. Vectorización automática
 -/
 
-/-- Regla de strength reduction: multiplicación por potencia de 2 -/
-def rule_mul_pow2 : RewriteRule Int
-  | mul e (const c) => 
-      -- Verificar si c es potencia de 2
-      if c > 0 && (c &&& (c - 1)) == 0 then
-        -- Sería: some (shift_left e (log2 c))
-        -- Por ahora solo marcamos que aplicaría
-        none
-      else none
-  | _ => none
+-- Regla de strength reduction: multiplicación por potencia de 2
+-- (Comentada: requiere operaciones bitwise que se implementarán en fase posterior)
+-- def rule_mul_pow2 : RewriteRule Int
+--   | mul _ (const c) =>
+--       if c > 0 && isPowerOfTwo c then some (...)
+--       else none
+--   | _ => none
 
 end AmoLean
