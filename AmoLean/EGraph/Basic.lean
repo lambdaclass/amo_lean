@@ -33,6 +33,7 @@ structure EGraphCostModel where
   varCost   : Nat := 0
   addCost   : Nat := 1
   mulCost   : Nat := 10
+  powCost   : Nat := 50  -- Potencia: exponenciación modular
   deriving Repr, Inhabited
 
 /-- Modelo de costo por defecto -/
@@ -45,6 +46,7 @@ inductive ENodeOp where
   | var : Nat → ENodeOp                      -- Variable (índice)
   | add : EClassId → EClassId → ENodeOp      -- Suma de dos e-classes
   | mul : EClassId → EClassId → ENodeOp      -- Multiplicación de dos e-classes
+  | pow : EClassId → Nat → ENodeOp           -- Potencia: base^exponente
   deriving Repr, BEq, Hashable, Inhabited
 
 /-- Un E-node es una operación con sus hijos ya canonicalizados.
@@ -67,12 +69,16 @@ def mkAdd (a b : EClassId) : ENode := ⟨.add a b⟩
 /-- Crear e-node para multiplicación -/
 def mkMul (a b : EClassId) : ENode := ⟨.mul a b⟩
 
+/-- Crear e-node para potencia -/
+def mkPow (base : EClassId) (exp : Nat) : ENode := ⟨.pow base exp⟩
+
 /-- Obtener los hijos de un e-node (IDs de e-classes) -/
 def children : ENode → List EClassId
   | ⟨.const _⟩ => []
   | ⟨.var _⟩ => []
   | ⟨.add a b⟩ => [a, b]
   | ⟨.mul a b⟩ => [a, b]
+  | ⟨.pow base _⟩ => [base]
 
 /-- Mapear una función sobre los hijos de un e-node -/
 def mapChildren (f : EClassId → EClassId) : ENode → ENode
@@ -80,6 +86,7 @@ def mapChildren (f : EClassId → EClassId) : ENode → ENode
   | ⟨.var v⟩ => ⟨.var v⟩
   | ⟨.add a b⟩ => ⟨.add (f a) (f b)⟩
   | ⟨.mul a b⟩ => ⟨.mul (f a) (f b)⟩
+  | ⟨.pow base exp⟩ => ⟨.pow (f base) exp⟩
 
 /-- Calcular el costo local de un e-node (sin contar hijos).
     El costo total requiere sumar los costos de las e-classes hijas. -/
@@ -88,6 +95,7 @@ def localCost (cm : EGraphCostModel := defaultCostModel) : ENode → Nat
   | ⟨.var _⟩ => cm.varCost
   | ⟨.add _ _⟩ => cm.addCost
   | ⟨.mul _ _⟩ => cm.mulCost
+  | ⟨.pow _ _⟩ => cm.powCost
 
 end ENode
 
@@ -263,6 +271,9 @@ def canonicalize (g : EGraph) (node : ENode) : (ENode × EGraph) :=
     let (a', g1) := g.find a
     let (b', g2) := g1.find b
     (ENode.mkMul a' b', g2)
+  | .pow base exp =>
+    let (base', g1) := g.find base
+    (ENode.mkPow base' exp, g1)
 
 /-- Añadir un e-node al grafo. Retorna el ID de su e-class (existente o nueva). -/
 def add (g : EGraph) (node : ENode) : (EClassId × EGraph) :=
@@ -398,6 +409,9 @@ def addExpr (g : EGraph) : Expr Int → (EClassId × EGraph)
     let (id1, g1) := addExpr g e1
     let (id2, g2) := addExpr g1 e2
     g2.add (ENode.mkMul id1 id2)
+  | .pow e n =>
+    let (id, g1) := addExpr g e
+    g1.add (ENode.mkPow id n)
 
 /-- Crear un E-graph desde una expresión -/
 def fromExpr (e : Expr Int) : (EClassId × EGraph) :=
@@ -412,6 +426,7 @@ def nodeCost (cm : EGraphCostModel) (childCosts : EClassId → Nat) : ENode → 
   | ⟨.var _⟩ => cm.varCost
   | ⟨.add a b⟩ => cm.addCost + childCosts a + childCosts b
   | ⟨.mul a b⟩ => cm.mulCost + childCosts a + childCosts b
+  | ⟨.pow base _⟩ => cm.powCost + childCosts base
 
 /-- Calcular costos de todas las e-classes (análisis bottom-up).
     Itera hasta convergencia porque las clases pueden tener dependencias circulares. -/
@@ -469,6 +484,10 @@ partial def extract (g : EGraph) (id : EClassId) : Option (Expr Int) :=
         match extract g' a, extract g' b with
         | some e1, some e2 => some (.mul e1 e2)
         | _, _ => none
+      | .pow base exp =>
+        match extract g' base with
+        | some e => some (.pow e exp)
+        | none => none
 
 end EGraph
 

@@ -13,7 +13,7 @@ open Expr
 
 /-! ## Parte 1: Representación Intermedia para Código -/
 
-/-- 
+/--
 Representación de bajo nivel más cercana a C.
 Similar a three-address code / SSA.
 -/
@@ -21,6 +21,7 @@ inductive LowLevelExpr where
   | litInt : Int → LowLevelExpr
   | varRef : String → LowLevelExpr
   | binOp : String → LowLevelExpr → LowLevelExpr → LowLevelExpr
+  | funcCall : String → List LowLevelExpr → LowLevelExpr  -- Para pow, etc.
   deriving Repr, Inhabited
 
 /-- Instrucción de asignación -/
@@ -71,6 +72,18 @@ def lowerExpr (varNames : VarId → String) :
       let (tmpName, s3) := freshVar s2
       let assignment := { varName := tmpName, value := LowLevelExpr.binOp "*" ll1 ll2 }
       (LowLevelExpr.varRef tmpName, addAssignment s3 assignment)
+  | pow e n, s =>
+      let (llBase, s1) := lowerExpr varNames e s
+      let (tmpName, s2) := freshVar s1
+      -- Para potencias pequeñas, generar multiplicaciones inline
+      -- Para potencias grandes, usar función pow
+      let value :=
+        if n == 0 then LowLevelExpr.litInt 1
+        else if n == 1 then llBase
+        else if n == 2 then LowLevelExpr.binOp "*" llBase llBase
+        else LowLevelExpr.funcCall "pow_int" [llBase, LowLevelExpr.litInt n]
+      let assignment := { varName := tmpName, value := value }
+      (LowLevelExpr.varRef tmpName, addAssignment s2 assignment)
 termination_by e _ => sizeOf e
 
 /-- Convertir expresión completa a programa -/
@@ -81,12 +94,15 @@ def toLowLevel (varNames : VarId → String) (e : Expr Int) : LowLevelProgram :=
 /-! ## Parte 3: Pretty Printing a C -/
 
 /-- Convertir LowLevelExpr a string C -/
-def lowLevelToC : LowLevelExpr → String
-  | LowLevelExpr.litInt n => 
+partial def lowLevelToC : LowLevelExpr → String
+  | LowLevelExpr.litInt n =>
       if n < 0 then s!"({n})" else toString n
   | LowLevelExpr.varRef name => name
-  | LowLevelExpr.binOp op l r => 
+  | LowLevelExpr.binOp op l r =>
       s!"({lowLevelToC l} {op} {lowLevelToC r})"
+  | LowLevelExpr.funcCall fn args =>
+      let argsStr := String.intercalate ", " (args.map lowLevelToC)
+      s!"{fn}({argsStr})"
 
 /-- Convertir asignación a línea C -/
 def assignmentToC (a : Assignment) (ty : String := "int64_t") : String :=
@@ -146,6 +162,16 @@ def horner_poly : Expr Int :=
   add (const 3) (mul (var 0) (add (const 2) (mul (var 0) (const 1))))
 
 #eval! exprToC "horner_poly" ["x"] horner_poly
+
+-- Ejemplo 5: Potencia simple x^2
+def example_pow2 : Expr Int := pow (var 0) 2
+
+#eval! exprToC "square" ["x"] example_pow2
+
+-- Ejemplo 6: Potencia mayor x^7 (usa función)
+def example_pow7 : Expr Int := pow (var 0) 7
+
+#eval! exprToC "pow7" ["x"] example_pow7
 
 end Examples
 

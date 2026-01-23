@@ -14,7 +14,7 @@ namespace AmoLean
 /-- Variables representadas como índices naturales -/
 abbrev VarId := Nat
 
-/-- 
+/--
 Expresiones aritméticas sobre un tipo base `α`.
 Esta es nuestra representación sintáctica - el "OptExpr" del diseño estratificado.
 -/
@@ -23,6 +23,7 @@ inductive Expr (α : Type) where
   | var : VarId → Expr α                         -- Variable
   | add : Expr α → Expr α → Expr α               -- Suma
   | mul : Expr α → Expr α → Expr α               -- Multiplicación
+  | pow : Expr α → Nat → Expr α                  -- Potencia (base^exponente)
   deriving Repr, BEq, Inhabited
 
 namespace Expr
@@ -48,15 +49,16 @@ def smartMul [BEq α] [OfNat α 0] [OfNat α 1] : Expr α → Expr α → Expr �
 
 /-! ## Parte 2: Semántica Denotacional -/
 
-/-- 
+/--
 Denotación de expresiones dado un entorno de variables.
 Esta función conecta la sintaxis con la semántica de Mathlib.
 -/
-def denote [Add α] [Mul α] (env : VarId → α) : Expr α → α
+def denote [Add α] [Mul α] [Pow α Nat] (env : VarId → α) : Expr α → α
   | const c => c
   | var v => env v
   | add e1 e2 => denote env e1 + denote env e2
   | mul e1 e2 => denote env e1 * denote env e2
+  | pow e n => denote env e ^ n
 
 /-- Notación para denotación -/
 notation "⟦" e "⟧" env => denote env e
@@ -139,6 +141,9 @@ def rewriteBottomUp (rules : List (RewriteRule α)) : Expr α → Expr α
       let e1' := rewriteBottomUp rules e1
       let e2' := rewriteBottomUp rules e2
       rewriteAtRoot rules (mul e1' e2')
+  | pow e n =>
+      let e' := rewriteBottomUp rules e
+      rewriteAtRoot rules (pow e' n)
 termination_by e => sizeOf e
 
 /-- Reescritura iterativa hasta punto fijo (con límite) -/
@@ -173,6 +178,7 @@ structure CostModel where
   varCost   : Nat := 0   -- Variables: lectura de registro
   addCost   : Nat := 1   -- Suma: ~1 ciclo
   mulCost   : Nat := 10  -- Multiplicación: ~10 ciclos en campo finito
+  powCost   : Nat := 50  -- Potencia: ~50 ciclos (exponenciación modular)
   deriving Repr, Inhabited
 
 /-- Modelo de costo por defecto -/
@@ -184,6 +190,7 @@ def exprCost (cm : CostModel := defaultCostModel) : Expr α → Nat
   | var _ => cm.varCost
   | add e1 e2 => cm.addCost + exprCost cm e1 + exprCost cm e2
   | mul e1 e2 => cm.mulCost + exprCost cm e1 + exprCost cm e2
+  | pow e _ => cm.powCost + exprCost cm e
 
 /-- Contar el número de nodos en una expresión -/
 def exprSize : Expr α → Nat
@@ -191,6 +198,7 @@ def exprSize : Expr α → Nat
   | var _ => 1
   | add e1 e2 => 1 + exprSize e1 + exprSize e2
   | mul e1 e2 => 1 + exprSize e1 + exprSize e2
+  | pow e _ => 1 + exprSize e
 
 /-! ## Parte 5.6: Reglas Adicionales (Constant Folding, Asociatividad) -/
 
@@ -212,6 +220,28 @@ def rule_assoc_add_right : RewriteRule α
 /-- Asociatividad derecha para multiplicación: (a * b) * c → a * (b * c) -/
 def rule_assoc_mul_right : RewriteRule α
   | mul (mul a b) c => some (mul a (mul b c))
+  | _ => none
+
+/-! ### Reglas de Potencia -/
+
+/-- Potencia cero: a^0 → 1 -/
+def rule_pow_zero [OfNat α 1] : RewriteRule α
+  | pow _ 0 => some (const 1)
+  | _ => none
+
+/-- Potencia uno: a^1 → a -/
+def rule_pow_one : RewriteRule α
+  | pow e 1 => some e
+  | _ => none
+
+/-- Uno elevado a cualquier potencia: 1^n → 1 -/
+def rule_one_pow [BEq α] [OfNat α 1] : RewriteRule α
+  | pow (const c) _ => if c == (1 : α) then some (const 1) else none
+  | _ => none
+
+/-- Cero elevado a potencia positiva: 0^n → 0 (para n > 0) -/
+def rule_zero_pow [BEq α] [OfNat α 0] : RewriteRule α
+  | pow (const c) n => if c == (0 : α) && n > 0 then some (const 0) else none
   | _ => none
 
 /-- Reglas con constant folding (sin asociatividad - más eficiente) -/

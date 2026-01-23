@@ -18,7 +18,7 @@ open Expr
 Cada regla de reescritura debe preservar la denotación.
 Este es el teorema central que garantiza corrección.
 -/
-theorem denote_preserved_by_rule {α : Type} [Add α] [Mul α]
+theorem denote_preserved_by_rule {α : Type} [Add α] [Mul α] [Pow α Nat]
     (rule : RewriteRule α) (e e' : Expr α) (env : VarId → α)
     (h : rule e = some e')
     (h_sound : ∀ x y, rule x = some y → denote env x = denote env y) :
@@ -68,6 +68,8 @@ theorem rule_add_zero_right_sound :
   | add e1 (var _) => simp [rule_add_zero_right] at h
   | add e1 (add _ _) => simp [rule_add_zero_right] at h
   | add e1 (mul _ _) => simp [rule_add_zero_right] at h
+  | add e1 (pow _ _) => simp [rule_add_zero_right] at h
+  | pow _ _ => simp [rule_add_zero_right] at h
 
 /-- Corrección de 0 + e → e -/
 theorem rule_add_zero_left_sound :
@@ -90,6 +92,8 @@ theorem rule_add_zero_left_sound :
   | add (var _) _ => simp [rule_add_zero_left] at h
   | add (add _ _) _ => simp [rule_add_zero_left] at h
   | add (mul _ _) _ => simp [rule_add_zero_left] at h
+  | add (pow _ _) _ => simp [rule_add_zero_left] at h
+  | pow _ _ => simp [rule_add_zero_left] at h
 
 /-- Corrección de e * 1 → e -/
 theorem rule_mul_one_right_sound :
@@ -112,6 +116,8 @@ theorem rule_mul_one_right_sound :
   | mul _ (var _) => simp [rule_mul_one_right] at h
   | mul _ (add _ _) => simp [rule_mul_one_right] at h
   | mul _ (mul _ _) => simp [rule_mul_one_right] at h
+  | mul _ (pow _ _) => simp [rule_mul_one_right] at h
+  | pow _ _ => simp [rule_mul_one_right] at h
 
 /-- Corrección de 1 * e → e -/
 theorem rule_mul_one_left_sound :
@@ -134,6 +140,8 @@ theorem rule_mul_one_left_sound :
   | mul (var _) _ => simp [rule_mul_one_left] at h
   | mul (add _ _) _ => simp [rule_mul_one_left] at h
   | mul (mul _ _) _ => simp [rule_mul_one_left] at h
+  | mul (pow _ _) _ => simp [rule_mul_one_left] at h
+  | pow _ _ => simp [rule_mul_one_left] at h
 
 /-- Corrección de e * 0 → 0 -/
 theorem rule_mul_zero_right_sound :
@@ -156,6 +164,8 @@ theorem rule_mul_zero_right_sound :
   | mul _ (var _) => simp [rule_mul_zero_right] at h
   | mul _ (add _ _) => simp [rule_mul_zero_right] at h
   | mul _ (mul _ _) => simp [rule_mul_zero_right] at h
+  | mul _ (pow _ _) => simp [rule_mul_zero_right] at h
+  | pow _ _ => simp [rule_mul_zero_right] at h
 
 /-- Corrección de 0 * e → 0 -/
 theorem rule_mul_zero_left_sound :
@@ -178,6 +188,8 @@ theorem rule_mul_zero_left_sound :
   | mul (var _) _ => simp [rule_mul_zero_left] at h
   | mul (add _ _) _ => simp [rule_mul_zero_left] at h
   | mul (mul _ _) _ => simp [rule_mul_zero_left] at h
+  | mul (pow _ _) _ => simp [rule_mul_zero_left] at h
+  | pow _ _ => simp [rule_mul_zero_left] at h
 
 omit [DecidableEq α] in
 /-- Corrección de la distributividad izquierda: a * (b + c) → a*b + a*c -/
@@ -196,6 +208,8 @@ theorem rule_distrib_left_sound :
   | mul _ (const _) => simp [rule_distrib_left] at h
   | mul _ (var _) => simp [rule_distrib_left] at h
   | mul _ (mul _ _) => simp [rule_distrib_left] at h
+  | mul _ (pow _ _) => simp [rule_distrib_left] at h
+  | pow _ _ => simp [rule_distrib_left] at h
 
 omit [DecidableEq α] in
 /-- Corrección de la distributividad derecha: (a + b) * c → a*c + b*c -/
@@ -214,13 +228,15 @@ theorem rule_distrib_right_sound :
   | mul (const _) _ => simp [rule_distrib_right] at h
   | mul (var _) _ => simp [rule_distrib_right] at h
   | mul (mul _ _) _ => simp [rule_distrib_right] at h
+  | mul (pow _ _) _ => simp [rule_distrib_right] at h
+  | pow _ _ => simp [rule_distrib_right] at h
 
 end RuleProofs
 
 /-! ## Parte 4: Teorema Principal de Corrección -/
 
 /-- Lema auxiliar: applyFirst preserva semántica si todas las reglas lo hacen -/
-lemma applyFirst_sound {α : Type} [Add α] [Mul α]
+lemma applyFirst_sound {α : Type} [Add α] [Mul α] [Pow α Nat]
     (rules : List (RewriteRule α)) (env : VarId → α)
     (h_rules_sound : ∀ rule ∈ rules, ∀ e e', rule e = some e' → denote env e = denote env e')
     (e e' : Expr α) (h : applyFirst rules e = some e') :
@@ -239,7 +255,7 @@ lemma applyFirst_sound {α : Type} [Add α] [Mul α]
       exact h_rules_sound rule (List.mem_cons_self _ _) e result hr
 
 /-- Lema auxiliar: rewriteAtRoot preserva semántica -/
-lemma rewriteAtRoot_sound {α : Type} [Add α] [Mul α]
+lemma rewriteAtRoot_sound {α : Type} [Add α] [Mul α] [Pow α Nat]
     (rules : List (RewriteRule α)) (env : VarId → α)
     (h_rules_sound : ∀ rule ∈ rules, ∀ e e', rule e = some e' → denote env e = denote env e')
     (e : Expr α) :
@@ -254,7 +270,7 @@ lemma rewriteAtRoot_sound {α : Type} [Add α] [Mul α]
 La reescritura bottom-up preserva la semántica.
 Ahora que rewriteBottomUp usa recursión bien fundada, podemos probar por inducción.
 -/
-theorem rewriteBottomUp_sound {α : Type} [Add α] [Mul α]
+theorem rewriteBottomUp_sound {α : Type} [Add α] [Mul α] [Pow α Nat]
     (rules : List (RewriteRule α)) (env : VarId → α)
     (h_rules_sound : ∀ rule ∈ rules, ∀ e e', rule e = some e' → denote env e = denote env e')
     (e : Expr α) :
@@ -282,12 +298,20 @@ theorem rewriteBottomUp_sound {α : Type} [Add α] [Mul α]
       rw [ih1, ih2]
     rw [rewriteAtRoot_sound rules env h_rules_sound]
     exact h_inner
+  | pow e1 n ih =>
+    simp only [rewriteBottomUp]
+    have h_inner : denote env (pow (rewriteBottomUp rules e1) n) =
+                   denote env (pow e1 n) := by
+      simp only [denote]
+      rw [ih]
+    rw [rewriteAtRoot_sound rules env h_rules_sound]
+    exact h_inner
 
 /--
 La reescritura hasta punto fijo preserva la semántica.
 Probamos por inducción sobre fuel.
 -/
-theorem rewriteToFixpoint_sound {α : Type} [Add α] [Mul α] [BEq (Expr α)]
+theorem rewriteToFixpoint_sound {α : Type} [Add α] [Mul α] [Pow α Nat] [BEq (Expr α)]
     (rules : List (RewriteRule α)) (env : VarId → α)
     (h_rules_sound : ∀ rule ∈ rules, ∀ e e', rule e = some e' → denote env e = denote env e')
     (fuel : Nat) (e : Expr α) :

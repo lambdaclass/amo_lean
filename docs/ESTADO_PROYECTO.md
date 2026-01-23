@@ -1,6 +1,6 @@
 # AMO-Lean: Estado del Proyecto
 
-*Última actualización: 23 de Enero 2026 - Fase 2 (E-Graph) Completada*
+*Última actualización: 23 de Enero 2026 - Fase 4 (Extensión de Potencias) Completada*
 
 ---
 
@@ -24,9 +24,9 @@
 
 | Componente | Estado | Archivo |
 |------------|--------|---------|
-| AST de expresiones (`Expr α`) | ✅ Completo | `Basic.lean` |
+| AST de expresiones (`Expr α`) con pow | ✅ Completo | `Basic.lean` |
 | Semántica denotacional (`denote`) | ✅ Completo | `Basic.lean` |
-| 8 reglas de reescritura greedy | ✅ Implementadas | `Basic.lean` |
+| 12 reglas de reescritura greedy | ✅ Implementadas | `Basic.lean` |
 | Pruebas de soundness (reglas) | ✅ 8/8 probadas | `Correctness.lean` |
 | Motor bottom-up + punto fijo | ✅ Verificado | `Basic.lean` |
 | Cost Model (`CostModel`, `exprCost`) | ✅ Completo | `Basic.lean` |
@@ -49,9 +49,13 @@
 - `(a + b) * c → a*c + b*c` (distributividad derecha)
 - `const a + const b → const (a+b)` (constant folding)
 - `const a * const b → const (a*b)` (constant folding)
+- `a^0 → 1`, `a^1 → a` (identidades de potencia)
+- `1^n → 1`, `0^n → 0` (n > 0) (casos especiales)
 
 **E-Graph (reglas adicionales):**
 - `a*b + a*c → a*(b+c)` (factorización)
+- `a*a → a^2` (squareFromMul)
+- `a^2 → a*a` (squareToMul)
 
 ---
 
@@ -199,18 +203,92 @@ let code := exprToC "mi_funcion" ["x", "y", "z"] expr
 
 ---
 
-## 5. Fases Pendientes
+## 5. Fase en Progreso
 
-### Fase 3: Mathlib Extendida sobre E-graph
+### Fase 3: Mathlib Extendida sobre E-graph (✅ Completada - Enero 2026)
 
-- [ ] Macro `#compile_rules` para extracción automática
-- [ ] Nuevas reglas desde Mathlib (conmutatividad, asociatividad)
-- [ ] E-class analysis para síntesis de instancias
+**Completado:**
+- [x] Nuevas reglas desde Mathlib (conmutatividad, asociatividad):
+  - `addComm`, `mulComm` (2 reglas)
+  - `addAssocRight`, `addAssocLeft`, `mulAssocRight`, `mulAssocLeft` (4 reglas)
+- [x] Colecciones de reglas: `commRules`, `assocRules`, `semiringRules` (15 total)
+- [x] Funciones helper en namespace `MathlibToEGraph`
+- [x] Optimización para evitar merges redundantes en `applyRuleAt`
+- [x] **Macro `#compile_rules`** - Extracción automática de reglas desde teoremas Mathlib
+  - Convierte `Lean.Expr` a `Pattern` usando metaprogramación
+  - Soporta `Add.add`, `HAdd.hAdd`, `Mul.mul`, `HMul.hMul`, `OfNat.ofNat`
+  - Archivo: `AmoLean/Meta/CompileRules.lean`
+- [x] **Auditoría de Generalidad** - Verificado que la macro es GENÉRICA
+  - Soporta teoremas con Type Classes (AddCommMagma, MulOneClass, etc.)
+  - NO está limitada a tipos concretos como Nat
+  - Fase 4 (ZMod/Campos Finitos) NO está bloqueada
+  - Archivo: `Tests/GenericsAudit.lean`
 
-### Fase 4: Aplicaciones Criptográficas (FRI)
+**Pendiente (opcional):**
+- [ ] E-class analysis para síntesis de instancias (mejora futura)
 
-- [ ] Aritmética de campos finitos (`ZMod p`, `GF(2^n)`)
-- [ ] Evaluación de polinomios
+---
+
+## 6. Fase 4: Campos Finitos y Potencias (✅ Completada - Enero 2026)
+
+### Extensión de Potencias Completada
+
+- [x] **Constructor `pow` añadido al AST**
+  - `Expr.pow : Expr α → Nat → Expr α`
+  - `denote` actualizado con constraint `[Pow α Nat]`
+  - `CostModel.powCost` añadido (default: 50)
+- [x] **ENodeOp extendido con potencias**
+  - `ENodeOp.pow : EClassId → Nat → ENodeOp`
+  - E-matching actualizado para potencias
+  - Extracción con costo de potencias
+- [x] **Pattern extendido**
+  - `Pattern.pow : Pattern → Nat → Pattern`
+  - Reglas: `powZero`, `powOne`, `squareFromMul`, `squareToMul`
+  - `powerRules` y `fullRules` colecciones
+- [x] **CompileRules con HPow**
+  - Soporta `HPow.hPow` y `Pow.pow`
+  - Maneja exponentes literales y `OfNat.ofNat`
+- [x] **CodeGen con potencias**
+  - `n=0`: genera `1`
+  - `n=1`: genera la base directa
+  - `n=2`: genera `(x * x)` inline
+  - `n>2`: genera `pow_int(x, n)` function call
+- [x] **Correctness.lean actualizado**
+  - Casos `pow` añadidos a todas las pruebas
+
+### ZMod Exploración Completada
+
+- [x] **ZMod compilado y funcionando**
+  - `Mathlib.Data.ZMod.Basic` y `Mathlib.FieldTheory.Finite.Basic` compilados
+  - Variables `(a b c : ZMod 7)` definidas y operables
+- [x] **Reglas genéricas funcionan en ZMod**
+  - `add_comm`, `mul_comm`, `add_zero`, `mul_one`, etc.
+  - Verificado que #compile_rules produce reglas aplicables a campos finitos
+- [x] **Teoremas de característica verificados**
+  - `ZMod.natCast_self`: `(7 : ZMod 7) = 0`
+  - `(7 : ZMod 7) * a = 0` (reducción de coeficientes)
+- [x] **Pequeño Teorema de Fermat verificado**
+  - `ZMod.pow_card`: `a ^ p = a` para `[Fact p.Prime]`
+  - `ZMod.pow_card_pow`: `a ^ (p^n) = a`
+  - Archivo: `Tests/ZModDemo.lean`
+
+### Limitaciones Restantes
+
+La macro `#compile_rules` aún no puede extraer:
+- `ZMod.natCast_self`: requiere pattern matching sobre casts
+- `ZMod.pow_card`: exponente no es constante literal (es `Fintype.card`)
+
+### Próximos Pasos (Fase 5)
+
+- [ ] Agregar `Pattern.cast` para constantes modulares
+- [ ] Soportar exponentes no literales
+- [ ] Evaluación de polinomios en campos finitos
+- [ ] FFT como composición de operaciones
+
+## 7. Fases Futuras
+
+### Fase 5: FFT/NTT
+
 - [ ] FFT como composición de operaciones
 - [ ] Descubrimiento automático de optimizaciones
 - [ ] Generación de código Rust
@@ -285,9 +363,9 @@ Fase 1: Toy Model       ████░░░░░░     ✅ COMPLETADA    Nin
 Fase 1.5: Verificación  ████░░░░░░     ✅ COMPLETADA    Toy Model
 Fase 1.75: Pre-E-graph  ████░░░░░░     ✅ COMPLETADA    Verificación
 Fase 2: E-graph         █████░░░░░     ✅ COMPLETADA    Pre-E-graph
-Fase 3: Mathlib Ext     █████░░░░░     🔜 Planificada   E-graph
-Fase 4: Campo Finito    ██████░░░░     🔜 Planificada   Mathlib ZMod
-Fase 5: FFT             ███████░░░     🔜 Planificada   Campo Finito
+Fase 3: Mathlib Ext     █████░░░░░     ✅ COMPLETADA    E-graph
+Fase 4: Potencias+ZMod  ██████░░░░     ✅ COMPLETADA    Mathlib Ext
+Fase 5: FFT             ███████░░░     🔜 Planificada   Potencias
 Fase 6: FRI             █████████░     🔜 Planificada   Todo lo anterior
 Fase 7: CodeGen         ██████████     🔜 Planificada   FRI
 Fase 8: Producción      ██████████     🔜 Planificada   Todo + Ingeniería
@@ -306,4 +384,4 @@ Fase 8: Producción      ██████████     🔜 Planificada   T
 ---
 
 *Documento generado: Enero 2026*
-*Última actualización: 23 Enero 2026 - Fase 2 (E-Graph) completada*
+*Última actualización: 23 Enero 2026 - Fase 4 (Potencias + ZMod) completada*

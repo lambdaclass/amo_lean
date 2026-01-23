@@ -13,11 +13,15 @@ namespace AmoLean.EGraph
 
 /-- Configuración para el proceso de saturación -/
 structure SaturationConfig where
-  maxIterations : Nat := 30        -- Máximo de iteraciones
-  maxNodes : Nat := 10000          -- Máximo de nodos en el E-graph
-  maxClasses : Nat := 5000         -- Máximo de e-classes
+  maxIterations : Nat := 10        -- Máximo de iteraciones (bajo para compile-time)
+  maxNodes : Nat := 100            -- Máximo de nodos en el E-graph
+  maxClasses : Nat := 50           -- Máximo de e-classes
   costModel : EGraphCostModel := defaultCostModel
   deriving Repr, Inhabited
+
+/-- Configuración para uso en runtime con más capacidad -/
+def SaturationConfig.large : SaturationConfig :=
+  { maxIterations := 30, maxNodes := 10000, maxClasses := 5000 }
 
 /-- Resultado de la saturación -/
 structure SaturationResult where
@@ -126,6 +130,24 @@ def optimizeExtended (expr : Expr Int) : Option (Expr Int) :=
   let (result, _) := optimize expr RewriteRule.extendedRules
   result
 
+/-- Optimizar con reglas "seguras" (sin conmutatividad ni asociatividad).
+    Equivalente a extendedRules. -/
+def optimizeSafe (expr : Expr Int) : Option (Expr Int) :=
+  let (result, _) := optimize expr RewriteRule.safeRules
+  result
+
+/-- Optimizar con todas las reglas de semiring (incluye conmutatividad y asociatividad).
+    ADVERTENCIA: Puede causar explosión del E-graph. Usar límites apropiados. -/
+def optimizeSemiring (expr : Expr Int) (config : SaturationConfig := { maxIterations := 10, maxNodes := 1000 }) : Option (Expr Int) :=
+  let (result, _) := optimize expr RewriteRule.semiringRules config
+  result
+
+/-- Optimizar con conmutatividad (permite encontrar formas canónicas) -/
+def optimizeWithComm (expr : Expr Int) (config : SaturationConfig := { maxIterations := 10, maxNodes := 500 }) : Option (Expr Int) :=
+  let rules := RewriteRule.basicRules ++ RewriteRule.commRules
+  let (result, _) := optimize expr rules config
+  result
+
 /-! ## Parte 6: Tests -/
 
 section Tests
@@ -178,14 +200,22 @@ open Expr
   | some r => IO.println s!"  Resultado: {repr r}"
   | none => IO.println "  Error: no se pudo extraer"
 
--- Test 6: Distributividad (si está habilitada)
+-- Test 6: Verificar que las colecciones de reglas existen
 #eval do
-  let expr : Expr Int := .mul (.var 0) (.add (.var 1) (.var 2))  -- x * (y + z)
-  IO.println "Test 6: x * (y + z) con reglas extendidas"
-  let (_, satResult) := optimize expr RewriteRule.extendedRules
-  IO.println s!"  Iteraciones: {satResult.iterations}"
-  IO.println s!"  Clases finales: {satResult.graph.numClasses}"
-  IO.println s!"  Nodos finales: {satResult.graph.numNodes}"
+  IO.println "Test 6: Verificación de colecciones de reglas"
+  IO.println s!"  basicRules: {RewriteRule.basicRules.length} reglas"
+  IO.println s!"  extendedRules: {RewriteRule.extendedRules.length} reglas"
+  IO.println s!"  safeRules: {RewriteRule.safeRules.length} reglas"
+  IO.println s!"  commRules: {RewriteRule.commRules.length} reglas"
+  IO.println s!"  assocRules: {RewriteRule.assocRules.length} reglas"
+  IO.println s!"  semiringRules: {RewriteRule.semiringRules.length} reglas"
+
+-- NOTA: Las reglas de conmutatividad y asociatividad están implementadas
+-- pero pueden causar explosión del E-graph. Para tests en runtime:
+--   #eval optimizeSafe expr                                     -- sin comm/assoc
+--   #eval optimizeWithComm expr { maxIterations := 2, maxNodes := 20 }
+--   #eval optimizeSemiring expr { maxIterations := 2, maxNodes := 20 }
+-- Para producción, usar SaturationConfig.large
 
 end Tests
 

@@ -192,20 +192,36 @@ let (result, satResult) := EGraph.optimize expr rules config
 
 ---
 
-### Fase 3: Mathlib Extendida sobre E-graph (PENDIENTE)
+### Fase 3: Mathlib Extendida sobre E-graph ✓ (COMPLETADA - Enero 2026)
 
 **Objetivo**: Usar teoremas reales de Mathlib como reglas sobre el E-graph.
 
-**Tareas**:
-- [ ] Macro `#compile_rules` para extracción automática:
-  ```lean
-  #compile_rules [add_comm, mul_comm, add_assoc, mul_assoc] for (ZMod p)
-  ```
-- [ ] Nuevas reglas desde Mathlib:
-  - Conmutatividad: `add_comm`, `mul_comm`
-  - Asociatividad: `add_assoc`, `mul_assoc`
-  - Otras identidades de `Ring`/`Field`
-- [ ] E-class analysis para síntesis de instancias de tipo clase
+**Completado**:
+- [x] Nuevas reglas desde Mathlib:
+  - Conmutatividad: `addComm`, `mulComm` (2 reglas)
+  - Asociatividad: `addAssocRight`, `addAssocLeft`, `mulAssocRight`, `mulAssocLeft` (4 reglas)
+- [x] Colecciones de reglas: `commRules`, `assocRules`, `semiringRules` (15 reglas total)
+- [x] Funciones helper en `MathlibToEGraph`:
+  - `commPattern`, `assocPattern`, `identityPattern`
+  - `mathlibCommRules`, `mathlibAssocRules`, `mathlibIdentityRules`
+- [x] Optimización en `applyRuleAt`: evita merges redundantes
+- [x] Configuración ajustada para evitar explosión de E-graph
+- [x] **Macro `#compile_rules`** - Extracción automática de reglas desde teoremas
+  - Convierte `Lean.Expr` a `Pattern` usando metaprogramación
+  - Soporta `Add.add`, `HAdd.hAdd`, `Mul.mul`, `HMul.hMul`, `OfNat.ofNat`
+  - Archivo: `AmoLean/Meta/CompileRules.lean`
+- [x] **Auditoría de Generalidad** - Verificado soporte de Type Classes
+  - 10 teoremas genéricos compilados exitosamente
+  - Soporta AddCommMagma, MulOneClass, LeftDistribClass, etc.
+  - NO limitada a tipos concretos
+  - Archivo: `Tests/GenericsAudit.lean`
+
+**NOTA sobre conmutatividad/asociatividad**:
+Las reglas de comm/assoc pueden causar explosión del E-graph. Usar siempre con límites bajos:
+```lean
+let config := { maxIterations := 3, maxNodes := 50 }
+let result := optimizeSemiring expr config
+```
 
 ---
 
@@ -287,7 +303,10 @@ amo-lean/
 
 ## Próximos Pasos
 
-1. **Fase 3**: Implementar macro `#compile_rules` para Mathlib
+1. **Fase 4**: Aritmética de campos finitos (ZMod p)
+   - Modelar expresiones en ZMod
+   - Importar reglas de característica (CharP.cast_eq_zero)
+   - Pequeño Teorema de Fermat para optimización de potencias
 2. **Pruebas de corrección E-graph**: Probar que `extract` preserva semántica
 3. **Benchmark E-graph vs Greedy**: Comparar rendimiento y calidad
 4. **Casos de uso criptográficos**: Evaluar con expresiones de FRI

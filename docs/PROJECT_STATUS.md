@@ -1,6 +1,6 @@
 # AMO-Lean: Project Status
 
-*Last Updated: January 23, 2026 - Phase 2 (E-Graph) Completed*
+*Last Updated: January 23, 2026 - Phase 4 (Power Extension + ZMod) Completed*
 
 ---
 
@@ -20,13 +20,14 @@
 
 ### What It Can Do
 
-1. **Expression AST** (`Expr α`): constants, variables, addition, multiplication
+1. **Expression AST** (`Expr α`): constants, variables, addition, multiplication, **power**
 2. **Denotational Semantics**: `denote` connects syntax with Mathlib semantics
-3. **Greedy Rewriter**: 8 verified rewrite rules, bottom-up to fixpoint
+3. **Greedy Rewriter**: 12 verified rewrite rules, bottom-up to fixpoint
 4. **E-Graph with Equality Saturation**: Full implementation with extraction
-5. **C Code Generation**: with let-lifting (SSA form)
+5. **C Code Generation**: with let-lifting (SSA form) and power support
 6. **Mathlib Integration**: for algebraic types (Semiring, Ring)
-7. **0 `sorry`** in greedy rewriter proofs - fully verified
+7. **`#compile_rules` Macro**: Extract rewrite rules from Mathlib theorems
+8. **0 `sorry`** in greedy rewriter proofs - fully verified
 
 ---
 
@@ -40,10 +41,15 @@ amo-lean/
 │   ├── Correctness.lean         # Soundness proofs (0 sorry)
 │   ├── MathlibIntegration.lean  # Mathlib integration
 │   ├── CodeGen.lean             # C code generation
+│   ├── Meta/
+│   │   └── CompileRules.lean    # #compile_rules macro
 │   └── EGraph/
 │       ├── Basic.lean           # E-graph structures, union-find (~530 lines)
-│       ├── EMatch.lean          # Patterns, e-matching, rules (~275 lines)
+│       ├── EMatch.lean          # Patterns, e-matching, rules (~400 lines)
 │       └── Saturate.lean        # Saturation, extraction (~190 lines)
+├── Tests/
+│   ├── ZModDemo.lean            # ZMod finite field tests
+│   └── GenericsAudit.lean       # Generics verification
 ├── docs/
 │   ├── BENCHMARK_FASE1.md       # Performance analysis
 │   ├── PROJECT_STATUS.md        # This file
@@ -106,21 +112,6 @@ amo-lean/
 - [x] `searchPattern` - Search entire graph
 - [x] `instantiate` - Create nodes from pattern + substitution
 
-**Rewrite Rules:**
-- [x] `basicRules`: `a+0→a`, `0+a→a`, `a*1→a`, `1*a→a`, `a*0→0`, `0*a→0`
-- [x] `extendedRules`: + distributivity and factorization
-
-**Saturation:**
-- [x] `SaturationConfig` - Configurable limits
-- [x] `saturateStep` - One iteration (apply rules + rebuild)
-- [x] `saturate` - Until fixpoint or limit
-- [x] `saturateAndExtract` - Saturate + compute costs + extract
-
-**Extraction:**
-- [x] `EGraphCostModel` - Cost model for E-graph
-- [x] `computeCosts` - Bottom-up iterative calculation
-- [x] `extract` - Extract best term from e-class
-
 **Tests (all pass):**
 ```
 x + 0           → x          ✓
@@ -130,6 +121,70 @@ x * 1           → x          ✓
 x*1 + 0         → x          ✓ (1 iteration)
 x * (y + z)     → explored   ✓ (2 iterations, 8 nodes)
 ```
+
+### Phase 3: Extended Mathlib on E-Graph ✓
+
+- [x] New rules from Mathlib (commutativity, associativity):
+  - `addComm`, `mulComm` (2 rules)
+  - `addAssocRight`, `addAssocLeft`, `mulAssocRight`, `mulAssocLeft` (4 rules)
+- [x] Rule collections: `commRules`, `assocRules`, `semiringRules` (15 total)
+- [x] Helper functions in `MathlibToEGraph` namespace
+- [x] Optimization to avoid redundant merges in `applyRuleAt`
+- [x] **`#compile_rules` macro** - Automatic rule extraction from Mathlib theorems
+  - Converts `Lean.Expr` to `Pattern` using metaprogramming
+  - Supports `Add.add`, `HAdd.hAdd`, `Mul.mul`, `HMul.hMul`, `OfNat.ofNat`, `HPow.hPow`
+  - File: `AmoLean/Meta/CompileRules.lean`
+- [x] **Generics Audit** - Verified macro is GENERIC
+  - Supports theorems with Type Classes (AddCommMagma, MulOneClass, etc.)
+  - NOT limited to concrete types like Nat
+  - File: `Tests/GenericsAudit.lean`
+
+### Phase 4: Power Extension + Finite Fields ✓
+
+**Power Extension:**
+- [x] `pow` constructor added to AST: `Expr.pow : Expr α → Nat → Expr α`
+- [x] `denote` updated with `[Pow α Nat]` constraint
+- [x] `CostModel.powCost` added (default: 50)
+- [x] `ENodeOp.pow` added to E-graph
+- [x] `Pattern.pow` for E-matching
+- [x] Power rules: `powZero`, `powOne`, `squareFromMul`, `squareToMul`
+- [x] CodeGen generates:
+  - `n=0`: literal `1`
+  - `n=1`: base directly
+  - `n=2`: `(x * x)` inline
+  - `n>2`: `pow_int(x, n)` function call
+- [x] Correctness.lean updated with pow cases
+
+**ZMod Exploration:**
+- [x] ZMod compiled and working (Mathlib.Data.ZMod.Basic)
+- [x] Generic rules work in ZMod: `add_comm`, `mul_comm`, etc.
+- [x] Characteristic theorems verified: `ZMod.natCast_self`
+- [x] Fermat's Little Theorem verified: `ZMod.pow_card`
+- [x] File: `Tests/ZModDemo.lean`
+
+**Remaining Limitations:**
+- `ZMod.natCast_self`: requires pattern matching on casts
+- `ZMod.pow_card`: exponent is not a constant literal
+
+---
+
+## Rewrite Rules Implemented
+
+**Greedy Rewriter:**
+- `x + 0 → x`, `0 + x → x` (additive identities)
+- `x * 1 → x`, `1 * x → x` (multiplicative identities)
+- `x * 0 → 0`, `0 * x → 0` (annihilators)
+- `a * (b + c) → a*b + a*c` (left distributivity)
+- `(a + b) * c → a*c + b*c` (right distributivity)
+- `const a + const b → const (a+b)` (constant folding)
+- `const a * const b → const (a*b)` (constant folding)
+- `a^0 → 1`, `a^1 → a` (power identities)
+- `1^n → 1`, `0^n → 0` (n > 0) (special cases)
+
+**E-Graph (additional rules):**
+- `a*b + a*c → a*(b+c)` (factorization)
+- `a*a → a^2` (squareFromMul)
+- `a^2 → a*a` (squareToMul)
 
 ---
 
@@ -164,35 +219,47 @@ let result := optimizeExtended expr
 -- Custom configuration
 let config := { maxIterations := 50, maxNodes := 5000 }
 let (result, satResult) := optimize expr RewriteRule.basicRules config
--- satResult.iterations, satResult.saturated, satResult.reason
 ```
 
 ### C Code Generation
 ```lean
 import AmoLean
 
-let expr := Expr.mul (Expr.add (Expr.var 0) (Expr.var 1)) (Expr.var 2)
-let code := exprToC "my_func" ["x", "y", "z"] expr
--- "int64_t my_func(int64_t x, int64_t y, int64_t z) { ... }"
+let expr := Expr.pow (Expr.var 0) 2  -- x^2
+let code := exprToC "square" ["x"] expr
+-- "int64_t square(int64_t x) { int64_t t0 = (x * x); return t0; }"
+
+let expr7 := Expr.pow (Expr.var 0) 7  -- x^7
+let code7 := exprToC "pow7" ["x"] expr7
+-- "int64_t pow7(int64_t x) { int64_t t0 = pow_int(x, 7); return t0; }"
+```
+
+### Compile Rules from Mathlib
+```lean
+import AmoLean.Meta.CompileRules
+
+-- Extract rewrite rules from Mathlib theorems
+#compile_rules [add_comm, mul_comm, add_zero, mul_one]
+-- Output: Compiled rules with Pattern LHS and RHS
 ```
 
 ---
 
 ## Pending Phases
 
-### Phase 3: Extended Mathlib on E-Graph
+### Phase 5: FFT/NTT
 
-- [ ] Macro `#compile_rules` for automatic extraction
-- [ ] New rules from Mathlib (commutativity, associativity)
-- [ ] E-class analysis for instance synthesis
-
-### Phase 4: Cryptographic Applications (FRI)
-
-- [ ] Finite field arithmetic (`ZMod p`, `GF(2^n)`)
-- [ ] Polynomial evaluation
+- [ ] Add `Pattern.cast` for modular constants
+- [ ] Support non-literal exponents
+- [ ] Polynomial evaluation in finite fields
 - [ ] FFT as operation composition
-- [ ] Automatic optimization discovery
+
+### Phase 6+: FRI and Production
+
+- [ ] Merkle commitments
+- [ ] Folding rounds
 - [ ] Rust code generation
+- [ ] Production engineering
 
 ---
 
@@ -218,40 +285,13 @@ let code := exprToC "my_func" ["x", "y", "z"] expr
 │           ├── Field extensions                                         │
 │           └── Montgomery/Barrett operations                            │
 │                           ↑                                            │
-│  Level 1: Arithmetic Expressions  ◄──── WE ARE HERE (E-Graph ready)   │
-│           ├── Generic AST                                              │
+│  Level 1: Arithmetic Expressions  ◄──── WE ARE HERE (pow ready)       │
+│           ├── Generic AST with pow                                     │
 │           ├── E-graph saturation                                       │
 │           └── Code generation                                          │
 │                                                                        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
-
----
-
-## Problem History and Solutions
-
-| Problem | Cause | Solution |
-|---------|-------|----------|
-| Lean 4.3.0 incompatible | Mathlib requires recent versions | Updated to 4.16.0 |
-| `leanOptions` doesn't exist | Lake API changed | New lakefile syntax |
-| `BEq` vs `Eq` in proofs | Rules use `==` but proofs need `=` | `LawfulBEq` + lemmas |
-| `partial` blocks induction | Lean doesn't generate induction principle | **SOLVED**: Structural recursion + `termination_by` |
-| Associativity slowdown | 70x slower due to repeated applications | **SOLVED**: Validated need for E-graphs |
-| E-graph memory | Recursive types cause GC issues | **SOLVED**: Flat structures (Array + HashMap) |
-
----
-
-## Lessons Learned
-
-### From Phase 1.75 (Benchmark)
-- **Greedy is fast but limited**: 253k nodes in 0.5s, but doesn't explore alternatives
-- **Associativity breaks greedy**: 70x slowdown because it applies rules indefinitely
-- **Cost model is essential**: Without it, no criterion for "better"
-
-### From Phase 2 (E-Graph)
-- **Flat structures work**: `Array` + `HashMap` avoid GC problems
-- **Rebuild is critical**: Without re-canonicalization, hashcons becomes inconsistent
-- **E-matching is elegant**: Patterns + substitutions = declarative search
 
 ---
 
@@ -264,9 +304,9 @@ Phase 1: Toy Model      ████░░░░░░     ✅ COMPLETED     Non
 Phase 1.5: Verification ████░░░░░░     ✅ COMPLETED     Toy Model
 Phase 1.75: Pre-E-graph ████░░░░░░     ✅ COMPLETED     Verification
 Phase 2: E-graph        █████░░░░░     ✅ COMPLETED     Pre-E-graph
-Phase 3: Mathlib Ext    █████░░░░░     🔜 Planned       E-graph
-Phase 4: Finite Field   ██████░░░░     🔜 Planned       Mathlib ZMod
-Phase 5: FFT            ███████░░░     🔜 Planned       Finite Field
+Phase 3: Mathlib Ext    █████░░░░░     ✅ COMPLETED     E-graph
+Phase 4: Power+ZMod     ██████░░░░     ✅ COMPLETED     Mathlib Ext
+Phase 5: FFT            ███████░░░     🔜 Planned       Power+ZMod
 Phase 6: FRI            █████████░     🔜 Planned       All above
 Phase 7: CodeGen        ██████████     🔜 Planned       FRI
 Phase 8: Production     ██████████     🔜 Planned       Everything
@@ -285,4 +325,4 @@ Phase 8: Production     ██████████     🔜 Planned       Ev
 ---
 
 *Document generated: January 2026*
-*Last update: January 23, 2026 - Phase 2 (E-Graph) completed*
+*Last update: January 23, 2026 - Phase 4 (Power + ZMod) completed*
