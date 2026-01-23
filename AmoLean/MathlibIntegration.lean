@@ -4,11 +4,10 @@
   Este archivo conecta nuestro Expr con las estructuras
   algebraicas de Mathlib, permitiendo usar teoremas reales
   como reglas de reescritura.
-
-  NOTA: Algunas pruebas usan `sorry` y serán completadas en iteraciones futuras.
 -/
 
 import AmoLean.Basic
+import AmoLean.Correctness
 import Mathlib.Algebra.Ring.Basic
 import Mathlib.Algebra.Field.Basic
 
@@ -33,42 +32,42 @@ def semiring_rules (α : Type) [Semiring α] [DecidableEq α] :
   {
     name := "add_zero"
     rule := rule_add_zero_right
-    sound := by intro env e e' h; sorry
+    sound := fun env => rule_add_zero_right_sound env
   },
   {
     name := "zero_add"
     rule := rule_add_zero_left
-    sound := by intro env e e' h; sorry
+    sound := fun env => rule_add_zero_left_sound env
   },
   {
     name := "mul_one"
     rule := rule_mul_one_right
-    sound := by intro env e e' h; sorry
+    sound := fun env => rule_mul_one_right_sound env
   },
   {
     name := "one_mul"
     rule := rule_mul_one_left
-    sound := by intro env e e' h; sorry
+    sound := fun env => rule_mul_one_left_sound env
   },
   {
     name := "mul_zero"
     rule := rule_mul_zero_right
-    sound := by intro env e e' h; sorry
+    sound := fun env => rule_mul_zero_right_sound env
   },
   {
     name := "zero_mul"
     rule := rule_mul_zero_left
-    sound := by intro env e e' h; sorry
+    sound := fun env => rule_mul_zero_left_sound env
   },
   {
     name := "left_distrib"
     rule := rule_distrib_left
-    sound := by intro env e e' h; sorry
+    sound := fun env => rule_distrib_left_sound env
   },
   {
     name := "right_distrib"
     rule := rule_distrib_right
-    sound := by intro env e e' h; sorry
+    sound := fun env => rule_distrib_right_sound env
   }
 ]
 
