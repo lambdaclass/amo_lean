@@ -94,7 +94,27 @@ theorem mul_comm {M : Type*} [CommMagma M] (a b : M) : a * b = b * a
 
 **Resultado**: 0 `sorry` en el proyecto. Motor de reescritura completamente verificado.
 
-### Fase 2: E-graph y Equality Saturation (PRÓXIMA)
+### Fase 1.75: Optimizaciones Pre-E-graph (EN PROGRESO)
+
+**Objetivo**: Preparar el terreno para E-graphs con optimizaciones de bajo costo.
+
+**Justificación**: Benchmark mostró que el motor actual escala bien (253k nodos en 0.5s),
+pero carece de cost model y optimizaciones básicas que son pre-requisitos para E-graphs.
+
+**Pre-requisitos completados**:
+- [x] Benchmark baseline (ver `docs/BENCHMARK_FASE1.md`)
+
+**Tareas**:
+- [ ] Cost Model: Definir `CostModel` y `exprCost`
+- [ ] Constant Folding: `add (const a) (const b) → const (a+b)`
+- [ ] Asociatividad Dirigida: `(a + b) + c → a + (b + c)`
+
+**Métricas de éxito**:
+- Constant folding reduce expresiones con literales
+- Cost model permite comparar calidad de optimizaciones
+- Sin regresión de rendimiento
+
+### Fase 2: E-graph y Equality Saturation
 
 **Objetivo**: Reemplazar reescritura greedy con equality saturation.
 
@@ -102,16 +122,30 @@ theorem mul_comm {M : Type*} [CommMagma M] (a b : M) : a * b = b * a
 destructivamente y puede perder oportunidades de optimización. E-graphs permiten
 explorar múltiples formas equivalentes simultáneamente.
 
-**Tareas**:
-1. Implementar estructuras de datos:
-   - `EClassId` (alias de Nat)
-   - `ENode` (nodo con operador + IDs de hijos)
-   - `EClass` (conjunto de nodos equivalentes)
-   - `EGraph` (union-find + hashcons)
-2. Operaciones básicas: `add`, `merge`, `find`, `rebuild`
-3. E-matching simple para patrones de reglas
-4. Saturación con las 8 reglas existentes de `semiring_rules`
-5. Extracción con cost model básico: `const=0, var=0, add=1, mul=10`
+**Estructuras de datos** (usando Array para eficiencia):
+- `EClassId`: Índice en array (no tipo inductivo recursivo)
+- `ENode`: Operador + `Array EClassId` de hijos
+- `EClass`: `Array ENode` de nodos equivalentes
+- `EGraph`:
+  - `classes: Array EClass`
+  - `unionFind: Array EClassId` (con path compression)
+  - `hashcons: HashMap ENode EClassId`
+
+**Algoritmos**:
+1. `add(EGraph, ENode) → (EClassId, EGraph)`
+2. `merge(EGraph, EClassId, EClassId) → EGraph`
+3. `find(EGraph, EClassId) → EClassId`
+4. `rebuild(EGraph) → EGraph` (deferred invariant maintenance)
+
+**E-matching y Saturación**:
+- Patrones simples sin variables de binding
+- Scheduler básico (aplicar todas las reglas)
+- Límites configurables de iteraciones y tamaño
+
+**Extracción**:
+- Usa `CostModel` definido en Fase 1.75
+- Algoritmo greedy bottom-up
+- Prueba de corrección: término extraído equivalente al original
 
 **Archivos a crear**:
 - `AmoLean/EGraph/Basic.lean` - Estructuras y union-find

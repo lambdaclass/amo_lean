@@ -161,8 +161,74 @@ def algebraicRules [BEq α] [OfNat α 0] [OfNat α 1] : List (RewriteRule α) :=
 ]
 
 /-- Todas las reglas incluyendo distributividad -/
-def allRules [BEq α] [BEq (Expr α)] [OfNat α 0] [OfNat α 1] : List (RewriteRule α) := 
+def allRules [BEq α] [BEq (Expr α)] [OfNat α 0] [OfNat α 1] : List (RewriteRule α) :=
   algebraicRules ++ [rule_distrib_left, rule_distrib_right]
+
+/-! ## Parte 5.5: Cost Model (Pre-requisito para E-graphs) -/
+
+/-- Modelo de costo para expresiones.
+    Usado para comparar calidad de optimizaciones y para extracción en E-graphs. -/
+structure CostModel where
+  constCost : Nat := 0   -- Literales: sin computación
+  varCost   : Nat := 0   -- Variables: lectura de registro
+  addCost   : Nat := 1   -- Suma: ~1 ciclo
+  mulCost   : Nat := 10  -- Multiplicación: ~10 ciclos en campo finito
+  deriving Repr, Inhabited
+
+/-- Modelo de costo por defecto -/
+def defaultCostModel : CostModel := {}
+
+/-- Calcular el costo de una expresión según un modelo de costo -/
+def exprCost (cm : CostModel := defaultCostModel) : Expr α → Nat
+  | const _ => cm.constCost
+  | var _ => cm.varCost
+  | add e1 e2 => cm.addCost + exprCost cm e1 + exprCost cm e2
+  | mul e1 e2 => cm.mulCost + exprCost cm e1 + exprCost cm e2
+
+/-- Contar el número de nodos en una expresión -/
+def exprSize : Expr α → Nat
+  | const _ => 1
+  | var _ => 1
+  | add e1 e2 => 1 + exprSize e1 + exprSize e2
+  | mul e1 e2 => 1 + exprSize e1 + exprSize e2
+
+/-! ## Parte 5.6: Reglas Adicionales (Constant Folding, Asociatividad) -/
+
+/-- Constant folding para suma: const a + const b → const (a + b) -/
+def rule_const_fold_add [Add α] [BEq α] : RewriteRule α
+  | add (const a) (const b) => some (const (a + b))
+  | _ => none
+
+/-- Constant folding para multiplicación: const a * const b → const (a * b) -/
+def rule_const_fold_mul [Mul α] [BEq α] : RewriteRule α
+  | mul (const a) (const b) => some (const (a * b))
+  | _ => none
+
+/-- Asociatividad derecha para suma: (a + b) + c → a + (b + c) -/
+def rule_assoc_add_right : RewriteRule α
+  | add (add a b) c => some (add a (add b c))
+  | _ => none
+
+/-- Asociatividad derecha para multiplicación: (a * b) * c → a * (b * c) -/
+def rule_assoc_mul_right : RewriteRule α
+  | mul (mul a b) c => some (mul a (mul b c))
+  | _ => none
+
+/-- Reglas con constant folding (sin asociatividad - más eficiente) -/
+def rulesWithConstFold [Add α] [Mul α] [BEq α] [OfNat α 0] [OfNat α 1] : List (RewriteRule α) :=
+  algebraicRules ++ [
+    rule_const_fold_add,
+    rule_const_fold_mul
+  ]
+
+/-- Reglas extendidas incluyendo constant folding y asociatividad.
+    NOTA: La asociatividad puede causar explosión de tiempo en expresiones grandes.
+    Usar con precaución o preferir `rulesWithConstFold`. -/
+def extendedRules [Add α] [Mul α] [BEq α] [OfNat α 0] [OfNat α 1] : List (RewriteRule α) :=
+  rulesWithConstFold ++ [
+    rule_assoc_add_right,
+    rule_assoc_mul_right
+  ]
 
 /-! ## Parte 6: Función Principal de Optimización -/
 
@@ -178,6 +244,17 @@ def simplify [BEq α] [BEq (Expr α)] [OfNat α 0] [OfNat α 1]
 def expand [BEq α] [BEq (Expr α)] [OfNat α 0] [OfNat α 1]
     (e : Expr α) (fuel : Nat := 100) : Expr α :=
   rewriteToFixpoint allRules fuel e
+
+/-- Simplificar con constant folding (recomendado - eficiente) -/
+def simplifyWithConstFold [Add α] [Mul α] [BEq α] [BEq (Expr α)] [OfNat α 0] [OfNat α 1]
+    (e : Expr α) (fuel : Nat := 100) : Expr α :=
+  rewriteToFixpoint rulesWithConstFold fuel e
+
+/-- Simplificar con reglas extendidas (constant folding + asociatividad).
+    ADVERTENCIA: Puede ser lento en expresiones grandes debido a la asociatividad. -/
+def simplifyExtended [Add α] [Mul α] [BEq α] [BEq (Expr α)] [OfNat α 0] [OfNat α 1]
+    (e : Expr α) (fuel : Nat := 100) : Expr α :=
+  rewriteToFixpoint extendedRules fuel e
 
 end Expr
 
@@ -213,6 +290,23 @@ def two : Expr Int := const 2
 -- Ejemplo 5: Distributividad
 -- x * (y + z) debería expandirse a x*y + x*z
 #eval! expand (mul x (add y z))
+
+-- Ejemplo 6: Constant folding
+-- 3 + 4 debería simplificarse a 7
+#eval! simplifyExtended (add (const 3) (const 4))
+
+-- Ejemplo 7: Constant folding con multiplicación
+-- 3 * 4 debería simplificarse a 12
+#eval! simplifyExtended (mul (const 3) (const 4))
+
+-- Ejemplo 8: Expresión mixta con constant folding
+-- x + (3 + 4) debería simplificarse a x + 7
+#eval! simplifyExtended (add x (add (const 3) (const 4)))
+
+-- Ejemplo 9: Cost model
+-- Comparar costo de x*y vs x+x+x
+#eval! exprCost defaultCostModel (mul x y)  -- Esperado: 10 (1 mul)
+#eval! exprCost defaultCostModel (add x (add x x))  -- Esperado: 2 (2 adds)
 
 end Examples
 
