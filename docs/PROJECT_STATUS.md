@@ -1,272 +1,288 @@
-# AMO-Lean: Estado del Proyecto y Roadmap
+# AMO-Lean: Project Status
 
-## Estado Actual del Proyecto
+*Last Updated: January 23, 2026 - Phase 2 (E-Graph) Completed*
 
-### ¿Qué puede hacer?
+---
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    Pipeline AMO-Lean                            │
-│                                                                 │
-│  Expr α ──→ Rewrite Engine ──→ Simplified Expr ──→ C Code      │
-│                                                                 │
-│  x*(y+0)*1  ──→  algebraicRules  ──→  x*y  ──→  int64_t f() {  │
-│                                                   return x*y;   │
-│                                                 }               │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-**Capacidades concretas:**
-1. **AST de expresiones** (`Expr α`): constantes, variables, suma, multiplicación
-2. **Semántica denotacional**: `denote` conecta sintaxis con semántica de Mathlib
-3. **8 reglas de reescritura verificadas**: identidades (+0, *1), aniquiladores (*0), distributividad
-4. **Motor de reescritura bottom-up** con iteración a punto fijo - **COMPLETAMENTE VERIFICADO**
-5. **Generación de código C** con let-lifting (forma SSA)
-6. **Integración con Mathlib** para tipos algebraicos (Semiring, Ring)
-7. **0 `sorry`** en todo el proyecto - todas las pruebas de corrección están completas
-
-### Estructura de Archivos
+## Current Capabilities
 
 ```
-AmoLean/
-├── Basic.lean              # AST, semántica, reglas, motor de reescritura
-├── Correctness.lean        # Pruebas de soundness para reglas
-├── MathlibIntegration.lean # Conexión con estructuras algebraicas de Mathlib
-├── CodeGen.lean            # Generación de código C
-└── AmoLean.lean            # Módulo principal y ejemplos
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         AMO-Lean Pipeline                                   │
+│                                                                             │
+│  Expr α ──→ E-Graph Saturation ──→ Best Expr ──→ C Code                    │
+│                                                                             │
+│  (x+0)*1+y*0  ──→  equality saturation  ──→  x  ──→  int64_t f() {         │
+│                    with cost model              return x;                   │
+│                                                 }                           │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### What It Can Do
+
+1. **Expression AST** (`Expr α`): constants, variables, addition, multiplication
+2. **Denotational Semantics**: `denote` connects syntax with Mathlib semantics
+3. **Greedy Rewriter**: 8 verified rewrite rules, bottom-up to fixpoint
+4. **E-Graph with Equality Saturation**: Full implementation with extraction
+5. **C Code Generation**: with let-lifting (SSA form)
+6. **Mathlib Integration**: for algebraic types (Semiring, Ring)
+7. **0 `sorry`** in greedy rewriter proofs - fully verified
+
+---
+
+## Project Structure
+
+```
+amo-lean/
+├── AmoLean.lean                 # Main module, public API
+├── AmoLean/
+│   ├── Basic.lean               # AST, rules, greedy rewriter, CostModel
+│   ├── Correctness.lean         # Soundness proofs (0 sorry)
+│   ├── MathlibIntegration.lean  # Mathlib integration
+│   ├── CodeGen.lean             # C code generation
+│   └── EGraph/
+│       ├── Basic.lean           # E-graph structures, union-find (~530 lines)
+│       ├── EMatch.lean          # Patterns, e-matching, rules (~275 lines)
+│       └── Saturate.lean        # Saturation, extraction (~190 lines)
+├── docs/
+│   ├── BENCHMARK_FASE1.md       # Performance analysis
+│   ├── PROJECT_STATUS.md        # This file
+│   └── ESTADO_PROYECTO.md       # Spanish version
+├── ROADMAP.md                   # Detailed roadmap
+└── lakefile.lean                # Project configuration
 ```
 
 ---
 
-## Historial de Problemas y Soluciones
+## Completed Phases
 
-| Problema | Causa | Solución |
-|----------|-------|----------|
-| Lean 4.3.0 incompatible | Mathlib requiere versiones recientes | Actualización a 4.16.0 |
-| `leanOptions` no existe | API de Lake cambió | Nueva sintaxis de lakefile |
-| `BEq` vs `Eq` en pruebas | Las reglas usan `==` pero pruebas necesitan `=` | `LawfulBEq` + lemas `beq_zero_eq`/`beq_one_eq` |
-| `partial` impide inducción | Lean no genera principio de inducción para `partial` | **RESUELTO**: Recursión estructural + `termination_by` |
-| `Inhabited` faltante | `partial def` requiere tipo habitado | `deriving Inhabited` |
-| Bitwise no disponible | `Int.land` no está en el prelude | Comentar `rule_mul_pow2` |
-| 2 `sorry` en Correctness.lean | Dependían de `partial` | **RESUELTO**: Pruebas completas por inducción |
+### Phase 1: Toy Model ✓
 
-### Deuda Técnica Principal - RESUELTA (Enero 2026)
+- [x] `Expr α` inductive type for arithmetic expressions
+- [x] Denotational semantics
+- [x] 8 rewrite rules (identities, annihilators, distributivity)
+- [x] Bottom-up rewriter with fixpoint iteration
+- [x] Basic C code generation
 
-~~El problema más significativo era estructural: `rewriteBottomUp` estaba definido como `partial`.~~
+### Phase 1.5: Complete Verification ✓
 
-**SOLUCIÓN IMPLEMENTADA:**
+- [x] Remove `partial` from `rewriteBottomUp` (structural recursion)
+- [x] Remove `partial` from `rewriteToFixpoint` (pattern matching on Nat)
+- [x] Prove `rewriteBottomUp_sound` by induction on `Expr`
+- [x] Prove `rewriteToFixpoint_sound` by induction on `fuel`
+- [x] Prove `simplify_sound`
+- [x] **Result: 0 `sorry` in project**
 
+### Phase 1.75: Pre-E-Graph Optimizations ✓
+
+- [x] Benchmark baseline (253k nodes in 0.5s, O(n) scaling)
+- [x] Cost Model: `CostModel` and `exprCost`
+- [x] Constant Folding: `rule_const_fold_add`, `rule_const_fold_mul`
+- [x] Associativity evaluation (rejected: 70x slowdown in greedy)
+- [x] `simplifyWithConstFold` - recommended function
+- [x] Documentation: `docs/BENCHMARK_FASE1.md`
+
+### Phase 2: E-Graph and Equality Saturation ✓
+
+**Data Structures:**
+- [x] `EClassId`: Array index (Nat)
+- [x] `ENodeOp`: Operations with child IDs (non-recursive)
+- [x] `ENode`: Wrapper with helpers
+- [x] `EClass`: Equivalence class with nodes and cost metadata
+- [x] `UnionFind`: Path compression with `Array EClassId`
+- [x] `EGraph`: Main structure (union-find + hashcons + classes)
+
+**Algorithms:**
+- [x] `add(EGraph, ENode) → (EClassId, EGraph)` - Add with deduplication
+- [x] `merge(EGraph, EClassId, EClassId) → EGraph` - Union classes
+- [x] `find(EGraph, EClassId) → EClassId` - Find canonical
+- [x] `rebuild(EGraph) → EGraph` - Full re-canonicalization
+- [x] `canonicalize` - Normalize node children
+
+**E-Matching:**
+- [x] `Pattern` - Patterns with variables (`?a`, `?b`, etc.)
+- [x] `Substitution` - Variable to e-class mapping
+- [x] `ematch` - Search for instances in an e-class
+- [x] `searchPattern` - Search entire graph
+- [x] `instantiate` - Create nodes from pattern + substitution
+
+**Rewrite Rules:**
+- [x] `basicRules`: `a+0→a`, `0+a→a`, `a*1→a`, `1*a→a`, `a*0→0`, `0*a→0`
+- [x] `extendedRules`: + distributivity and factorization
+
+**Saturation:**
+- [x] `SaturationConfig` - Configurable limits
+- [x] `saturateStep` - One iteration (apply rules + rebuild)
+- [x] `saturate` - Until fixpoint or limit
+- [x] `saturateAndExtract` - Saturate + compute costs + extract
+
+**Extraction:**
+- [x] `EGraphCostModel` - Cost model for E-graph
+- [x] `computeCosts` - Bottom-up iterative calculation
+- [x] `extract` - Extract best term from e-class
+
+**Tests (all pass):**
+```
+x + 0           → x          ✓
+x * 1           → x          ✓
+(x + 0) * 1     → x          ✓
+(x + y) * 0     → 0          ✓
+x*1 + 0         → x          ✓ (1 iteration)
+x * (y + z)     → explored   ✓ (2 iterations, 8 nodes)
+```
+
+---
+
+## Usage Examples
+
+### Greedy Rewriter
 ```lean
--- Antes (no permitía inducción):
-partial def rewriteBottomUp (rules) : Expr α → Expr α
+import AmoLean
 
--- Ahora (permite inducción estructural):
-def rewriteBottomUp (rules : List (RewriteRule α)) : Expr α → Expr α
-  | const c => rewriteAtRoot rules (const c)
-  | var v => rewriteAtRoot rules (var v)
-  | add e1 e2 => rewriteAtRoot rules (add (rewriteBottomUp rules e1) (rewriteBottomUp rules e2))
-  | mul e1 e2 => rewriteAtRoot rules (mul (rewriteBottomUp rules e1) (rewriteBottomUp rules e2))
-termination_by e => sizeOf e
+open AmoLean Expr
+
+-- Simple expression
+let expr := add (mul (var 0) (const 1)) (const 0)  -- x*1 + 0
+let simplified := simplify expr                      -- x
 ```
 
-**Cambios realizados:**
-1. `rewriteBottomUp`: Recursión estructural con `termination_by e => sizeOf e`
-2. `rewriteToFixpoint`: Pattern matching sobre `Nat` para terminación obvia
-3. `lowerExpr` (CodeGen): Mismo patrón de recursión estructural
+### E-Graph Optimizer
+```lean
+import AmoLean.EGraph.Saturate
 
-**Pruebas completadas:**
-- `rewriteBottomUp_sound`: Por inducción sobre `Expr α`
-- `rewriteToFixpoint_sound`: Por inducción sobre `fuel : Nat`
-- `simplify_sound`: Composición de los lemas anteriores
-- `algebraicRules_sound`: Lema auxiliar para las 6 reglas base
+open AmoLean.EGraph
+
+-- Optimize with basic rules
+let expr := Expr.add (Expr.mul (Expr.var 0) (Expr.const 1)) (Expr.const 0)
+match optimizeBasic expr with
+| some result => -- result = Expr.var 0
+| none => -- error
+
+-- Optimize with extended rules (distributivity)
+let result := optimizeExtended expr
+
+-- Custom configuration
+let config := { maxIterations := 50, maxNodes := 5000 }
+let (result, satResult) := optimize expr RewriteRule.basicRules config
+-- satResult.iterations, satResult.saturated, satResult.reason
+```
+
+### C Code Generation
+```lean
+import AmoLean
+
+let expr := Expr.mul (Expr.add (Expr.var 0) (Expr.var 1)) (Expr.var 2)
+let code := exprToC "my_func" ["x", "y", "z"] expr
+-- "int64_t my_func(int64_t x, int64_t y, int64_t z) { ... }"
+```
 
 ---
 
-## Relación Toy Model ↔ Optimizador FRI Completo
+## Pending Phases
 
-### Arquitectura por Niveles
+### Phase 3: Extended Mathlib on E-Graph
+
+- [ ] Macro `#compile_rules` for automatic extraction
+- [ ] New rules from Mathlib (commutativity, associativity)
+- [ ] E-class analysis for instance synthesis
+
+### Phase 4: Cryptographic Applications (FRI)
+
+- [ ] Finite field arithmetic (`ZMod p`, `GF(2^n)`)
+- [ ] Polynomial evaluation
+- [ ] FFT as operation composition
+- [ ] Automatic optimization discovery
+- [ ] Rust code generation
+
+---
+
+## Architecture: Toy Model ↔ Full FRI Optimizer
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
-│                         NIVELES DE ABSTRACCIÓN                         │
+│                         ABSTRACTION LEVELS                             │
 ├────────────────────────────────────────────────────────────────────────┤
 │                                                                        │
-│  Nivel 4: Protocolo FRI Completo                                       │
-│           ├── Compromisos Merkle                                       │
-│           ├── Rondas de plegado (folding)                              │
-│           └── Verificación de proximidad                               │
+│  Level 4: Complete FRI Protocol                                        │
+│           ├── Merkle commitments                                       │
+│           ├── Folding rounds                                           │
+│           └── Proximity verification                                   │
 │                           ↑                                            │
-│  Nivel 3: Operaciones sobre Polinomios                                 │
-│           ├── FFT/NTT verificada                                       │
-│           ├── Interpolación                                            │
-│           └── Evaluación multi-punto                                   │
+│  Level 3: Polynomial Operations                                        │
+│           ├── Verified FFT/NTT                                         │
+│           ├── Interpolation                                            │
+│           └── Multi-point evaluation                                   │
 │                           ↑                                            │
-│  Nivel 2: Aritmética de Campo Finito                                   │
-│           ├── F_p (campo primo)                                        │
-│           ├── Extensiones de campo                                     │
-│           └── Operaciones Montgomery/Barrett                           │
+│  Level 2: Finite Field Arithmetic                                      │
+│           ├── F_p (prime field)                                        │
+│           ├── Field extensions                                         │
+│           └── Montgomery/Barrett operations                            │
 │                           ↑                                            │
-│  Nivel 1: Expresiones Aritméticas  ◄──── ESTAMOS AQUÍ (Toy Model)     │
-│           ├── AST genérico                                             │
-│           ├── Reglas de reescritura                                    │
-│           └── Generación de código                                     │
+│  Level 1: Arithmetic Expressions  ◄──── WE ARE HERE (E-Graph ready)   │
+│           ├── Generic AST                                              │
+│           ├── E-graph saturation                                       │
+│           └── Code generation                                          │
 │                                                                        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Extensiones Necesarias para FRI
+---
 
-El toy model maneja `Expr α` donde `α` es un Semiring genérico. Para FRI necesitamos:
+## Problem History and Solutions
 
-```lean
--- Toy Model actual:
-inductive Expr (α : Type) where
-  | const : α → Expr α
-  | var : VarId → Expr α
-  | add : Expr α → Expr α → Expr α
-  | mul : Expr α → Expr α → Expr α
+| Problem | Cause | Solution |
+|---------|-------|----------|
+| Lean 4.3.0 incompatible | Mathlib requires recent versions | Updated to 4.16.0 |
+| `leanOptions` doesn't exist | Lake API changed | New lakefile syntax |
+| `BEq` vs `Eq` in proofs | Rules use `==` but proofs need `=` | `LawfulBEq` + lemmas |
+| `partial` blocks induction | Lean doesn't generate induction principle | **SOLVED**: Structural recursion + `termination_by` |
+| Associativity slowdown | 70x slower due to repeated applications | **SOLVED**: Validated need for E-graphs |
+| E-graph memory | Recursive types cause GC issues | **SOLVED**: Flat structures (Array + HashMap) |
 
--- Para FRI necesitaríamos:
-inductive FRIExpr where
-  | fieldElem : ZMod p → FRIExpr           -- Elementos de campo
-  | poly : Polynomial (ZMod p) → FRIExpr    -- Polinomios
-  | fft : FRIExpr → FRIExpr                 -- Transformada
-  | fold : FRIExpr → FRIExpr → FRIExpr      -- Operación de plegado FRI
-  | merkleRoot : FRIExpr → FRIExpr          -- Compromiso
-  | queryAt : FRIExpr → Nat → FRIExpr       -- Evaluación en punto
+---
+
+## Lessons Learned
+
+### From Phase 1.75 (Benchmark)
+- **Greedy is fast but limited**: 253k nodes in 0.5s, but doesn't explore alternatives
+- **Associativity breaks greedy**: 70x slowdown because it applies rules indefinitely
+- **Cost model is essential**: Without it, no criterion for "better"
+
+### From Phase 2 (E-Graph)
+- **Flat structures work**: `Array` + `HashMap` avoid GC problems
+- **Rebuild is critical**: Without re-canonicalization, hashcons becomes inconsistent
+- **E-matching is elegant**: Patterns + substitutions = declarative search
+
+---
+
+## Complexity Estimate
+
+```
+                        Complexity     Status           Dependencies
+                        ──────────     ──────           ────────────
+Phase 1: Toy Model      ████░░░░░░     ✅ COMPLETED     None
+Phase 1.5: Verification ████░░░░░░     ✅ COMPLETED     Toy Model
+Phase 1.75: Pre-E-graph ████░░░░░░     ✅ COMPLETED     Verification
+Phase 2: E-graph        █████░░░░░     ✅ COMPLETED     Pre-E-graph
+Phase 3: Mathlib Ext    █████░░░░░     🔜 Planned       E-graph
+Phase 4: Finite Field   ██████░░░░     🔜 Planned       Mathlib ZMod
+Phase 5: FFT            ███████░░░     🔜 Planned       Finite Field
+Phase 6: FRI            █████████░     🔜 Planned       All above
+Phase 7: CodeGen        ██████████     🔜 Planned       FRI
+Phase 8: Production     ██████████     🔜 Planned       Everything
 ```
 
 ---
 
-## Roadmap hacia Producción
+## References
 
-### Fase 1: Toy Model ✅ COMPLETADA
-
-- [x] AST `Expr α` inductivo
-- [x] Semántica denotacional
-- [x] 8 reglas de reescritura
-- [x] Motor bottom-up + punto fijo
-- [x] Generación de código C
-
-### Fase 1.5: Verificación Completa ✅ COMPLETADA (Enero 2026)
-
-- [x] Redefinir `rewriteBottomUp` sin `partial` (recursión estructural)
-- [x] Redefinir `rewriteToFixpoint` sin `partial` (pattern matching)
-- [x] Probar `rewriteBottomUp_sound` por inducción
-- [x] Probar `rewriteToFixpoint_sound` por inducción
-- [x] Probar `simplify_sound`
-- [x] 0 `sorry` en el proyecto
-
-### Fase 2: E-graph y Equality Saturation (PRÓXIMA)
-
-- [ ] Estructuras: `EClassId`, `ENode`, `EClass`, `EGraph`
-- [ ] Union-find + hashcons
-- [ ] Operaciones: `add`, `merge`, `find`, `rebuild`
-- [ ] E-matching simple
-- [ ] Saturación con las 8 reglas existentes
-- [ ] Extracción con cost model
-
-**Justificación:** La reescritura greedy actual pierde oportunidades de optimización.
-E-graphs permiten explorar múltiples formas equivalentes simultáneamente.
-
-### Fase 3: Mathlib Extendida sobre E-graph
-
-- [ ] Macro `#compile_rules` para extracción automática
-- [ ] Reglas de conmutatividad y asociatividad
-- [ ] E-class analysis para síntesis de instancias
-
-### Fase 4: Aritmética de Campo Finito
-
-- [ ] Integrar `ZMod p` de Mathlib
-- [ ] Implementar/verificar aritmética Montgomery
-- [ ] Optimizaciones específicas: reducción de Barrett, Karatsuba
-- [ ] Reglas de reescritura para campos finitos
-
-**Referencia clave:** [Fiat-Crypto](https://github.com/mit-plv/fiat-crypto)
-
-### Fase 5: Polinomios y FFT
-
-- [ ] Representación de polinomios (coeficientes vs evaluaciones)
-- [ ] FFT/NTT con prueba de corrección
-- [ ] Conversiones verificadas entre representaciones
-- [ ] Optimizaciones: Cooley-Tukey, Good-Thomas
-
-### Fase 6: Protocolo FRI
-
-- [ ] Estructura de datos para rondas FRI
-- [ ] Operación de plegado verificada
-- [ ] Generación de queries
-- [ ] Merkle trees verificados
-- [ ] Prueba de soundness del protocolo
-
-**Referencias:**
-- [FRI original](https://eccc.weizmann.ac.il/report/2017/134/) - Ben-Sasson et al.
-- [DEEP-FRI](https://eprint.iacr.org/2019/336) - optimizaciones
-- [ethSTARK](https://eprint.iacr.org/2021/582) - implementación práctica
-
-### Fase 7: Generación de Código Verificada
-
-- [ ] Backend para múltiples targets (C, Rust, assembly)
-- [ ] Pruebas de preservación semántica en code generation
-- [ ] Optimizaciones de bajo nivel (vectorización, paralelismo)
-- [ ] Integración con compiladores verificados
-
-**Referencias:**
-- [Bedrock2](https://github.com/mit-plv/bedrock2)
-- [CakeML](https://cakeml.org/)
-- [CompCert](https://compcert.org/)
-
-### Fase 8: Integración y Producción
-
-- [ ] API estable para usuarios
-- [ ] Benchmarks contra implementaciones no verificadas
-- [ ] Documentación completa
-- [ ] Integración con sistemas de prueba existentes (Plonky2, etc.)
-- [ ] Auditoría de seguridad
+1. Willsey et al. "egg: Fast and Extensible Equality Saturation" (POPL 2021)
+2. Sun et al. "E-Graphs as Circuits, and Optimal Extraction via Treewidth" (2024)
+3. Gross et al. "Accelerating Verified-Compiler Development with a Verified Rewriting Engine" (ITP 2022)
+4. Erbsen et al. "Simple High-Level Code For Cryptographic Arithmetic" (Fiat-Crypto)
+5. Metaprogramming in Lean 4 (official documentation)
 
 ---
 
-## Referencias Bibliográficas
-
-### E-graphs y Equality Saturation
-- **egg: Fast and Extensible Equality Saturation** - Willsey et al. 2021
-- **Rewrite Rule Inference Using Equality Saturation** - Nandi et al.
-- **egglog** - E-graphs + Datalog
-
-### Verificación de Criptografía
-- **Fiat-Crypto: Synthesizing Correct-by-Construction Code** - Erbsen et al.
-- **Simple High-Level Code For Cryptographic Arithmetic** - continuación
-
-### Optimización Verificada
-- **Verifying and Synthesizing Constant-Resource Implementations**
-- **Alive2: Bounded Translation Validation for LLVM**
-
-### FRI y STARKs
-- **Proximity Gaps for Reed-Solomon Codes** - análisis teórico
-- **STARK paper original** - Ben-Sasson et al. 2018
-
----
-
-## Estimación de Complejidad
-
-```
-                        Complejidad    Estado           Dependencias
-                        ───────────    ──────           ────────────
-Fase 1: Toy Model       ████░░░░░░     ✅ COMPLETADA    Ninguna
-Fase 1.5: Verificación  ████░░░░░░     ✅ COMPLETADA    Toy Model
-Fase 2: E-graph         █████░░░░░     ⏳ PRÓXIMA       Verificación
-Fase 3: Mathlib Ext     █████░░░░░     🔜 Planificada   E-graph
-Fase 4: Campo Finito    ██████░░░░     🔜 Planificada   Mathlib ZMod
-Fase 5: FFT             ███████░░░     🔜 Planificada   Campo Finito
-Fase 6: FRI             █████████░     🔜 Planificada   Todo lo anterior
-Fase 7: CodeGen         ██████████     🔜 Planificada   FRI
-Fase 8: Producción      ██████████     🔜 Planificada   Todo + Ingeniería
-```
-
----
-
-*Documento generado: Enero 2026*
-*Última actualización: 23 Enero 2026 - Fase 1.5 completada (0 sorry)*
-
-*Documento generado: Enero 2026*
-*Última actualización: Estado post-pruebas de soundness*
+*Document generated: January 2026*
+*Last update: January 23, 2026 - Phase 2 (E-Graph) completed*

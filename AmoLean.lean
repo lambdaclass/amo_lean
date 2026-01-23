@@ -33,6 +33,9 @@ import AmoLean.Basic
 import AmoLean.Correctness
 import AmoLean.MathlibIntegration
 import AmoLean.CodeGen
+import AmoLean.EGraph.Basic
+import AmoLean.EGraph.EMatch
+import AmoLean.EGraph.Saturate
 
 namespace AmoLean
 
@@ -80,24 +83,35 @@ end Demo
 
 /-! ## Roadmap
 
-### Fase 1 (Actual): Modelo de Juguete ✓
+### Fase 1: Modelo de Juguete ✓
 - [x] Definición de Expr
 - [x] Reglas de reescritura básicas
 - [x] Motor de reescritura bottom-up
 - [x] Generación de código C básica
-- [ ] Pruebas de corrección completas
 
-### Fase 2: Integración con Mathlib
-- [ ] Importar Mathlib
-- [ ] Conectar Expr con estructuras algebraicas reales
-- [ ] Compilación automática de teoremas a reglas
-- [ ] Soporte para Ring, Field, etc.
+### Fase 1.5: Verificación Completa ✓
+- [x] Remover `partial` de funciones (recursión bien fundada)
+- [x] Pruebas de corrección completas (0 sorry)
+- [x] `simplify_sound`, `rewriteBottomUp_sound`, etc.
 
-### Fase 3: E-graph y Equality Saturation
-- [ ] Implementar E-graph en Lean puro
-- [ ] E-class analysis para tracking de tipos
-- [ ] Integración con síntesis de instancias de Mathlib
-- [ ] Extracción óptima
+### Fase 1.75: Optimizaciones Pre-E-graph ✓
+- [x] Cost Model (`CostModel`, `exprCost`)
+- [x] Constant Folding (`rule_const_fold_add/mul`)
+- [x] Benchmark del motor (253k nodos en 0.5s)
+- [x] Documentación: asociatividad causa 70x slowdown
+
+### Fase 2: E-graph y Equality Saturation ✓
+- [x] Estructuras de datos: `EClassId`, `ENode`, `EClass`, `EGraph`
+- [x] Union-Find con path compression
+- [x] Rebuild con re-canonicalización
+- [x] E-matching (patrones → matches en e-graph)
+- [x] Saturación con reglas (básicas + distributividad)
+- [x] Extracción con cost model
+
+### Fase 3: Mathlib Extendida sobre E-graph
+- [ ] Macro `#compile_rules` para extracción automática
+- [ ] Nuevas reglas desde Mathlib (conmutatividad, asociatividad)
+- [ ] E-class analysis para síntesis de instancias
 
 ### Fase 4: Aplicaciones Criptográficas
 - [ ] Soporte para aritmética de campos finitos

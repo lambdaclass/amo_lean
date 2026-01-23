@@ -22,7 +22,7 @@ Basándonos en el análisis de las referencias (egg, E-graphs as Circuits, Fiat-
 ┌─────────────────────────────────────────────────────────────────┐
 │                   NIVEL SINTÁCTICO (OptExpr)                    │
 │  • AST simplificado (similar a HacspecExpr)                     │
-│  • Reescritura bottom-up / E-graph (futuro)                     │
+│  • E-graph con equality saturation                              │
 │  • E-class analyses para tracking de información                │
 └─────────────────────────────────────────────────────────────────┘
                               ↓
@@ -66,6 +66,8 @@ theorem mul_comm {M : Type*} [CommMagma M] (a b : M) : a * b = b * a
 
 **Solución**: E-class analysis que consulta `MetaM` en puntos estratégicos, no en cada operación.
 
+---
+
 ## Roadmap Detallado
 
 ### Fase 1: Modelo de Juguete ✓ (COMPLETADA)
@@ -78,6 +80,8 @@ theorem mul_comm {M : Type*} [CommMagma M] (a b : M) : a * b = b * a
 - [x] Motor de reescritura bottom-up
 - [x] Generación de código C básica
 - [x] Esqueleto de pruebas de corrección
+
+---
 
 ### Fase 1.5: Verificación Completa ✓ (COMPLETADA - Enero 2026)
 
@@ -94,139 +98,201 @@ theorem mul_comm {M : Type*} [CommMagma M] (a b : M) : a * b = b * a
 
 **Resultado**: 0 `sorry` en el proyecto. Motor de reescritura completamente verificado.
 
-### Fase 1.75: Optimizaciones Pre-E-graph (EN PROGRESO)
+---
+
+### Fase 1.75: Optimizaciones Pre-E-graph ✓ (COMPLETADA - Enero 2026)
 
 **Objetivo**: Preparar el terreno para E-graphs con optimizaciones de bajo costo.
 
-**Justificación**: Benchmark mostró que el motor actual escala bien (253k nodos en 0.5s),
-pero carece de cost model y optimizaciones básicas que son pre-requisitos para E-graphs.
-
-**Pre-requisitos completados**:
+**Completado**:
 - [x] Benchmark baseline (ver `docs/BENCHMARK_FASE1.md`)
+- [x] Cost Model: `CostModel` y `exprCost` en Basic.lean
+- [x] Constant Folding: `rule_const_fold_add`, `rule_const_fold_mul`
+- [x] Asociatividad Dirigida: Evaluada pero descartada (causa 70x slowdown en greedy)
+- [x] `simplifyWithConstFold` - función recomendada sin asociatividad
+- [x] `simplifyExtended` - función con asociatividad (con advertencia)
 
-**Tareas**:
-- [ ] Cost Model: Definir `CostModel` y `exprCost`
-- [ ] Constant Folding: `add (const a) (const b) → const (a+b)`
-- [ ] Asociatividad Dirigida: `(a + b) + c → a + (b + c)`
+**Hallazgos clave**:
+- Motor escala O(n): 253k nodos en 0.5s
+- Asociatividad no es viable en reescritura greedy
+- Esto validó la necesidad de E-graphs para explorar múltiples formas
 
-**Métricas de éxito**:
-- Constant folding reduce expresiones con literales
-- Cost model permite comparar calidad de optimizaciones
-- Sin regresión de rendimiento
+---
 
-### Fase 2: E-graph y Equality Saturation
+### Fase 2: E-graph y Equality Saturation ✓ (COMPLETADA - Enero 2026)
 
 **Objetivo**: Reemplazar reescritura greedy con equality saturation.
 
-**Justificación**: La reescritura bottom-up actual es "greedy" - aplica reglas
-destructivamente y puede perder oportunidades de optimización. E-graphs permiten
-explorar múltiples formas equivalentes simultáneamente.
+**Archivos creados**:
+- `AmoLean/EGraph/Basic.lean` (~530 líneas) - Estructuras y algoritmos core
+- `AmoLean/EGraph/EMatch.lean` (~275 líneas) - E-matching y reglas
+- `AmoLean/EGraph/Saturate.lean` (~190 líneas) - Saturación y optimización
 
-**Estructuras de datos** (usando Array para eficiencia):
-- `EClassId`: Índice en array (no tipo inductivo recursivo)
-- `ENode`: Operador + `Array EClassId` de hijos
-- `EClass`: `Array ENode` de nodos equivalentes
-- `EGraph`:
-  - `classes: Array EClass`
-  - `unionFind: Array EClassId` (con path compression)
-  - `hashcons: HashMap ENode EClassId`
+**Estructuras de datos implementadas**:
+- [x] `EClassId`: Índice en array (Nat)
+- [x] `ENodeOp`: Operaciones con IDs de hijos (no recursivo)
+- [x] `ENode`: Wrapper con helpers (`mkConst`, `mkAdd`, `children`, etc.)
+- [x] `EClass`: Clase de equivalencia con nodos y metadata de costo
+- [x] `UnionFind`: Path compression con `Array EClassId`
+- [x] `EGraph`: Estructura principal (union-find + hashcons + classes)
 
-**Algoritmos**:
-1. `add(EGraph, ENode) → (EClassId, EGraph)`
-2. `merge(EGraph, EClassId, EClassId) → EGraph`
-3. `find(EGraph, EClassId) → EClassId`
-4. `rebuild(EGraph) → EGraph` (deferred invariant maintenance)
+**Algoritmos implementados**:
+- [x] `add(EGraph, ENode) → (EClassId, EGraph)` - Añadir con deduplicación
+- [x] `merge(EGraph, EClassId, EClassId) → EGraph` - Unir clases
+- [x] `find(EGraph, EClassId) → EClassId` - Encontrar canónico
+- [x] `rebuild(EGraph) → EGraph` - Re-canonicalización completa
+- [x] `canonicalize` - Normalizar hijos de un nodo
 
-**E-matching y Saturación**:
-- Patrones simples sin variables de binding
-- Scheduler básico (aplicar todas las reglas)
-- Límites configurables de iteraciones y tamaño
+**E-matching implementado**:
+- [x] `Pattern` - Patrones con variables (`?a`, `?b`, etc.)
+- [x] `Substitution` - Mapeo de variables a e-classes
+- [x] `ematch` - Búsqueda de instancias en una e-class
+- [x] `searchPattern` - Búsqueda en todo el grafo
+- [x] `instantiate` - Crear nodos desde patrón + sustitución
 
-**Extracción**:
-- Usa `CostModel` definido en Fase 1.75
-- Algoritmo greedy bottom-up
-- Prueba de corrección: término extraído equivalente al original
+**Reglas de reescritura**:
+- [x] `basicRules`: `a+0→a`, `0+a→a`, `a*1→a`, `1*a→a`, `a*0→0`, `0*a→0`
+- [x] `extendedRules`: + distributividad (`a*(b+c)→a*b+a*c`) y factorización
 
-**Archivos a crear**:
-- `AmoLean/EGraph/Basic.lean` - Estructuras y union-find
-- `AmoLean/EGraph/EMatch.lean` - E-matching
-- `AmoLean/EGraph/Saturate.lean` - Saturación con reglas
-- `AmoLean/EGraph/Extract.lean` - Extracción con cost model
+**Saturación implementada**:
+- [x] `SaturationConfig` - Límites configurables (iteraciones, nodos, clases)
+- [x] `saturateStep` - Una iteración (aplicar reglas + rebuild)
+- [x] `saturate` - Hasta punto fijo o límite
+- [x] `saturateAndExtract` - Saturar + calcular costos + extraer
 
-**Referencia principal**: Paper de egg (Willsey et al.)
+**Extracción implementada**:
+- [x] `EGraphCostModel` - Modelo de costo para E-graph
+- [x] `computeCosts` - Cálculo bottom-up iterativo
+- [x] `extract` - Extraer mejor término desde e-class
 
-### Fase 3: Mathlib Extendida sobre E-graph
+**Tests (todos pasan)**:
+```
+x + 0           → x          ✓
+x * 1           → x          ✓
+(x + 0) * 1     → x          ✓
+(x + y) * 0     → 0          ✓
+x*1 + 0         → x          ✓ (1 iteración)
+x * (y + z)     → explorado   ✓ (2 iteraciones, 8 nodos)
+```
+
+**API de uso**:
+```lean
+import AmoLean.EGraph.Saturate
+
+-- Optimizar con reglas básicas
+let result := EGraph.optimizeBasic expr
+
+-- Optimizar con reglas extendidas (distributividad)
+let result := EGraph.optimizeExtended expr
+
+-- Optimizar con configuración personalizada
+let config := { maxIterations := 50, maxNodes := 5000 }
+let (result, satResult) := EGraph.optimize expr rules config
+```
+
+---
+
+### Fase 3: Mathlib Extendida sobre E-graph (PENDIENTE)
 
 **Objetivo**: Usar teoremas reales de Mathlib como reglas sobre el E-graph.
 
 **Tareas**:
-1. Macro `#compile_rules` para extracción automática:
-   ```lean
-   #compile_rules [add_comm, mul_comm, add_assoc, mul_assoc] for (ZMod p)
-   ```
-2. Nuevas reglas desde Mathlib:
-   - Conmutatividad: `add_comm`, `mul_comm`
-   - Asociatividad: `add_assoc`, `mul_assoc`
-   - Otras identidades de `Ring`/`Field`
-3. E-class analysis para síntesis de instancias de tipo clase
+- [ ] Macro `#compile_rules` para extracción automática:
+  ```lean
+  #compile_rules [add_comm, mul_comm, add_assoc, mul_assoc] for (ZMod p)
+  ```
+- [ ] Nuevas reglas desde Mathlib:
+  - Conmutatividad: `add_comm`, `mul_comm`
+  - Asociatividad: `add_assoc`, `mul_assoc`
+  - Otras identidades de `Ring`/`Field`
+- [ ] E-class analysis para síntesis de instancias de tipo clase
 
-### Fase 4: Aplicación a Criptografía (FRI)
+---
+
+### Fase 4: Aplicación a Criptografía (FRI) (PENDIENTE)
 
 **Objetivo**: Optimizar componentes de FRI/STARKs.
 
 **Tareas**:
-1. Modelar aritmética de campos finitos (`ZMod p`, `GF(2^n)`)
-2. Implementar evaluación de polinomios
-3. Modelar FFT como composición de operaciones
-4. Descubrir optimizaciones automáticamente
-5. Generar código Rust optimizado
+- [ ] Modelar aritmética de campos finitos (`ZMod p`, `GF(2^n)`)
+- [ ] Implementar evaluación de polinomios
+- [ ] Modelar FFT como composición de operaciones
+- [ ] Descubrir optimizaciones automáticamente
+- [ ] Generar código Rust optimizado
 
 **Métricas de éxito**:
 - Código generado ≈ rendimiento de implementaciones manuales
 - Prueba formal de corrección end-to-end
 
-## Lecciones de las Referencias
+---
+
+## Estructura del Proyecto
+
+```
+amo-lean/
+├── AmoLean.lean              # Módulo principal, API pública
+├── AmoLean/
+│   ├── Basic.lean            # AST, reglas, motor greedy, CostModel
+│   ├── Correctness.lean      # Pruebas de corrección (0 sorry)
+│   ├── MathlibIntegration.lean # Integración con Mathlib
+│   ├── CodeGen.lean          # Generación de código C
+│   └── EGraph/
+│       ├── Basic.lean        # Estructuras E-graph, union-find
+│       ├── EMatch.lean       # Patrones, e-matching, reglas
+│       └── Saturate.lean     # Saturación, extracción
+├── docs/
+│   ├── BENCHMARK_FASE1.md    # Análisis de rendimiento
+│   ├── PROJECT_STATUS.md     # Estado del proyecto (inglés)
+│   └── ESTADO_PROYECTO.md    # Estado del proyecto (español)
+├── ROADMAP.md                # Este archivo
+└── lakefile.lean             # Configuración del proyecto
+```
+
+---
+
+## Lecciones Aprendidas
+
+### De la Fase 1.75 (Benchmark)
+- **Greedy es rápido pero limitado**: 253k nodos en 0.5s, pero no explora alternativas
+- **Asociatividad rompe greedy**: 70x slowdown porque aplica reglas indefinidamente
+- **Cost model es esencial**: Sin él, no hay criterio de "mejor"
+
+### De la Fase 2 (E-graph)
+- **Estructuras planas funcionan**: `Array` + `HashMap` evitan problemas de GC
+- **Rebuild es crítico**: Sin re-canonicalización, el hashcons queda inconsistente
+- **E-matching es elegante**: Patrones + sustituciones = búsqueda declarativa
 
 ### De egg (Willsey et al.)
-
 - **Rebuilding**: Diferir mantenimiento de invariantes mejora rendimiento 88×
 - **E-class analysis**: Framework general para integrar análisis semántico
 - **Separation of phases**: Read phase → Write phase → Rebuild
 
-### De E-graphs as Circuits (Sun et al.)
-
-- **Treewidth**: E-graphs prácticos tienen treewidth bajo
-- **Simplification**: Reglas de simplificación de circuitos aplican a e-graphs
-- **Extraction óptima**: Algoritmo parametrizado por treewidth
-
 ### De Fiat-Crypto Rewriter (Gross et al.)
-
 - **PHOAS**: Evita bookkeeping de binders
 - **Let-lifting**: Crucial para evitar explosión de memoria
 - **Pattern compilation**: Seguir Maranget para eficiencia
-- **NbE + Rewriting**: Combinar normalización con reescritura
 
-### De Term Rewriting Systems (teoría)
-
-- **Confluencia**: Importante para determinismo
-- **Terminación**: Necesaria para corrección
-- **Ordenamiento de términos**: Para estrategias de simplificación
+---
 
 ## Riesgos y Mitigaciones
 
-| Riesgo | Probabilidad | Impacto | Mitigación |
-|--------|--------------|---------|------------|
-| Binding en E-matching | Alta | Alto | AST simplificado + verificación final |
-| Rendimiento del E-graph en Lean | Media | Alto | Estructuras de datos eficientes (Std) |
-| Síntesis de instancias de tipo clase | Media | Medio | E-class analysis + cache |
-| Explosión de tamaño del E-graph | Media | Alto | Scheduling de reglas + límites |
+| Riesgo | Probabilidad | Impacto | Mitigación | Estado |
+|--------|--------------|---------|------------|--------|
+| Binding en E-matching | Alta | Alto | AST simplificado | ✓ Mitigado |
+| Rendimiento E-graph en Lean | Media | Alto | Estructuras planas | ✓ Mitigado |
+| Síntesis de instancias | Media | Medio | E-class analysis | Pendiente |
+| Explosión de E-graph | Media | Alto | Límites configurables | ✓ Mitigado |
 
-## Próximos Pasos Inmediatos
+---
 
-1. **Completar pruebas de Fase 1**: Cerrar los `sorry` en `Correctness.lean`
-2. **Añadir Mathlib**: Configurar dependencia y probar imports
-3. **Benchmark baseline**: Medir rendimiento actual vs expresiones grandes
-4. **Prototipo de E-graph**: Implementación mínima para evaluar viabilidad
+## Próximos Pasos
+
+1. **Fase 3**: Implementar macro `#compile_rules` para Mathlib
+2. **Pruebas de corrección E-graph**: Probar que `extract` preserva semántica
+3. **Benchmark E-graph vs Greedy**: Comparar rendimiento y calidad
+4. **Casos de uso criptográficos**: Evaluar con expresiones de FRI
+
+---
 
 ## Referencias
 
