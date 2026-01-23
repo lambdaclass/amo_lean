@@ -68,7 +68,7 @@ theorem mul_comm {M : Type*} [CommMagma M] (a b : M) : a * b = b * a
 
 ## Roadmap Detallado
 
-### Fase 1: Modelo de Juguete ✓
+### Fase 1: Modelo de Juguete ✓ (COMPLETADA)
 
 **Objetivo**: Validar la arquitectura básica.
 
@@ -79,45 +79,62 @@ theorem mul_comm {M : Type*} [CommMagma M] (a b : M) : a * b = b * a
 - [x] Generación de código C básica
 - [x] Esqueleto de pruebas de corrección
 
-**Pendiente**:
-- [ ] Completar pruebas de corrección
-- [ ] Tests más exhaustivos
-- [ ] Benchmarks básicos
+### Fase 1.5: Verificación Completa ✓ (COMPLETADA - Enero 2026)
 
-### Fase 2: Integración con Mathlib
+**Objetivo**: Cerrar todos los `sorry` y tener pruebas completas.
 
-**Objetivo**: Usar teoremas reales de Mathlib como reglas.
+**Completado**:
+- [x] Redefinir `rewriteBottomUp` sin `partial` (usando recursión estructural)
+- [x] Redefinir `rewriteToFixpoint` sin `partial` (usando pattern matching sobre Nat)
+- [x] Redefinir `lowerExpr` sin `partial` en CodeGen
+- [x] Probar `rewriteBottomUp_sound` por inducción sobre `Expr`
+- [x] Probar `rewriteToFixpoint_sound` por inducción sobre `fuel`
+- [x] Probar `simplify_sound` usando los lemas anteriores
+- [x] Lema auxiliar `algebraicRules_sound` para las 6 reglas
 
-**Tareas**:
-1. Añadir dependencia de Mathlib al proyecto
-2. Definir morfismo `Expr α → α` para `α : Semiring`
-3. Probar que `denote` preserva la estructura algebraica
-4. Compilar teoremas (`add_zero`, `mul_comm`, etc.) a `VerifiedRule`
-5. Tactic/macro para extracción automática de reglas
+**Resultado**: 0 `sorry` en el proyecto. Motor de reescritura completamente verificado.
 
-**Métrica de éxito**: Poder escribir:
-```lean
-#compile_rules [add_zero, mul_comm, left_distrib] for (ZMod p)
-```
+### Fase 2: E-graph y Equality Saturation (PRÓXIMA)
 
-### Fase 3: E-graph y Equality Saturation
+**Objetivo**: Reemplazar reescritura greedy con equality saturation.
 
-**Objetivo**: Reemplazar reescritura bottom-up con equality saturation.
+**Justificación**: La reescritura bottom-up actual es "greedy" - aplica reglas
+destructivamente y puede perder oportunidades de optimización. E-graphs permiten
+explorar múltiples formas equivalentes simultáneamente.
 
 **Tareas**:
-1. Implementar E-graph sobre `OptExpr` en Lean puro
-2. Operaciones: `add`, `merge`, `rebuild`
-3. E-class analysis para:
-   - Tipos inferidos
-   - Estructura algebraica (Ring, Field, etc.)
-   - Constant folding
-4. E-matching para patrones de reglas
-5. Función de costo y extracción
+1. Implementar estructuras de datos:
+   - `EClassId` (alias de Nat)
+   - `ENode` (nodo con operador + IDs de hijos)
+   - `EClass` (conjunto de nodos equivalentes)
+   - `EGraph` (union-find + hashcons)
+2. Operaciones básicas: `add`, `merge`, `find`, `rebuild`
+3. E-matching simple para patrones de reglas
+4. Saturación con las 8 reglas existentes de `semiring_rules`
+5. Extracción con cost model básico: `const=0, var=0, add=1, mul=10`
+
+**Archivos a crear**:
+- `AmoLean/EGraph/Basic.lean` - Estructuras y union-find
+- `AmoLean/EGraph/EMatch.lean` - E-matching
+- `AmoLean/EGraph/Saturate.lean` - Saturación con reglas
+- `AmoLean/EGraph/Extract.lean` - Extracción con cost model
 
 **Referencia principal**: Paper de egg (Willsey et al.)
 
-**Consideración de rendimiento**: Del paper de E-graphs as Circuits:
-> "Circuit simplification can reduce e-graph size and treewidth by 40-80%"
+### Fase 3: Mathlib Extendida sobre E-graph
+
+**Objetivo**: Usar teoremas reales de Mathlib como reglas sobre el E-graph.
+
+**Tareas**:
+1. Macro `#compile_rules` para extracción automática:
+   ```lean
+   #compile_rules [add_comm, mul_comm, add_assoc, mul_assoc] for (ZMod p)
+   ```
+2. Nuevas reglas desde Mathlib:
+   - Conmutatividad: `add_comm`, `mul_comm`
+   - Asociatividad: `add_assoc`, `mul_assoc`
+   - Otras identidades de `Ring`/`Field`
+3. E-class analysis para síntesis de instancias de tipo clase
 
 ### Fase 4: Aplicación a Criptografía (FRI)
 

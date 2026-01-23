@@ -20,9 +20,10 @@
 1. **AST de expresiones** (`Expr α`): constantes, variables, suma, multiplicación
 2. **Semántica denotacional**: `denote` conecta sintaxis con semántica de Mathlib
 3. **8 reglas de reescritura verificadas**: identidades (+0, *1), aniquiladores (*0), distributividad
-4. **Motor de reescritura bottom-up** con iteración a punto fijo
+4. **Motor de reescritura bottom-up** con iteración a punto fijo - **COMPLETAMENTE VERIFICADO**
 5. **Generación de código C** con let-lifting (forma SSA)
 6. **Integración con Mathlib** para tipos algebraicos (Semiring, Ring)
+7. **0 `sorry`** en todo el proyecto - todas las pruebas de corrección están completas
 
 ### Estructura de Archivos
 
@@ -44,23 +45,40 @@ AmoLean/
 | Lean 4.3.0 incompatible | Mathlib requiere versiones recientes | Actualización a 4.16.0 |
 | `leanOptions` no existe | API de Lake cambió | Nueva sintaxis de lakefile |
 | `BEq` vs `Eq` en pruebas | Las reglas usan `==` pero pruebas necesitan `=` | `LawfulBEq` + lemas `beq_zero_eq`/`beq_one_eq` |
-| `partial` impide inducción | Lean no genera principio de inducción para `partial` | Documentado; requiere rediseño con `WellFounded` |
+| `partial` impide inducción | Lean no genera principio de inducción para `partial` | **RESUELTO**: Recursión estructural + `termination_by` |
 | `Inhabited` faltante | `partial def` requiere tipo habitado | `deriving Inhabited` |
 | Bitwise no disponible | `Int.land` no está en el prelude | Comentar `rule_mul_pow2` |
+| 2 `sorry` en Correctness.lean | Dependían de `partial` | **RESUELTO**: Pruebas completas por inducción |
 
-### Deuda Técnica Principal
+### Deuda Técnica Principal - RESUELTA (Enero 2026)
 
-El problema más significativo es estructural: `rewriteBottomUp` está definido como `partial`, lo que impide probar su corrección por inducción. Esto requiere:
+~~El problema más significativo era estructural: `rewriteBottomUp` estaba definido como `partial`.~~
+
+**SOLUCIÓN IMPLEMENTADA:**
 
 ```lean
--- Actual (no permite inducción):
+-- Antes (no permitía inducción):
 partial def rewriteBottomUp (rules) : Expr α → Expr α
 
--- Necesario (permite inducción):
-def rewriteBottomUp (rules) : Expr α → Expr α :=
-  fun e => e.recOn ...  -- usando el eliminador de Expr
-  termination_by e => sizeOf e
+-- Ahora (permite inducción estructural):
+def rewriteBottomUp (rules : List (RewriteRule α)) : Expr α → Expr α
+  | const c => rewriteAtRoot rules (const c)
+  | var v => rewriteAtRoot rules (var v)
+  | add e1 e2 => rewriteAtRoot rules (add (rewriteBottomUp rules e1) (rewriteBottomUp rules e2))
+  | mul e1 e2 => rewriteAtRoot rules (mul (rewriteBottomUp rules e1) (rewriteBottomUp rules e2))
+termination_by e => sizeOf e
 ```
+
+**Cambios realizados:**
+1. `rewriteBottomUp`: Recursión estructural con `termination_by e => sizeOf e`
+2. `rewriteToFixpoint`: Pattern matching sobre `Nat` para terminación obvia
+3. `lowerExpr` (CodeGen): Mismo patrón de recursión estructural
+
+**Pruebas completadas:**
+- `rewriteBottomUp_sound`: Por inducción sobre `Expr α`
+- `rewriteToFixpoint_sound`: Por inducción sobre `fuel : Nat`
+- `simplify_sound`: Composición de los lemas anteriores
+- `algebraicRules_sound`: Lema auxiliar para las 6 reglas base
 
 ---
 
@@ -122,15 +140,42 @@ inductive FRIExpr where
 
 ## Roadmap hacia Producción
 
-### Fase 1: Completar el Toy Model (ACTUAL)
+### Fase 1: Toy Model ✅ COMPLETADA
 
-- [ ] Redefinir `rewriteBottomUp` con terminación demostrable
-- [ ] Probar `rewriteBottomUp_sound` y `simplify_sound`
-- [ ] Implementar E-graph básico para exploración de equivalencias
-- [ ] Agregar más reglas (asociatividad, conmutatividad)
-- [ ] Tests de corrección end-to-end
+- [x] AST `Expr α` inductivo
+- [x] Semántica denotacional
+- [x] 8 reglas de reescritura
+- [x] Motor bottom-up + punto fijo
+- [x] Generación de código C
 
-### Fase 2: Aritmética de Campo Finito
+### Fase 1.5: Verificación Completa ✅ COMPLETADA (Enero 2026)
+
+- [x] Redefinir `rewriteBottomUp` sin `partial` (recursión estructural)
+- [x] Redefinir `rewriteToFixpoint` sin `partial` (pattern matching)
+- [x] Probar `rewriteBottomUp_sound` por inducción
+- [x] Probar `rewriteToFixpoint_sound` por inducción
+- [x] Probar `simplify_sound`
+- [x] 0 `sorry` en el proyecto
+
+### Fase 2: E-graph y Equality Saturation (PRÓXIMA)
+
+- [ ] Estructuras: `EClassId`, `ENode`, `EClass`, `EGraph`
+- [ ] Union-find + hashcons
+- [ ] Operaciones: `add`, `merge`, `find`, `rebuild`
+- [ ] E-matching simple
+- [ ] Saturación con las 8 reglas existentes
+- [ ] Extracción con cost model
+
+**Justificación:** La reescritura greedy actual pierde oportunidades de optimización.
+E-graphs permiten explorar múltiples formas equivalentes simultáneamente.
+
+### Fase 3: Mathlib Extendida sobre E-graph
+
+- [ ] Macro `#compile_rules` para extracción automática
+- [ ] Reglas de conmutatividad y asociatividad
+- [ ] E-class analysis para síntesis de instancias
+
+### Fase 4: Aritmética de Campo Finito
 
 - [ ] Integrar `ZMod p` de Mathlib
 - [ ] Implementar/verificar aritmética Montgomery
@@ -139,14 +184,14 @@ inductive FRIExpr where
 
 **Referencia clave:** [Fiat-Crypto](https://github.com/mit-plv/fiat-crypto)
 
-### Fase 3: Polinomios y FFT
+### Fase 5: Polinomios y FFT
 
 - [ ] Representación de polinomios (coeficientes vs evaluaciones)
 - [ ] FFT/NTT con prueba de corrección
 - [ ] Conversiones verificadas entre representaciones
 - [ ] Optimizaciones: Cooley-Tukey, Good-Thomas
 
-### Fase 4: Protocolo FRI
+### Fase 6: Protocolo FRI
 
 - [ ] Estructura de datos para rondas FRI
 - [ ] Operación de plegado verificada
@@ -159,7 +204,7 @@ inductive FRIExpr where
 - [DEEP-FRI](https://eprint.iacr.org/2019/336) - optimizaciones
 - [ethSTARK](https://eprint.iacr.org/2021/582) - implementación práctica
 
-### Fase 5: Generación de Código Verificada
+### Fase 7: Generación de Código Verificada
 
 - [ ] Backend para múltiples targets (C, Rust, assembly)
 - [ ] Pruebas de preservación semántica en code generation
@@ -171,7 +216,7 @@ inductive FRIExpr where
 - [CakeML](https://cakeml.org/)
 - [CompCert](https://compcert.org/)
 
-### Fase 6: Integración y Producción
+### Fase 8: Integración y Producción
 
 - [ ] API estable para usuarios
 - [ ] Benchmarks contra implementaciones no verificadas
@@ -205,17 +250,23 @@ inductive FRIExpr where
 ## Estimación de Complejidad
 
 ```
-                        Complejidad    Dependencias
-                        ───────────    ────────────
-Toy Model Completo      ████░░░░░░     Ninguna
-E-graph Básico          █████░░░░░     Toy Model
-Campo Finito            ██████░░░░     Mathlib ZMod
-FFT Verificada          ███████░░░     Campo Finito
-FRI Completo            █████████░     Todo lo anterior
-Producción              ██████████     FRI + Ingeniería
+                        Complejidad    Estado           Dependencias
+                        ───────────    ──────           ────────────
+Fase 1: Toy Model       ████░░░░░░     ✅ COMPLETADA    Ninguna
+Fase 1.5: Verificación  ████░░░░░░     ✅ COMPLETADA    Toy Model
+Fase 2: E-graph         █████░░░░░     ⏳ PRÓXIMA       Verificación
+Fase 3: Mathlib Ext     █████░░░░░     🔜 Planificada   E-graph
+Fase 4: Campo Finito    ██████░░░░     🔜 Planificada   Mathlib ZMod
+Fase 5: FFT             ███████░░░     🔜 Planificada   Campo Finito
+Fase 6: FRI             █████████░     🔜 Planificada   Todo lo anterior
+Fase 7: CodeGen         ██████████     🔜 Planificada   FRI
+Fase 8: Producción      ██████████     🔜 Planificada   Todo + Ingeniería
 ```
 
 ---
+
+*Documento generado: Enero 2026*
+*Última actualización: 23 Enero 2026 - Fase 1.5 completada (0 sorry)*
 
 *Documento generado: Enero 2026*
 *Última actualización: Estado post-pruebas de soundness*

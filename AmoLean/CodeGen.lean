@@ -51,11 +51,11 @@ def freshVar (s : CodeGenState) : (String × CodeGenState) :=
 def addAssignment (s : CodeGenState) (a : Assignment) : CodeGenState :=
   { s with assignments := s.assignments ++ [a] }
 
-/-- 
+/--
 Convertir Expr a LowLevelExpr con let-lifting.
 Cada subexpresión no trivial se convierte en una variable temporal.
 -/
-partial def lowerExpr (varNames : VarId → String) : 
+def lowerExpr (varNames : VarId → String) :
     Expr Int → CodeGenState → (LowLevelExpr × CodeGenState)
   | const c, s => (LowLevelExpr.litInt c, s)
   | var v, s => (LowLevelExpr.varRef (varNames v), s)
@@ -71,6 +71,7 @@ partial def lowerExpr (varNames : VarId → String) :
       let (tmpName, s3) := freshVar s2
       let assignment := { varName := tmpName, value := LowLevelExpr.binOp "*" ll1 ll2 }
       (LowLevelExpr.varRef tmpName, addAssignment s3 assignment)
+termination_by e _ => sizeOf e
 
 /-- Convertir expresión completa a programa -/
 def toLowLevel (varNames : VarId → String) (e : Expr Int) : LowLevelProgram :=

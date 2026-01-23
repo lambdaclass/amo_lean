@@ -252,26 +252,83 @@ lemma rewriteAtRoot_sound {α : Type} [Add α] [Mul α]
 
 /--
 La reescritura bottom-up preserva la semántica.
-NOTA: Esta prueba requiere inducción bien fundada sobre Expr.
-La versión actual usa sorry porque rewriteBottomUp está definida como `partial`.
-Para una prueba completa, necesitaríamos redefinir rewriteBottomUp usando
-recursión bien fundada (por ejemplo, basada en el tamaño de la expresión).
+Ahora que rewriteBottomUp usa recursión bien fundada, podemos probar por inducción.
 -/
 theorem rewriteBottomUp_sound {α : Type} [Add α] [Mul α]
     (rules : List (RewriteRule α)) (env : VarId → α)
     (h_rules_sound : ∀ rule ∈ rules, ∀ e e', rule e = some e' → denote env e = denote env e')
     (e : Expr α) :
     denote env (rewriteBottomUp rules e) = denote env e := by
-  sorry -- Requiere redefinir rewriteBottomUp sin `partial` para permitir inducción
+  induction e with
+  | const c =>
+    simp only [rewriteBottomUp]
+    exact rewriteAtRoot_sound rules env h_rules_sound (const c)
+  | var v =>
+    simp only [rewriteBottomUp]
+    exact rewriteAtRoot_sound rules env h_rules_sound (var v)
+  | add e1 e2 ih1 ih2 =>
+    simp only [rewriteBottomUp]
+    have h_inner : denote env (add (rewriteBottomUp rules e1) (rewriteBottomUp rules e2)) =
+                   denote env (add e1 e2) := by
+      simp only [denote]
+      rw [ih1, ih2]
+    rw [rewriteAtRoot_sound rules env h_rules_sound]
+    exact h_inner
+  | mul e1 e2 ih1 ih2 =>
+    simp only [rewriteBottomUp]
+    have h_inner : denote env (mul (rewriteBottomUp rules e1) (rewriteBottomUp rules e2)) =
+                   denote env (mul e1 e2) := by
+      simp only [denote]
+      rw [ih1, ih2]
+    rw [rewriteAtRoot_sound rules env h_rules_sound]
+    exact h_inner
+
+/--
+La reescritura hasta punto fijo preserva la semántica.
+Probamos por inducción sobre fuel.
+-/
+theorem rewriteToFixpoint_sound {α : Type} [Add α] [Mul α] [BEq (Expr α)]
+    (rules : List (RewriteRule α)) (env : VarId → α)
+    (h_rules_sound : ∀ rule ∈ rules, ∀ e e', rule e = some e' → denote env e = denote env e')
+    (fuel : Nat) (e : Expr α) :
+    denote env (rewriteToFixpoint rules fuel e) = denote env e := by
+  induction fuel generalizing e with
+  | zero =>
+    simp only [rewriteToFixpoint]
+  | succ n ih =>
+    simp only [rewriteToFixpoint]
+    split
+    · -- Caso: e' == e (punto fijo alcanzado), retornamos e
+      rfl
+    · -- Caso: e' ≠ e (continuar iterando)
+      have h_bu := rewriteBottomUp_sound rules env h_rules_sound e
+      rw [← h_bu]
+      exact ih (rewriteBottomUp rules e)
+
+/--
+Lema auxiliar: las reglas algebraicas son todas correctas.
+-/
+lemma algebraicRules_sound {α : Type} [Semiring α] [DecidableEq α]
+    (env : VarId → α) :
+    ∀ rule ∈ algebraicRules (α := α), ∀ e e', rule e = some e' → denote env e = denote env e' := by
+  intro rule hr e e' h_apply
+  simp only [algebraicRules, List.mem_cons, List.mem_nil_iff, or_false] at hr
+  rcases hr with rfl | rfl | rfl | rfl | rfl | rfl
+  · exact rule_add_zero_right_sound env e e' h_apply
+  · exact rule_add_zero_left_sound env e e' h_apply
+  · exact rule_mul_one_right_sound env e e' h_apply
+  · exact rule_mul_one_left_sound env e e' h_apply
+  · exact rule_mul_zero_right_sound env e e' h_apply
+  · exact rule_mul_zero_left_sound env e e' h_apply
 
 /--
 La simplificación preserva la semántica.
-NOTA: Depende de rewriteBottomUp_sound, que requiere redefinición sin `partial`.
 -/
 theorem simplify_sound {α : Type} [Semiring α] [DecidableEq α] [BEq (Expr α)]
     (env : VarId → α)
     (e : Expr α) (fuel : Nat) :
     denote env (simplify e fuel) = denote env e := by
-  sorry -- Depende de rewriteBottomUp_sound y rewriteToFixpoint_sound
+  unfold simplify
+  exact rewriteToFixpoint_sound algebraicRules env (algebraicRules_sound env) fuel e
 
 end AmoLean

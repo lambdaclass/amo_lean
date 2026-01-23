@@ -128,10 +128,10 @@ def rewriteAtRoot (rules : List (RewriteRule α)) (e : Expr α) : Expr α :=
   | none => e
 
 /-- Reescritura bottom-up: primero simplifica subexpresiones, luego la raíz -/
-partial def rewriteBottomUp (rules : List (RewriteRule α)) : Expr α → Expr α
+def rewriteBottomUp (rules : List (RewriteRule α)) : Expr α → Expr α
   | const c => rewriteAtRoot rules (const c)
   | var v => rewriteAtRoot rules (var v)
-  | add e1 e2 => 
+  | add e1 e2 =>
       let e1' := rewriteBottomUp rules e1
       let e2' := rewriteBottomUp rules e2
       rewriteAtRoot rules (add e1' e2')
@@ -139,13 +139,14 @@ partial def rewriteBottomUp (rules : List (RewriteRule α)) : Expr α → Expr �
       let e1' := rewriteBottomUp rules e1
       let e2' := rewriteBottomUp rules e2
       rewriteAtRoot rules (mul e1' e2')
+termination_by e => sizeOf e
 
 /-- Reescritura iterativa hasta punto fijo (con límite) -/
-partial def rewriteToFixpoint [BEq (Expr α)] (rules : List (RewriteRule α)) (fuel : Nat) (e : Expr α) : Expr α :=
-  if fuel == 0 then e
-  else
-    let e' := rewriteBottomUp rules e
-    if e' == e then e else rewriteToFixpoint rules (fuel - 1) e'
+def rewriteToFixpoint [BEq (Expr α)] (rules : List (RewriteRule α)) : Nat → Expr α → Expr α
+  | 0, e => e
+  | fuel + 1, e =>
+      let e' := rewriteBottomUp rules e
+      if e' == e then e else rewriteToFixpoint rules fuel e'
 
 /-! ## Parte 5: Conjunto de Reglas por Defecto -/
 
