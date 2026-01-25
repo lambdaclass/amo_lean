@@ -1,6 +1,6 @@
 # AMO-Lean: Project Status
 
-*Last Updated: January 24, 2026 - Phase 6.4 (Merkle Tree) Complete, Ready for Phase 6.5*
+*Last Updated: January 25, 2026 - Phase 6.5 (FRI Protocol State Machine) Complete*
 
 ---
 
@@ -1666,11 +1666,23 @@ They cannot be reordered or eliminated, preserving cryptographic security.
 
 See **Design Decision: Phase 6.4 Merkle Tree Architecture** below for full analysis.
 
-**Phase 6.5: FRI Protocol (~500 lines)**
-- [ ] Create `AmoLean/FRI/Protocol.lean`
-- [ ] Implement commit phase (polynomial → Merkle root)
-- [ ] Implement fold phase (interactive folding rounds)
-- [ ] Implement query phase (random point verification)
+**Phase 6.5: FRI Protocol State Machine (~540 lines)** ✓ COMPLETE
+- [x] Create `AmoLean/FRI/Protocol.lean` with complete state machine
+- [x] `PolyExpr`: Symbolic polynomial representation (initial, folded, constant)
+- [x] `RoundState`: Complete protocol state (poly, domain, transcript, commitment, challenge)
+- [x] `friRound`: State transition with strict phase ordering:
+  - Phase 0: DOMAIN_ENTER (friFold context)
+  - Phase 1: COMMIT (Merkle tree construction)
+  - Phase 2: ABSORB (root into transcript)
+  - Phase 3: SQUEEZE (extract challenge α - BARRIER)
+  - Phase 4: FOLD (FRI fold with α)
+  - Phase 5: DOMAIN_EXIT
+- [x] Multi-round execution with `runFRIRounds`
+- [x] Flow analysis: `analyzeFlow`, `extractIntrinsicSequence`
+- [x] Cost analysis: `roundCost`, `protocolCost`
+- [x] Integration test `Benchmarks/FRI_Flow.lean` with flow pattern verification
+
+See **ADR-007: FRI Protocol State Machine Design** below for full analysis.
 
 **Phase 6.6: Verification (~300 lines)**
 - [ ] Property-based testing (similar to Phase 5.10)
@@ -1747,6 +1759,69 @@ Memory layout for N=8:
 Index:  0   1   2   3   4   5   6   7   8   9  10  11  12  13  14
 Node:  L0  L1  L2  L3  L4  L5  L6  L7  N0  N1  N2  N3  N4  N5 ROOT
 Layer:  ─────── leaves ───────────  ── layer1 ── ─ layer2 ─ root
+```
+
+**ADR-007: FRI Protocol as Explicit State Machine (Phase 6.5)**
+
+*Design Decision:* Model FRI as an explicit state machine with `RoundState → RoundState` transitions.
+
+*Protocol State:*
+```lean
+structure RoundState where
+  poly : PolyExpr           -- Symbolic polynomial (tracks folding history)
+  domain : Nat              -- Current evaluation domain size
+  transcript : TranscriptState  -- Fiat-Shamir state
+  round : Nat               -- Round number
+  commitment : Option UInt64    -- Merkle root (after commit)
+  challenge : Option UInt64     -- α value (after squeeze)
+```
+
+*Strict Phase Ordering:*
+```
+friRound : RoundState → RoundOutput
+
+RoundOutput contains:
+1. nextState: RoundState (for protocol continuation)
+2. sigma: CryptoSigma (IR for code generation)
+3. phases: List String (debugging trace)
+
+Phase ordering (enforced by CryptoSigma structure):
+  ENTER → Commit(MerkleTree) → ABSORB → SQUEEZE → Fold → EXIT
+```
+
+*Security Invariant:*
+The CryptoSigma IR ensures that SQUEEZE always comes AFTER ABSORB:
+```
+seq(domainEnter, seq(commitSigma, seq(absorbSigma, seq(squeezeSigma, seq(foldSigma, domainExit)))))
+```
+This prevents the optimizer from reordering cryptographic operations.
+
+*Flow Pattern Verification:*
+The integration test `Benchmarks/FRI_Flow.lean` verifies:
+1. Domain balance: enters = exits
+2. Absorb count = number of rounds
+3. Squeeze count = number of rounds
+4. ABSORB always precedes SQUEEZE in each round
+
+*Observed Flow (2 rounds, N=16):*
+```
+ROUND 0:
+  > ENTER[FRIFold]
+  T ENTER[MerkleNode]
+  # MERKLE_HASH (×4)
+  < EXIT
+  A ABSORB(1)
+  S SQUEEZE
+  < EXIT
+
+ROUND 1:
+  > ENTER[FRIFold]
+  T ENTER[MerkleNode]
+  # MERKLE_HASH (×3)
+  < EXIT
+  A ABSORB(1)
+  S SQUEEZE
+  < EXIT
 ```
 
 ---
@@ -1841,10 +1916,10 @@ import AmoLean.Meta.CompileRules
 │                         ABSTRACTION LEVELS                             │
 ├────────────────────────────────────────────────────────────────────────┤
 │                                                                        │
-│  Level 5: Complete FRI Protocol  ◄──── WE ARE HERE (Phase 6)          │
-│           ├── Merkle commitments                                       │
-│           ├── Folding rounds (✓ Validation complete)                   │
-│           └── Proximity verification                                   │
+│  Level 5: Complete FRI Protocol  ◄──── WE ARE HERE (Phase 6.5 done)   │
+│           ├── Merkle commitments (✓ Phase 6.4)                         │
+│           ├── Folding rounds (✓ Phase 6.2, State Machine ✓ Phase 6.5)  │
+│           └── Proximity verification (Phase 6.6 pending)               │
 │                           ↑                                            │
 │  Level 4: Polynomial Operations                                        │
 │           ├── Verified FFT/NTT                                         │
@@ -1921,4 +1996,4 @@ Phase 8: Production     ██████████     🔜 Planned       Ev
 ---
 
 *Document generated: January 2026*
-*Last update: January 24, 2026 - Phase 6.4 (Merkle Tree) complete, ready for Phase 6.5 (FRI Protocol)*
+*Last update: January 25, 2026 - Phase 6.5 (FRI Protocol State Machine) complete, ready for Phase 6.6 (Verification)*

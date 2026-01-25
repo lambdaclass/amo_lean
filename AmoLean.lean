@@ -41,6 +41,7 @@ import AmoLean.FRI.Fold
 import AmoLean.FRI.Kernel
 import AmoLean.FRI.Transcript
 import AmoLean.FRI.Merkle
+import AmoLean.FRI.Protocol
 
 namespace AmoLean
 
