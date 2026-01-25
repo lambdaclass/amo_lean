@@ -232,14 +232,14 @@ def hexFormat (n : UInt64) : String :=
 
 /-! ## Part 4: Test Execution -/
 
-/-- Known C output from test run -/
+/-- Known C output from test run (after buffer swap fix) -/
 def knownCOutput : CTestOutput :=
   { initialSize := 16
     numRounds := 2
     commitments := #[10032010613981586448, 10532967979716745914]
     challenges := #[1202725872338758096, 16330111461781289493]
-    finalPoly := #[2405451744677516193, 4810903489355032387,
-                   7216355234032548581, 9621806978710064775] }
+    finalPoly := #[7955566970841512480, 16199953074432279032,
+                   5997595104313493968, 14241981207904260520] }
 
 /-- Test polynomial: [1, 2, 3, ..., 16] -/
 def testPoly : Array UInt64 := Array.ofFn (fun i : Fin 16 => UInt64.ofNat (i.val + 1))

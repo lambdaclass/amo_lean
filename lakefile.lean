@@ -10,3 +10,6 @@ require mathlib from git
 @[default_target]
 lean_lib «AmoLean» where
   roots := #[`AmoLean]
+
+lean_lib «Benchmarks» where
+  roots := #[`Benchmarks.FRI_DiffTest]

@@ -877,19 +877,32 @@ Original:  6.5 → 6.6 (Verificación) → 7 (CodeGen)
 Nuevo:     6.5 → 7-Alpha (CodeGen) → 7-Beta (DiffFuzz) → 6.6 (Verificación)
 ```
 
-#### 7-Alpha: FRI CodeGen → C (SIGUIENTE)
-- [ ] `AmoLean/FRI/CodeGen.lean`: CryptoSigma → C con proof anchors
-- [ ] Generar `fri_protocol.c` con memoria, alineación AVX, intrinsics
-- [ ] Proof anchors: comentarios estructurados para Phase 6.6
+#### 7-Alpha: FRI CodeGen → C ✓ (COMPLETADA - Enero 2026)
+- [x] `AmoLean/FRI/CodeGen.lean`: CryptoSigma → C con proof anchors (~710 líneas)
+- [x] `generated/fri_protocol.c`: FRI completo (~320 líneas)
+- [x] Proof anchors: comentarios estructurados documentando pre/postcondiciones
 
-#### 7-Beta: Differential Fuzzing
-- [ ] `Benchmarks/FRI_DiffTest.lean`: Testing comparativo
-- [ ] Lean evaluator vs C binary - comparación bit a bit
-- [ ] Property-based test generation
+#### 7-Beta: Differential Fuzzing ✓ (COMPLETADA - Enero 2026)
+- [x] `Benchmarks/FRI_DiffTest.lean`: Testing comparativo (~350 líneas)
+- [x] Lean evaluator vs C binary - comparación bit a bit
+- [x] **BUG CRÍTICO ENCONTRADO Y CORREGIDO**: Buffer swap logic error
 
-#### 6.6: Verificación Formal con Proof Anchors
-- [ ] Teoremas que conectan con proof anchors del código C
-- [ ] Property-based testing informado por fuzzing diferencial
+**Bug encontrado**: El código C retornaba P1 (resultado de round 0) en lugar de P2 (resultado de round 1).
+- Causa: Swap condicional `if (round + 1 < num_rounds)` omitía el swap del último round
+- Efecto: `current` apuntaba a datos viejos mientras `next` tenía el resultado correcto
+- Fix: Swap incondicional después de cada round
+
+Este bug demuestra el valor del fuzzing diferencial: el código compilaba, no crasheaba, y los valores intermedios (commitments, challenges) eran correctos. Solo el valor final estaba corrupto.
+
+#### 6.6: Verificación Formal con Proof Anchors ✓ (COMPLETADA - Enero 2026)
+- [x] `AmoLean/Verification/FRI_Properties.lean`: Teoremas formales (~350 líneas)
+- [x] `friFold_spec`: Especificación del fold verificada
+- [x] `round_ordering_secure`: Ordenamiento Fiat-Shamir verificado
+- [x] `domain_size_after_rounds`: Reducción de dominio verificada
+- [x] Correspondencia proof anchors ↔ teoremas documentada
+- [x] `docs/FINAL_REPORT.md`: Reporte final del proyecto
+
+**PROYECTO COMPLETADO** - Todas las fases hasta 6.6 finalizadas.
 
 ---
 
@@ -1001,4 +1014,5 @@ amo-lean/
 ---
 
 *Documento actualizado: Enero 25, 2026*
-*Fase actual: 6 (FRI Protocol) - Phase 6.5 completa, iniciando 7-Alpha (CodeGen)*
+*Estado: PROYECTO COMPLETADO - Todas las fases (1 a 6.6) finalizadas. Bug crítico encontrado y corregido.*
+*Ver: docs/FINAL_REPORT.md para el reporte completo.*

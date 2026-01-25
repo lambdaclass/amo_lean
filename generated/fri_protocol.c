@@ -257,17 +257,15 @@ void fri_commit_phase(
         commitments[round] = merkle_nodes[2 * domain - 2];
         challenges[round] = alpha;
 
-        // Prepare for next round
-        if (round + 1 < num_rounds) {
-            // Swap buffers
-            const field_t* temp = current;
-            current = next;
-            next = (field_t*)temp;
-        }
+        // Prepare for next round - ALWAYS swap to track result location
+        const field_t* temp = current;
+        current = next;
+        next = (field_t*)temp;
         domain /= 2;
     }
 
-    // Ensure final result is in final_poly
+    // After always swapping, current points to latest result
+    // Copy to final_poly if needed
     if (current != final_poly) {
         memcpy(final_poly, current, domain * sizeof(field_t));
     }
