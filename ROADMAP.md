@@ -826,7 +826,74 @@ void fft8_avx(double* restrict in, double* restrict out) {
 
 ---
 
-## Estructura del Proyecto (Actualizada para Fase 5)
+### Fase 5.10: Verificación ✓ (COMPLETADA - Enero 2026)
+
+**Objetivo**: Verificar corrección del pipeline completo.
+
+**Completado**:
+- [x] `AmoLean/Verification/Semantics.lean`: Semántica de referencia para SigmaExpr
+- [x] `AmoLean/Verification/FuzzTest.lean`: Testing diferencial property-based
+- [x] `AmoLean/Verification/Theorems.lean`: Teoremas formales de corrección
+- [x] Pruebas para DFT_4, identidades de Kronecker, expansión de kernels
+
+**Resultado**: Pipeline Phase 5 completamente verificado.
+
+---
+
+### Fase 6: FRI Protocol ✓ (EN PROGRESO - Enero 2026)
+
+**Objetivo**: Implementar el protocolo FRI (Fast Reed-Solomon IOP of Proximity) como caso de estudio.
+
+#### 6.1 Infraestructura ✓ (COMPLETADA)
+- [x] `AmoLean/FRI/Basic.lean`: Tipos core, ZKCostModel, FieldConfig
+- [x] NodeTransparency, FRIParams, TileConfig
+
+#### 6.2 FRI Fold ✓ (COMPLETADA)
+- [x] `AmoLean/FRI/Fold.lean`: friFold con tipos dependientes
+- [x] `AmoLean/FRI/Kernel.lean`: FRILayerKernel parametrizado
+
+#### 6.3 Transcript & Cryptographic Intrinsics ✓ (COMPLETADA)
+- [x] `AmoLean/FRI/Transcript.lean`: TranscriptState, CryptoSigma
+- [x] Intrinsic operations: absorb, squeeze, hash, merkleHash, domainEnter/Exit
+
+#### 6.4 Vectorized Merkle Tree ✓ (COMPLETADA)
+- [x] `AmoLean/FRI/Merkle.lean`: FlatMerkle, MerkleProof
+- [x] Leaves-first layout, bottom-up construction
+
+#### 6.5 FRI Protocol State Machine ✓ (COMPLETADA)
+- [x] `AmoLean/FRI/Protocol.lean`: RoundState, friRound, multi-round execution
+- [x] `Benchmarks/FRI_Flow.lean`: Integration test con flow pattern verification
+
+#### 6.6-7: Plan Reordenado (ADR-008)
+
+**Decisión Estratégica**: Reordenar fases para evitar "verificación en el vacío".
+
+*Riesgo Identificado*: Verificar formalmente código Lean sin generar C podría probar
+teoremas sobre estructuras que no funcionan en la práctica (memoria, alineación AVX, etc.)
+
+*Plan Modificado*:
+```
+Original:  6.5 → 6.6 (Verificación) → 7 (CodeGen)
+Nuevo:     6.5 → 7-Alpha (CodeGen) → 7-Beta (DiffFuzz) → 6.6 (Verificación)
+```
+
+#### 7-Alpha: FRI CodeGen → C (SIGUIENTE)
+- [ ] `AmoLean/FRI/CodeGen.lean`: CryptoSigma → C con proof anchors
+- [ ] Generar `fri_protocol.c` con memoria, alineación AVX, intrinsics
+- [ ] Proof anchors: comentarios estructurados para Phase 6.6
+
+#### 7-Beta: Differential Fuzzing
+- [ ] `Benchmarks/FRI_DiffTest.lean`: Testing comparativo
+- [ ] Lean evaluator vs C binary - comparación bit a bit
+- [ ] Property-based test generation
+
+#### 6.6: Verificación Formal con Proof Anchors
+- [ ] Teoremas que conectan con proof anchors del código C
+- [ ] Property-based testing informado por fuzzing diferencial
+
+---
+
+## Estructura del Proyecto (Actualizada para Fase 6)
 
 ```
 amo-lean/
@@ -842,34 +909,42 @@ amo-lean/
 │   │   ├── Basic.lean           # E-graph core
 │   │   ├── EMatch.lean          # E-matching
 │   │   ├── Saturate.lean        # Saturación
-│   │   └── Vector.lean          # [✓ 5.4] E-graph para Kronecker (~720 líneas)
-│   ├── Vector/                  # [✓ 5.1] Fase 5
-│   │   └── Basic.lean           # Vec α n, VecExpr α n (~295 líneas)
-│   ├── Matrix/                  # [✓ 5.2, 5.3] Fase 5
-│   │   ├── Basic.lean           # MatExpr α m n, Perm n (~315 líneas)
-│   │   └── Perm.lean            # Evaluación de permutaciones (~310 líneas)
-│   ├── Sigma/                   # [✓ 5.5] Sigma-SPL IR y Pipeline Completo
-│   │   ├── Basic.lean           # SigmaExpr, Lowering (~370 líneas)
-│   │   ├── Expand.lean          # [5.6] Kernel expansion (DFT₂ → scalar ops)
-│   │   ├── CodeGen.lean         # [5.7] SigmaExpr → C code
-│   │   ├── SIMD.lean            # [5.8] AVX intrinsics generation
-│   │   ├── ZModSIMD.lean        # [5.9] Modular arithmetic SIMD
-│   │   └── Correctness.lean     # [5.10] Pruebas de corrección
+│   │   └── Vector.lean          # [✓ 5.4] E-graph para Kronecker
+│   ├── Vector/                  # [✓ 5.1]
+│   │   └── Basic.lean           # Vec α n, VecExpr α n
+│   ├── Matrix/                  # [✓ 5.2, 5.3]
+│   │   ├── Basic.lean           # MatExpr α m n, Perm n
+│   │   └── Perm.lean            # Evaluación de permutaciones
+│   ├── Sigma/                   # [✓ 5.5-5.9]
+│   │   ├── Basic.lean           # SigmaExpr, Lowering
+│   │   ├── Expand.lean          # Kernel expansion
+│   │   ├── CodeGen.lean         # SigmaExpr → C code
+│   │   ├── SIMD.lean            # AVX intrinsics generation
+│   │   └── ZModSIMD.lean        # Modular arithmetic SIMD
+│   ├── Verification/            # [✓ 5.10]
+│   │   ├── Semantics.lean       # Reference semantics
+│   │   ├── FuzzTest.lean        # Differential testing
+│   │   └── Theorems.lean        # Formal correctness
+│   └── FRI/                     # [✓ 6.1-6.5, IN PROGRESS 7-Alpha]
+│       ├── Basic.lean           # [6.1] Core types, ZKCostModel
+│       ├── Fold.lean            # [6.2] FRI fold with dependent types
+│       ├── Kernel.lean          # [6.2] FRILayerKernel parametrizado
+│       ├── Transcript.lean      # [6.3] TranscriptState, CryptoSigma
+│       ├── Merkle.lean          # [6.4] FlatMerkle, leaves-first
+│       ├── Protocol.lean        # [6.5] RoundState, friRound
+│       └── CodeGen.lean         # [7-Alpha] CryptoSigma → C (PRÓXIMO)
+├── Benchmarks/
+│   ├── FRI_Fusion.lean          # Fusion benchmark
+│   ├── FRI_Symbolic.lean        # Symbolic execution N=8
+│   ├── FRI_Flow.lean            # [6.5] Flow pattern verification
+│   └── FRI_DiffTest.lean        # [7-Beta] Differential fuzzing (PRÓXIMO)
 ├── Tests/
 │   ├── ZModDemo.lean
-│   ├── GenericsAudit.lean
-│   ├── VectorTests.lean         # [NUEVO]
-│   └── FFTTests.lean            # [NUEVO]
+│   └── GenericsAudit.lean
 ├── docs/
-│   ├── BENCHMARK_FASE1.md
 │   ├── PROJECT_STATUS.md
 │   ├── ESTADO_PROYECTO.md
 │   └── optimizaciones prefase5/ # Papers de referencia
-│       ├── efficient simd extensions.pdf
-│       ├── high performance simd.pdf
-│       ├── dt practical.pdf
-│       ├── dt formalization.pdf
-│       └── ...
 ├── ROADMAP.md                   # Este archivo
 └── lakefile.lean
 ```
@@ -925,5 +1000,5 @@ amo-lean/
 
 ---
 
-*Documento actualizado: Enero 24, 2026*
-*Fase actual: 5 (FFT/NTT - Diseño Vectorial) - EN PROGRESO*
+*Documento actualizado: Enero 25, 2026*
+*Fase actual: 6 (FRI Protocol) - Phase 6.5 completa, iniciando 7-Alpha (CodeGen)*

@@ -1684,11 +1684,26 @@ See **Design Decision: Phase 6.4 Merkle Tree Architecture** below for full analy
 
 See **ADR-007: FRI Protocol State Machine Design** below for full analysis.
 
-**Phase 6.6: Verification (~300 lines)**
-- [ ] Property-based testing (similar to Phase 5.10)
-- [ ] Formal theorems for FRI correctness
+**Phase 7-Alpha: FRI CodeGen to C (~400 lines)** ← REORDERED (see ADR-008)
+- [ ] Create `AmoLean/FRI/CodeGen.lean` - CryptoSigma → C code generation
+- [ ] Generate `fri_protocol.c` with proof anchors (structured comments)
+- [ ] Handle memory layout: field elements, Merkle nodes, transcript state
+- [ ] AVX2 intrinsics for FRI fold operations
+- [ ] Proof anchors documenting preconditions/postconditions for Phase 6.6
 
-**Total Estimated: ~2,250 lines**
+**Phase 7-Beta: Differential Fuzzing (~300 lines)**
+- [ ] Create `Benchmarks/FRI_DiffTest.lean` - Comparative testing framework
+- [ ] Lean evaluator as reference oracle
+- [ ] Compile and execute generated C code
+- [ ] Bit-exact comparison of results
+- [ ] Property-based test generation (QuickCheck-style)
+
+**Phase 6.6: Formal Verification with Proof Anchors (~300 lines)** ← REORDERED
+- [ ] Property-based testing connecting to C proof anchors
+- [ ] Formal theorems for FRI correctness (informed by differential fuzzing results)
+- [ ] Theorems that connect directly to generated C code invariants
+
+**Total Estimated: ~2,750 lines** (including reordered phases)
 
 ### Architecture Decision Records
 
@@ -1823,6 +1838,74 @@ ROUND 1:
   S SQUEEZE
   < EXIT
 ```
+
+**ADR-008: Phase Reordering - CodeGen Before Formal Verification**
+
+*Date: January 25, 2026*
+
+*Original Plan:*
+```
+Phase 6.5 → Phase 6.6 (Verification) → Phase 7 (CodeGen)
+```
+
+*Proposed Reordering:*
+```
+Phase 6.5 → Phase 7-Alpha (CodeGen) → Phase 7-Beta (Diff Fuzzing) → Phase 6.6 (Verification)
+```
+
+*Analysis of Proposal (User):*
+
+1. **"Verification in a Vacuum" Risk**: Proving theorems in Lean without generated C code
+   risks verifying code that is internally consistent but practically invalid. Evidence:
+   - Phase 6.4 Merkle proof verification returned FAILED
+   - This was detected by running code, not by theorem proving
+   - Theorems about incorrect code waste development time
+
+2. **Differential Fuzzing Advantage**: The strongest verification for compilers is:
+   ```
+   Lean Evaluator (Reference) ←→ Compare ←→ C Binary (Generated)
+   ```
+   This requires Phase 7 to exist before Phase 6.6 can use it.
+
+3. **Critical Security Already Verified**: Phase 6.5's `FRI_Flow.lean` test verified:
+   - ABSORB → SQUEEZE ordering (Fiat-Shamir security)
+   - Domain balance
+   - Operation counts
+
+*Counter-Proposal (Implemented):*
+
+Instead of a "dirty prototype", Phase 7-Alpha generates C with **Proof Anchors**:
+
+```c
+// PROOF_ANCHOR: fri_fold_correct
+// Precondition: input.size == 2*n, output.size == n
+// Postcondition: output[i] == input[2i] + alpha * input[2i+1]
+void fri_fold(size_t n, const uint64_t* input, uint64_t* output, uint64_t alpha) {
+    for (size_t i = 0; i < n; i++) {
+        output[i] = input[2*i] + alpha * input[2*i + 1];
+    }
+}
+```
+
+*Benefits of Proof Anchors:*
+1. Document invariants that Phase 6.6 must prove
+2. Enable external verification tools (Frama-C, CBMC)
+3. Prevent "dirty prototype becomes permanent" technical debt
+
+*Implementation Strategy:*
+
+| Phase | Description | Deliverable |
+|-------|-------------|-------------|
+| **7-Alpha** | CryptoSigma → C CodeGen | `fri_protocol.c` with proof anchors |
+| **7-Beta** | Differential Fuzzing | Lean eval vs C binary comparison |
+| **6.6** | Formal Verification | Theorems connecting to proof anchors |
+
+*Risk Mitigation:*
+- Proof anchors ensure verification is not forgotten
+- Differential fuzzing catches logic bugs early
+- Formal proofs verify code that already works in practice
+
+*Decision:* APPROVED - Reorder phases as proposed.
 
 ---
 
