@@ -36,6 +36,11 @@ import AmoLean.CodeGen
 import AmoLean.EGraph.Basic
 import AmoLean.EGraph.EMatch
 import AmoLean.EGraph.Saturate
+import AmoLean.FRI.Basic
+import AmoLean.FRI.Fold
+import AmoLean.FRI.Kernel
+import AmoLean.FRI.Transcript
+import AmoLean.FRI.Merkle
 
 namespace AmoLean
 
