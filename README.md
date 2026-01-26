@@ -1,154 +1,126 @@
-# AMO-Lean: Automatic Mathematical Optimizer
+# AMO-Lean: Verified Cryptographic Code Compiler
 
-[![Lean 4](https://img.shields.io/badge/Lean-4.3.0-blue.svg)](https://leanprover.github.io/lean4/doc/)
+[![Lean 4](https://img.shields.io/badge/Lean-4.16.0-blue.svg)](https://leanprover.github.io/lean4/doc/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Release](https://img.shields.io/badge/Release-v1.0.0--fri--verified-green.svg)](https://github.com/manuelpuebla/amo-lean/releases/tag/v1.0.0-fri-verified)
 
-**AMO-Lean** is a verified automatic mathematical optimizer written in Lean 4. It transforms algebraic expressions into optimized forms using rewrite rules derived from mathematical theorems, with formal proofs of correctness.
+**AMO-Lean** is a verified compiler that transforms algebraic expressions into optimized C code with formal correctness guarantees. The current release implements the FRI (Fast Reed-Solomon IOP) commit phase with SIMD optimization.
 
-## 🎯 Vision
+## Current Release: v1.0.0-fri-verified
 
-The goal is to create a verified compiler that can:
-1. Take high-level mathematical code (via Hacspec/Rust subset)
-2. Apply algebraic optimizations using theorems from Mathlib
-3. Generate optimized low-level code (C/Rust) with formal correctness guarantees
+The first stable release includes:
+- **MatExpr IR**: Symbolic algebra with Kronecker product optimization
+- **E-Graph Engine**: Equality saturation for automatic optimization
+- **C Code Generation**: SIMD-optimized output (AVX2)
+- **FRI Protocol**: Complete commit phase implementation
+- **Differential Fuzzing**: Testing framework that validates Lean reference against generated C
 
-This approach is inspired by [Fiat-Crypto](https://github.com/mit-plv/fiat-crypto), which generates verified cryptographic code used in major web browsers.
+### Key Achievement
+A critical buffer swap bug was discovered and fixed through differential fuzzing, demonstrating the value of our "Transitive Empirical Verification" methodology.
 
-## 🏗️ Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    SEMANTIC LEVEL (Lean)                        │
-│  • Lean.Expr for canonical representation                       │
-│  • MetaM for type checking and instance synthesis               │
-│  • Mathlib as the source of truth for rewrite rules             │
-└─────────────────────────────────────────────────────────────────┘
-                              ↕
-                    [Projection / Lifting]
-                              ↕
-┌─────────────────────────────────────────────────────────────────┐
-│                   SYNTACTIC LEVEL (OptExpr)                     │
-│  • Simplified AST for efficient manipulation                    │
-│  • Bottom-up rewriting / E-graph (future)                       │
-│  • E-class analyses for semantic tracking                       │
-└─────────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────────┐
-│                   CODE GENERATION                               │
-│  • Lowering to three-address code                               │
-│  • Pretty printing to C/Rust                                    │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-## 📁 Project Structure
+## Project Structure
 
 ```
 amo-lean/
-├── lakefile.lean              # Lake build configuration
-├── lean-toolchain             # Lean version specification
-├── AmoLean.lean               # Main module
-├── ROADMAP.md                 # Detailed development roadmap
-└── AmoLean/
-    ├── Basic.lean             # Core Expr type and rewrite rules
-    ├── Correctness.lean       # Semantic preservation proofs
-    ├── MathlibIntegration.lean # Mathlib connection (Phase 2)
-    └── CodeGen.lean           # C code generation
+├── AmoLean/
+│   ├── Core.lean           # Re-exports core modules
+│   ├── Backends.lean       # Re-exports code generators
+│   ├── Protocols.lean      # Re-exports protocol implementations
+│   │
+│   ├── EGraph/             # [CORE] Equality saturation engine
+│   ├── Sigma/              # [CORE] MatExpr symbolic algebra
+│   ├── Matrix/             # [CORE] Linear algebra primitives
+│   ├── Vector/             # [CORE] Vector operations
+│   ├── Meta/               # [CORE] Compile-time utilities
+│   │
+│   ├── CodeGen.lean        # [BACKEND] C code generation (AVX2)
+│   ├── Backends/
+│   │   ├── C_AVX512/       # [FUTURE] AVX-512 backend
+│   │   └── CUDA/           # [FUTURE] GPU backend
+│   │
+│   ├── FRI/                # [PROTOCOL] FRI commit phase (stable)
+│   ├── Protocols/
+│   │   └── Poseidon/       # [FUTURE] ZK-friendly hash
+│   │
+│   └── Verification/       # Formal proofs and testing
+│
+├── Benchmarks/             # Differential fuzzing tests
+├── generated/              # Generated C code
+└── docs/                   # Documentation and reports
 ```
 
-## 🚀 Quick Start
+### Module Organization
+
+| Module | Status | Description |
+|--------|--------|-------------|
+| `AmoLean.Core` | Stable | E-Graph, MatExpr, linear algebra primitives |
+| `AmoLean.Backends` | Stable | C/AVX2 code generation |
+| `AmoLean.Protocols` | Stable | FRI commit phase |
+| `AmoLean.Verification` | Stable | Formal proofs, fuzzing framework |
+
+## Quick Start
 
 ### Prerequisites
 
-- [Lean 4](https://leanprover.github.io/lean4/doc/setup.html) (v4.3.0 or later)
-- [Lake](https://github.com/leanprover/lake) (comes with Lean 4)
+- [Lean 4](https://leanprover.github.io/lean4/doc/setup.html) (v4.16.0)
+- [Lake](https://github.com/leanprover/lake)
+- GCC with AVX2 support (for generated code)
 
 ### Building
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/amo-lean.git
+git clone https://github.com/manuelpuebla/amo-lean.git
 cd amo-lean
 lake build
 ```
 
-### Example Usage
+### Running Differential Fuzzing
 
-```lean
-import AmoLean
-
-open AmoLean.Expr
-
--- Define variables
-def x : Expr Int := var 0
-def y : Expr Int := var 1
-
--- Create an expression: x * 1 + y * 0
-def myExpr : Expr Int := add (mul x (const 1)) (mul y (const 0))
-
--- Simplify it (should become just x)
-#eval simplify myExpr
-
--- Generate C code
-#eval exprToC "optimized_func" ["x", "y"] myExpr
+```bash
+# Build and run the FRI differential test
+lake build Benchmarks
+cd generated
+gcc -O3 -march=native -o fri_test fri_test.c fri_protocol.c
+./fri_test
 ```
 
-## 📋 Current Features (Phase 1)
+## Future Work (zkVM Roadmap)
 
-- ✅ Inductive `Expr` type for arithmetic expressions
-- ✅ Rewrite rules for algebraic identities:
-  - `x + 0 → x`, `0 + x → x`
-  - `x * 1 → x`, `1 * x → x`
-  - `x * 0 → 0`, `0 * x → 0`
-  - `a * (b + c) → a*b + a*c` (distributivity)
-- ✅ Bottom-up rewriting engine
-- ✅ Fixed-point iteration
-- ✅ Basic C code generation
-- 🔄 Correctness proofs (in progress)
+See [ZKVM_ROADMAP.md](docs/ZKVM_ROADMAP.md) for detailed planning.
 
-## 🗺️ Roadmap
+| Priority | Component | Time | Description |
+|----------|-----------|------|-------------|
+| #1 Critical | Poseidon Hash | 6-10 weeks | Enables efficient proof recursion |
+| #2 High | CUDA Backend | 3-6 months | 10-100x speedup via GPU |
+| #3 Medium | AVX-512 | 2-3 weeks | 2x incremental CPU speedup |
+| #4 Low | FRI Query Phase | 4-6 weeks | Completes the FRI protocol |
 
-### Phase 1: Toy Model ✅
-Basic expression optimization with algebraic rules.
+## Documentation
 
-### Phase 2: Mathlib Integration
-- Connect `Expr` to Mathlib's algebraic structures
-- Automatically compile Mathlib theorems to rewrite rules
-- Support for `Ring`, `Field`, `CommRing`, etc.
+- [FINAL_REPORT.md](docs/FINAL_REPORT.md) - Complete technical report
+- [ZKVM_ROADMAP.md](docs/ZKVM_ROADMAP.md) - Future work planning
+- [PROJECT_STATUS.md](docs/PROJECT_STATUS.md) - Development history
 
-### Phase 3: E-graph and Equality Saturation
-- Implement E-graph data structure in pure Lean
-- E-class analysis for type tracking
-- Optimal extraction
-
-### Phase 4: Cryptographic Applications
-- Finite field arithmetic (`ZMod p`, `GF(2^n)`)
-- FFT optimization
-- FRI/STARKs components
-
-## 📚 References
-
-This project builds on ideas from:
+## References
 
 1. **egg**: Willsey et al. "egg: Fast and Extensible Equality Saturation" (POPL 2021)
 2. **Fiat-Crypto**: Erbsen et al. "Simple High-Level Code For Cryptographic Arithmetic"
-3. **Verified Rewriter**: Gross et al. "Accelerating Verified-Compiler Development with a Verified Rewriting Engine" (ITP 2022)
-4. **E-graphs as Circuits**: Sun et al. "E-Graphs as Circuits, and Optimal Extraction via Treewidth" (2024)
+3. **FRI**: Ben-Sasson et al. "Fast Reed-Solomon Interactive Oracle Proofs of Proximity"
+4. **Poseidon**: Grassi et al. "Poseidon: A New Hash Function for Zero-Knowledge Proof Systems"
 
-## 🤝 Contributing
+## Contributing
 
-Contributions are welcome! Please feel free to submit issues and pull requests.
+Contributions are welcome, especially in these areas:
+- Poseidon hash implementation (Priority #1)
+- CUDA backend development (Priority #2)
+- Additional protocol implementations
 
-Areas where help is needed:
-- Completing correctness proofs
-- Mathlib integration
-- E-graph implementation
-- Documentation and examples
+## License
 
-## 📄 License
+MIT License - see [LICENSE](LICENSE) for details.
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - The Lean 4 community and Mathlib contributors
-- The egg project for pioneering equality saturation
-- The Fiat-Crypto team for demonstrating verified cryptographic code generation
+- The egg project for equality saturation foundations
+- The Fiat-Crypto team for verified cryptographic code generation methodology
