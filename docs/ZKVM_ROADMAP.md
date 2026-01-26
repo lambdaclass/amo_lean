@@ -23,172 +23,97 @@ Este documento presenta la planificación detallada para evolucionar AMO-Lean de
 
 ---
 
-## 1. Poseidon/Rescue Hash Integration
+## 1. Poseidon2 Hash Integration
+
+> **Documentación detallada**: Ver [docs/poseidon/](poseidon/) para ADRs y progreso.
 
 ### 1.1 Contexto y Motivación
 
-Poseidon es un hash "ZK-friendly" diseñado para ser eficiente dentro de circuitos aritméticos. Es el estándar de facto para:
-- Recursión de pruebas (una prueba verifica otra)
-- Árboles de Merkle en zkVMs
-- Compromisos de estado
+AMO-Lean v1.0 maneja solo operaciones **lineales** (add, mul, kron). Poseidon requiere la S-box `x^α`, una operación **no-lineal**. Sin esta extensión, no podemos generar:
+- Merkle trees (commits)
+- Fiat-Shamir completo
+- Recursión de pruebas
 
-**Por qué es crítico**: Sin Poseidon optimizado, la recursión de pruebas es prohibitivamente lenta, limitando la escalabilidad de cualquier zkVM.
+**Decisión clave**: Implementar **Poseidon2** (no el original) porque es 2-4x más eficiente.
 
-### 1.2 Desafío Técnico Principal
+### 1.2 Desafíos Técnicos Identificados
 
-Poseidon combina operaciones lineales y no-lineales:
+| Desafío | Solución | ADR |
+|---------|----------|-----|
+| Tipos dependientes en elemwise | Firma `MatExpr m n → MatExpr m n` preserva dimensiones | [ADR-001](poseidon/ADR-001-elemwise.md) |
+| Explosión E-Graph | `elemwise` como barrera opaca, sin expansión | [ADR-001](poseidon/ADR-001-elemwise.md) |
+| Rondas parciales (S-box solo en elemento 0) | Split/Concat de VecExpr existente | [ADR-002](poseidon/ADR-002-partial-rounds.md) |
+| SIMD para rondas parciales | Calcular todo + blend (más eficiente que extract) | [ADR-003](poseidon/ADR-003-codegen-simd.md) |
+
+### 1.3 Plan de Implementación Revisado
 
 ```
-Poseidon_round(state) = MDS × (state + round_constants)^α
+┌────────────────────────────────────────────────────────────────┐
+│ Paso 0: Prerrequisitos                                         │
+│ • ZModSIMD con field_mul_avx2                                  │
+│ • pow_chain_5 optimizado (3 multiplicaciones)                  │
+├────────────────────────────────────────────────────────────────┤
+│ Paso 0.5: Especificación Ejecutable (CRÍTICO)                  │
+│ • poseidon2_spec como función PURA en Lean                     │
+│ • Cargar parámetros BN254 (MDS, round constants)               │
+│ • Validar contra test vectors del paper                        │
+│ • Entregable: Referencia ejecutable para fuzzing               │
+├────────────────────────────────────────────────────────────────┤
+│ Paso 1: Extensión del IR                                       │
+│ • ElemOp = pow Nat | custom String                             │
+│ • elemwise : ElemOp → MatExpr α m n → MatExpr α m n            │
+│ • Reglas E-Graph: fusión, constant folding, NO expansión       │
+├────────────────────────────────────────────────────────────────┤
+│ Paso 2: CodeGen                                                │
+│ • S-box escalar: square chain (x→x²→x⁴→x⁵, 3 muls)             │
+│ • S-box AVX2: vectorización paralela                           │
+│ • Patrón split→elemwise→concat detectado → blend SIMD          │
+├────────────────────────────────────────────────────────────────┤
+│ Paso 3: Poseidon2 en MatExpr                                   │
+│ • Full rounds: add_rc → elemwise(pow 5) → mul(MDS)             │
+│ • Partial rounds: split(1) → elemwise → concat → mul(MDS)      │
+│ • Métricas E-Graph para detectar explosión                     │
+├────────────────────────────────────────────────────────────────┤
+│ Paso 4: Verificación                                           │
+│ • Differential fuzzing: poseidon2_spec vs C generado           │
+│ • Benchmark vs HorizenLabs/poseidon2 (Rust)                    │
+│ • Prueba formal: eval(matexpr) = spec                          │
+├────────────────────────────────────────────────────────────────┤
+│ Paso 5: Integración                                            │
+│ • MerkleTree usando Poseidon2                                  │
+│ • Conectar con FRI commits                                     │
+└────────────────────────────────────────────────────────────────┘
 ```
 
-Donde:
-- `MDS`: Matriz de difusión (Maximum Distance Separable) — **LINEAL**, compatible con Kronecker
-- `^α`: S-box, típicamente x⁵ — **NO LINEAL**, rompe nuestra representación actual
+### 1.4 Parámetros Target
 
-**El problema**: Nuestra arquitectura `MatExpr` está optimizada para operaciones lineales (productos Kronecker). Las S-boxes requieren extender el IR.
-
-### 1.3 Plan de Implementación por Fases
-
-#### Fase 1.1: Extensión de MatExpr (Semanas 1-2)
-
-**Objetivo**: Añadir soporte para operaciones element-wise no-lineales.
-
-**Entregables**:
-```lean
--- Nuevo constructor en MatExpr
-inductive MatExpr (α : Type) : Nat → Nat → Type where
-  | ...existing constructors...
-  | elemwise : (Expr α → Expr α) → MatExpr α n n
-  | diagMap : (Expr α → Expr α) → VecExpr α n → MatExpr α n n
+**Prioridad 1: BN254** (compatible con SNARKs de Ethereum)
+```
+t = 3, α = 5, RF = 8, RP = 56
 ```
 
-**Obstáculos técnicos**:
-1. **Preservación de tipos dependientes**: El constructor `elemwise` debe preservar dimensiones
-   - *Técnica*: Usar índices fantasma (phantom indices) como en Xi & Pfenning
-   - *Bibliografía*: "Dependent Types in Practical Programming" (POPL 1999)
-
-2. **Interacción con E-Graph**: Las operaciones no-lineales complican el e-matching
-   - *Técnica*: Tratar `elemwise` como nodo opaco, sin expansión
-   - *Bibliografía*: Willsey et al. "egg: Fast and Extensible Equality Saturation"
-
-**Testing Fase 1.1**:
-- [ ] Unit tests: `elemwise` preserva dimensiones
-- [ ] Property test: `elemwise id = identity`
-- [ ] Integration test: Composición con operaciones lineales
-
-#### Fase 1.2: Implementación de Poseidon Round (Semanas 3-4)
-
-**Objetivo**: Implementar una ronda de Poseidon usando el nuevo IR.
-
-**Entregables**:
-```lean
-/-- Constantes de Poseidon para estado de tamaño t -/
-structure PoseidonParams (t : Nat) where
-  mds : Matrix t t           -- Matriz MDS
-  roundConstants : Array (Vec t)  -- Constantes por ronda
-  fullRounds : Nat           -- Rondas completas
-  partialRounds : Nat        -- Rondas parciales
-  alpha : Nat := 5           -- Exponente S-box
-
-/-- Una ronda completa de Poseidon -/
-def poseidonFullRound (params : PoseidonParams t) (round : Nat)
-    (state : MatExpr α t 1) : MatExpr α t 1 :=
-  let withConstants := MatExpr.add state (params.roundConstants.get! round)
-  let afterSbox := MatExpr.elemwise (fun x => Expr.pow x params.alpha) withConstants
-  MatExpr.matmul params.mds afterSbox
+**Prioridad 2: Goldilocks** (compatible con STARKs de Plonky3)
+```
+t = 12, α = 7, RF = 8, RP = 22
 ```
 
-**Obstáculos técnicos**:
-1. **Matrices MDS grandes**: Para t=12 (común en zkVMs), la matriz tiene 144 elementos
-   - *Técnica*: Representación sparse si hay estructura, o precomputación
-   - *Bibliografía*: Grassi et al. "Poseidon: A New Hash Function for Zero-Knowledge Proof Systems"
+### 1.5 Métricas de Éxito
 
-2. **Overflow en campos finitos**: x⁵ puede causar overflow
-   - *Técnica*: Usar representación Montgomery para aritmética modular
-   - *Bibliografía*: Montgomery "Modular Multiplication Without Trial Division"
+| Métrica | Target |
+|---------|--------|
+| Throughput | ≥ 1M hashes/segundo (CPU single-thread) |
+| Correctitud | 100% fuzzing pass vs spec |
+| E-Graph | < 10,000 nodos para expresión completa |
+| Sorry count | 0 (o documentados) |
 
-**Testing Fase 1.2**:
-- [ ] Test vectors oficiales de Poseidon
-- [ ] Comparación con implementación de referencia (Circom)
-- [ ] Fuzzing diferencial contra poseidon-rs
+### 1.6 Referencias Bibliográficas
 
-#### Fase 1.3: Optimización de S-boxes (Semanas 5-6)
+Ver análisis completo en [references/poseidon/notes.md](references/poseidon/notes.md).
 
-**Objetivo**: Optimizar x⁵ para diferentes backends.
-
-**Entregables**:
-```lean
-/-- Estrategias de exponenciación -/
-inductive SboxStrategy where
-  | naive      : SboxStrategy  -- x * x * x * x * x
-  | squareChain : SboxStrategy  -- x² → x⁴ → x⁵ (3 muls)
-  | lookupTable : Nat → SboxStrategy  -- Tabla precalculada (para campos pequeños)
-
-/-- Seleccionar estrategia óptima -/
-def selectSboxStrategy (fieldSize : Nat) (simdWidth : Nat) : SboxStrategy :=
-  if fieldSize ≤ 2^16 then SboxStrategy.lookupTable fieldSize
-  else SboxStrategy.squareChain
-```
-
-**Obstáculos técnicos**:
-1. **Trade-off memoria vs computación**: Lookup tables usan memoria pero son O(1)
-   - *Técnica*: Cost model que considera cache sizes
-   - *Bibliografía*: Agner Fog "Instruction Tables" (latencias reales de CPU)
-
-2. **SIMD para exponenciación**: AVX2 no tiene instrucción de potencia
-   - *Técnica*: Vectorizar la cadena de cuadrados
-   - *Bibliografía*: Intel Intrinsics Guide
-
-**Testing Fase 1.3**:
-- [ ] Benchmark: naive vs squareChain vs lookupTable
-- [ ] Verificar equivalencia numérica entre estrategias
-- [ ] Profile con perf/vtune para cache misses
-
-#### Fase 1.4: Full Poseidon + CodeGen (Semanas 7-9)
-
-**Objetivo**: Poseidon completo con generación de código C optimizado.
-
-**Entregables**:
-- `poseidonHash : PoseidonParams → Array FieldElement → FieldElement`
-- `generatePoseidonC : PoseidonParams → String` (código C)
-- Proof anchors para cada componente
-
-**Obstáculos técnicos**:
-1. **Rondas parciales**: Poseidon usa rondas parciales (solo una S-box) para eficiencia
-   - *Técnica*: Modelar como caso especial de `elemwise`
-   - *Bibliografía*: Poseidon paper, Appendix B
-
-2. **Padding y dominio de separación**: Hash debe manejar inputs de longitud variable
-   - *Técnica*: Sponge construction estándar
-   - *Bibliografía*: NIST SP 800-185 (SHA-3 derived functions)
-
-**Testing Fase 1.4**:
-- [ ] Full test suite contra implementaciones canónicas
-- [ ] Fuzzing con inputs aleatorios de varias longitudes
-- [ ] Verificar proof anchors contra especificación
-
-#### Fase 1.5: Verificación Formal (Semana 10)
-
-**Objetivo**: Teoremas que conectan implementación con especificación.
-
-**Entregables**:
-```lean
-theorem poseidon_permutation_correct (params : PoseidonParams t) (input : Vec t) :
-  evalPoseidon params input = reference_poseidon params input
-
-theorem poseidon_sponge_absorb (params : PoseidonParams t) (msg : Array FieldElement) :
-  spongeAbsorb params msg satisfies_sponge_security
-```
-
-**Obstáculos técnicos**:
-1. **Propiedades criptográficas difíciles de probar**: Resistencia a colisiones requiere asunciones
-   - *Técnica*: Probar propiedades estructurales, no criptográficas
-   - *Bibliografía*: Barthe et al. "Computer-Aided Cryptographic Proofs"
-
-**Testing Fase 1.5**:
-- [ ] Teoremas compilan sin sorry (o con sorry documentados)
-- [ ] Differential fuzzing: Lean eval == C binary
+Papers críticos:
+- **poseidon2.pdf**: Algoritmo a implementar
+- **security of poseidon.pdf**: Justificación de parámetros
+- **construction lightweight s boxes.pdf**: Propiedades de x^5
 
 ---
 
