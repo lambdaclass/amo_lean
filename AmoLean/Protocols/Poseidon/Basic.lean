@@ -17,8 +17,9 @@
   - S-box (x^α): NON-LINEAR (requires extending MatExpr with elemwise)
 
   Implementation Status:
-  - [x] Paso 0.5: Pure specification (Spec.lean)
-  - [x] Paso 0.5: BN254 parameters (Params/BN254.lean)
+  - [x] Paso 0.5: Pure specification (Spec.lean) - DONE
+  - [ ] Paso 0.5: Load real BN254 round constants
+  - [ ] Paso 0.5: Validate against official test vectors
   - [ ] Paso 1: Extend MatExpr with elemwise
   - [ ] Paso 2: CodeGen for S-box
   - [ ] Paso 3: Poseidon2 in MatExpr
@@ -29,13 +30,19 @@
 -/
 
 import AmoLean.Protocols.Poseidon.Spec
-import AmoLean.Protocols.Poseidon.Params.BN254
 
 namespace AmoLean.Protocols.Poseidon
 
 -- Re-export key definitions for convenience
-export Spec (Params State poseidon2Permutation poseidon2Hash sbox5 sboxOpt)
-export Params.BN254 (prime alpha fullRounds partialRounds stateSize mdsMatrix)
+export Spec (
+  Params State
+  modAdd modMul modPow
+  sbox sbox5
+  mds3 mdsMultiply
+  fullRound partialRound
+  poseidon2Permutation poseidon2Hash
+  testParams bn254Params bn254Prime
+)
 
 /-! ## Implementation Roadmap
 
@@ -65,6 +72,6 @@ See: docs/poseidon/ADR-002-partial-rounds.md
 -- def generateSboxC : ElemOp → String
 
 -- TODO: Paso 3 - Poseidon2 in MatExpr
--- def poseidon2MatExpr : Params p t → MatExpr (ZMod p) t 1 → MatExpr (ZMod p) t 1
+-- def poseidon2MatExpr : Params → State → MatExpr
 
 end AmoLean.Protocols.Poseidon
