@@ -4,10 +4,10 @@
 
 Esta fase extiende AMO-Lean para soportar operaciones no-lineales, habilitando la implementación de Poseidon2, un hash ZK-friendly crítico para zkVMs.
 
-**Estado**: Paso 1 Completado - Ready for CodeGen
+**Estado**: Paso 2 En Progreso (CodeGen Escalar)
 **Prioridad**: #1 Crítico
 **Inicio**: Enero 2026
-**Progreso**: Paso 0.5 ✓ | Paso 1 ✓ | Paso 1.5 (Tests) ✓
+**Progreso**: Paso 0.5 ✓ | Paso 1 ✓ | Paso 1.5 ✓ | **Paso 2.1** ◐
 
 ---
 
@@ -95,10 +95,25 @@ El tipo garantiza preservación de dimensiones por construcción.
 │ • Safety check: E-Graph NO prueba (A+B)^2 = A^2+B^2            │
 │ • Barrier integrity: elemwise opaco a álgebra lineal           │
 ├────────────────────────────────────────────────────────────────┤
-│ Paso 2: CodeGen                               [SIGUIENTE PASO] │
-│ • S-box escalar (square chain, 3 muls)                         │
-│ • S-box SIMD (AVX2 paralelo)                                   │
-│ • Patrón split→elemwise→concat → blend                         │
+│ Paso 2: CodeGen (Estrategia por Capas)        [EN PROGRESO]    │
+│ Ver ADR-004 para justificación de la estrategia                │
+├────────────────────────────────────────────────────────────────┤
+│   2.1: CodeGen Escalar                        [EN PROGRESO]    │
+│   • S-box escalar (square chain, 3 muls)                       │
+│   • Funciona para cualquier campo (BN254, Goldilocks)          │
+│   • Base para differential fuzzing                             │
+├────────────────────────────────────────────────────────────────┤
+│   2.2: Pattern Matching Lowering              [Pendiente]      │
+│   • Detectar concat(elemwise(head...)) → PartialSbox           │
+│   • Mantener arquitectura de capas                             │
+├────────────────────────────────────────────────────────────────┤
+│   2.3: SIMD Goldilocks (Opcional)             [Pendiente]      │
+│   • Solo campos ≤64 bits (4 elem/YMM)                          │
+│   • Blend para partial rounds                                  │
+├────────────────────────────────────────────────────────────────┤
+│   2.4: Batch SIMD BN254 (Futuro)              [Pendiente]      │
+│   • 4 hashes independientes en paralelo                        │
+│   • Requiere API de batch hashing                              │
 ├────────────────────────────────────────────────────────────────┤
 │ Paso 3: Poseidon2 en MatExpr                        [Pendiente]│
 │ • Full rounds con elemwise                                     │
@@ -122,7 +137,8 @@ El tipo garantiza preservación de dimensiones por construcción.
 |---------|-----------|
 | [ADR-001-elemwise.md](ADR-001-elemwise.md) | Decisión: extensión de MatExpr |
 | [ADR-002-partial-rounds.md](ADR-002-partial-rounds.md) | Decisión: split/concat para rondas parciales |
-| [ADR-003-codegen-simd.md](ADR-003-codegen-simd.md) | Decisión: estrategia SIMD blend |
+| [ADR-003-codegen-simd.md](ADR-003-codegen-simd.md) | Estrategia SIMD original (parcialmente superseded) |
+| [ADR-004-codegen-strategy.md](ADR-004-codegen-strategy.md) | **Estrategia CodeGen por capas** (actual) |
 | [PROGRESS.md](PROGRESS.md) | Progreso de implementación |
 
 ## Archivos de Código
@@ -169,4 +185,4 @@ RP = 22
 ---
 
 *Última actualización: 26 Enero 2026*
-*Paso 1 Completado - Ready for CodeGen*
+*Paso 2.1 En Progreso - CodeGen Escalar*
