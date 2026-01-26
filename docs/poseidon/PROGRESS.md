@@ -4,8 +4,8 @@
 
 | Paso | Descripción | Estado | Notas |
 |------|-------------|--------|-------|
-| 0 | Prerrequisitos (ZModSIMD) | Pendiente | |
-| 0.5 | Especificación ejecutable | Pendiente | |
+| 0 | Prerrequisitos (ZModSIMD) | Parcial | ZModSIMD existe, falta pow_chain |
+| 0.5 | Especificación ejecutable | **En progreso** | Spec.lean + Params/BN254.lean creados |
 | 1 | Extensión IR (elemwise) | Pendiente | |
 | 2 | CodeGen SIMD | Pendiente | |
 | 3 | Poseidon2 en MatExpr | Pendiente | |
@@ -36,18 +36,32 @@ Asegurar que ZModSIMD tiene las primitivas necesarias para S-box.
 Implementar Poseidon2 como función pura en Lean (sin IR) para validación.
 
 ### Checklist
-- [ ] Definir `PoseidonParams` structure
-- [ ] Cargar parámetros BN254 (MDS, round constants)
-- [ ] Implementar `poseidon2_spec : Vec t Field → Vec t Field`
+- [x] Definir `Params` structure (genérico para cualquier primo p y tamaño t)
+- [x] Cargar parámetros BN254 (MDS, round constants placeholder)
+- [x] Implementar `poseidon2Permutation : Params p t → State p t → State p t`
+- [x] Implementar `poseidon2Hash` con construcción sponge
+- [x] S-box con square chain: x^5 = x * (x^2)^2 (3 muls)
+- [ ] Cargar round constants completas (actualmente placeholder)
 - [ ] Validar contra test vectors del paper Poseidon2
 - [ ] Documentar cualquier discrepancia
 
-### Archivos a crear
-- `AmoLean/Protocols/Poseidon/Spec.lean`
-- `AmoLean/Protocols/Poseidon/Params/BN254.lean`
+### Archivos creados
+- `AmoLean/Protocols/Poseidon/Spec.lean` - Especificación pura
+- `AmoLean/Protocols/Poseidon/Params/BN254.lean` - Parámetros BN254
+
+### Implementación
+- Estado: `State p t := Fin t → ZMod p`
+- Full round: AddRC → S-box(all) → MDS
+- Partial round: AddRC → S-box(first) → MDS
+- Permutación: [RF/2 full] → [RP partial] → [RF/2 full]
+
+### Parámetros BN254 t=3
+- α = 5, RF = 8, RP = 56
+- MDS: [[2,1,1], [1,2,1], [1,1,3]]
+- Fuente: HorizenLabs/poseidon2
 
 ### Test Vectors
-Fuente: Paper Poseidon2, Apéndice
+Fuente: Paper Poseidon2, Apéndice (pendiente de cargar)
 
 ---
 
@@ -159,6 +173,7 @@ Conectar Poseidon2 con el resto del sistema.
 | Fecha | Cambio | Autor |
 |-------|--------|-------|
 | 2026-01-26 | Documentación inicial creada | Equipo |
+| 2026-01-26 | Paso 0.5: Spec.lean y Params/BN254.lean | Equipo |
 
 ---
 
