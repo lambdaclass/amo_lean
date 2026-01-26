@@ -13,7 +13,7 @@
 | 2.2 | Pattern Matching Lowering | **Completado** | partialElemwise, partialSbox kernel |
 | 2.3 | SIMD Goldilocks | **Completado** | AVX2 intra-hash, blend para partial |
 | 2.4 | Batch SIMD BN254 | **Completado** | AoS↔SoA, 4 hashes paralelos |
-| 3 | Poseidon2 en MatExpr | Pendiente | |
+| 3 | Poseidon2 en MatExpr | **COMPLETADO** | ConstRef, MDS opaco, loops en CodeGen |
 | 4 | Verificación | Pendiente | |
 | 5 | Integración MerkleTree | Pendiente | |
 

@@ -126,6 +126,10 @@ inductive Kernel where
   | butterfly : Kernel
   | sbox : Nat → Nat → Kernel        -- Full S-box: size, exponent (all elements)
   | partialSbox : Nat → Nat → Nat → Kernel  -- Partial S-box: size, exponent, index
+  -- Phase 3: Poseidon2 specific kernels
+  | mdsApply : String → Nat → Kernel       -- MDS matrix multiplication: name, size
+  | mdsInternal : Nat → Kernel             -- Poseidon2 internal MDS: size
+  | addRoundConst : Nat → Nat → Kernel     -- Add round constants: round, size
   deriving Repr, BEq, Inhabited
 
 namespace Kernel
@@ -139,6 +143,9 @@ def inputSize : Kernel → Nat
   | butterfly => 2
   | sbox n _ => n
   | partialSbox n _ _ => n
+  | mdsApply _ n => n
+  | mdsInternal n => n
+  | addRoundConst _ n => n
 
 def toString : Kernel → String
   | identity n => s!"I_{n}"
@@ -149,6 +156,9 @@ def toString : Kernel → String
   | butterfly => "Butterfly"
   | sbox n α => s!"Sbox_{n}(x^{α})"
   | partialSbox n α idx => s!"PartialSbox_{n}(x^{α}, idx={idx})"
+  | mdsApply name n => s!"MDS_{name}({n})"
+  | mdsInternal n => s!"MDS_Internal({n})"
+  | addRoundConst r n => s!"AddRC(round={r}, size={n})"
 
 instance : ToString Kernel := ⟨Kernel.toString⟩
 
@@ -336,6 +346,24 @@ partial def lower (m n : Nat) (state : LowerState) : MatExpr α m n → (SigmaEx
       (Gather.contiguous (m' * n') (.const 0))
       (Scatter.contiguous (m' * n') (.const 0))
     (.seq innerExpr partialSboxExpr, state1)
+
+  | @MatExpr.mdsApply _ t mdsName stateSize a =>
+    -- Lower the inner matrix first, then apply MDS
+    let (innerExpr, state1) := lower t 1 state a
+    -- Apply MDS multiplication (symbolic - not expanded)
+    let mdsExpr : SigmaExpr := .compute (.mdsApply mdsName stateSize)
+      (Gather.contiguous stateSize (.const 0))
+      (Scatter.contiguous stateSize (.const 0))
+    (.seq innerExpr mdsExpr, state1)
+
+  | @MatExpr.addRoundConst _ t round stateSize a =>
+    -- Lower the inner matrix first, then add round constants
+    let (innerExpr, state1) := lower t 1 state a
+    -- Add round constants
+    let rcExpr : SigmaExpr := .compute (.addRoundConst round stateSize)
+      (Gather.contiguous stateSize (.const 0))
+      (Scatter.contiguous stateSize (.const 0))
+    (.seq innerExpr rcExpr, state1)
 
 def lowerFresh (m n : Nat) (e : MatExpr α m n) : SigmaExpr :=
   (lower m n {} e).1

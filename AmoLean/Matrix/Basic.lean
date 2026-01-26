@@ -211,6 +211,21 @@ inductive MatExpr (α : Type) : Nat → Nat → Type where
       Only modifies state[idx], leaves other elements unchanged. -/
   | partialElemwise : (idx : Nat) → ElemOp → MatExpr α m n → MatExpr α m n
 
+  /-- Symbolic MDS matrix application (Poseidon2 Phase 3).
+      Represents MDS × state as an OPAQUE operation.
+      The matrix is referenced by name, NOT embedded as literals.
+      CodeGen translates to a loop or function call.
+      @param mdsName: Identifier for the MDS matrix (e.g., "MDS_3")
+      @param stateSize: Size of the state vector (t) -/
+  | mdsApply : (mdsName : String) → (stateSize : Nat) → MatExpr α t 1 → MatExpr α t 1
+
+  /-- Add round constants (Poseidon2 Phase 3).
+      Represents state + RC[round] as a single operation.
+      Round constants are referenced by index, NOT embedded.
+      @param round: Round index for constant lookup
+      @param stateSize: Size of the state vector (t) -/
+  | addRoundConst : (round : Nat) → (stateSize : Nat) → MatExpr α t 1 → MatExpr α t 1
+
 namespace MatExpr
 
 /-! ### Smart Constructors -/
@@ -288,6 +303,8 @@ def nodeCount : MatExpr α m n → Nat
   | conjTranspose A => 1 + nodeCount A
   | elemwise _ A   => 1 + nodeCount A
   | partialElemwise _ _ A => 1 + nodeCount A
+  | mdsApply _ _ A => 1 + nodeCount A
+  | addRoundConst _ _ A => 1 + nodeCount A
 
 /-- Estimate operation count after expansion (for cost model).
     This gives an upper bound on the number of scalar operations. -/
@@ -318,6 +335,12 @@ def opCountEstimate : MatExpr α m n → Nat
     | ElemOp.pow 5 => baseCost + 3  -- Single element S-box x^5: 3 muls
     | ElemOp.pow k => baseCost + k  -- General power: k muls (naive)
     | ElemOp.custom _ => baseCost + 1   -- Custom: assume 1 op
+  | mdsApply _ t A =>
+    let baseCost := opCountEstimate A
+    baseCost + t * t  -- Dense matrix: t² multiplications
+  | addRoundConst _ t A =>
+    let baseCost := opCountEstimate A
+    baseCost + t  -- t additions
 
 /-- Full round S-box: apply x^α to all state elements -/
 def fullRoundSbox (α : Nat) (state : MatExpr β m n) : MatExpr β m n :=
@@ -396,6 +419,14 @@ def estimateCost (cm : VectorCostModel) : MatExpr α m n → Nat
       | ElemOp.pow k => k * cm.mulCost  -- k muls for x^k
       | ElemOp.custom _ => cm.mulCost   -- 1 op for custom
     baseCost + sboxCost
+  | MatExpr.mdsApply _ t A =>
+    let baseCost := estimateCost cm A
+    -- MDS: t² multiplications, potentially SIMD-able for small t
+    baseCost + (t * t * cm.mulCost) / cm.simdWidth + (t * t * cm.addCost) / cm.simdWidth
+  | MatExpr.addRoundConst _ t A =>
+    let baseCost := estimateCost cm A
+    -- RC addition: t additions
+    baseCost + (t * cm.addCost) / cm.simdWidth
   | _ => 0
 
 end AmoLean.Matrix
