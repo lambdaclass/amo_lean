@@ -432,6 +432,59 @@ void poseidon2_sbox5_partial_round_batch4(
 
 ---
 
+## Tests Pre-Fase 3: Validación de Robustez
+
+**Estado**: **COMPLETADO** - Todos los tests pasan
+
+### Tests de Correctitud Matemática
+
+| Test | Descripción | Estado | Resultado |
+|------|-------------|--------|-----------|
+| 2.1 | S-Box Isolation (x^5 correcto) | ✅ PASS | 5/5 subtests |
+| 2.2 | Partial Round Logic (solo state[0] cambia) | ✅ PASS | 1100 random states |
+| 2.3 | Differential Fuzzing (C vs known vectors) | ✅ PASS | 8 known + 10k self-consistency |
+
+### Tests de Estabilidad del Compilador
+
+| Test | Descripción | Estado | Flags |
+|------|-------------|--------|-------|
+| 2.4 | Compilation Hygiene | ✅ PASS | `-Wall -Wextra -Werror -pedantic -Wconversion` |
+| 2.5 | ASAN Memory Safety | ✅ PASS | `-fsanitize=address -fsanitize=undefined` |
+
+### Benchmark de Rendimiento (Apple M1)
+
+| Operación | Tiempo | Throughput | Esperado |
+|-----------|--------|------------|----------|
+| Field mul | 31.8 ns | 31.4M mul/s | 100-500 ns |
+| S-box x^5 | 90.5 ns | 11.0M sbox/s | 300-1500 ns |
+| Partial round | 83.2 ns | 12.0M/s | - |
+| Full round (t=3) | 239.6 ns | 4.2M/s | 1-5 us |
+| **Hash rate estimado** | **6.4 us** | **156k H/s** | 10k-50k H/s |
+
+**Análisis**: El rendimiento es **3x mejor** de lo esperado para código escalar BN254.
+Esto indica que el código generado es eficiente y no hay problemas de rendimiento.
+
+### Archivos de tests
+- `tests/poseidon_c/bn254_field.h` - Header de aritmética de campo
+- `tests/poseidon_c/bn254_field.c` - Implementación Montgomery arithmetic
+- `tests/poseidon_c/test_sbox.c` - Tests de correctitud (2.1, 2.2)
+- `tests/poseidon_c/test_differential.c` - Test diferencial (2.3)
+- `tests/poseidon_c/benchmark.c` - Benchmark de throughput
+- `tests/poseidon_c/Makefile` - Build con hygiene y ASAN
+
+### Comandos
+```bash
+cd tests/poseidon_c
+make test       # Tests 2.1, 2.2
+make hygiene    # Test 2.4
+make asan       # Test 2.5
+make differential # Test 2.3
+make benchmark  # Benchmark 2.1
+make fulltest   # Todos los tests
+```
+
+---
+
 ## Paso 3: Poseidon2 en MatExpr
 
 ### Objetivo
@@ -500,6 +553,7 @@ Conectar Poseidon2 con el resto del sistema.
 | 2026-01-26 | Paso 2.3: SIMD Goldilocks completado (AVX2 intra-hash, blend) | Equipo |
 | 2026-01-26 | Paso 2.4: Batch SIMD BN254 completado (AoS↔SoA, 4 hashes) | Equipo |
 | 2026-01-26 | **Paso 2 COMPLETO** - CodeGen escalar + SIMD funcionando | Equipo |
+| 2026-01-26 | Tests Pre-Fase 3: Correctitud, ASAN, Hygiene, Benchmark - ALL PASS | Equipo |
 
 ---
 
