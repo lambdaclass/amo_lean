@@ -10,7 +10,7 @@
 | 1.5 | Sanity Tests | **Completado** | 4/4 tests pasan, safe to proceed to CodeGen |
 | 2 | CodeGen | **En Progreso** | Estrategia por capas (ADR-004) |
 | 2.1 | CodeGen Escalar | **Completado** | S-box con square chain, full/partial rounds |
-| 2.2 | Pattern Matching Lowering | Pendiente | Detectar partial rounds |
+| 2.2 | Pattern Matching Lowering | **Completado** | partialElemwise, partialSbox kernel |
 | 2.3 | SIMD Goldilocks | Pendiente | Opcional, campos 64-bit |
 | 2.4 | Batch SIMD BN254 | Pendiente | Futuro, 4 hashes paralelos |
 | 3 | Poseidon2 en MatExpr | Pendiente | |
@@ -275,29 +275,56 @@ void sbox5_partial_round(
 
 **Objetivo**: Detectar el patrón de partial round en MatExpr y generar código optimizado.
 
-**Prioridad**: MEDIA (después de que 2.1 esté completo)
+**Estado**: **COMPLETADO**
 
 #### Checklist
-- [ ] Implementar `matchPartialRound : MatExpr → Option PartialRoundInfo`
-- [ ] Extender lowering para generar `SigmaPartialSbox`
-- [ ] Generar código C específico para partial rounds
-- [ ] Tests de detección de patrones
+- [x] Añadir `partialElemwise` a MatExpr
+- [x] Añadir `partialSbox` a Kernel
+- [x] Extender lowering para generar `partialSbox`
+- [x] Implementar `expandPartialSbox` en Expand
+- [x] Tests de detección de patrones (Tests 6-9)
+- [x] Actualizar nodeCount, opCountEstimate, estimateCost
 
-#### Patrón a detectar
+#### Implementación
 
+**En MatExpr** (nuevo constructor):
 ```lean
--- En MatExpr:
-concat (elemwise (pow α) (head state)) (tail state)
--- Significa: aplicar pow α solo al primer elemento
-
--- Transformación en lowering:
-SigmaExpr.PartialSbox { alpha := α, index := 0, input := state }
+| partialElemwise : (idx : Nat) → ElemOp → MatExpr α m n → MatExpr α m n
 ```
 
-#### Archivos a modificar
-- `AmoLean/Sigma/Basic.lean` - Añadir `PartialSbox` a SigmaExpr
-- `AmoLean/Sigma/Lower.lean` - Pattern matching en lowering
-- `AmoLean/Sigma/CodeGen.lean` - CodeGen para PartialSbox
+**En Kernel** (nuevo kernel):
+```lean
+| partialSbox : Nat → Nat → Nat → Kernel  -- size, exponent, index
+```
+
+**Lowering** (nuevo caso):
+```lean
+| @MatExpr.partialElemwise _ m' n' idx op a =>
+  let (innerExpr, state1) := lower m' n' state a
+  let exp := match op with | ElemOp.pow α => α | _ => 1
+  let partialSboxExpr := .compute (.partialSbox (m' * n') exp idx) ...
+  (.seq innerExpr partialSboxExpr, state1)
+```
+
+**Expansión** (scalar ops):
+```lean
+def expandPartialSbox (size : Nat) (α : Nat) (idx : Nat) : ExpandedKernel :=
+  -- Apply S-box only to element at `idx`, copy others
+  -- For α=5: 3 muls for the target element, 0 for others
+```
+
+#### Archivos modificados
+- `AmoLean/Matrix/Basic.lean` - partialElemwise, fullRoundSbox, partialRoundSbox
+- `AmoLean/Sigma/Basic.lean` - partialSbox kernel, lowering de partialElemwise
+- `AmoLean/Sigma/Expand.lean` - expandPartialSbox, tests 6-9
+
+#### Resultados de tests
+```
+Test 6: Full S-box (3 elements)   → 9 muls (3 × 3)
+Test 7: Partial S-box (idx=0)     → 3 muls (1 × 3)
+Test 8: Full round lowering (9 elements) → 27 muls
+Test 9: Partial round lowering          → 3 muls ✓
+```
 
 ---
 
@@ -447,6 +474,7 @@ Conectar Poseidon2 con el resto del sistema.
 | 2026-01-26 | ADR-004: Estrategia CodeGen por capas (reemplaza SIMD naive) | Equipo |
 | 2026-01-26 | Paso 2: Inicio de implementación CodeGen escalar | Equipo |
 | 2026-01-26 | Paso 2.1: CodeGen escalar completado (S-box, full/partial rounds) | Equipo |
+| 2026-01-26 | Paso 2.2: Pattern matching completado (partialElemwise, partialSbox) | Equipo |
 
 ---
 

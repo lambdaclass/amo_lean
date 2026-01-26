@@ -128,6 +128,9 @@ def isIdentity : ElemOp → Bool
 /-- S-box for Poseidon2: x^5 -/
 def sbox5 : ElemOp := pow 5
 
+/-- S-box for Goldilocks Poseidon2: x^7 -/
+def sbox7 : ElemOp := pow 7
+
 end ElemOp
 
 /-! ## MatExpr α m n: Matrix Expression AST
@@ -199,8 +202,14 @@ inductive MatExpr (α : Type) : Nat → Nat → Type where
   /-- Element-wise non-linear operation (OPAQUE BARRIER).
       Applies op to each element independently.
       E-graph rules must NOT penetrate this constructor.
-      Used for Poseidon2 S-box: elemwise (pow 5) state -/
+      Used for Poseidon2 full rounds: elemwise (pow 5) state -/
   | elemwise : ElemOp → MatExpr α m n → MatExpr α m n
+
+  /-- Partial element-wise operation (for Poseidon2 partial rounds).
+      Applies op only to the element at the specified index.
+      Used for partial rounds: partialElemwise 0 (pow 5) state
+      Only modifies state[idx], leaves other elements unchanged. -/
+  | partialElemwise : (idx : Nat) → ElemOp → MatExpr α m n → MatExpr α m n
 
 namespace MatExpr
 
@@ -278,6 +287,7 @@ def nodeCount : MatExpr α m n → Nat
   | transpose A    => 1 + nodeCount A
   | conjTranspose A => 1 + nodeCount A
   | elemwise _ A   => 1 + nodeCount A
+  | partialElemwise _ _ A => 1 + nodeCount A
 
 /-- Estimate operation count after expansion (for cost model).
     This gives an upper bound on the number of scalar operations. -/
@@ -302,6 +312,20 @@ def opCountEstimate : MatExpr α m n → Nat
     | ElemOp.pow 5 => baseCost + m * n * 3  -- S-box x^5: 3 muls (square chain)
     | ElemOp.pow k => baseCost + m * n * k  -- General power: k muls (naive)
     | ElemOp.custom _ => baseCost + m * n   -- Custom: assume 1 op per element
+  | partialElemwise _ op A =>
+    let baseCost := opCountEstimate A
+    match op with
+    | ElemOp.pow 5 => baseCost + 3  -- Single element S-box x^5: 3 muls
+    | ElemOp.pow k => baseCost + k  -- General power: k muls (naive)
+    | ElemOp.custom _ => baseCost + 1   -- Custom: assume 1 op
+
+/-- Full round S-box: apply x^α to all state elements -/
+def fullRoundSbox (α : Nat) (state : MatExpr β m n) : MatExpr β m n :=
+  MatExpr.elemwise (ElemOp.pow α) state
+
+/-- Partial round S-box: apply x^α only to state[0] -/
+def partialRoundSbox (α : Nat) (state : MatExpr β m n) : MatExpr β m n :=
+  MatExpr.partialElemwise 0 (ElemOp.pow α) state
 
 end MatExpr
 
@@ -363,6 +387,14 @@ def estimateCost (cm : VectorCostModel) : MatExpr α m n → Nat
       | ElemOp.pow 5 => (m * n * 3 * cm.mulCost) / cm.simdWidth
       | ElemOp.pow k => (m * n * k * cm.mulCost) / cm.simdWidth
       | ElemOp.custom _ => (m * n * cm.mulCost) / cm.simdWidth
+    baseCost + sboxCost
+  | MatExpr.partialElemwise _ op A =>
+    let baseCost := estimateCost cm A
+    -- Partial S-box: only 1 element, so no SIMD benefit
+    let sboxCost := match op with
+      | ElemOp.pow 5 => 3 * cm.mulCost  -- 3 muls for x^5
+      | ElemOp.pow k => k * cm.mulCost  -- k muls for x^k
+      | ElemOp.custom _ => cm.mulCost   -- 1 op for custom
     baseCost + sboxCost
   | _ => 0
 

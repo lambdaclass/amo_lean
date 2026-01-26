@@ -22,7 +22,7 @@ import AmoLean.Matrix.Basic
 
 namespace AmoLean.Sigma
 
-open AmoLean.Matrix (MatExpr)
+open AmoLean.Matrix (MatExpr ElemOp)
 
 /-! ## Part 1: Scalar Expressions for Kernels -/
 
@@ -229,6 +229,29 @@ def expandSbox (size : Nat) (α : Nat) : ExpandedKernel :=
       { target := .output i, value := ScalarExpr.x i }
   { inputVars := inputs, outputVars := outputs, body := body }
 
+/-- Expand partial S-box kernel: apply S-box only to index `idx` -/
+def expandPartialSbox (size : Nat) (α : Nat) (idx : Nat) : ExpandedKernel :=
+  let inputs := List.range size |>.map ScalarVar.input
+  let outputs := List.range size |>.map ScalarVar.output
+  -- Apply S-box only to element at `idx`, copy others
+  let body := List.range size |>.bind fun i =>
+    if i == idx then
+      -- Apply S-box (square chain for α=5)
+      if α == 5 then
+        let xi := ScalarExpr.x i
+        [
+          { target := .temp 0, value := .mul xi xi },                    -- t0 = x_i^2
+          { target := .temp 1, value := .mul (.t 0) (.t 0) },            -- t1 = x_i^4
+          { target := .output i, value := .mul xi (.t 1) }               -- y_i = x_i^5
+        ]
+      else
+        -- Fallback: just copy (TODO: implement other exponents)
+        [{ target := .output i, value := ScalarExpr.x i }]
+    else
+      -- Copy unchanged
+      [{ target := .output i, value := ScalarExpr.x i }]
+  { inputVars := inputs, outputVars := outputs, body := body }
+
 /-- Main kernel expansion function -/
 def expandKernel : Kernel → ExpandedKernel
   | .identity n => expandIdentity n
@@ -239,7 +262,8 @@ def expandKernel : Kernel → ExpandedKernel
   | .twiddle n _ => expandIdentity n  -- TODO: implement twiddle factors
   | .scale => expandScale 1  -- Default scale factor
   | .butterfly => expandButterfly
-  | .sbox n α => expandSbox n α  -- Poseidon2 S-box
+  | .sbox n α => expandSbox n α  -- Poseidon2 full S-box
+  | .partialSbox n α idx => expandPartialSbox n α idx  -- Poseidon2 partial S-box
 
 /-! ## Part 4: Expanded SigmaExpr -/
 
@@ -411,6 +435,53 @@ def testVerifyDFT2 : IO Unit := do
   IO.println s!"Verification: {if y0Val == 8 && y1Val == -2 then "PASS ✓" else "FAIL ✗"}"
   IO.println ""
 
+-- Test 6: Expand full S-box (Poseidon2 full round)
+def testExpandSbox : IO Unit := do
+  IO.println "=== Test 6: Expand full S-box x^5 (Poseidon2) ==="
+  let k := expandSbox 3 5  -- 3 elements, exponent 5
+  IO.println s!"{k}"
+  let (adds, subs, muls) := k.opCount
+  IO.println s!"Operations: {adds} adds, {subs} subs, {muls} muls"
+  IO.println s!"Expected: 0 adds, 0 subs, 9 muls (3 elements × 3 muls/element)"
+  IO.println ""
+
+-- Test 7: Expand partial S-box (Poseidon2 partial round)
+def testExpandPartialSbox : IO Unit := do
+  IO.println "=== Test 7: Expand partial S-box x^5 at idx=0 (Poseidon2) ==="
+  let k := expandPartialSbox 3 5 0  -- 3 elements, exponent 5, only idx 0
+  IO.println s!"{k}"
+  let (adds, subs, muls) := k.opCount
+  IO.println s!"Operations: {adds} adds, {subs} subs, {muls} muls"
+  IO.println s!"Expected: 0 adds, 0 subs, 3 muls (only 1 element gets S-box)"
+  IO.println ""
+
+-- Test 8: Full round lowering via MatExpr
+def testFullRoundLowering : IO Unit := do
+  IO.println "=== Test 8: Full round S-box lowering ==="
+  let state : MatExpr Int 3 3 := .identity 3  -- 3x3 identity as state
+  let fullRound := MatExpr.elemwise (ElemOp.pow 5) state
+  let sigma := lowerFresh 3 3 fullRound
+  IO.println s!"SigmaExpr:\n{sigma}"
+  let expanded := expandSigmaExpr sigma
+  IO.println s!"Expanded:\n{expanded}"
+  let (adds, subs, muls) := expanded.totalOps
+  IO.println s!"Total operations: {adds} adds, {subs} subs, {muls} muls"
+  IO.println ""
+
+-- Test 9: Partial round lowering via MatExpr
+def testPartialRoundLowering : IO Unit := do
+  IO.println "=== Test 9: Partial round S-box lowering ==="
+  let state : MatExpr Int 3 3 := .identity 3  -- 3x3 identity as state
+  let partialRound := MatExpr.partialElemwise 0 (ElemOp.pow 5) state
+  let sigma := lowerFresh 3 3 partialRound
+  IO.println s!"SigmaExpr:\n{sigma}"
+  let expanded := expandSigmaExpr sigma
+  IO.println s!"Expanded:\n{expanded}"
+  let (adds, subs, muls) := expanded.totalOps
+  IO.println s!"Total operations: {adds} adds, {subs} subs, {muls} muls"
+  IO.println s!"Expected: fewer muls than full round (3 vs 9)"
+  IO.println ""
+
 -- Run all tests
 #eval! do
   testExpandDFT2
@@ -418,6 +489,10 @@ def testVerifyDFT2 : IO Unit := do
   testExpandKron
   testExpandCT
   testVerifyDFT2
+  testExpandSbox
+  testExpandPartialSbox
+  testFullRoundLowering
+  testPartialRoundLowering
 
 end Tests
 

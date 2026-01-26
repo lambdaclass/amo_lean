@@ -124,7 +124,8 @@ inductive Kernel where
   | twiddle : Nat → Nat → Kernel
   | scale : Kernel
   | butterfly : Kernel
-  | sbox : Nat → Nat → Kernel  -- S-box: size, exponent (for Poseidon2 x^α)
+  | sbox : Nat → Nat → Kernel        -- Full S-box: size, exponent (all elements)
+  | partialSbox : Nat → Nat → Nat → Kernel  -- Partial S-box: size, exponent, index
   deriving Repr, BEq, Inhabited
 
 namespace Kernel
@@ -137,6 +138,7 @@ def inputSize : Kernel → Nat
   | scale => 1
   | butterfly => 2
   | sbox n _ => n
+  | partialSbox n _ _ => n
 
 def toString : Kernel → String
   | identity n => s!"I_{n}"
@@ -146,6 +148,7 @@ def toString : Kernel → String
   | scale => "Scale"
   | butterfly => "Butterfly"
   | sbox n α => s!"Sbox_{n}(x^{α})"
+  | partialSbox n α idx => s!"PartialSbox_{n}(x^{α}, idx={idx})"
 
 instance : ToString Kernel := ⟨Kernel.toString⟩
 
@@ -315,11 +318,24 @@ partial def lower (m n : Nat) (state : LowerState) : MatExpr α m n → (SigmaEx
     let exp := match op with
       | ElemOp.pow α => α
       | ElemOp.custom _ => 1  -- Default to identity for custom ops
-    -- Apply S-box to each element
+    -- Apply S-box to ALL elements (full round)
     let sboxExpr : SigmaExpr := .compute (.sbox (m' * n') exp)
       (Gather.contiguous (m' * n') (.const 0))
       (Scatter.contiguous (m' * n') (.const 0))
     (.seq innerExpr sboxExpr, state1)
+
+  | @MatExpr.partialElemwise _ m' n' idx op a =>
+    -- Lower the inner matrix first, then apply partial S-box
+    let (innerExpr, state1) := lower m' n' state a
+    -- Get the exponent from ElemOp
+    let exp := match op with
+      | ElemOp.pow α => α
+      | ElemOp.custom _ => 1  -- Default to identity for custom ops
+    -- Apply S-box to ONLY the specified index (partial round)
+    let partialSboxExpr : SigmaExpr := .compute (.partialSbox (m' * n') exp idx)
+      (Gather.contiguous (m' * n') (.const 0))
+      (Scatter.contiguous (m' * n') (.const 0))
+    (.seq innerExpr partialSboxExpr, state1)
 
 def lowerFresh (m n : Nat) (e : MatExpr α m n) : SigmaExpr :=
   (lower m n {} e).1
