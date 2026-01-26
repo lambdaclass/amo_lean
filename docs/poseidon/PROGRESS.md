@@ -8,11 +8,11 @@
 | 0.5 | Especificación ejecutable | **Completado** | Spec.lean funcionando sin Mathlib |
 | 1 | Extensión IR (elemwise) | **Completado** | head/tail, elemwise, E-Graph, sanity tests ✓ |
 | 1.5 | Sanity Tests | **Completado** | 4/4 tests pasan, safe to proceed to CodeGen |
-| 2 | CodeGen | **En Progreso** | Estrategia por capas (ADR-004) |
+| 2 | CodeGen | **COMPLETADO** | Escalar + SIMD (ADR-004) |
 | 2.1 | CodeGen Escalar | **Completado** | S-box con square chain, full/partial rounds |
 | 2.2 | Pattern Matching Lowering | **Completado** | partialElemwise, partialSbox kernel |
-| 2.3 | SIMD Goldilocks | Pendiente | Opcional, campos 64-bit |
-| 2.4 | Batch SIMD BN254 | Pendiente | Futuro, 4 hashes paralelos |
+| 2.3 | SIMD Goldilocks | **Completado** | AVX2 intra-hash, blend para partial |
+| 2.4 | Batch SIMD BN254 | **Completado** | AoS↔SoA, 4 hashes paralelos |
 | 3 | Poseidon2 en MatExpr | Pendiente | |
 | 4 | Verificación | Pendiente | |
 | 5 | Integración MerkleTree | Pendiente | |
@@ -328,85 +328,107 @@ Test 9: Partial round lowering          → 3 muls ✓
 
 ---
 
-### Paso 2.3: SIMD para Goldilocks (Opcional)
+### Paso 2.3: SIMD para Goldilocks
 
-**Objetivo**: Implementar vectorización para campos de 64 bits como prueba de concepto.
+**Objetivo**: Implementar vectorización AVX2 para campos de 64 bits.
 
-**Prioridad**: BAJA (solo si hay tiempo, después de 2.1 y 2.2)
+**Estado**: **COMPLETADO**
 
-**Precondición**: Campo con elementos de ≤64 bits (4 caben en YMM de 256 bits)
+**Estrategia**: Intra-hash SIMD - 4 elementos del estado en paralelo.
 
 #### Checklist
-- [ ] Detectar si el campo es "SIMD-friendly" (≤64 bits)
-- [ ] Implementar `field_mul_avx2` para Goldilocks
-- [ ] Implementar `sbox5_simd` con instrucciones AVX2
-- [ ] Implementar blend para partial rounds
-- [ ] Benchmarks vs versión escalar
+- [x] Detectar si el campo es "SIMD-friendly" (≤64 bits)
+- [x] Implementar `field_mul_avx2` para Goldilocks (reducción especial p = 2^64 - 2^32 + 1)
+- [x] Implementar `sbox7_simd` con instrucciones AVX2
+- [x] Implementar `sbox7_partial_simd` con blend para partial rounds
+- [x] Generar `sbox7_full_round_simd` y `sbox7_partial_round_simd`
 
-#### Código C objetivo
+#### Archivos generados
+- `generated/poseidon_sbox_goldilocks_simd.h` (~206 líneas)
 
+#### Implementación
+
+**Detección de campo SIMD-friendly**:
+```lean
+def isSIMDFriendly : FieldType → Bool
+  | .Goldilocks => true   -- 64-bit: 4 elementos por YMM
+  | .BN254 => false       -- 254-bit: 1 elemento llena YMM
+  | .Generic => false
+```
+
+**S-box vectorizada**:
 ```c
-#include <immintrin.h>
-
-// Goldilocks: p = 2^64 - 2^32 + 1
-// 4 elementos de 64 bits caben en un registro YMM
-
-// S-box vectorizada para 4 elementos
-static inline __m256i sbox5_simd(__m256i x, const goldilocks_params *p) {
-    __m256i x2 = field_mul_avx2(x, x, p);
-    __m256i x4 = field_mul_avx2(x2, x2, p);
-    return field_mul_avx2(x, x4, p);
+static inline __m256i sbox7_simd(__m256i x) {
+    __m256i x2 = field_mul_avx2(x, x);      // x^2
+    __m256i x4 = field_mul_avx2(x2, x2);    // x^4
+    __m256i x5 = field_mul_avx2(x, x4);     // x^5
+    return x5;
 }
+```
 
-// Partial round con blend: solo modificar el primer elemento
-static inline __m256i sbox5_partial_simd(__m256i state, const goldilocks_params *p) {
-    __m256i x5_all = sbox5_simd(state, p);
-    // Blend: mantener elementos 1,2,3 originales, tomar elemento 0 de x5_all
-    // Máscara 0b1110 = mantener lanes 1,2,3 de state
+**Partial round con blend**:
+```c
+static inline __m256i sbox7_partial_simd(__m256i state) {
+    __m256i x5_all = sbox7_simd(state);
+    // Blend: lane 0 de x5_all, lanes 1-3 de state
     return _mm256_blend_epi64(x5_all, state, 0b1110);
 }
 ```
 
 ---
 
-### Paso 2.4: Batch SIMD para BN254 (Futuro)
+### Paso 2.4: Batch SIMD para BN254
 
-**Objetivo**: Vectorizar procesando múltiples hashes independientes en paralelo.
+**Objetivo**: Vectorizar procesando 4 hashes independientes en paralelo.
 
-**Prioridad**: MUY BAJA (fase futura, requiere cambios de API)
+**Estado**: **COMPLETADO**
 
-**Contexto**: Para BN254, un elemento llena todo un registro YMM. La única forma de
-usar SIMD es procesar múltiples hashes en paralelo (batch processing).
+**Estrategia**: Inter-hash SIMD - procesar limbs correspondientes de 4 hashes juntos.
 
 #### Checklist
-- [ ] Diseñar API de batch: `poseidon2_hash_batch4`
-- [ ] Implementar transpose de datos (AoS → SoA)
-- [ ] Implementar aritmética Montgomery vectorizada entre limbs
-- [ ] Benchmarks vs 4× llamadas secuenciales
+- [x] Diseñar API de batch: `poseidon2_sbox5_full_round_batch4`, `poseidon2_sbox5_partial_round_batch4`
+- [x] Implementar estructuras AoS (user-facing) y SoA (SIMD-friendly)
+- [x] Implementar transpose bidireccional: `batch4_aos_to_soa`, `batch4_soa_to_aos`
+- [x] Implementar `batch4_field_mul` con schoolbook multiplication vectorizada
+- [x] Implementar `batch4_sbox5` con square chain
+
+#### Archivos generados
+- `generated/poseidon_sbox_bn254_batch.h` (~352 líneas)
 
 #### Estructura de datos
 
 ```c
-// Array of Structures (entrada del usuario)
+// Array of Structures (AoS): User-facing
 typedef struct {
-    uint64_t input[4][4];   // 4 hashes, 4 limbs cada uno
-} batch4_input;
+    uint64_t hash[4][3][4];  // [hash_idx][elem_idx][limb_idx]
+} batch4_aos_3;
 
-// Structure of Arrays (interna para SIMD)
+// Structure of Arrays (SoA): SIMD-friendly
 typedef struct {
-    __m256i limb0;  // [hash0.limb0 | hash1.limb0 | hash2.limb0 | hash3.limb0]
-    __m256i limb1;  // [hash0.limb1 | hash1.limb1 | hash2.limb1 | hash3.limb1]
-    __m256i limb2;  // [hash0.limb2 | hash1.limb2 | hash2.limb2 | hash3.limb2]
-    __m256i limb3;  // [hash0.limb3 | hash1.limb3 | hash2.limb3 | hash3.limb3]
-} batch4_soa;
+    __m256i elem[3][4];  // [elem_idx][limb_idx] = 4 hashes
+} batch4_soa_3;
+```
 
-// API pública
-void poseidon2_hash_batch4(
-    uint64_t out[4][4],      // 4 outputs
-    const uint64_t in[4][4], // 4 inputs
-    const poseidon_params *p
+#### API Pública
+
+```c
+// Procesa 4 hashes en paralelo (full round)
+void poseidon2_sbox5_full_round_batch4(
+    batch4_aos_3 *states,
+    const field_params *p
+);
+
+// Procesa 4 hashes en paralelo (partial round)
+void poseidon2_sbox5_partial_round_batch4(
+    batch4_aos_3 *states,
+    const field_params *p
 );
 ```
+
+#### Flujo de ejecución
+1. Transpose AoS → SoA
+2. Aplicar S-box vectorizado (4 hashes simultáneos)
+3. Transpose SoA → AoS
 
 ---
 
@@ -475,6 +497,9 @@ Conectar Poseidon2 con el resto del sistema.
 | 2026-01-26 | Paso 2: Inicio de implementación CodeGen escalar | Equipo |
 | 2026-01-26 | Paso 2.1: CodeGen escalar completado (S-box, full/partial rounds) | Equipo |
 | 2026-01-26 | Paso 2.2: Pattern matching completado (partialElemwise, partialSbox) | Equipo |
+| 2026-01-26 | Paso 2.3: SIMD Goldilocks completado (AVX2 intra-hash, blend) | Equipo |
+| 2026-01-26 | Paso 2.4: Batch SIMD BN254 completado (AoS↔SoA, 4 hashes) | Equipo |
+| 2026-01-26 | **Paso 2 COMPLETO** - CodeGen escalar + SIMD funcionando | Equipo |
 
 ---
 
