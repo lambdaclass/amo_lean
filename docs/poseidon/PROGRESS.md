@@ -488,17 +488,139 @@ make fulltest   # Todos los tests
 ## Paso 3: Poseidon2 en MatExpr
 
 ### Objetivo
-Expresar Poseidon2 completo usando el IR extendido.
+Expresar Poseidon2 completo usando el IR extendido, evitando explosión del grafo.
+
+### Estado: **COMPLETADO**
+
+**Ver**: [ADR-005-phase3-architecture.md](ADR-005-phase3-architecture.md)
+
+### Decisiones de Diseño Críticas
+
+#### 1. ConstRef: Referencias Simbólicas
+**Problema**: Embeber matrices MDS (12x12=144 elementos) y round constants (64×12=768 valores) causaría:
+- Archivos Lean de 1GB
+- Timeouts de compilación
+- E-Graph saturado
+
+**Solución**: `ConstRef` - referencias tipadas que CodeGen traduce a arrays externos.
+
+```lean
+inductive ConstRef where
+  | mds (t : Nat) : ConstRef
+  | mdsInternal (t : Nat) : ConstRef
+  | mdsExternal (t : Nat) : ConstRef
+  | roundConst (round : Nat) (t : Nat) : ConstRef
+```
+
+**Resultado**: La representación es compacta (~50 caracteres), no miles de literales.
+
+#### 2. MDS como Operación Opaca
+**Problema**: Si MDS se representa como matriz de escalares, las reglas de E-Graph la distribuirían:
+```
+MDS × (A + B) → MDS×A + MDS×B → [expansión de 144 términos]
+```
+
+**Solución**: `MatExpr.mdsApply` es un nodo opaco que el E-Graph NO penetra.
+
+```lean
+| mdsApply : (mdsName : String) → (stateSize : Nat) → MatExpr α t 1 → MatExpr α t 1
+```
+
+**Resultado**: 4 nodos por ronda (no miles).
+
+#### 3. Loops en CodeGen (No Unrolling en IR)
+**Problema**: Representar 64 rondas en el IR causaría:
+- Árbol de 256+ nodos
+- Código C de 1MB
+
+**Solución**: `PoseidonConfig` almacena metadata. CodeGen genera loops `for`.
+
+```c
+for (int r = 0; r < 4; r++) { poseidon_full_round(state, round++, p); }
+for (int r = 0; r < 56; r++) { poseidon_partial_round(state, round++, p); }
+for (int r = 0; r < 4; r++) { poseidon_full_round(state, round++, p); }
+```
+
+**Resultado**: ~5KB de código C (no 1MB).
 
 ### Checklist
-- [ ] Full round como MatExpr
-- [ ] Partial round con split/concat
-- [ ] Poseidon2 permutation completa
-- [ ] Modo sponge para hash de longitud variable
-- [ ] Verificar que E-Graph no explota con expresión completa
+- [x] ConstRef: Referencias simbólicas para MDS y RC
+- [x] PoseidonConfig: Estructura de configuración (field, stateSize, RF, RP)
+- [x] PermutationSpec: Secuencia de rondas con estimación de multiplicaciones
+- [x] Full round como MatExpr: AddRC → Sbox → MDS
+- [x] Partial round con partialElemwise (no split/concat)
+- [x] Poseidon2 permutation completa: genPermutation genera loops
+- [x] Modo sponge: poseidon2_hash_2to1 para Merkle trees
+- [x] Verificar que E-Graph no explota: 4 nodos por ronda ✓
 
-### Archivos a crear
-- `AmoLean/Protocols/Poseidon/MatExpr.lean`
+### Archivos creados
+- `AmoLean/Protocols/Poseidon/MatExpr.lean` (~580 líneas)
+- `Tests/Poseidon3.lean` - Tests de integración
+- `Tests/Poseidon3Validation.lean` - Suite de validación arquitectónica
+- `generated/poseidon2_bn254_t3.h` - Header C generado
+- `generated/poseidon2_bn254_t5.h` - Header C generado
+
+### Archivos modificados
+- `AmoLean/Matrix/Basic.lean` - Añadido mdsApply, addRoundConst
+- `AmoLean/Sigma/Basic.lean` - Kernels mdsApply, mdsInternal, addRoundConst
+- `AmoLean/Sigma/Expand.lean` - Expansión de nuevos kernels
+
+---
+
+## Validación Arquitectónica Fase 3
+
+**Estado**: **COMPLETADO** - Todos los tests pasan
+
+### Suite de Tests
+
+| Test | Objetivo | Resultado | Evidencia |
+|------|----------|-----------|-----------|
+| 3.1 | Instant Check (<100ms) | ✅ PASS | #check instantáneo |
+| 3.2 | Type Inference Depth | ✅ PASS | Firmas limpias, sin heartbeat timeout |
+| 3.3 | Partial Round Topology | ✅ PASS | 4 nodos (no miles) |
+| 3.4 | Constant Opaqueness | ✅ PASS | ConstRef.mds 3 (49 chars) |
+| 3.5 | CodeGen Loop Structure | ✅ PASS | for loops, no 64 calls |
+| 3.6 | Round Correctness | ✅ PASS | AddRC→Sbox→MDS orden correcto |
+
+### Resultados Detallados
+
+#### Test 3.3: Topología del Grafo
+```
+Partial Round (t=3) Structure:
+  MdsApply("MDS_INTERNAL_3", 3, PartialElemwise(0, pow 5, AddRC(round=4, size=3, Zero(3x1))))
+
+Node count: 4 ← ¡NO EXPLOSIÓN!
+```
+
+#### Test 3.5: Estructura de Loops
+```c
+// Generated code - NOT unrolled
+for (int r = 0; r < 4; r++) { poseidon_full_round(state, round++, p); }
+for (int r = 0; r < 56; r++) { poseidon_partial_round(state, round++, p); }
+for (int r = 0; r < 4; r++) { poseidon_full_round(state, round++, p); }
+```
+
+Full round calls: **2** (no 64)
+Partial round calls: **1** (no 56)
+
+#### Métricas de Código
+| Métrica | Valor | Límite |
+|---------|-------|--------|
+| Header size | 5,373 chars | < 10,000 |
+| Permutation function | 658 chars | - |
+| Estimated muls (BN254 t=3) | 536 | 400-700 |
+
+### Conflictos Evitados
+
+| Problema | Riesgo | Estado |
+|----------|--------|--------|
+| The 1GB File | Desenrollar 64 rondas × 144 muls | **EVITADO** |
+| Compilation Timeout | Unificar tipos para matrices 12×12 | **EVITADO** |
+| Cache Thrashing | Código de instrucciones no cabe en L1 | **EVITADO** |
+| Graph Explosion | MDS distribuido en escalares | **EVITADO** |
+
+### Archivo de validación
+- `Tests/Poseidon3Validation.lean` - Suite completa ejecutable
 
 ---
 
@@ -554,6 +676,14 @@ Conectar Poseidon2 con el resto del sistema.
 | 2026-01-26 | Paso 2.4: Batch SIMD BN254 completado (AoS↔SoA, 4 hashes) | Equipo |
 | 2026-01-26 | **Paso 2 COMPLETO** - CodeGen escalar + SIMD funcionando | Equipo |
 | 2026-01-26 | Tests Pre-Fase 3: Correctitud, ASAN, Hygiene, Benchmark - ALL PASS | Equipo |
+| 2026-01-26 | ADR-005: Arquitectura Fase 3 (ConstRef, MDS opaco, loops) | Equipo |
+| 2026-01-26 | Paso 3.1: ConstRef implementado - referencias simbólicas | Equipo |
+| 2026-01-26 | Paso 3.2: PoseidonConfig y PermutationSpec | Equipo |
+| 2026-01-26 | Paso 3.3: mdsApply y addRoundConst en MatExpr | Equipo |
+| 2026-01-26 | Paso 3.4: Kernels Sigma para MDS y RC | Equipo |
+| 2026-01-26 | Paso 3.5: genPoseidon2Header - CodeGen completo con loops | Equipo |
+| 2026-01-26 | Validación arquitectónica: 6/6 tests PASS | Equipo |
+| 2026-01-26 | **Paso 3 COMPLETO** - Poseidon2 en MatExpr sin explosión | Equipo |
 
 ---
 
@@ -575,4 +705,5 @@ Ver ADRs en este directorio:
 - [ADR-001-elemwise.md](ADR-001-elemwise.md) - Extensión de MatExpr
 - [ADR-002-partial-rounds.md](ADR-002-partial-rounds.md) - Split/concat para rondas parciales
 - [ADR-003-codegen-simd.md](ADR-003-codegen-simd.md) - Estrategia SIMD original (parcialmente superseded)
-- [ADR-004-codegen-strategy.md](ADR-004-codegen-strategy.md) - **Estrategia CodeGen por capas** (actual)
+- [ADR-004-codegen-strategy.md](ADR-004-codegen-strategy.md) - Estrategia CodeGen por capas
+- [ADR-005-phase3-architecture.md](ADR-005-phase3-architecture.md) - **Arquitectura Fase 3** (ConstRef, MDS opaco, loops)
