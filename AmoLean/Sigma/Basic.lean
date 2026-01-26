@@ -27,7 +27,7 @@ import AmoLean.Matrix.Perm
 
 namespace AmoLean.Sigma
 
-open AmoLean.Matrix (Perm MatExpr strideIndex)
+open AmoLean.Matrix (Perm MatExpr ElemOp strideIndex)
 
 /-! ## Part 1: Index Expressions -/
 
@@ -124,6 +124,7 @@ inductive Kernel where
   | twiddle : Nat → Nat → Kernel
   | scale : Kernel
   | butterfly : Kernel
+  | sbox : Nat → Nat → Kernel  -- S-box: size, exponent (for Poseidon2 x^α)
   deriving Repr, BEq, Inhabited
 
 namespace Kernel
@@ -135,6 +136,7 @@ def inputSize : Kernel → Nat
   | twiddle n _ => n
   | scale => 1
   | butterfly => 2
+  | sbox n _ => n
 
 def toString : Kernel → String
   | identity n => s!"I_{n}"
@@ -143,6 +145,7 @@ def toString : Kernel → String
   | twiddle n k => s!"T^{n}_{k}"
   | scale => "Scale"
   | butterfly => "Butterfly"
+  | sbox n α => s!"Sbox_{n}(x^{α})"
 
 instance : ToString Kernel := ⟨Kernel.toString⟩
 
@@ -304,6 +307,19 @@ partial def lower (m n : Nat) (state : LowerState) : MatExpr α m n → (SigmaEx
 
   | .scalar _ =>
     (.compute .scale (Gather.contiguous 1 (.const 0)) (Scatter.contiguous 1 (.const 0)), state)
+
+  | @MatExpr.elemwise _ m' n' op a =>
+    -- Lower the inner matrix first, then apply S-box
+    let (innerExpr, state1) := lower m' n' state a
+    -- Get the exponent from ElemOp
+    let exp := match op with
+      | ElemOp.pow α => α
+      | ElemOp.custom _ => 1  -- Default to identity for custom ops
+    -- Apply S-box to each element
+    let sboxExpr : SigmaExpr := .compute (.sbox (m' * n') exp)
+      (Gather.contiguous (m' * n') (.const 0))
+      (Scatter.contiguous (m' * n') (.const 0))
+    (.seq innerExpr sboxExpr, state1)
 
 def lowerFresh (m n : Nat) (e : MatExpr α m n) : SigmaExpr :=
   (lower m n {} e).1

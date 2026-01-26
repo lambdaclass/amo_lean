@@ -189,6 +189,20 @@ def evalNTT2Kernel (p : Nat) (input : List Float) : List Float :=
     [sumMod, diffMod]
   | _ => input
 
+/-- Evaluate S-box kernel (Poseidon2): x^α for each element.
+    For α=5, uses square chain for efficiency. -/
+def evalSboxKernel (α : Nat) (input : List Float) : List Float :=
+  input.map fun x =>
+    -- Compute x^α using repeated multiplication
+    let rec pow (base : Float) : Nat → Float
+      | 0 => 1.0
+      | 1 => base
+      | n + 2 =>
+        let half := pow base ((n + 2) / 2)
+        let squared := half * half
+        if (n + 2) % 2 == 0 then squared else squared * base
+    pow x α
+
 /-- Evaluate a kernel on input data -/
 def evalKernel (k : Kernel) (input : List Float) : List Float :=
   match k with
@@ -201,6 +215,7 @@ def evalKernel (k : Kernel) (input : List Float) : List Float :=
   | .twiddle _ _ => input  -- Twiddle is just multiplication by constants
   | .scale => evalScaleKernel input
   | .butterfly => evalButterflyKernel input
+  | .sbox _ α => evalSboxKernel α input  -- Poseidon2 S-box
 
 /-! ## Part 6: Main Sigma Evaluator
 

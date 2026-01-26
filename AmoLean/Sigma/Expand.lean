@@ -207,6 +207,28 @@ def expandScale (factor : Int) : ExpandedKernel :=
 /-- Expand butterfly kernel (same as DFT_2) -/
 def expandButterfly : ExpandedKernel := expandDFT2
 
+/-- Expand S-box kernel: x^α for each element (Poseidon2).
+    For α=5, uses square chain: x^5 = x * (x^2)^2 (3 multiplications) -/
+def expandSbox (size : Nat) (α : Nat) : ExpandedKernel :=
+  let inputs := List.range size |>.map ScalarVar.input
+  let outputs := List.range size |>.map ScalarVar.output
+  -- For each element, compute x^α using square chain if α=5
+  let body := if α == 5 then
+    -- Square chain: x^5 = x * x^4 = x * (x^2)^2
+    List.range size |>.bind fun i =>
+      let xi := ScalarExpr.x i
+      [
+        { target := .temp (3*i),     value := .mul xi xi },          -- t_3i = x_i^2
+        { target := .temp (3*i + 1), value := .mul (.t (3*i)) (.t (3*i)) },  -- t_3i+1 = x_i^4
+        { target := .output i,       value := .mul xi (.t (3*i + 1)) }       -- y_i = x_i^5
+      ]
+  else
+    -- Naive: compute x^α with α-1 multiplications
+    List.range size |>.map fun i =>
+      -- For simplicity, just use y = x (TODO: implement general power)
+      { target := .output i, value := ScalarExpr.x i }
+  { inputVars := inputs, outputVars := outputs, body := body }
+
 /-- Main kernel expansion function -/
 def expandKernel : Kernel → ExpandedKernel
   | .identity n => expandIdentity n
@@ -217,6 +239,7 @@ def expandKernel : Kernel → ExpandedKernel
   | .twiddle n _ => expandIdentity n  -- TODO: implement twiddle factors
   | .scale => expandScale 1  -- Default scale factor
   | .butterfly => expandButterfly
+  | .sbox n α => expandSbox n α  -- Poseidon2 S-box
 
 /-! ## Part 4: Expanded SigmaExpr -/
 

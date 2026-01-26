@@ -218,6 +218,12 @@ inductive VecExpr (α : Type) : Nat → Type where
   /-- Take second half of a vector (high elements) -/
   | splitHi : VecExpr α (2 * n) → VecExpr α n
 
+  /-- Extract first element as a 1-element vector (for partial rounds) -/
+  | head : VecExpr α (n + 1) → VecExpr α 1
+
+  /-- Extract all but first element (for partial rounds) -/
+  | tail : VecExpr α (n + 1) → VecExpr α n
+
   /-- Concatenate two vectors -/
   | concat : VecExpr α m → VecExpr α n → VecExpr α (m + n)
 
@@ -257,6 +263,8 @@ def size : VecExpr α n → Nat
   | zipWith v1 v2   => 1 + size v1 + size v2
   | splitLo v       => 1 + size v
   | splitHi v       => 1 + size v
+  | head v          => 1 + size v
+  | tail v          => 1 + size v
   | concat v1 v2    => 1 + size v1 + size v2
   | interleave v1 v2 => 1 + size v1 + size v2
   | stride _ v      => 1 + size v

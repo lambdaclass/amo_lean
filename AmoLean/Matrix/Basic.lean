@@ -96,6 +96,40 @@ def simplify : Perm n → Perm n
 
 end Perm
 
+/-! ## ElemOp: Element-wise Operations
+
+Non-linear operations applied element-wise to matrices.
+This is the key extension for Poseidon2 support.
+
+The S-box (x^5) is implemented as `ElemOp.pow 5`.
+
+IMPORTANT: elemwise acts as an "opaque barrier" - linear algebra
+E-graph rules must NOT penetrate it. This prevents:
+- mul(elemwise(...), ...) from being rewritten
+- elemwise being absorbed into Kronecker structure
+-/
+
+/-- Element-wise operation type for non-linear functions.
+    Used primarily for Poseidon2 S-box (x^α). -/
+inductive ElemOp where
+  /-- Power operation: x → x^n (S-box for α=5) -/
+  | pow : Nat → ElemOp
+  /-- Named custom operation (for extensibility) -/
+  | custom : String → ElemOp
+  deriving Repr, BEq, Hashable
+
+namespace ElemOp
+
+/-- Check if this is the identity operation (pow 1) -/
+def isIdentity : ElemOp → Bool
+  | pow 1 => true
+  | _ => false
+
+/-- S-box for Poseidon2: x^5 -/
+def sbox5 : ElemOp := pow 5
+
+end ElemOp
+
 /-! ## MatExpr α m n: Matrix Expression AST
 
 Represents an m×n matrix as a linear transformation.
@@ -161,6 +195,12 @@ inductive MatExpr (α : Type) : Nat → Nat → Type where
 
   /-- Conjugate transpose (for complex) -/
   | conjTranspose : MatExpr α m n → MatExpr α n m
+
+  /-- Element-wise non-linear operation (OPAQUE BARRIER).
+      Applies op to each element independently.
+      E-graph rules must NOT penetrate this constructor.
+      Used for Poseidon2 S-box: elemwise (pow 5) state -/
+  | elemwise : ElemOp → MatExpr α m n → MatExpr α m n
 
 namespace MatExpr
 
@@ -237,6 +277,7 @@ def nodeCount : MatExpr α m n → Nat
   | smul _ A       => 1 + nodeCount A
   | transpose A    => 1 + nodeCount A
   | conjTranspose A => 1 + nodeCount A
+  | elemwise _ A   => 1 + nodeCount A
 
 /-- Estimate operation count after expansion (for cost model).
     This gives an upper bound on the number of scalar operations. -/
@@ -255,6 +296,12 @@ def opCountEstimate : MatExpr α m n → Nat
   | smul _ A       => opCountEstimate A + m * n
   | transpose _    => 0
   | conjTranspose _ => 0
+  | elemwise op A  =>
+    let baseCost := opCountEstimate A
+    match op with
+    | ElemOp.pow 5 => baseCost + m * n * 3  -- S-box x^5: 3 muls (square chain)
+    | ElemOp.pow k => baseCost + m * n * k  -- General power: k muls (naive)
+    | ElemOp.custom _ => baseCost + m * n   -- Custom: assume 1 op per element
 
 end MatExpr
 
@@ -309,6 +356,14 @@ def estimateCost (cm : VectorCostModel) : MatExpr α m n → Nat
   | MatExpr.compose A B => estimateCost cm A + estimateCost cm B
   | MatExpr.add A B => estimateCost cm A + estimateCost cm B + m * cm.addCost / cm.simdWidth
   | MatExpr.smul _ A => estimateCost cm A + m * n * cm.mulCost / cm.simdWidth
+  | MatExpr.elemwise op A =>
+    let baseCost := estimateCost cm A
+    -- S-box x^5 uses 3 multiplications per element (square chain)
+    let sboxCost := match op with
+      | ElemOp.pow 5 => (m * n * 3 * cm.mulCost) / cm.simdWidth
+      | ElemOp.pow k => (m * n * k * cm.mulCost) / cm.simdWidth
+      | ElemOp.custom _ => (m * n * cm.mulCost) / cm.simdWidth
+    baseCost + sboxCost
   | _ => 0
 
 end AmoLean.Matrix

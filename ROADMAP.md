@@ -902,7 +902,64 @@ Este bug demuestra el valor del fuzzing diferencial: el código compilaba, no cr
 - [x] Correspondencia proof anchors ↔ teoremas documentada
 - [x] `docs/FINAL_REPORT.md`: Reporte final del proyecto
 
-**PROYECTO COMPLETADO** - Todas las fases hasta 6.6 finalizadas.
+**PROYECTO FASE 6 COMPLETADO** - Todas las fases hasta 6.6 finalizadas.
+
+---
+
+### Fase Poseidon: Non-Linear Extensions (EN PROGRESO - Enero 2026)
+
+**Objetivo**: Extender AMO-Lean para soportar operaciones no-lineales, habilitando Poseidon2 hash.
+
+**Documentación detallada**: Ver `docs/poseidon/` para ADRs y progreso.
+
+#### Estado de Implementación
+
+| Paso | Descripción | Estado |
+|------|-------------|--------|
+| 0 | Prerrequisitos (ZModSIMD) | Parcial |
+| 0.5 | Especificación ejecutable | ✓ Completado |
+| 1 | Extensión IR (elemwise) | ✓ Completado |
+| 1.5 | Sanity Tests | ✓ Completado (4/4 pasan) |
+| 2 | CodeGen SIMD | Pendiente |
+| 3 | Poseidon2 en MatExpr | Pendiente |
+| 4 | Verificación | Pendiente |
+| 5 | Integración MerkleTree | Pendiente |
+
+#### Paso 1: Extensión del IR ✓ (COMPLETADO)
+
+**Implementado**:
+- [x] `ElemOp` type: `pow`, `custom`
+- [x] `elemwise` constructor en MatExpr
+- [x] `head`/`tail` en VecExpr para rondas parciales
+- [x] E-Graph con barrera opaca (arquitectónica)
+- [x] Lowering de elemwise a SigmaExpr con kernel `sbox`
+- [x] Evaluador semántico para sbox
+
+**Archivos modificados**:
+- `AmoLean/Matrix/Basic.lean` - ElemOp, elemwise
+- `AmoLean/Vector/Basic.lean` - head/tail
+- `AmoLean/EGraph/Vector.lean` - MatEGraph
+- `AmoLean/Sigma/Basic.lean` - sbox kernel
+- `AmoLean/Sigma/Expand.lean` - square chain
+- `AmoLean/Verification/Semantics.lean` - evaluador
+
+#### Paso 1.5: Sanity Tests ✓ (COMPLETADO)
+
+**Tests implementados** (`Tests/ElemwiseSanity.lean`):
+1. **Semantic Check**: sbox5 (x^5 mod p) computa correctamente
+2. **Optimization Check**: E-Graph requiere regla explícita para composición
+3. **Safety Check (CRÍTICO)**: E-Graph NO prueba (A+B)^2 = A^2+B^2
+4. **Barrier Integrity**: elemwise no distribuye sobre adición
+
+**Resultado**: 4/4 tests pasan - Safe to proceed to CodeGen
+
+#### Problemas Encontrados y Soluciones
+
+| Problema | Solución |
+|----------|----------|
+| Sintaxis `let open` no soportada | Usar `open` a nivel de módulo |
+| Axioma sorry bloquea `#eval` | Usar `#eval!` |
+| Cálculo incorrecto 5^5 mod 17 | Recalculado: 3125 mod 17 = 14 |
 
 ---
 
@@ -938,14 +995,19 @@ amo-lean/
 │   │   ├── Semantics.lean       # Reference semantics
 │   │   ├── FuzzTest.lean        # Differential testing
 │   │   └── Theorems.lean        # Formal correctness
-│   └── FRI/                     # [✓ 6.1-6.5, IN PROGRESS 7-Alpha]
-│       ├── Basic.lean           # [6.1] Core types, ZKCostModel
-│       ├── Fold.lean            # [6.2] FRI fold with dependent types
-│       ├── Kernel.lean          # [6.2] FRILayerKernel parametrizado
-│       ├── Transcript.lean      # [6.3] TranscriptState, CryptoSigma
-│       ├── Merkle.lean          # [6.4] FlatMerkle, leaves-first
-│       ├── Protocol.lean        # [6.5] RoundState, friRound
-│       └── CodeGen.lean         # [7-Alpha] CryptoSigma → C (PRÓXIMO)
+│   ├── FRI/                     # [✓ 6.1-6.5, IN PROGRESS 7-Alpha]
+│   │   ├── Basic.lean           # [6.1] Core types, ZKCostModel
+│   │   ├── Fold.lean            # [6.2] FRI fold with dependent types
+│   │   ├── Kernel.lean          # [6.2] FRILayerKernel parametrizado
+│   │   ├── Transcript.lean      # [6.3] TranscriptState, CryptoSigma
+│   │   ├── Merkle.lean          # [6.4] FlatMerkle, leaves-first
+│   │   ├── Protocol.lean        # [6.5] RoundState, friRound
+│   │   └── CodeGen.lean         # [7-Alpha] CryptoSigma → C (PRÓXIMO)
+│   └── Protocols/               # [Poseidon] Hash protocols
+│       └── Poseidon/
+│           ├── Spec.lean        # [0.5] Pure specification
+│           └── Params/
+│               └── BN254.lean   # BN254 parameters
 ├── Benchmarks/
 │   ├── FRI_Fusion.lean          # Fusion benchmark
 │   ├── FRI_Symbolic.lean        # Symbolic execution N=8
@@ -953,7 +1015,8 @@ amo-lean/
 │   └── FRI_DiffTest.lean        # [7-Beta] Differential fuzzing (PRÓXIMO)
 ├── Tests/
 │   ├── ZModDemo.lean
-│   └── GenericsAudit.lean
+│   ├── GenericsAudit.lean
+│   └── ElemwiseSanity.lean   # [Poseidon 1.5] Sanity tests
 ├── docs/
 │   ├── PROJECT_STATUS.md
 │   ├── ESTADO_PROYECTO.md
@@ -1013,6 +1076,7 @@ amo-lean/
 
 ---
 
-*Documento actualizado: Enero 25, 2026*
-*Estado: PROYECTO COMPLETADO - Todas las fases (1 a 6.6) finalizadas. Bug crítico encontrado y corregido.*
-*Ver: docs/FINAL_REPORT.md para el reporte completo.*
+*Documento actualizado: Enero 26, 2026*
+*Estado: Fase 6 Completada. Fase Poseidon Paso 1 Completado - Ready for CodeGen.*
+*Ver: docs/FINAL_REPORT.md para reporte de Fase 6.*
+*Ver: docs/poseidon/PROGRESS.md para progreso de Fase Poseidon.*

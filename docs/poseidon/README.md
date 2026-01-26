@@ -4,9 +4,10 @@
 
 Esta fase extiende AMO-Lean para soportar operaciones no-lineales, habilitando la implementación de Poseidon2, un hash ZK-friendly crítico para zkVMs.
 
-**Estado**: En desarrollo
+**Estado**: Paso 1 Completado - Ready for CodeGen
 **Prioridad**: #1 Crítico
 **Inicio**: Enero 2026
+**Progreso**: Paso 0.5 ✓ | Paso 1 ✓ | Paso 1.5 (Tests) ✓
 
 ---
 
@@ -76,31 +77,38 @@ El tipo garantiza preservación de dimensiones por construcción.
 
 ```
 ┌────────────────────────────────────────────────────────────────┐
-│ Paso 0: Prerrequisitos                                         │
+│ Paso 0: Prerrequisitos                               [PARCIAL] │
 │ • ZModSIMD con pow_chain_5 optimizado                          │
 ├────────────────────────────────────────────────────────────────┤
-│ Paso 0.5: Especificación Ejecutable                            │
+│ Paso 0.5: Especificación Ejecutable                        [✓] │
 │ • poseidon2_spec como función pura en Lean                     │
 │ • Validar contra test vectors del paper                        │
 ├────────────────────────────────────────────────────────────────┤
-│ Paso 1: Extensión del IR                                       │
+│ Paso 1: Extensión del IR                                   [✓] │
 │ • Añadir elemwise a MatExpr                                    │
-│ • Reglas E-Graph (barrera opaca)                               │
+│ • Reglas E-Graph (barrera opaca arquitectónica)                │
+│ • head/tail en VecExpr para rondas parciales                   │
 ├────────────────────────────────────────────────────────────────┤
-│ Paso 2: CodeGen                                                │
+│ Paso 1.5: Sanity Tests                                     [✓] │
+│ • Semantic check: sbox5 (x^5 mod p)                            │
+│ • Optimization check: composición de potencias                 │
+│ • Safety check: E-Graph NO prueba (A+B)^2 = A^2+B^2            │
+│ • Barrier integrity: elemwise opaco a álgebra lineal           │
+├────────────────────────────────────────────────────────────────┤
+│ Paso 2: CodeGen                               [SIGUIENTE PASO] │
 │ • S-box escalar (square chain, 3 muls)                         │
 │ • S-box SIMD (AVX2 paralelo)                                   │
 │ • Patrón split→elemwise→concat → blend                         │
 ├────────────────────────────────────────────────────────────────┤
-│ Paso 3: Poseidon2 en MatExpr                                   │
+│ Paso 3: Poseidon2 en MatExpr                        [Pendiente]│
 │ • Full rounds con elemwise                                     │
 │ • Partial rounds con split/concat                              │
 ├────────────────────────────────────────────────────────────────┤
-│ Paso 4: Verificación                                           │
+│ Paso 4: Verificación                                [Pendiente]│
 │ • Differential fuzzing: spec vs C generado                     │
 │ • Prueba formal de equivalencia                                │
 ├────────────────────────────────────────────────────────────────┤
-│ Paso 5: Integración                                            │
+│ Paso 5: Integración                                 [Pendiente]│
 │ • MerkleTree con Poseidon2                                     │
 │ • Conectar con FRI                                             │
 └────────────────────────────────────────────────────────────────┘
@@ -116,6 +124,16 @@ El tipo garantiza preservación de dimensiones por construcción.
 | [ADR-002-partial-rounds.md](ADR-002-partial-rounds.md) | Decisión: split/concat para rondas parciales |
 | [ADR-003-codegen-simd.md](ADR-003-codegen-simd.md) | Decisión: estrategia SIMD blend |
 | [PROGRESS.md](PROGRESS.md) | Progreso de implementación |
+
+## Archivos de Código
+
+| Archivo | Contenido |
+|---------|-----------|
+| `AmoLean/Protocols/Poseidon/Spec.lean` | Especificación pura de Poseidon2 |
+| `AmoLean/Protocols/Poseidon/Params/BN254.lean` | Parámetros para BN254 |
+| `AmoLean/Matrix/Basic.lean` | ElemOp y elemwise constructor |
+| `AmoLean/EGraph/Vector.lean` | MatEGraph con barrera opaca |
+| `Tests/ElemwiseSanity.lean` | Tests de sanidad (4/4 pasan) |
 
 ---
 
@@ -150,4 +168,5 @@ RP = 22
 
 ---
 
-*Última actualización: Enero 2026*
+*Última actualización: 26 Enero 2026*
+*Paso 1 Completado - Ready for CodeGen*

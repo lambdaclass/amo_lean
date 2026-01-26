@@ -26,7 +26,7 @@ import AmoLean.EGraph.Basic
 
 namespace AmoLean.EGraph.Matrix
 
-open AmoLean.Matrix (Perm MatExpr)
+open AmoLean.Matrix (Perm MatExpr ElemOp)
 open AmoLean.EGraph (EClassId infiniteCost)
 
 /-! ## Part 1: Matrix E-Node Operations -/
@@ -142,6 +142,11 @@ inductive MatENodeOp where
   /-- Conjugate transpose (for complex matrices) -/
   | conjTranspose (a : MatEClassId) (m n : Nat)
 
+  /-- Element-wise non-linear operation (OPAQUE BARRIER).
+      Used for Poseidon2 S-box: elemwise (pow 5) state.
+      E-graph rules must NOT penetrate this constructor. -/
+  | elemwise (op : ElemOp) (a : MatEClassId) (m n : Nat)
+
   deriving Repr, BEq, Hashable, Inhabited
 
 /-- A matrix E-node wraps an operation. -/
@@ -195,6 +200,10 @@ def mkSmul (scalar a : MatEClassId) (m n : Nat) : MatENode :=
 def mkTranspose (a : MatEClassId) (m n : Nat) : MatENode :=
   ⟨.transpose a m n⟩
 
+/-- Create elemwise node (OPAQUE BARRIER for S-box) -/
+def mkElemwise (op : ElemOp) (a : MatEClassId) (m n : Nat) : MatENode :=
+  ⟨.elemwise op a m n⟩
+
 /-- Get the output dimensions of a matrix node (rows, cols) -/
 def dimensions : MatENode → (Nat × Nat)
   | ⟨.identity n⟩ => (n, n)
@@ -215,6 +224,7 @@ def dimensions : MatENode → (Nat × Nat)
   | ⟨.smul _ _ m n⟩ => (m, n)
   | ⟨.transpose _ m n⟩ => (n, m)  -- Note: transposed
   | ⟨.conjTranspose _ m n⟩ => (n, m)
+  | ⟨.elemwise _ _ m n⟩ => (m, n)  -- Same dimensions as input
 
 /-- Get all child e-class IDs of a node -/
 def children : MatENode → List MatEClassId
@@ -236,6 +246,7 @@ def children : MatENode → List MatEClassId
   | ⟨.smul s a _ _⟩ => [s, a]
   | ⟨.transpose a _ _⟩ => [a]
   | ⟨.conjTranspose a _ _⟩ => [a]
+  | ⟨.elemwise _ a _ _⟩ => [a]
 
 /-- Map a function over child IDs -/
 def mapChildren (f : MatEClassId → MatEClassId) : MatENode → MatENode
@@ -257,6 +268,7 @@ def mapChildren (f : MatEClassId → MatEClassId) : MatENode → MatENode
   | ⟨.smul s a m n⟩ => ⟨.smul (f s) (f a) m n⟩
   | ⟨.transpose a m n⟩ => ⟨.transpose (f a) m n⟩
   | ⟨.conjTranspose a m n⟩ => ⟨.conjTranspose (f a) m n⟩
+  | ⟨.elemwise op a m n⟩ => ⟨.elemwise op (f a) m n⟩
 
 /-- Calculate local cost of a node (without counting children) -/
 def localCost (cm : MatCostModel := defaultMatCostModel) : MatENode → Nat
@@ -272,6 +284,12 @@ def localCost (cm : MatCostModel := defaultMatCostModel) : MatENode → Nat
   | ⟨.smul _ _ _ _⟩ => cm.smulCost
   | ⟨.transpose _ _ _⟩ => cm.transposeCost
   | ⟨.conjTranspose _ _ _⟩ => cm.transposeCost
+  | ⟨.elemwise op _ m n⟩ =>
+    -- S-box x^5 uses 3 multiplications per element (square chain)
+    match op with
+    | ElemOp.pow 5 => (m * n * 3) / cm.simdWidth
+    | ElemOp.pow k => (m * n * k) / cm.simdWidth
+    | ElemOp.custom _ => (m * n) / cm.simdWidth
 
 end MatENode
 
@@ -435,6 +453,7 @@ def canonicalize (g : MatEGraph) (node : MatENode) : (MatENode × MatEGraph) :=
       | .perm (.compose _ _), [p1, p2] => ⟨.perm (.compose p1 p2)⟩
       | .perm (.inverse _), [p] => ⟨.perm (.inverse p)⟩
       | .perm (.tensor _ _), [p1, p2] => ⟨.perm (.tensor p1 p2)⟩
+      | .elemwise op _ m n, [a] => MatENode.mkElemwise op a m n
       | _, _ => node  -- No change for other cases
     (canonNode, g')
 
@@ -561,6 +580,10 @@ def addMatExpr (g : MatEGraph) (m n : Nat) : MatExpr α m n → (MatEClassId × 
     g.add (MatENode.mkIdentity n)
   | .scalar _ =>
     g.add (MatENode.mkIdentity 1)
+  | @MatExpr.elemwise _ m' n' op a =>
+    -- elemwise is an OPAQUE BARRIER - it enters the E-graph but rules don't penetrate it
+    let (idA, g1) := addMatExpr g m' n' a
+    g1.add (MatENode.mkElemwise op idA m' n')
 
 /-- Create a MatEGraph from a MatExpr -/
 def fromMatExpr (e : MatExpr α m n) : (MatEClassId × MatEGraph) :=

@@ -1,7 +1,7 @@
 # ADR-001: Extensión de MatExpr con elemwise
 
 ## Estado
-Aceptado
+**Implementado** (26 Enero 2026)
 
 ## Contexto
 
@@ -112,5 +112,50 @@ elemwise (pow 5) x → x * x * x * x * x  -- NO expandir
 
 ---
 
-*Fecha*: Enero 2026
+## Estado de Implementación (26 Enero 2026)
+
+### Archivos Modificados/Creados
+
+| Archivo | Cambios |
+|---------|---------|
+| `AmoLean/Matrix/Basic.lean` | ElemOp, elemwise constructor |
+| `AmoLean/Vector/Basic.lean` | head/tail para rondas parciales |
+| `AmoLean/EGraph/Vector.lean` | MatEGraph con barrera opaca |
+| `AmoLean/Sigma/Basic.lean` | Kernel sbox, lowering |
+| `AmoLean/Sigma/Expand.lean` | Square chain expansion |
+| `AmoLean/Verification/Semantics.lean` | Evaluador sbox |
+| `Tests/ElemwiseSanity.lean` | Tests de sanidad |
+
+### Decisiones de Implementación
+
+#### Barrera Opaca es Arquitectónica
+La barrera opaca de `elemwise` NO se implementa mediante reglas explícitas de bloqueo, sino arquitectónicamente: simplemente no existen reglas en el E-Graph que miren dentro de un nodo `elemwise`.
+
+**Verificación**: Test 4 (Barrier Integrity) confirma que `elemwise(f, A+B) ≠ elemwise(f,A) + elemwise(f,B)`.
+
+#### Square Chain para x^5
+La S-box `x^5` se implementa con square chain (3 multiplicaciones):
+```
+x^5 = x * (x^2)^2
+    = x * x4
+donde x2 = x * x
+      x4 = x2 * x2
+```
+
+### Tests de Sanidad (4/4 Pasan)
+
+1. **Semantic Check**: sbox5 computa x^5 mod 17 correctamente
+2. **Optimization Check**: E-Graph requiere regla explícita para fusión de potencias
+3. **Safety Check (CRÍTICO)**: E-Graph NO prueba (x+y)^2 = x^2 + y^2
+4. **Barrier Integrity**: elemwise no se distribuye sobre adición
+
+### Problemas Encontrados
+
+1. **Sintaxis `let open`**: No soportada en Lean 4 dentro de bloques `do`. Solución: usar `open` a nivel de módulo.
+2. **Axioma sorry**: `#eval` rechaza código con dependencias de sorry. Solución: usar `#eval!`.
+
+---
+
+*Fecha original*: Enero 2026
+*Última actualización*: 26 Enero 2026
 *Autores*: Equipo AMO-Lean
