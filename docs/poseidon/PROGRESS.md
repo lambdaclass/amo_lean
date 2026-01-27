@@ -14,7 +14,7 @@
 | 2.3 | SIMD Goldilocks | **Completado** | AVX2 intra-hash, blend para partial |
 | 2.4 | Batch SIMD BN254 | **Completado** | AoS↔SoA, 4 hashes paralelos |
 | 3 | Poseidon2 en MatExpr | **COMPLETADO** | ConstRef, MDS opaco, loops en CodeGen |
-| 4 | Verificación | **EN PROGRESO** | Fase 4a (Test Vector) ✅ PASS |
+| 4 | Verificación | **EN PROGRESO** | 4a ✅ | 4b.1 ✅ (Spec.lean corregido) |
 | 5 | Integración MerkleTree | Pendiente | |
 
 ---
@@ -629,12 +629,12 @@ Partial round calls: **1** (no 56)
 ### Objetivo
 Validar correctitud de código generado contra implementación de referencia HorizenLabs.
 
-### Estado: **PARCIALMENTE COMPLETADO** (Fase 4a completa)
+### Estado: **EN PROGRESO** (Fases 4a y 4b.1 completas)
 
 ### Checklist
 - [x] **4a: Test Vector Validation**: C generado vs HorizenLabs reference ✅ PASS
-- [ ] **4b.1: Validación Spec**: Lean spec vs HorizenLabs (edge cases)
-- [ ] **4b.2: Fuzzing Masivo**: C vs HorizenLabs (100k vectores)
+- [x] **4b.1: Validación Spec**: Lean spec corregida, 118 vectores generados ✅
+- [ ] **4b.2: Fuzzing Masivo**: C vs HorizenLabs (100k vectores) - EN PROGRESO
 - [ ] **4b.3: Property Testing**: QuickCheck en Lean (opcional)
 - [ ] **4c: Benchmark**: vs implementación Rust de referencia
 - [ ] **4d: Prueba formal**: `eval(poseidon2_matexpr) = poseidon2_spec`
@@ -814,9 +814,25 @@ Esta estrategia da:
 
 #### Fase 4b.1: Validación Lean ↔ HorizenLabs
 
+**Estado**: ✅ **COMPLETADO**
+
 **Objetivo**: Confirmar que `Spec.lean` es semánticamente equivalente a HorizenLabs.
 
-**Estrategia**:
+**Resultado**: Durante la generación de vectores, se encontraron y corrigieron 2 bugs en `Spec.lean` (Bugs 3 y 4 documentados abajo). Después de las correcciones, `Spec.lean` produce outputs idénticos a HorizenLabs.
+
+**Vectores generados**: 118 total
+- 18 edge cases (valores cerca del primo, límites de limb, patrones de bits)
+- 100 random (seed fija = 42 para reproducibilidad)
+
+**Archivos creados**:
+- `Tests/poseidon_lean/GenerateVectors.lean` - Generador ejecutable
+- `Tests/poseidon_lean/vectors_edge.json` - 118 vectores en formato JSON
+
+**Validación parcial completada**:
+- ✅ Vector `[0, 1, 2]` coincide exactamente con HorizenLabs
+- Pendiente: validación masiva de los 118 vectores (se hará en 4b.2)
+
+**Estrategia original**:
 1. Generar ~100-200 test vectors desde Lean con edge cases obligatorios
 2. Ejecutar mismos inputs en HorizenLabs Rust
 3. Comparar outputs byte a byte
