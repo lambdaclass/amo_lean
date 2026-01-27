@@ -4,10 +4,10 @@
 
 Esta fase extiende AMO-Lean para soportar operaciones no-lineales, habilitando la implementación de Poseidon2, un hash ZK-friendly crítico para zkVMs.
 
-**Estado**: Paso 2 En Progreso (CodeGen Escalar)
+**Estado**: Paso 4 En Progreso (Verificación)
 **Prioridad**: #1 Crítico
 **Inicio**: Enero 2026
-**Progreso**: Paso 0.5 ✓ | Paso 1 ✓ | Paso 1.5 ✓ | **Paso 2.1** ◐
+**Progreso**: Paso 0.5 ✓ | Paso 1 ✓ | Paso 1.5 ✓ | Paso 2 ✓ | Paso 3 ✓ | **Paso 4a** ✓
 
 ---
 
@@ -95,33 +95,35 @@ El tipo garantiza preservación de dimensiones por construcción.
 │ • Safety check: E-Graph NO prueba (A+B)^2 = A^2+B^2            │
 │ • Barrier integrity: elemwise opaco a álgebra lineal           │
 ├────────────────────────────────────────────────────────────────┤
-│ Paso 2: CodeGen (Estrategia por Capas)        [EN PROGRESO]    │
+│ Paso 2: CodeGen (Estrategia por Capas)            [COMPLETADO] │
 │ Ver ADR-004 para justificación de la estrategia                │
 ├────────────────────────────────────────────────────────────────┤
-│   2.1: CodeGen Escalar                        [EN PROGRESO]    │
+│   2.1: CodeGen Escalar                            [COMPLETADO] │
 │   • S-box escalar (square chain, 3 muls)                       │
 │   • Funciona para cualquier campo (BN254, Goldilocks)          │
 │   • Base para differential fuzzing                             │
 ├────────────────────────────────────────────────────────────────┤
-│   2.2: Pattern Matching Lowering              [Pendiente]      │
+│   2.2: Pattern Matching Lowering                  [COMPLETADO] │
 │   • Detectar concat(elemwise(head...)) → PartialSbox           │
 │   • Mantener arquitectura de capas                             │
 ├────────────────────────────────────────────────────────────────┤
-│   2.3: SIMD Goldilocks (Opcional)             [Pendiente]      │
+│   2.3: SIMD Goldilocks (Opcional)                 [COMPLETADO] │
 │   • Solo campos ≤64 bits (4 elem/YMM)                          │
 │   • Blend para partial rounds                                  │
 ├────────────────────────────────────────────────────────────────┤
-│   2.4: Batch SIMD BN254 (Futuro)              [Pendiente]      │
+│   2.4: Batch SIMD BN254 (Futuro)                  [COMPLETADO] │
 │   • 4 hashes independientes en paralelo                        │
 │   • Requiere API de batch hashing                              │
 ├────────────────────────────────────────────────────────────────┤
-│ Paso 3: Poseidon2 en MatExpr                        [Pendiente]│
+│ Paso 3: Poseidon2 en MatExpr                      [COMPLETADO] │
 │ • Full rounds con elemwise                                     │
-│ • Partial rounds con split/concat                              │
+│ • Partial rounds con partialElemwise (no split/concat)         │
+│ • ConstRef, MDS opaco, loops en CodeGen                        │
 ├────────────────────────────────────────────────────────────────┤
-│ Paso 4: Verificación                                [Pendiente]│
-│ • Differential fuzzing: spec vs C generado                     │
-│ • Prueba formal de equivalencia                                │
+│ Paso 4: Verificación                            [EN PROGRESO]  │
+│ • Fase 4a: Test Vector vs HorizenLabs          [✓ COMPLETADO]  │
+│ • Differential fuzzing: spec vs C generado        [Pendiente]  │
+│ • Prueba formal de equivalencia                   [Pendiente]  │
 ├────────────────────────────────────────────────────────────────┤
 │ Paso 5: Integración                                 [Pendiente]│
 │ • MerkleTree con Poseidon2                                     │
@@ -138,7 +140,8 @@ El tipo garantiza preservación de dimensiones por construcción.
 | [ADR-001-elemwise.md](ADR-001-elemwise.md) | Decisión: extensión de MatExpr |
 | [ADR-002-partial-rounds.md](ADR-002-partial-rounds.md) | Decisión: split/concat para rondas parciales |
 | [ADR-003-codegen-simd.md](ADR-003-codegen-simd.md) | Estrategia SIMD original (parcialmente superseded) |
-| [ADR-004-codegen-strategy.md](ADR-004-codegen-strategy.md) | **Estrategia CodeGen por capas** (actual) |
+| [ADR-004-codegen-strategy.md](ADR-004-codegen-strategy.md) | Estrategia CodeGen por capas |
+| [ADR-005-phase3-architecture.md](ADR-005-phase3-architecture.md) | **Arquitectura Fase 3** (ConstRef, MDS opaco, loops) |
 | [PROGRESS.md](PROGRESS.md) | Progreso de implementación |
 
 ## Archivos de Código
@@ -147,9 +150,12 @@ El tipo garantiza preservación de dimensiones por construcción.
 |---------|-----------|
 | `AmoLean/Protocols/Poseidon/Spec.lean` | Especificación pura de Poseidon2 |
 | `AmoLean/Protocols/Poseidon/Params/BN254.lean` | Parámetros para BN254 |
-| `AmoLean/Matrix/Basic.lean` | ElemOp y elemwise constructor |
+| `AmoLean/Protocols/Poseidon/CodeGen.lean` | CodeGen específico Poseidon |
+| `AmoLean/Protocols/Poseidon/MatExpr.lean` | Poseidon2 en MatExpr (Paso 3) |
+| `AmoLean/Matrix/Basic.lean` | ElemOp, elemwise, mdsApply constructor |
 | `AmoLean/EGraph/Vector.lean` | MatEGraph con barrera opaca |
 | `Tests/ElemwiseSanity.lean` | Tests de sanidad (4/4 pasan) |
+| `Tests/poseidon_c/` | Tests C para verificación (Paso 4) |
 
 ---
 
@@ -184,5 +190,5 @@ RP = 22
 
 ---
 
-*Última actualización: 26 Enero 2026*
-*Paso 2.1 En Progreso - CodeGen Escalar*
+*Última actualización: 27 Enero 2026*
+*Paso 4 En Progreso - Verificación (Fase 4a Test Vector ✅ PASS)*

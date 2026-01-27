@@ -33,9 +33,9 @@ OBJS = $(SRCS:.c=.o)
 # Build directory
 BUILD_DIR = build
 
-.PHONY: all test benchmark hygiene asan clean dirs differential
+.PHONY: all test benchmark hygiene asan clean dirs differential testvector phase4
 
-all: dirs $(BUILD_DIR)/test_sbox $(BUILD_DIR)/benchmark $(BUILD_DIR)/test_differential
+all: dirs $(BUILD_DIR)/test_sbox $(BUILD_DIR)/benchmark $(BUILD_DIR)/test_differential $(BUILD_DIR)/test_vector
 
 dirs:
 	@mkdir -p $(BUILD_DIR)
@@ -52,6 +52,9 @@ $(BUILD_DIR)/benchmark: benchmark.c $(BUILD_DIR)/bn254_field.o
 
 $(BUILD_DIR)/test_differential: test_differential.c $(BUILD_DIR)/bn254_field.o
 	$(CC) $(CFLAGS) $^ -o $@
+
+$(BUILD_DIR)/test_vector: test_vector.c $(BUILD_DIR)/bn254_field.o
+	$(CC) $(CFLAGS) -I../../generated $^ -o $@
 
 # Hygiene build (strict warnings)
 $(BUILD_DIR)/bn254_field_hygiene.o: bn254_field.c bn254_field.h
@@ -101,6 +104,15 @@ benchmark: all
 	@echo ""
 	$(BUILD_DIR)/benchmark 100000
 
+# Run Phase 4a test vector validation
+testvector: all
+	@echo ""
+	@echo "══════════════════════════════════════════════════════════════════"
+	@echo "  Phase 4a: Test Vector Validation (HorizenLabs reference)"
+	@echo "══════════════════════════════════════════════════════════════════"
+	@echo ""
+	$(BUILD_DIR)/test_vector
+
 # Run differential fuzzing
 differential: all
 	@echo ""
@@ -110,8 +122,15 @@ differential: all
 	@echo ""
 	$(BUILD_DIR)/test_differential
 
+# Phase 4 complete test suite
+phase4: all testvector test differential
+	@echo ""
+	@echo "══════════════════════════════════════════════════════════════════"
+	@echo "  PHASE 4 TEST SUITE COMPLETED"
+	@echo "══════════════════════════════════════════════════════════════════"
+
 # Full test suite
-fulltest: hygiene asan test differential benchmark
+fulltest: hygiene asan test differential benchmark testvector
 	@echo ""
 	@echo "══════════════════════════════════════════════════════════════════"
 	@echo "  FULL TEST SUITE COMPLETED"
