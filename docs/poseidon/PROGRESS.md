@@ -1418,17 +1418,59 @@ Estas herramientas son **overkill** para este caso:
 ## Paso 5: Integración
 
 ### Objetivo
-Conectar Poseidon2 con el resto del sistema.
+Conectar Poseidon2 con el resto del sistema FRI.
+
+**Ver**: [ADR-007-step5-integration.md](ADR-007-step5-integration.md)
+
+### Descubrimiento Crítico
+
+**La infraestructura YA EXISTE**:
+- `AmoLean/FRI/Merkle.lean` (608 líneas) - MerkleTree completo con layout leaves-first
+- `AmoLean/FRI/Transcript.lean` (~538 líneas) - Fiat-Shamir con DomainTag
+- `AmoLean/FRI/Protocol.lean` (~538 líneas) - Orquestación FRI completa
+
+**El gap real**: Usan placeholder hashes (XOR-based), no Poseidon2.
+
+### Plan Refinado
+
+```
+Paso 5 (INTEGRACIÓN, no implementación):
+├── 5.1: Adaptadores de Hash                      [✓ COMPLETADO]
+│   ├── poseidon2HashFn : HashFn Nat              [✓]
+│   ├── poseidon2Squeeze : TranscriptState → Nat  [✓]
+│   └── Tests de validación (6/6 PASS)            [✓]
+│
+├── 5.2: Auditoría de Seguridad                   [PENDIENTE]
+│   ├── Verificar domain separation completo      [ ]
+│   ├── Verificar no hay randomness crudo         [ ]
+│   └── Documentar gaps                           [ ]
+│
+└── 5.3: Tests End-to-End                         [PENDIENTE]
+    ├── MerkleTree con Poseidon2                  [ ]
+    ├── FRI commit/query con transcript real      [ ]
+    └── Benchmark vs testHash                     [ ]
+```
 
 ### Checklist
-- [ ] MerkleTree usando Poseidon2
-- [ ] Fiat-Shamir usando Poseidon2
-- [ ] Conectar con FRI para commits completos
-- [ ] Tests end-to-end
+- [x] 5.1: Crear adaptador `poseidon2HashFn` para Merkle ✅
+- [x] 5.1: Crear adaptador `poseidon2Squeeze` para Transcript ✅
+- [x] 5.1: Validar adaptadores contra Spec.lean (6/6 tests) ✅
+- [ ] 5.2: Audit de domain separation
+- [ ] 5.2: Verificar transcript completeness
+- [ ] 5.3: Test E2E Merkle con Poseidon2
+- [ ] 5.3: Test E2E FRI completo
+- [ ] 5.3: Benchmark comparativo
 
-### Archivos a crear/modificar
-- `AmoLean/Protocols/MerkleTree.lean`
-- `AmoLean/FRI/Commit.lean` (actualizar)
+### Archivos creados/modificados
+- `AmoLean/Protocols/Poseidon/Integration.lean` - **COMPLETADO** (~340 líneas)
+  - `poseidon2MerkleHash : Nat → Nat → Nat` - Adaptador para Merkle HashFn
+  - `poseidon2TranscriptSqueeze : List Nat → Nat` - Adaptador para Transcript
+  - `poseidon2MultipleSqueeze` - Multi-output para challenges
+  - `poseidon2HashWithDomain` - Domain separation
+  - 6 tests integrados (todos pasan)
+- `AmoLean/FRI/Merkle.lean` - Pendiente: instanciar con Poseidon2
+- `AmoLean/FRI/Transcript.lean` - Pendiente: reemplazar XOR squeeze
+- `Tests/PoseidonIntegration.lean` - Pendiente: Tests E2E
 
 ---
 
@@ -1490,6 +1532,15 @@ Conectar Poseidon2 con el resto del sistema.
 | 2026-01-27 | Paso 4d Fase D: Teorema principal poseidon2_correct, 3/3 tests | Equipo |
 | 2026-01-27 | Auditoría Híbrida: 21/21 tests, 12 sorry verificados, 0 huérfanos | Equipo |
 | 2026-01-27 | **Paso 4 COMPLETO** - Verificación formal con auditoría ✅ | Equipo |
+| 2026-01-27 | Paso 5: Análisis de infraestructura existente | Equipo |
+| 2026-01-27 | Paso 5: ADR-007 creado - Estrategia de integración refinada | Equipo |
+| 2026-01-27 | Paso 5: Descubierto que Merkle/Transcript/Protocol YA EXISTEN | Equipo |
+| 2026-01-27 | Paso 5.1: Inicio de implementación de adaptadores | Equipo |
+| 2026-01-27 | Paso 5.1: Integration.lean creado con adaptadores Poseidon2 | Equipo |
+| 2026-01-27 | Paso 5.1: poseidon2MerkleHash - 2-to-1 hash para Merkle trees | Equipo |
+| 2026-01-27 | Paso 5.1: poseidon2Squeeze/MultipleSqueeze - sponge para transcript | Equipo |
+| 2026-01-27 | Paso 5.1: poseidon2HashWithDomain - domain separation | Equipo |
+| 2026-01-27 | **Paso 5.1 COMPLETADO** - 6/6 tests pasan ✅ | Equipo |
 
 ---
 
