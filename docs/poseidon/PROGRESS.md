@@ -632,10 +632,12 @@ Validar correctitud de código generado contra implementación de referencia Hor
 ### Estado: **PARCIALMENTE COMPLETADO** (Fase 4a completa)
 
 ### Checklist
-- [x] **Test Vector Validation**: C generado vs HorizenLabs reference ✅ PASS
-- [ ] Differential fuzzing: `poseidon2_spec` vs C generado (pendiente)
-- [ ] Benchmark vs implementación Rust de referencia
-- [ ] Prueba formal: `eval(poseidon2_matexpr) = poseidon2_spec`
+- [x] **4a: Test Vector Validation**: C generado vs HorizenLabs reference ✅ PASS
+- [ ] **4b.1: Validación Spec**: Lean spec vs HorizenLabs (edge cases)
+- [ ] **4b.2: Fuzzing Masivo**: C vs HorizenLabs (100k vectores)
+- [ ] **4b.3: Property Testing**: QuickCheck en Lean (opcional)
+- [ ] **4c: Benchmark**: vs implementación Rust de referencia
+- [ ] **4d: Prueba formal**: `eval(poseidon2_matexpr) = poseidon2_spec`
 - [ ] Documentar cualquier `sorry`
 
 ---
@@ -748,7 +750,248 @@ Errores de transcripción manual al copiar los round constants desde `BN254.lean
 5. **Identificación**: Encontrados 2 RC incorrectos en rounds 57 y 58
 
 ### Framework de testing
-Usar framework de fuzzing de Fase 6 para tests adicionales.
+Usar framework de fuzzing de Fase 4b para validación exhaustiva.
+
+---
+
+### Fase 4b: Differential Fuzzing
+
+**Estado**: EN PROGRESO
+
+**Objetivo**: Validar que el código C generado produce resultados idénticos a la especificación para miles de inputs, incluyendo edge cases matemáticos.
+
+#### Análisis de Diseño
+
+**El Problema Central**:
+La Fase 4a validó UN test vector. Esto es insuficiente para garantizar corrección:
+- Un test vector no encuentra edge cases matemáticos (valores cerca del módulo P)
+- No detecta errores que solo se manifiestan con inputs específicos
+- No valida que la semántica del compilador Lean→C sea correcta en general
+
+**Desafíos Identificados**:
+
+| Desafío | Descripción | Impacto |
+|---------|-------------|---------|
+| Velocidad del Oráculo | Lean runtime es lento (~100ms por permutación) | Fuzzing de 100k casos tardaría horas |
+| Serialización | Lean usa `ZMod p`, C usa `uint64_t[4]` | Errores de endianness posibles |
+| Edge Cases | `rand()` nunca golpea valores cerca de P ≈ 2^254 | Errores aritméticos no detectados |
+| Reproducibilidad | Sin seed fija, bugs son intermitentes | Debugging imposible |
+
+**Decisión Arquitectónica: Estrategia Híbrida de Tres Oráculos**
+
+Tenemos tres implementaciones disponibles:
+
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   Lean Spec     │    │   C Generado    │    │  HorizenLabs    │
+│ (source of truth│    │ (nuestro target)│    │  (fast oracle)  │
+│   pero lento)   │    │                 │    │                 │
+└────────┬────────┘    └────────┬────────┘    └────────┬────────┘
+         │                      │                      │
+         ▼                      ▼                      ▼
+    4b.1: Validar         4b.2: Fuzzear           Oráculo rápido
+    spec correcta         a escala masiva         para 4b.2
+```
+
+**Por qué NO usar solo Lean como oráculo**:
+- Lean compilado es ~100x más lento que C optimizado
+- Para 100,000 casos, el test tardaría horas
+- Iteración lenta = bugs descubiertos tarde
+
+**Por qué NO usar solo HorizenLabs**:
+- No valida nuestra especificación Lean
+- Confianza transitiva sin verificar Lean directamente
+
+**Solución: Estrategia en Fases**:
+1. **4b.1**: Validar Lean ↔ HorizenLabs (pequeña escala, una vez)
+2. **4b.2**: Fuzzear C ↔ HorizenLabs (gran escala, rápido)
+3. **4b.3**: (Opcional) Property-based testing con QuickCheck si existe
+
+Esta estrategia da:
+- ✓ Validación de spec (4b.1)
+- ✓ Fuzzing masivo rápido (4b.2)
+- ✓ Ciclo de desarrollo ágil
+
+#### Fase 4b.1: Validación Lean ↔ HorizenLabs
+
+**Objetivo**: Confirmar que `Spec.lean` es semánticamente equivalente a HorizenLabs.
+
+**Estrategia**:
+1. Generar ~100-200 test vectors desde Lean con edge cases obligatorios
+2. Ejecutar mismos inputs en HorizenLabs Rust
+3. Comparar outputs byte a byte
+
+**Edge Cases Obligatorios para BN254**:
+
+| Categoría | Valores | Razón |
+|-----------|---------|-------|
+| Triviales | 0, 1, 2 | Casos base |
+| Cerca del módulo | P-1, P-2, P-3 | Overflow/wrap-around |
+| Límites de limb | 2^64-1, 2^64, 2^128-1 | Carries entre limbs |
+| Patrones de bits | 0xFFFF...FFFF, 0x8000...0000 | Estrés de lógica Montgomery |
+| Aleatorios | ~100 valores con seed fija | Cobertura general |
+
+**Formato de intercambio**: JSON para debugging humano
+```json
+{
+  "seed": 42,
+  "vectors": [
+    {"input": ["0x0", "0x1", "0x2"], "output": ["0x0bb6...", "0x303b...", "0x1ed2..."]},
+    ...
+  ]
+}
+```
+
+**Criterio de éxito**: 100% de coincidencia en todos los vectores.
+
+#### Fase 4b.2: Fuzzing Masivo C ↔ HorizenLabs
+
+**Objetivo**: Validar código C a escala con HorizenLabs como oráculo rápido.
+
+**Estrategia**:
+1. HorizenLabs Rust genera 100,000+ vectores (rápido)
+2. Test runner C consume vectores y compara
+3. Reportar primer mismatch con contexto completo
+
+**Por qué HorizenLabs como oráculo**:
+- Rust es ~10x más rápido que Lean para este workload
+- Ya validado contra nuestra spec en 4b.1
+- Confianza transitiva: si Lean = HorizenLabs y C = HorizenLabs → Lean = C
+
+**Formato de datos**: Binario para velocidad
+```
+Header: magic(4) | version(4) | count(8) | seed(8)
+Vector: input[3][32 bytes] | output[3][32 bytes] = 192 bytes/vector
+Total para 100k: ~19MB
+```
+
+**Determinismo**:
+- Seed fija configurable: `FUZZ_SEED=12345`
+- En fallo, dump de `crash_input.json` con vector específico
+
+**Criterio de éxito**: 0 mismatches en 100,000 vectores.
+
+#### Fase 4b.3: Property-Based Testing (Opcional)
+
+**Objetivo**: Usar QuickCheck o similar para generar propiedades verificables.
+
+**Propiedades a verificar**:
+1. `permutation(permutation_inverse(x)) = x` (si implementamos inversa)
+2. `sbox(0) = 0` (propiedad algebraica de x^5)
+3. `sbox(1) = 1` (propiedad algebraica de x^5)
+4. Determinismo: `permutation(x) = permutation(x)` (mismo input, mismo output)
+
+**Estado**: Pendiente de evaluar disponibilidad de QuickCheck en Lean 4.
+
+#### Checklist Fase 4b
+
+- [x] **4b.1**: Generar edge case vectors desde Lean ✅
+- [x] **4b.1**: Encontrar y corregir bugs en Spec.lean ✅
+- [ ] **4b.1**: Validar vectors contra HorizenLabs Rust (en progreso)
+- [ ] **4b.1**: Confirmar 100% match Lean ↔ HorizenLabs
+- [ ] **4b.2**: Crear generador de vectores en Rust
+- [ ] **4b.2**: Crear test runner C para fuzzing masivo
+- [ ] **4b.2**: Ejecutar 100k vectores sin mismatches
+- [ ] **4b.3**: Evaluar QuickCheck en Lean 4 (opcional)
+
+#### Bugs Encontrados en Spec.lean (Fase 4b.1)
+
+La generación de vectores desde Lean reveló que `Spec.lean` producía outputs incorrectos.
+Este es exactamente el tipo de bug que 4b.1 está diseñado para encontrar.
+
+##### Bug 3: Falta MDS Inicial
+
+**Ubicación**: `AmoLean/Protocols/Poseidon/Spec.lean` función `poseidon2Permutation`
+
+**Síntoma**: Output de permutación diferente al de HorizenLabs desde el primer round.
+
+**Causa Raíz**:
+Poseidon2 aplica una capa MDS externa **antes** del primer round. `Spec.lean` omitía esta capa inicial.
+
+```
+Poseidon2 correcto:  Initial MDS → [RF/2 full] → [RP partial] → [RF/2 full]
+Spec.lean original:              [RF/2 full] → [RP partial] → [RF/2 full]
+```
+
+**Corrección**:
+```lean
+-- ANTES (incorrecto):
+def poseidon2Permutation (params : Params) (input : State) : State :=
+  let halfFull := params.fullRounds / 2
+  let state := applyRounds (fullRound params) 0 halfFull input  -- Sin MDS inicial
+  ...
+
+-- DESPUÉS (correcto):
+def poseidon2Permutation (params : Params) (input : State) : State :=
+  let halfFull := params.fullRounds / 2
+  let state := mdsExternal params.prime input  -- MDS inicial añadido
+  let state := applyRounds (fullRound params) 0 halfFull state
+  ...
+```
+
+##### Bug 4: MDS Interno Incorrecto para Partial Rounds
+
+**Ubicación**: `AmoLean/Protocols/Poseidon/Spec.lean` función `partialRound`
+
+**Síntoma**: Output diverge progresivamente después de los primeros full rounds.
+
+**Causa Raíz**:
+Poseidon2 usa matrices MDS **diferentes** para full rounds y partial rounds:
+- Full rounds: MDS externo (`state[i] += sum(state)`)
+- Partial rounds: MDS interno (usa diagonal `[1, 1, 2]` para t=3)
+
+`Spec.lean` usaba el mismo `mdsMultiply` para ambos tipos de rounds.
+
+**Corrección**:
+```lean
+-- Añadidas nuevas funciones MDS:
+def mdsExternal (p : Nat) (state : State) : State :=
+  let sum := state.foldl (modAdd p) 0
+  state.map (modAdd p sum)
+
+def mdsInternal3 (p : Nat) (state : State) : State :=
+  let s0 := state.get! 0
+  let s1 := state.get! 1
+  let s2 := state.get! 2
+  let sum := modAdd p (modAdd p s0 s1) s2
+  #[modAdd p s0 sum,
+    modAdd p s1 sum,
+    modAdd p (modAdd p s2 s2) sum]  -- 2*s2 + sum
+
+-- Actualizado partialRound para usar mdsInternal3:
+def partialRound (params : Params) (roundIdx : Nat) (state : State) : State :=
+  ...
+  mdsInternal3 params.prime afterSbox  -- Antes era mdsMultiply
+```
+
+**Por qué ocurrió**:
+1. La documentación inicial del algoritmo Poseidon2 no enfatizaba la diferencia entre MDS externo/interno
+2. El nombre "MDS matrix" sugiere una única matriz, cuando en realidad hay dos operaciones distintas
+3. No había tests de integración que compararan Spec.lean contra una implementación de referencia
+
+**Lección aprendida**:
+- Siempre validar la especificación Lean contra una implementación de referencia (HorizenLabs)
+- La Fase 4b.1 (generación de vectores) es crítica para encontrar bugs en la especificación misma
+- Los bugs en la spec son más peligrosos que los bugs en el código generado
+
+**Resultado**: Después de las correcciones, `Spec.lean` produce el mismo output que HorizenLabs para el vector de test `[0, 1, 2]`.
+
+#### Por qué NO usar AFL++/libFuzzer
+
+Estas herramientas son **overkill** para este caso:
+
+| Herramienta | Propósito | Nuestro caso |
+|-------------|-----------|--------------|
+| AFL++ | Encontrar crashes, memory bugs | Ya validado con ASAN en Fase 2 |
+| libFuzzer | Coverage-guided fuzzing | Poseidon es código lineal, sin branches |
+
+**Conclusión**: Un simple loop con comparación de outputs es suficiente y más fácil de debuggear.
+
+#### Archivos a crear
+
+- `Tests/poseidon_lean/GenerateVectors.lean` - Generador de edge cases
+- `Tests/poseidon_c/test_fuzz.c` - Test runner para fuzzing masivo
+- `scripts/generate_fuzz_vectors.rs` - Generador Rust de vectores masivos (en repo HorizenLabs)
 
 ---
 
@@ -801,6 +1044,13 @@ Conectar Poseidon2 con el resto del sistema.
 | 2026-01-27 | Bug 2 encontrado: RC values incorrectos en rounds 57-58 | Equipo |
 | 2026-01-27 | Bugs corregidos, test_vector.c validado | Equipo |
 | 2026-01-27 | **Paso 4a COMPLETO** - Test Vector Validation ✅ PASS | Equipo |
+| 2026-01-27 | Paso 4b: Diseño de estrategia híbrida de fuzzing documentada | Equipo |
+| 2026-01-27 | Paso 4b: Análisis de desafíos (velocidad oráculo, serialización, edge cases) | Equipo |
+| 2026-01-27 | Paso 4b.1: Creado GenerateVectors.lean - generador de edge cases | Equipo |
+| 2026-01-27 | Bug 3 encontrado: Spec.lean faltaba MDS inicial | Equipo |
+| 2026-01-27 | Bug 4 encontrado: Spec.lean usaba MDS externo en partial rounds | Equipo |
+| 2026-01-27 | Bugs 3-4 corregidos: mdsExternal, mdsInternal3 añadidos a Spec.lean | Equipo |
+| 2026-01-27 | Generados 118 test vectors (18 edge cases + 100 random) | Equipo |
 
 ---
 

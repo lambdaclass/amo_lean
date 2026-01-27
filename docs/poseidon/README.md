@@ -121,9 +121,12 @@ El tipo garantiza preservación de dimensiones por construcción.
 │ • ConstRef, MDS opaco, loops en CodeGen                        │
 ├────────────────────────────────────────────────────────────────┤
 │ Paso 4: Verificación                            [EN PROGRESO]  │
-│ • Fase 4a: Test Vector vs HorizenLabs          [✓ COMPLETADO]  │
-│ • Differential fuzzing: spec vs C generado        [Pendiente]  │
-│ • Prueba formal de equivalencia                   [Pendiente]  │
+│ • 4a: Test Vector vs HorizenLabs               [✓ COMPLETADO]  │
+│ • 4b.1: Validación Lean↔HorizenLabs (edge cases) [EN PROGRESO] │
+│ • 4b.2: Fuzzing masivo C↔HorizenLabs (100k)        [Pendiente] │
+│ • 4b.3: Property testing QuickCheck (opcional)     [Pendiente] │
+│ • 4c: Benchmark vs Rust reference                  [Pendiente] │
+│ • 4d: Prueba formal de equivalencia                [Pendiente] │
 ├────────────────────────────────────────────────────────────────┤
 │ Paso 5: Integración                                 [Pendiente]│
 │ • MerkleTree con Poseidon2                                     │
@@ -191,4 +194,4 @@ RP = 22
 ---
 
 *Última actualización: 27 Enero 2026*
-*Paso 4 En Progreso - Verificación (Fase 4a Test Vector ✅ PASS)*
+*Paso 4 En Progreso - Fase 4b.1 (Differential Fuzzing)*

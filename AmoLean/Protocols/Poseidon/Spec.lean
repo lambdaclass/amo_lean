@@ -74,15 +74,22 @@ abbrev State := Array Nat
 def zeroState (t : Nat) : State :=
   Array.mkArray t 0
 
-/-! ## MDS Matrix Multiplication
+/-! ## MDS Matrix Operations
 
-For t=3, the MDS matrix is:
-  [2, 1, 1]
-  [1, 2, 1]
-  [1, 1, 3]
+Poseidon2 uses TWO different MDS operations:
+1. External MDS (for full rounds): state[i] += sum(state)
+2. Internal MDS (for partial rounds): uses diagonal multiplication
+
+For t=3, the external MDS is: state[i] = state[i] + sum
+The internal MDS for t=3 uses diagonal [1, 1, 2]:
+  state[0] += sum
+  state[1] += sum
+  state[2] = 2*state[2] + sum
+
+Reference: HorizenLabs/poseidon2 implementation
 -/
 
-/-- MDS matrix as nested array -/
+/-- MDS matrix as nested array (for reference, not used directly in Poseidon2) -/
 def mds3 : Array (Array Nat) := #[
   #[2, 1, 1],
   #[1, 2, 1],
@@ -93,6 +100,27 @@ def mds3 : Array (Array Nat) := #[
 def mdsMultiply (p : Nat) (M : Array (Array Nat)) (v : State) : State :=
   M.map fun row =>
     row.zipWith v (modMul p) |>.foldl (modAdd p) 0
+
+/-- External MDS for Poseidon2 (used in full rounds)
+    state[i] = state[i] + sum(state) for all i -/
+def mdsExternal (p : Nat) (state : State) : State :=
+  let sum := state.foldl (modAdd p) 0
+  state.map (modAdd p sum)
+
+/-- Internal MDS for Poseidon2 t=3 (used in partial rounds)
+    Uses diagonal [1, 1, 2]:
+    state[0] += sum
+    state[1] += sum
+    state[2] = 2*state[2] + sum -/
+def mdsInternal3 (p : Nat) (state : State) : State :=
+  if state.size != 3 then state else
+  let s0 := state.get! 0
+  let s1 := state.get! 1
+  let s2 := state.get! 2
+  let sum := modAdd p (modAdd p s0 s1) s2
+  #[modAdd p s0 sum,
+    modAdd p s1 sum,
+    modAdd p (modAdd p s2 s2) sum]  -- 2*s2 + sum
 
 /-! ## Poseidon2 Parameters -/
 
@@ -131,19 +159,19 @@ def sboxPartial (p : Nat) (alpha : Nat) (state : State) : State :=
   else
     state
 
-/-- One full round: AddRC → S-box(all) → MDS -/
+/-- One full round: AddRC → S-box(all) → External MDS -/
 def fullRound (params : Params) (roundIdx : Nat) (state : State) : State :=
   let rc := params.roundConstants.getD roundIdx #[]
   let withRC := addRoundConstants params.prime rc state
   let afterSbox := sboxFull params.prime params.alpha withRC
-  mdsMultiply params.prime params.mds afterSbox
+  mdsExternal params.prime afterSbox
 
-/-- One partial round: AddRC → S-box(first) → MDS -/
+/-- One partial round: AddRC → S-box(first) → Internal MDS -/
 def partialRound (params : Params) (roundIdx : Nat) (state : State) : State :=
   let rc := params.roundConstants.getD roundIdx #[]
   let withRC := addRoundConstants params.prime rc state
   let afterSbox := sboxPartial params.prime params.alpha withRC
-  mdsMultiply params.prime params.mds afterSbox
+  mdsInternal3 params.prime afterSbox
 
 /-! ## Poseidon2 Permutation
 
@@ -157,12 +185,16 @@ def applyRounds (roundFn : Nat → State → State)
     (fun s i => roundFn (startIdx + i) s)
     state
 
-/-- Poseidon2 permutation -/
+/-- Poseidon2 permutation
+    Structure: Initial MDS → [RF/2 full] → [RP partial] → [RF/2 full] -/
 def poseidon2Permutation (params : Params) (input : State) : State :=
   let halfFull := params.fullRounds / 2
 
+  -- Initial linear layer (external MDS before first round)
+  let state := mdsExternal params.prime input
+
   -- First RF/2 full rounds
-  let state := applyRounds (fullRound params) 0 halfFull input
+  let state := applyRounds (fullRound params) 0 halfFull state
 
   -- RP partial rounds
   let state := applyRounds (partialRound params) halfFull params.partialRounds state
