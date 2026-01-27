@@ -151,6 +151,9 @@ El tipo garantiza preservación de dimensiones por construcción.
 | [ADR-006-formal-verification-strategy.md](ADR-006-formal-verification-strategy.md) | **Estrategia Verificación Formal** (Paso 4d) |
 | [ADR-007-step5-integration.md](ADR-007-step5-integration.md) | **Estrategia Integración** (Paso 5) |
 | [ADR-008-domain-separation-audit.md](ADR-008-domain-separation-audit.md) | **Auditoría Domain Separation** (Paso 5.2) |
+| [ADR-009-step53-generic-field-migration.md](ADR-009-step53-generic-field-migration.md) | **Migración Campo Genérico** (Paso 5.3) |
+| [migration/PLAN.md](migration/PLAN.md) | Plan detallado de migración |
+| [migration/DECISIONS.md](migration/DECISIONS.md) | Log de decisiones de migración |
 | [PROGRESS.md](PROGRESS.md) | Progreso de implementación |
 
 ## Archivos de Código
@@ -166,7 +169,11 @@ El tipo garantiza preservación de dimensiones por construcción.
 | `AmoLean/Matrix/Basic.lean` | ElemOp, elemwise, mdsApply constructor |
 | `AmoLean/EGraph/Vector.lean` | MatEGraph con barrera opaca |
 | `Tests/ElemwiseSanity.lean` | Tests de sanidad (4/4 pasan) |
+| `Tests/TranscriptSecurityAudit.lean` | Auditoría de seguridad (Paso 5.2) |
 | `Tests/poseidon_c/` | Tests C para verificación (Paso 4) |
+| `AmoLean/FRI/Hash.lean` | CryptoHash typeclass (Paso 5.3 - pendiente) |
+| `AmoLean/FRI/Fields/BN254.lean` | Campo BN254 con Poseidon2 (Paso 5.3 - pendiente) |
+| `AmoLean/FRI/Fields/TestField.lean` | Campo de testing rápido (Paso 5.3 - pendiente) |
 
 ---
 

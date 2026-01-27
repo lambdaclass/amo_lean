@@ -15,10 +15,10 @@
 | 2.4 | Batch SIMD BN254 | **Completado** | AoS↔SoA, 4 hashes paralelos |
 | 3 | Poseidon2 en MatExpr | **COMPLETADO** | ConstRef, MDS opaco, loops en CodeGen |
 | 4 | Verificación | **COMPLETADO** | 4a ✅ | 4b ✅ | 4c ✅ | 4d ✅ |
-| 5 | Integración FRI | **EN PROGRESO** | 5.1 ✅ | 5.2 ✅ | 5.3 Pendiente |
+| 5 | Integración FRI | **EN PROGRESO** | 5.1 ✅ | 5.2 ✅ | 5.3 En Progreso |
 | 5.1 | Adaptadores Poseidon2 | **COMPLETADO** | Integration.lean + tests |
 | 5.2 | Domain Separation Audit | **COMPLETADO** | DomainSeparation.lean |
-| 5.3 | Tests End-to-End FRI | Pendiente | |
+| 5.3 | Generic Field Migration | **EN PROGRESO** | Migrar FRI de UInt64 a F genérico |
 
 ---
 
@@ -1641,6 +1641,85 @@ Layer 3 (root):    hash(L2[0], L2[1])
 | 2026-01-27 | Paso 5.2: Auditoría weak F-S en Protocol.lean - OK | Equipo |
 | 2026-01-27 | Paso 5.2: 9/9 tests Integration pasan | Equipo |
 | 2026-01-27 | **Paso 5.2 COMPLETADO** - Domain separation auditado y unificado ✅ | Equipo |
+| 2026-01-27 | Paso 5.3: Análisis de opciones para E2E tests | Equipo |
+| 2026-01-27 | Paso 5.3: Decisión: Migración completa a campo genérico (Option 4) | Equipo |
+| 2026-01-27 | Paso 5.3: ADR-009 creado - Generic Field Migration | Equipo |
+| 2026-01-27 | Paso 5.3: Estructura de migración creada (docs/poseidon/migration/) | Equipo |
+| 2026-01-27 | **Paso 5.3 INICIADO** - Migración de FRI a campo genérico F | Equipo |
+
+---
+
+## Paso 5.3: Generic Field Migration
+
+### Objetivo
+Migrar el código FRI de `UInt64` hardcoded a campo genérico `F` con typeclasses `FRIField` y `CryptoHash`.
+
+**Ver**: [ADR-009-step53-generic-field-migration.md](ADR-009-step53-generic-field-migration.md)
+
+### Estado: **EN PROGRESO**
+
+### Análisis Previo
+
+**Problema identificado**: El código FRI usa `UInt64` en todos lados:
+- `TranscriptState.absorbed : List UInt64`
+- `RoundState.commitment : Option UInt64`
+- `RoundState.challenge : Option UInt64`
+- `testHash : UInt64 → UInt64 → UInt64`
+
+**Por qué no podemos truncar Poseidon2 a 64 bits**:
+- BN254 tiene 254 bits
+- Truncar a 64 bits reduce seguridad de 127 bits a 32 bits
+- 32 bits = atacable en ~4 segundos con GPU moderna
+
+### Opciones Evaluadas
+
+| Opción | Descripción | Veredicto |
+|--------|-------------|-----------|
+| 1 | Truncar `hash % 2^64` | ❌ Inseguro (32 bits) |
+| 2 | Usar Goldilocks (64 bits) | ❌ No tenemos parámetros Poseidon2 |
+| 3 | Código paralelo Nat | ❌ Duplicación, mantenimiento doble |
+| **4** | **Migración a F genérico** | **✅ ACEPTADO** |
+
+### Plan de Migración
+
+```
+docs/poseidon/migration/
+├── PLAN.md           <- Plan detallado con checklist
+├── DECISIONS.md      <- Decisiones incrementales
+├── PHASE1-NOTES.md   <- Notas de progreso Fase 1
+└── (más fases según avancemos)
+
+AmoLean/FRI/
+├── Hash.lean         <- NUEVO: CryptoHash typeclass
+└── Fields/
+    ├── BN254.lean    <- NUEVO: FRIField + CryptoHash BN254
+    ├── TestField.lean <- NUEVO: Campo rápido para tests (XOR)
+    └── Goldilocks.lean <- FUTURO: Placeholder
+```
+
+### Fases
+
+| Fase | Descripción | Estado |
+|------|-------------|--------|
+| 1 | Infraestructura (typeclasses, instancias) | [ ] Pendiente |
+| 2 | Migración (Transcript, Protocol, Merkle) | [ ] Pendiente |
+| 3 | Tests (E2E con BN254 y TestField) | [ ] Pendiente |
+| 4 | Documentación | [ ] En progreso |
+
+### Checklist Fase 1
+
+- [ ] Extender `FRIField` con `toNat`, `modulus`
+- [ ] Crear `CryptoHash` typeclass en `Hash.lean`
+- [ ] Crear `BN254` field con `FRIField` y `CryptoHash` instances
+- [ ] Crear `TestField` con XOR-based hash (para tests rápidos)
+- [ ] Verificar que `lake build` pasa
+
+### Archivos Creados
+
+- `docs/poseidon/ADR-009-step53-generic-field-migration.md` - Decisión arquitectónica
+- `docs/poseidon/migration/PLAN.md` - Plan detallado
+- `docs/poseidon/migration/DECISIONS.md` - Log de decisiones
+- `docs/poseidon/migration/PHASE1-NOTES.md` - Notas de Fase 1
 
 ---
 
