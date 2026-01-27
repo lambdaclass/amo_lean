@@ -33,9 +33,9 @@ OBJS = $(SRCS:.c=.o)
 # Build directory
 BUILD_DIR = build
 
-.PHONY: all test benchmark hygiene asan clean dirs differential testvector phase4
+.PHONY: all test benchmark hygiene asan clean dirs differential testvector phase4 fuzz
 
-all: dirs $(BUILD_DIR)/test_sbox $(BUILD_DIR)/benchmark $(BUILD_DIR)/test_differential $(BUILD_DIR)/test_vector
+all: dirs $(BUILD_DIR)/test_sbox $(BUILD_DIR)/benchmark $(BUILD_DIR)/test_differential $(BUILD_DIR)/test_vector $(BUILD_DIR)/test_fuzz
 
 dirs:
 	@mkdir -p $(BUILD_DIR)
@@ -55,6 +55,9 @@ $(BUILD_DIR)/test_differential: test_differential.c $(BUILD_DIR)/bn254_field.o
 
 $(BUILD_DIR)/test_vector: test_vector.c $(BUILD_DIR)/bn254_field.o
 	$(CC) $(CFLAGS) -I../../generated $^ -o $@
+
+$(BUILD_DIR)/test_fuzz: test_fuzz.c $(BUILD_DIR)/bn254_field.o
+	$(CC) $(CFLAGS) $^ -o $@
 
 # Hygiene build (strict warnings)
 $(BUILD_DIR)/bn254_field_hygiene.o: bn254_field.c bn254_field.h
@@ -122,8 +125,17 @@ differential: all
 	@echo ""
 	$(BUILD_DIR)/test_differential
 
+# Run Phase 4b.2 fuzzing (Lean vectors vs C)
+fuzz: all
+	@echo ""
+	@echo "══════════════════════════════════════════════════════════════════"
+	@echo "  Phase 4b.2: Mass Fuzzing Validation (Lean→C)"
+	@echo "══════════════════════════════════════════════════════════════════"
+	@echo ""
+	$(BUILD_DIR)/test_fuzz ../poseidon_lean/vectors_edge.json
+
 # Phase 4 complete test suite
-phase4: all testvector test differential
+phase4: all testvector test differential fuzz
 	@echo ""
 	@echo "══════════════════════════════════════════════════════════════════"
 	@echo "  PHASE 4 TEST SUITE COMPLETED"

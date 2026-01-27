@@ -123,7 +123,7 @@ El tipo garantiza preservación de dimensiones por construcción.
 │ Paso 4: Verificación                            [EN PROGRESO]  │
 │ • 4a: Test Vector vs HorizenLabs               [✓ COMPLETADO]  │
 │ • 4b.1: Spec.lean corregido, 118 vectors       [✓ COMPLETADO]  │
-│ • 4b.2: Fuzzing masivo C↔HorizenLabs (100k)      [EN PROGRESO] │
+│ • 4b.2: Fuzzing Lean→C 118/118 vectors         [✓ COMPLETADO]  │
 │ • 4b.3: Property testing QuickCheck (opcional)     [Pendiente] │
 │ • 4c: Benchmark vs Rust reference                  [Pendiente] │
 │ • 4d: Prueba formal de equivalencia                [Pendiente] │
