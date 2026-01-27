@@ -14,11 +14,13 @@
 
 import AmoLean.Protocols.Poseidon.Spec
 import AmoLean.Protocols.Poseidon.Constants.BN254
+import AmoLean.Protocols.Poseidon.DomainSeparation
 
 namespace AmoLean.Protocols.Poseidon.Integration
 
 open AmoLean.Protocols.Poseidon.Spec
 open AmoLean.Protocols.Poseidon.Constants.BN254
+open AmoLean.Protocols.Poseidon.DomainSeparation (DomainTag IOPattern)
 
 /-! ## Part 1: BN254 Parameters with Real Constants -/
 
@@ -184,41 +186,70 @@ def poseidon2MultipleSqueeze (params : Params) (absorbed : List Nat) (count : Na
 Domain separation prevents cross-protocol attacks by prefixing
 different contexts with unique tags.
 
-The existing DomainTag in Transcript.lean:
-  merkleNode | friChallenge | friCommit | fieldElement | constraint | custom
+Step 5.2 Update: Now uses unified DomainTag from DomainSeparation.lean
+which follows Poseidon paper Section 4.2 recommendations:
+- Merkle operations: 2^arity - 1
+- Protocol phases: identifier * 2^32
 
-We provide helper to convert tag to field element for absorption.
+Reference: docs/references/poseidon/domain-separation/notes-domain-separation.md
 -/
 
-/-- Domain tag to Nat conversion.
+/-- Legacy domain tag to Nat conversion (for backwards compatibility).
 
-    Each tag gets a unique prime to avoid collisions.
-    Using small primes for efficiency.
+    DEPRECATED: Use DomainTag.toCapacityValue instead.
 -/
 def domainTagToNat : String → Nat
-  | "merkleNode" => 2
-  | "friChallenge" => 3
-  | "friCommit" => 5
-  | "fieldElement" => 7
-  | "constraint" => 11
-  | "queryResponse" => 13    -- New for query phase
-  | "proofFinalize" => 17    -- New for proof finalization
-  | custom => custom.hash.toNat  -- Hash custom string
+  | "merkleNode" => DomainTag.merkleTree2to1.toCapacityValue
+  | "merkleLeaf" => DomainTag.merkleLeaf.toCapacityValue
+  | "friChallenge" => DomainTag.friFold.toCapacityValue
+  | "friCommit" => DomainTag.friCommit.toCapacityValue
+  | "friQuery" => DomainTag.friQuery.toCapacityValue
+  | "friDeep" => DomainTag.friDeep.toCapacityValue
+  | "constraint" => DomainTag.constraint.toCapacityValue
+  | custom => (DomainTag.custom custom).toCapacityValue
 
-/-- Poseidon2 hash with domain separation.
+/-- Poseidon2 hash with domain separation using new DomainTag.
 
-    Prepends domain tag to input before hashing.
+    The domain tag is injected into the capacity element (state[2])
+    following the Poseidon paper recommendation. The tag value is
+    computed from DomainTag.toCapacityValue.
+
+    Construction:
+    1. state[0] = left mod p
+    2. state[1] = right mod p
+    3. state[2] = domain_tag mod p (capacity element)
+    4. Apply permutation
+    5. Return state[0]
 -/
-def poseidon2HashWithDomain (params : Params) (domain : String) (left right : Nat) : Nat :=
-  let domainVal := domainTagToNat domain
-  -- Absorb [domain, left, right] with capacity
-  let state := #[domainVal % params.prime, left % params.prime, right % params.prime]
+def poseidon2HashWithDomainTag (params : Params) (tag : DomainTag) (left right : Nat) : Nat :=
+  let domainVal := tag.toCapacityValue
+  -- Inject domain into capacity (state[2]), inputs into rate (state[0,1])
+  let state := #[left % params.prime, right % params.prime, domainVal % params.prime]
   let result := poseidon2Permutation params state
   result.get! 0
 
-/-- Merkle hash with domain separation -/
+/-- Legacy string-based domain separation (for backwards compatibility) -/
+def poseidon2HashWithDomain (params : Params) (domain : String) (left right : Nat) : Nat :=
+  let domainVal := domainTagToNat domain
+  let state := #[left % params.prime, right % params.prime, domainVal % params.prime]
+  let result := poseidon2Permutation params state
+  result.get! 0
+
+/-- Merkle hash with domain separation (using new DomainTag) -/
+def poseidon2MerkleHashWithDomainTag : Nat → Nat → Nat :=
+  poseidon2HashWithDomainTag bn254ParamsProduction DomainTag.merkleTree2to1
+
+/-- Merkle hash with domain separation (legacy string API) -/
 def poseidon2MerkleHashWithDomain : Nat → Nat → Nat :=
   poseidon2HashWithDomain bn254ParamsProduction "merkleNode"
+
+/-- FRI fold challenge derivation with proper domain separation -/
+def poseidon2FRIFoldChallenge (commitment : Nat) (previousState : Nat) : Nat :=
+  poseidon2HashWithDomainTag bn254ParamsProduction DomainTag.friFold commitment previousState
+
+/-- FRI query index derivation with proper domain separation -/
+def poseidon2FRIQueryIndex (seed : Nat) (index : Nat) : Nat :=
+  poseidon2HashWithDomainTag bn254ParamsProduction DomainTag.friQuery seed index
 
 /-! ## Part 5: Tests -/
 
@@ -260,6 +291,28 @@ def test_domain_separation : Bool :=
   let h2 := poseidon2HashWithDomain bn254ParamsProduction "friChallenge" 1 2
   h1 != h2
 
+/-- Test 7: New DomainTag produces different hashes for different tags -/
+def test_domain_tag_separation : Bool :=
+  let h1 := poseidon2HashWithDomainTag bn254ParamsProduction DomainTag.merkleTree2to1 1 2
+  let h2 := poseidon2HashWithDomainTag bn254ParamsProduction DomainTag.friFold 1 2
+  let h3 := poseidon2HashWithDomainTag bn254ParamsProduction DomainTag.friQuery 1 2
+  h1 != h2 && h2 != h3 && h1 != h3
+
+/-- Test 8: Legacy and new API produce same result for same domain -/
+def test_legacy_new_compatibility : Bool :=
+  let h1 := poseidon2HashWithDomain bn254ParamsProduction "merkleNode" 1 2
+  let h2 := poseidon2HashWithDomainTag bn254ParamsProduction DomainTag.merkleTree2to1 1 2
+  h1 == h2
+
+/-- Test 9: All FRI phases have distinct tags -/
+def test_fri_phases_distinct : Bool :=
+  let hCommit := poseidon2HashWithDomainTag bn254ParamsProduction DomainTag.friCommit 1 2
+  let hFold := poseidon2HashWithDomainTag bn254ParamsProduction DomainTag.friFold 1 2
+  let hQuery := poseidon2HashWithDomainTag bn254ParamsProduction DomainTag.friQuery 1 2
+  let hDeep := poseidon2HashWithDomainTag bn254ParamsProduction DomainTag.friDeep 1 2
+  hCommit != hFold && hFold != hQuery && hQuery != hDeep &&
+  hCommit != hQuery && hCommit != hDeep && hFold != hDeep
+
 /-- Run all tests -/
 def runAllTests : IO Unit := do
   IO.println "╔════════════════════════════════════════════════════════════╗"
@@ -273,7 +326,10 @@ def runAllTests : IO Unit := do
     ("Test 3: Different inputs → different outputs", test_hash_different_inputs),
     ("Test 4: Squeeze non-zero", test_squeeze_nonzero),
     ("Test 5: Multi-squeeze different", test_multi_squeeze_different),
-    ("Test 6: Domain separation", test_domain_separation)
+    ("Test 6: Domain separation (legacy)", test_domain_separation),
+    ("Test 7: DomainTag separation (new)", test_domain_tag_separation),
+    ("Test 8: Legacy-New API compatibility", test_legacy_new_compatibility),
+    ("Test 9: FRI phases distinct", test_fri_phases_distinct)
   ]
 
   let mut passed := 0
@@ -308,8 +364,8 @@ end Tests
 /-! ## Part 6: Summary -/
 
 def integrationSummary : String :=
-  "Poseidon2 Integration Module (Step 5.1)
-   ========================================
+  "Poseidon2 Integration Module (Step 5.1 + 5.2)
+   =============================================
 
    1. BN254 Production Parameters
       - Uses HorizenLabs round constants (64 rounds)
@@ -325,16 +381,27 @@ def integrationSummary : String :=
       - Multi-output support via poseidon2MultipleSqueeze
       - Drop-in replacement for XOR-based squeeze
 
-   4. Domain Separation
-      - poseidon2HashWithDomain for context-tagged hashing
-      - Unique tags for merkle, FRI, constraints
+   4. Domain Separation (Step 5.2 - Updated)
+      - NEW: DomainTag enum from DomainSeparation.lean
+      - poseidon2HashWithDomainTag : new type-safe API
+      - poseidon2HashWithDomain : legacy string API
+      - Values follow Poseidon paper Section 4.2:
+        * Merkle: 2^arity - 1 (3 for 2-to-1, 15 for 4-to-1)
+        * FRI phases: identifier * 2^32
+
+   5. FRI-Specific Functions (Step 5.2)
+      - poseidon2FRIFoldChallenge : challenge derivation
+      - poseidon2FRIQueryIndex : query index derivation
 
    Usage:
-   - For Merkle: Replace testHash with poseidon2MerkleHash
-   - For Transcript: Replace XOR squeeze with poseidon2TranscriptSqueeze
+   - For Merkle: poseidon2MerkleHash or poseidon2MerkleHashWithDomainTag
+   - For Transcript: poseidon2TranscriptSqueeze
+   - For FRI: poseidon2FRIFoldChallenge, poseidon2FRIQueryIndex
 
-   All adapters use BN254 by default. For other fields,
-   use poseidon2HashFn with custom params."
+   Security:
+   - Domain tags prevent cross-protocol attacks
+   - Tags injected into capacity (not rate)
+   - All FRI phases have distinct identifiers"
 
 #eval IO.println integrationSummary
 

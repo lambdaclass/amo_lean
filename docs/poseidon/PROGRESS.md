@@ -15,7 +15,10 @@
 | 2.4 | Batch SIMD BN254 | **Completado** | AoS↔SoA, 4 hashes paralelos |
 | 3 | Poseidon2 en MatExpr | **COMPLETADO** | ConstRef, MDS opaco, loops en CodeGen |
 | 4 | Verificación | **COMPLETADO** | 4a ✅ | 4b ✅ | 4c ✅ | 4d ✅ |
-| 5 | Integración MerkleTree | Pendiente | |
+| 5 | Integración FRI | **EN PROGRESO** | 5.1 ✅ | 5.2 ✅ | 5.3 Pendiente |
+| 5.1 | Adaptadores Poseidon2 | **COMPLETADO** | Integration.lean + tests |
+| 5.2 | Domain Separation Audit | **COMPLETADO** | DomainSeparation.lean |
+| 5.3 | Tests End-to-End FRI | Pendiente | |
 
 ---
 
@@ -1468,9 +1471,96 @@ Paso 5 (INTEGRACIÓN, no implementación):
   - `poseidon2MultipleSqueeze` - Multi-output para challenges
   - `poseidon2HashWithDomain` - Domain separation
   - 6 tests integrados (todos pasan)
+- `Tests/PoseidonIntegrationBenchmark.lean` - Batería de validación 5.1
+- `Tests/poseidon_c/benchmark_merkle.c` - Benchmark C para performance tax
 - `AmoLean/FRI/Merkle.lean` - Pendiente: instanciar con Poseidon2
 - `AmoLean/FRI/Transcript.lean` - Pendiente: reemplazar XOR squeeze
 - `Tests/PoseidonIntegration.lean` - Pendiente: Tests E2E
+
+---
+
+### Batería de Validación Step 5.1
+
+**Estado**: ✅ **COMPLETADO**
+
+#### Test 1: Type Safety (Preservación de Entropía)
+
+| Test | Descripción | Resultado |
+|------|-------------|-----------|
+| 1A | Reducción modular correcta (mod p, no truncation) | ✅ PASS |
+| 1B | Entropía preservada (14 inputs → 14 outputs únicos) | ✅ PASS |
+| 1C | No truncación silenciosa (bits altos afectan hash) | ✅ PASS |
+
+**Valores probados en Test 1A**:
+- zero (0), one (1), small (42)
+- UInt64.max (2^64 - 1), UInt128 approx (2^128 - 1)
+- near_prime (P-1), equal_prime (P), above_prime (P+1), double_prime (2P)
+- large_random (12345678901234567890...)
+
+**Todos verificados**: `hash(val) == hash(val mod p)` para todos los casos.
+
+#### Test 2: Merkle Tree Construction Correctness
+
+| Métrica | Resultado |
+|---------|-----------|
+| Leaves | [1, 2, 3, 4, 5, 6, 7, 8] |
+| Manual root == Auto-built root | ✅ MATCH |
+| Poseidon2 root ≠ XOR root | ✅ VERIFIED |
+
+**Construcción layer-by-layer verificada**:
+```
+Layer 0 (leaves): [1, 2, 3, 4, 5, 6, 7, 8]
+Layer 1 (4 nodes): hash(1,2), hash(3,4), hash(5,6), hash(7,8)
+Layer 2 (2 nodes): hash(L1[0], L1[1]), hash(L1[2], L1[3])
+Layer 3 (root):    hash(L2[0], L2[1])
+```
+
+#### Test 3: Performance Benchmark (XOR vs Poseidon2)
+
+**3A: Single Hash Latency**
+
+| Hash | Tiempo | Throughput |
+|------|--------|------------|
+| XOR (testHash) | 1.23 ns | 812 MH/s |
+| Poseidon2 BN254 | 13,196 ns | 76 kH/s |
+| **Slowdown** | **~10,700x** | |
+
+**3B: Merkle Tree Construction**
+
+| Leaves | XOR (µs) | Poseidon2 (µs) | Slowdown | Hashes |
+|--------|----------|----------------|----------|--------|
+| 8 | 0.02 | 90 | 3,748x | 7 |
+| 64 | 0.10 | 815 | 8,566x | 63 |
+| 256 | 0.16 | 3,291 | 20,189x | 255 |
+| 1024 | 0.58 | 13,378 | 22,899x | 1,023 |
+| 4096 | 2.33 | 53,124 | 22,771x | 4,095 |
+| 16384 | 9.89 | 211,895 | 21,430x | 16,383 |
+
+#### Análisis de Performance
+
+**¿Es aceptable la sobrecarga actual?** ✅ **SÍ**
+
+1. **El slowdown de 10,000x vs XOR es esperado y correcto**:
+   - XOR es 1-2 ciclos de CPU, Poseidon2 requiere aritmética modular de 256 bits
+   - Comparar XOR vs Poseidon2 es como comparar suma vs encriptación AES
+
+2. **El throughput absoluto es razonable**:
+   - **76 kH/s** single-threaded coincide con benchmarks de Step 4c (100kH/s C, 136kH/s Rust)
+   - 1K leaves Merkle tree: ~13 ms
+   - 16K leaves Merkle tree: ~212 ms
+
+3. **Comparación con hashes criptográficos reales**:
+   - SHA-256 hardware: ~200-400 ns/hash → ~5x más rápido que Poseidon2
+   - Pero Poseidon2 es **ZK-friendly** (10-100x menos restricciones en circuitos)
+
+**Veredicto**: No es necesario optimizar el adaptador. Para producción con volúmenes grandes:
+- SIMD vectorization (2-4x)
+- Multi-threading (Nx cores)
+- GPU batch hashing (10-100x para lotes grandes)
+
+#### Archivos de Tests
+- `Tests/PoseidonIntegrationBenchmark.lean` - Tests de integridad (Lean)
+- `Tests/poseidon_c/benchmark_merkle.c` - Benchmark de performance (C)
 
 ---
 
@@ -1541,6 +1631,16 @@ Paso 5 (INTEGRACIÓN, no implementación):
 | 2026-01-27 | Paso 5.1: poseidon2Squeeze/MultipleSqueeze - sponge para transcript | Equipo |
 | 2026-01-27 | Paso 5.1: poseidon2HashWithDomain - domain separation | Equipo |
 | 2026-01-27 | **Paso 5.1 COMPLETADO** - 6/6 tests pasan ✅ | Equipo |
+| 2026-01-27 | Paso 5.1 Validación: Batería de pruebas Type Safety 3/3 ✅ | Equipo |
+| 2026-01-27 | Paso 5.1 Validación: Merkle tree correctness ✅ | Equipo |
+| 2026-01-27 | Paso 5.1 Validación: Performance benchmark C (76kH/s Poseidon2) | Equipo |
+| 2026-01-27 | **Paso 5.1 Validación COMPLETA** - Adaptadores listos para producción ✅ | Equipo |
+| 2026-01-27 | Paso 5.2: Análisis bibliográfico (9 papers domain separation) | Equipo |
+| 2026-01-27 | Paso 5.2: Creación DomainSeparation.lean (tags unificados) | Equipo |
+| 2026-01-27 | Paso 5.2: Actualización Integration.lean (nueva API + legacy) | Equipo |
+| 2026-01-27 | Paso 5.2: Auditoría weak F-S en Protocol.lean - OK | Equipo |
+| 2026-01-27 | Paso 5.2: 9/9 tests Integration pasan | Equipo |
+| 2026-01-27 | **Paso 5.2 COMPLETADO** - Domain separation auditado y unificado ✅ | Equipo |
 
 ---
 

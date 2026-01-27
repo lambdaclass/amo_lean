@@ -200,12 +200,61 @@ inductive DomainTag where
 
 ---
 
+## Step 5.1 Completion: Validation Battery
+
+**Status**: ✅ COMPLETED (2026-01-27)
+
+### Type Safety Tests (Lean)
+
+| Test | Description | Result |
+|------|-------------|--------|
+| 1A | Modular reduction correctness | ✅ PASS |
+| 1B | Entropy preservation | ✅ PASS |
+| 1C | No silent truncation | ✅ PASS |
+| 2 | Merkle tree construction | ✅ PASS |
+
+### Performance Benchmark (C)
+
+| Metric | XOR (testHash) | Poseidon2 BN254 | Slowdown |
+|--------|----------------|-----------------|----------|
+| Single hash | 1.23 ns | 13,196 ns | ~10,700x |
+| Throughput | 812 MH/s | 76 kH/s | - |
+
+**Merkle Tree Construction Time**:
+
+| Leaves | XOR (µs) | Poseidon2 (µs) | Practical Impact |
+|--------|----------|----------------|------------------|
+| 1,024 | 0.58 | 13,378 | ~13 ms |
+| 16,384 | 9.89 | 211,895 | ~212 ms |
+
+### Performance Analysis
+
+**Is the overhead acceptable?** ✅ YES
+
+1. The 10,000x slowdown vs XOR is **expected and correct**
+   - XOR: 1-2 CPU cycles (NOT cryptographic)
+   - Poseidon2: 256-bit modular arithmetic with 64 rounds
+
+2. **Absolute throughput is reasonable**: 76 kH/s matches Step 4c benchmarks
+
+3. **For production at scale**, optimize with:
+   - SIMD vectorization (2-4x speedup)
+   - Multi-threading (linear with cores)
+   - GPU batch hashing (10-100x for large batches)
+
+**Verdict**: No adapter optimization required. Proceed to Step 5.2.
+
+---
+
 ## References
 
 - `AmoLean/FRI/Merkle.lean` - Existing Merkle tree implementation
 - `AmoLean/FRI/Transcript.lean` - Existing transcript implementation
 - `AmoLean/FRI/Protocol.lean` - Existing FRI protocol orchestration
 - `AmoLean/Protocols/Poseidon/Spec.lean` - Poseidon2 specification
+- `AmoLean/Protocols/Poseidon/Integration.lean` - Poseidon2 adapters (Step 5.1)
+- `Tests/PoseidonIntegrationBenchmark.lean` - Validation battery (Step 5.1)
+- `Tests/poseidon_c/benchmark_merkle.c` - C performance benchmark
 - ADR-006 - Formal verification strategy (completed)
 
 ---

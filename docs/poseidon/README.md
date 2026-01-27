@@ -132,7 +132,7 @@ El tipo garantiza preservación de dimensiones por construcción.
 │ Paso 5: Integración                              [EN PROGRESO] │
 │ Ver ADR-007 para estrategia refinada                           │
 │ • 5.1: Adaptadores Poseidon2 → HashFn                 [✓]      │
-│ • 5.2: Auditoría de domain separation                 [ ]      │
+│ • 5.2: Auditoría de domain separation                 [✓]      │
 │ • 5.3: Tests End-to-End FRI con Poseidon2             [ ]      │
 └────────────────────────────────────────────────────────────────┘
 ```
@@ -150,6 +150,7 @@ El tipo garantiza preservación de dimensiones por construcción.
 | [ADR-005-phase3-architecture.md](ADR-005-phase3-architecture.md) | **Arquitectura Fase 3** (ConstRef, MDS opaco, loops) |
 | [ADR-006-formal-verification-strategy.md](ADR-006-formal-verification-strategy.md) | **Estrategia Verificación Formal** (Paso 4d) |
 | [ADR-007-step5-integration.md](ADR-007-step5-integration.md) | **Estrategia Integración** (Paso 5) |
+| [ADR-008-domain-separation-audit.md](ADR-008-domain-separation-audit.md) | **Auditoría Domain Separation** (Paso 5.2) |
 | [PROGRESS.md](PROGRESS.md) | Progreso de implementación |
 
 ## Archivos de Código
@@ -161,6 +162,7 @@ El tipo garantiza preservación de dimensiones por construcción.
 | `AmoLean/Protocols/Poseidon/CodeGen.lean` | CodeGen específico Poseidon |
 | `AmoLean/Protocols/Poseidon/MatExpr.lean` | Poseidon2 en MatExpr (Paso 3) |
 | `AmoLean/Protocols/Poseidon/Integration.lean` | Adaptadores FRI (Paso 5.1) |
+| `AmoLean/Protocols/Poseidon/DomainSeparation.lean` | Domain tags unificados (Paso 5.2) |
 | `AmoLean/Matrix/Basic.lean` | ElemOp, elemwise, mdsApply constructor |
 | `AmoLean/EGraph/Vector.lean` | MatEGraph con barrera opaca |
 | `Tests/ElemwiseSanity.lean` | Tests de sanidad (4/4 pasan) |
