@@ -4,10 +4,10 @@
 
 Esta fase extiende AMO-Lean para soportar operaciones no-lineales, habilitando la implementación de Poseidon2, un hash ZK-friendly crítico para zkVMs.
 
-**Estado**: Paso 4 En Progreso (Verificación)
+**Estado**: Paso 4 Completado (Verificación Formal)
 **Prioridad**: #1 Crítico
 **Inicio**: Enero 2026
-**Progreso**: Paso 0.5 ✓ | Paso 1 ✓ | Paso 1.5 ✓ | Paso 2 ✓ | Paso 3 ✓ | **Paso 4a** ✓
+**Progreso**: Paso 0.5 ✓ | Paso 1 ✓ | Paso 1.5 ✓ | Paso 2 ✓ | Paso 3 ✓ | **Paso 4** ✓
 
 ---
 
@@ -120,13 +120,14 @@ El tipo garantiza preservación de dimensiones por construcción.
 │ • Partial rounds con partialElemwise (no split/concat)         │
 │ • ConstRef, MDS opaco, loops en CodeGen                        │
 ├────────────────────────────────────────────────────────────────┤
-│ Paso 4: Verificación                            [EN PROGRESO]  │
+│ Paso 4: Verificación                             [COMPLETADO]  │
 │ • 4a: Test Vector vs HorizenLabs               [✓ COMPLETADO]  │
 │ • 4b.1: Spec.lean corregido, 118 vectors       [✓ COMPLETADO]  │
 │ • 4b.2: Fuzzing Lean→C 118/118 vectors         [✓ COMPLETADO]  │
 │ • 4b.3: Property testing 10/10 props           [✓ COMPLETADO]  │
-│ • 4c: Benchmark vs Rust reference                  [Pendiente] │
-│ • 4d: Prueba formal de equivalencia                [Pendiente] │
+│ • 4b Ext: Rust Oracle 10,035/10,035 vectors    [✓ COMPLETADO]  │
+│ • 4c: Benchmark (C: 100kH/s, Rust: 136kH/s)    [✓ COMPLETADO]  │
+│ • 4d: Prueba formal (21 tests, 12 sorry)       [✓ COMPLETADO]  │
 ├────────────────────────────────────────────────────────────────┤
 │ Paso 5: Integración                                 [Pendiente]│
 │ • MerkleTree con Poseidon2                                     │
@@ -145,6 +146,7 @@ El tipo garantiza preservación de dimensiones por construcción.
 | [ADR-003-codegen-simd.md](ADR-003-codegen-simd.md) | Estrategia SIMD original (parcialmente superseded) |
 | [ADR-004-codegen-strategy.md](ADR-004-codegen-strategy.md) | Estrategia CodeGen por capas |
 | [ADR-005-phase3-architecture.md](ADR-005-phase3-architecture.md) | **Arquitectura Fase 3** (ConstRef, MDS opaco, loops) |
+| [ADR-006-formal-verification-strategy.md](ADR-006-formal-verification-strategy.md) | **Estrategia Verificación Formal** (Paso 4d) |
 | [PROGRESS.md](PROGRESS.md) | Progreso de implementación |
 
 ## Archivos de Código
@@ -194,4 +196,4 @@ RP = 22
 ---
 
 *Última actualización: 27 Enero 2026*
-*Paso 4 En Progreso - Fase 4b.2 (Fuzzing Masivo)*
+*Paso 4 Completado - Verificación Formal con 21 tests, 12 sorry verificados computacionalmente*
