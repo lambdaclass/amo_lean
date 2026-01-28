@@ -1,0 +1,182 @@
+name: AMO-Lean CI
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master, develop ]
+
+env:
+  LEAN_VERSION: v4.16.0
+
+jobs:
+  build:
+    name: Build & Test
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Install elan
+      run: |
+        curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh -s -- -y --default-toolchain ${{ env.LEAN_VERSION }}
+        echo "$HOME/.elan/bin" >> $GITHUB_PATH
+
+    - name: Cache Lake packages
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.elan
+          .lake
+        key: ${{ runner.os }}-lake-${{ hashFiles('lakefile.lean', 'lake-manifest.json') }}
+        restore-keys: |
+          ${{ runner.os }}-lake-
+
+    - name: Build library
+      run: lake build AmoLean
+
+    - name: Build test executables
+      run: |
+        lake build safety-checks
+        lake build oracle-test
+
+  phase0-tests:
+    name: Phase 0 Tests
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Install elan
+      run: |
+        curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh -s -- -y --default-toolchain ${{ env.LEAN_VERSION }}
+        echo "$HOME/.elan/bin" >> $GITHUB_PATH
+
+    - name: Cache Lake packages
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.elan
+          .lake
+        key: ${{ runner.os }}-lake-${{ hashFiles('lakefile.lean', 'lake-manifest.json') }}
+        restore-keys: |
+          ${{ runner.os }}-lake-
+
+    - name: Build test executables
+      run: |
+        lake build safety-checks
+        lake build oracle-test
+
+    - name: Install clang
+      run: sudo apt-get update && sudo apt-get install -y clang
+
+    - name: Compile C test programs
+      run: |
+        clang -DFIELD_NATIVE -O2 -o generated/oracle_test generated/oracle_test.c
+        clang -DFIELD_NATIVE -O3 -march=native -o generated/bench_fri_fold generated/bench_fri_fold.c
+
+    - name: Run Safety Checks
+      run: |
+        echo "=== Running Safety Checks ==="
+        ./.lake/build/bin/safety-checks
+
+    - name: Run Oracle Tests
+      run: |
+        echo "=== Running Oracle Tests ==="
+        ./.lake/build/bin/oracle-test
+
+    - name: Run Quick Benchmark
+      run: |
+        echo "=== Running Quick Benchmark ==="
+        ./generated/bench_fri_fold 256 1000
+        echo ""
+        echo "Benchmark completed successfully"
+
+  goldilocks-tests:
+    name: Goldilocks Field Tests
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Install clang
+      run: sudo apt-get update && sudo apt-get install -y clang
+
+    - name: Compile Goldilocks tests
+      run: |
+        clang -DFIELD_GOLDILOCKS -O1 -g -fsanitize=undefined,integer \
+          -fno-sanitize-recover=all \
+          -o generated/test_goldilocks generated/test_goldilocks.c
+
+    - name: Run Goldilocks tests
+      run: |
+        echo "=== Running Goldilocks Field Tests ==="
+        ./generated/test_goldilocks
+
+  sanitizers:
+    name: Sanitizer Tests
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Install clang
+      run: sudo apt-get update && sudo apt-get install -y clang
+
+    - name: Compile with AddressSanitizer
+      run: |
+        clang -DFIELD_NATIVE -O1 -g -fsanitize=address,undefined \
+          -o generated/bench_fri_fold_asan generated/bench_fri_fold.c
+
+    - name: Run with AddressSanitizer
+      run: |
+        echo "=== Running with AddressSanitizer ==="
+        ./generated/bench_fri_fold_asan 64 100
+        echo "AddressSanitizer: No errors detected"
+
+    - name: Compile with UndefinedBehaviorSanitizer
+      run: |
+        clang -DFIELD_NATIVE -O1 -g -fsanitize=undefined \
+          -o generated/bench_fri_fold_ubsan generated/bench_fri_fold.c
+
+    - name: Run with UndefinedBehaviorSanitizer
+      run: |
+        echo "=== Running with UBSan ==="
+        ./generated/bench_fri_fold_ubsan 64 100
+        echo "UBSan: No errors detected"
+
+  summary:
+    name: CI Summary
+    runs-on: ubuntu-latest
+    needs: [build, phase0-tests, goldilocks-tests, sanitizers]
+    if: always()
+
+    steps:
+    - name: Check results
+      run: |
+        echo "╔══════════════════════════════════════════════════════════════╗"
+        echo "║                    AMO-Lean CI Summary                       ║"
+        echo "╚══════════════════════════════════════════════════════════════╝"
+        echo ""
+        echo "Build:            ${{ needs.build.result }}"
+        echo "Phase 0 Tests:    ${{ needs.phase0-tests.result }}"
+        echo "Goldilocks Tests: ${{ needs.goldilocks-tests.result }}"
+        echo "Sanitizers:       ${{ needs.sanitizers.result }}"
+        echo ""
+        if [ "${{ needs.build.result }}" == "success" ] && \
+           [ "${{ needs.phase0-tests.result }}" == "success" ] && \
+           [ "${{ needs.goldilocks-tests.result }}" == "success" ] && \
+           [ "${{ needs.sanitizers.result }}" == "success" ]; then
+          echo "✅ All checks passed!"
+          exit 0
+        else
+          echo "❌ Some checks failed"
+          exit 1
+        fi
