@@ -233,6 +233,11 @@ static bool test_unaligned_access(void) {
  *
  * Ejecuta FRI fold sobre inputs de tamaños incómodos (primos, no potencias de 2).
  */
+/* Round up to multiple of 32 for aligned_alloc */
+static inline size_t round_up_32(size_t n) {
+    return (n + 31) & ~(size_t)31;
+}
+
 static bool test_tail_processing(void) {
     /* Test sizes: primos y tamaños incómodos */
     const size_t test_sizes[] = {1, 2, 3, 5, 7, 11, 13, 17, 23, 31, 61, 127, 1023};
@@ -241,11 +246,12 @@ static bool test_tail_processing(void) {
     for (int s = 0; s < num_sizes; s++) {
         size_t n = test_sizes[s];
 
-        /* Allocate with padding for safety */
-        uint64_t *even = aligned_alloc(32, (n + 4) * sizeof(uint64_t));
-        uint64_t *odd = aligned_alloc(32, (n + 4) * sizeof(uint64_t));
-        uint64_t *result_avx2 = aligned_alloc(32, (n + 4) * sizeof(uint64_t));
-        uint64_t *result_scalar = aligned_alloc(32, (n + 4) * sizeof(uint64_t));
+        /* Allocate with padding for safety, rounded up to multiple of 32 */
+        size_t alloc_size = round_up_32((n + 4) * sizeof(uint64_t));
+        uint64_t *even = aligned_alloc(32, alloc_size);
+        uint64_t *odd = aligned_alloc(32, alloc_size);
+        uint64_t *result_avx2 = aligned_alloc(32, alloc_size);
+        uint64_t *result_scalar = aligned_alloc(32, alloc_size);
 
         if (!even || !odd || !result_avx2 || !result_scalar) {
             printf("\n    Failed to allocate memory for size %zu\n", n);
