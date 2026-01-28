@@ -36,16 +36,29 @@ open AmoLean.Vector (Vec)
 We define field operations abstractly to support multiple field implementations.
 -/
 
-/-- Typeclass for field operations needed by FRI -/
-class FRIField (F : Type) extends Add F, Sub F, Mul F, Neg F, Inhabited F where
+/-- Typeclass for field operations needed by FRI.
+
+    Extended in Phase 1 of Step 5.3 migration to support generic fields.
+    See: docs/poseidon/ADR-009-step53-generic-field-migration.md
+
+    Design decisions:
+    - BEq F: Required for verification (verifyFoldQuery uses ==)
+    - toNat/modulus: Required for Poseidon2 integration (works on Nat)
+    - Flat hierarchy: All traits in extends, no deep nesting (compilation speed)
+-/
+class FRIField (F : Type) extends Add F, Sub F, Mul F, Neg F, BEq F, Inhabited F where
   /-- Additive identity -/
   zero : F
   /-- Multiplicative identity -/
   one : F
-  /-- Field division (a / b) -/
+  /-- Field division (a / b). Must implement modular inverse for finite fields. -/
   fdiv : F → F → F
-  /-- Convert from Nat -/
+  /-- Convert from Nat (mod field characteristic) -/
   ofNat : Nat → F
+  /-- Convert to Nat (canonical representative) -/
+  toNat : F → Nat
+  /-- Field characteristic (prime modulus) -/
+  modulus : Nat
 
 namespace FRIField
 
@@ -57,12 +70,16 @@ def half (x : F) : F := fdiv x two
 
 end FRIField
 
-/-- Float instance for testing -/
+/-- Float instance for testing (NOT cryptographically meaningful).
+    Float is used for basic arithmetic testing, not production.
+-/
 instance : FRIField Float where
   zero := 0.0
   one := 1.0
   fdiv := (· / ·)
   ofNat := Float.ofNat
+  toNat := fun f => f.toUInt64.toNat  -- Lossy, only for testing
+  modulus := 2^64  -- Placeholder, Float is not a finite field
 
 /-! ## Part 2: Core Fold Operation
 

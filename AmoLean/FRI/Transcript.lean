@@ -24,12 +24,17 @@
 -/
 
 import AmoLean.FRI.Basic
+import AmoLean.FRI.Fold
+import AmoLean.FRI.Hash
+import AmoLean.FRI.Fields.TestField
 import AmoLean.Vector.Basic
 import AmoLean.Sigma.Basic
 
 namespace AmoLean.FRI.Transcript
 
 open AmoLean.FRI (FieldConfig ZKCostModel)
+open AmoLean.FRI.Fold (FRIField)
+open AmoLean.FRI.Hash (CryptoHash)
 open AmoLean.Vector (Vec)
 open AmoLean.Sigma (Kernel Gather Scatter LoopVar IdxExpr)
 
@@ -67,37 +72,42 @@ end DomainTag
 
     IMPORTANT: This state is OPAQUE to the optimizer.
     Operations on Transcript cannot be reordered or eliminated.
+
+    Type parameter F: The field type (e.g., BN254, TestField).
+    Phase 2.1 Migration: UInt64 → generic F with [FRIField F] constraint.
 -/
-structure TranscriptState where
+structure TranscriptState (F : Type) where
   /-- All absorbed data (commitment to history) -/
-  absorbed : List UInt64
+  absorbed : List F
   /-- Number of squeeze operations performed -/
   squeezeCount : Nat
   /-- Domain separation stack -/
   domainStack : List DomainTag
   /-- Current round number (for debugging) -/
   round : Nat
-  deriving Repr, Inhabited
+  deriving Repr
 
 namespace TranscriptState
 
+variable {F : Type}
+
 /-- Create a fresh transcript with domain separator -/
-def init (domain : DomainTag) : TranscriptState :=
+def init (domain : DomainTag) : TranscriptState F :=
   { absorbed := []
     squeezeCount := 0
     domainStack := [domain]
     round := 0 }
 
 /-- Create transcript for FRI protocol -/
-def forFRI : TranscriptState := init .friCommit
+def forFRI : TranscriptState F := init .friCommit
 
 end TranscriptState
 
 /-! ## Part 2: Transcript Operations -/
 
 /-- Result of a transcript operation: new state + optional output -/
-structure TranscriptResult (α : Type) where
-  state : TranscriptState
+structure TranscriptResult (F : Type) (α : Type) where
+  state : TranscriptState F
   output : α
   deriving Repr
 
@@ -108,20 +118,22 @@ structure TranscriptResult (α : Type) where
     2. Updates internal sponge state (simulated)
 
     The element becomes part of the challenge derivation.
+
+    Phase 2.1: Parametrized over field type F.
 -/
-def absorb (state : TranscriptState) (elem : UInt64) : TranscriptState :=
+def absorb {F : Type} (state : TranscriptState F) (elem : F) : TranscriptState F :=
   { state with absorbed := state.absorbed ++ [elem] }
 
 /-- Absorb multiple field elements -/
-def absorbMany (state : TranscriptState) (elems : List UInt64) : TranscriptState :=
+def absorbMany {F : Type} (state : TranscriptState F) (elems : List F) : TranscriptState F :=
   { state with absorbed := state.absorbed ++ elems }
 
 /-- Absorb a vector of field elements -/
-def absorbVec (state : TranscriptState) (vec : Vec UInt64 n) : TranscriptState :=
+def absorbVec {F : Type} (state : TranscriptState F) (vec : Vec F n) : TranscriptState F :=
   { state with absorbed := state.absorbed ++ vec.toList }
 
 /-- Absorb a commitment (e.g., Merkle root) -/
-def absorbCommitment (state : TranscriptState) (commitment : UInt64) : TranscriptState :=
+def absorbCommitment {F : Type} (state : TranscriptState F) (commitment : F) : TranscriptState F :=
   absorb state commitment
 
 /-- Squeeze a challenge from the transcript.
@@ -133,33 +145,37 @@ def absorbCommitment (state : TranscriptState) (commitment : UInt64) : Transcrip
 
     CRITICAL: This operation is NOT idempotent.
     Calling squeeze twice gives different values.
+
+    Phase 2.1: Now uses CryptoHash.squeeze instead of XOR.
+    The XOR implementation is encapsulated in TestField's CryptoHash instance.
+    Production code uses Poseidon2 via BN254's CryptoHash instance.
 -/
-def squeeze (state : TranscriptState) : TranscriptResult UInt64 :=
-  -- Simulate hash: combine all absorbed data with squeeze count
-  let hash := state.absorbed.foldl (fun acc x => acc ^^^ x.toNat) state.squeezeCount
-  let challenge := UInt64.ofNat (hash % (2^64 - 1))
+def squeeze {F : Type} [FRIField F] [CryptoHash F] (state : TranscriptState F) :
+    TranscriptResult F F :=
+  -- Use CryptoHash.squeeze to derive challenge from absorbed data
+  let challenge := CryptoHash.squeeze state.absorbed state.squeezeCount
   { state := { state with squeezeCount := state.squeezeCount + 1 }
     output := challenge }
 
-/-- Squeeze multiple challenges (implemented iteratively using fold) -/
-def squeezeMany (state : TranscriptState) (count : Nat) : TranscriptResult (List UInt64) :=
-  let (finalState, challenges) := List.range count |>.foldl
-    (fun (s, acc) _ =>
-      let r := squeeze s
-      (r.state, r.output :: acc))
-    (state, [])
-  { state := finalState, output := challenges.reverse }
+/-- Squeeze multiple challenges efficiently using CryptoHash.squeezeMany.
+    Phase 2.1: Now delegates to CryptoHash for batch challenge derivation.
+-/
+def squeezeMany {F : Type} [FRIField F] [CryptoHash F] (state : TranscriptState F)
+    (count : Nat) : TranscriptResult F (List F) :=
+  let challenges := CryptoHash.squeezeMany state.absorbed state.squeezeCount count
+  { state := { state with squeezeCount := state.squeezeCount + count }
+    output := challenges }
 
 /-- Enter a new domain context (push) -/
-def enterDomain (state : TranscriptState) (tag : DomainTag) : TranscriptState :=
+def enterDomain {F : Type} (state : TranscriptState F) (tag : DomainTag) : TranscriptState F :=
   { state with domainStack := tag :: state.domainStack }
 
 /-- Exit current domain context (pop) -/
-def exitDomain (state : TranscriptState) : TranscriptState :=
+def exitDomain {F : Type} (state : TranscriptState F) : TranscriptState F :=
   { state with domainStack := state.domainStack.tail }
 
 /-- Advance to next round -/
-def nextRound (state : TranscriptState) : TranscriptState :=
+def nextRound {F : Type} (state : TranscriptState F) : TranscriptState F :=
   { state with round := state.round + 1 }
 
 /-! ## Part 3: Transcript Intrinsics for SigmaExpr -/
@@ -333,19 +349,23 @@ end CryptoSigma
     2. Squeeze challenge α
     3. Compute folded layer
     4. (Next round will absorb new commitment)
+
+    Phase 2.1: Parametrized over field type F.
 -/
-structure FRIRoundState where
+structure FRIRoundState (F : Type) where
   /-- Current layer evaluations (size n) -/
   layerSize : Nat
   /-- Transcript state -/
-  transcript : TranscriptState
+  transcript : TranscriptState F
   /-- Current round number -/
   round : Nat
   deriving Repr
 
-/-- Execute one FRI round (state transition) -/
-def friRoundTransition (state : FRIRoundState) (commitment : UInt64) :
-    FRIRoundState × UInt64 :=
+/-- Execute one FRI round (state transition).
+    Phase 2.1: Requires [FRIField F] [CryptoHash F] for squeeze operation.
+-/
+def friRoundTransition {F : Type} [FRIField F] [CryptoHash F]
+    (state : FRIRoundState F) (commitment : F) : FRIRoundState F × F :=
   -- 1. Absorb commitment
   let t1 := absorbCommitment state.transcript commitment
   -- 2. Enter fold domain
@@ -358,7 +378,7 @@ def friRoundTransition (state : FRIRoundState) (commitment : UInt64) :
   let t4 := exitDomain t3
   let t5 := nextRound t4
   -- 5. Return new state (layer size halved) and alpha
-  let newState : FRIRoundState := {
+  let newState : FRIRoundState F := {
     layerSize := state.layerSize / 2
     transcript := t5
     round := state.round + 1
@@ -408,47 +428,56 @@ def verifyIntrinsicSequence (seq : List Intrinsic) : Bool × List String :=
     | _ :: rest => check rest domainDepth errors
   check seq 0 []
 
-/-- Theorem: Absorb operations cannot be reordered -/
-theorem absorb_order_matters (s1 s2 : TranscriptState) (a b : UInt64) (h : a ≠ b) :
+/-- Theorem: Absorb operations cannot be reordered.
+    Phase 2.1: Parametrized over generic field type F.
+-/
+theorem absorb_order_matters {F : Type} (s1 s2 : TranscriptState F) (a b : F) (h : a ≠ b) :
     absorb (absorb s1 a) b ≠ absorb (absorb s1 b) a := by
   simp [absorb]
   intro heq
   -- The absorbed lists would differ
   sorry  -- Full proof requires list extensionality
 
-/-- Theorem: Squeeze is deterministic given transcript state -/
-theorem squeeze_deterministic (s : TranscriptState) :
+/-- Theorem: Squeeze is deterministic given transcript state.
+    Phase 2.1: Requires CryptoHash constraint.
+-/
+theorem squeeze_deterministic {F : Type} [FRIField F] [CryptoHash F] (s : TranscriptState F) :
     (squeeze s).output = (squeeze s).output := rfl
 
 /-! ## Part 7: Tests -/
 
 section Tests
 
+-- Import TestField for fast testing
+open AmoLean.FRI.Fields.TestField (TestField)
+
 -- Test 1: Basic transcript operations
 def testTranscript : IO Unit := do
-  IO.println "=== Transcript Test ==="
+  IO.println "=== Transcript Test (Phase 2.1: Using TestField) ==="
 
-  let t0 := TranscriptState.forFRI
+  let t0 : TranscriptState TestField := TranscriptState.forFRI
   IO.println s!"Initial state: round={t0.round}, absorbed={t0.absorbed.length}"
 
-  let t1 := absorb t0 42
-  let t2 := absorb t1 123
-  IO.println s!"After 2 absorbs: absorbed={t2.absorbed}"
+  let elem1 : TestField := FRIField.ofNat 42
+  let elem2 : TestField := FRIField.ofNat 123
+  let t1 := absorb t0 elem1
+  let t2 := absorb t1 elem2
+  IO.println s!"After 2 absorbs: absorbed count={t2.absorbed.length}"
 
   let r := squeeze t2
-  IO.println s!"Squeezed challenge: {r.output}"
+  IO.println s!"Squeezed challenge: {FRIField.toNat r.output}"
   IO.println s!"Squeeze count: {r.state.squeezeCount}"
 
   let r2 := squeeze r.state
-  IO.println s!"Second squeeze: {r2.output} (should differ from first)"
+  IO.println s!"Second squeeze: {FRIField.toNat r2.output} (should differ from first)"
 
 #eval! testTranscript
 
 -- Test 2: FRI round state transition
 def testFRIRound : IO Unit := do
-  IO.println "\n=== FRI Round Test ==="
+  IO.println "\n=== FRI Round Test (Phase 2.1: Using TestField) ==="
 
-  let initial : FRIRoundState := {
+  let initial : FRIRoundState TestField := {
     layerSize := 1024
     transcript := TranscriptState.forFRI
     round := 0
@@ -456,14 +485,17 @@ def testFRIRound : IO Unit := do
 
   IO.println s!"Initial: layer size = {initial.layerSize}, round = {initial.round}"
 
-  let (state1, alpha1) := friRoundTransition initial 0xABCD
-  IO.println s!"Round 1: layer size = {state1.layerSize}, alpha = {alpha1}"
+  let commit1 : TestField := FRIField.ofNat 0xABCD
+  let (state1, alpha1) := friRoundTransition initial commit1
+  IO.println s!"Round 1: layer size = {state1.layerSize}, alpha = {FRIField.toNat alpha1}"
 
-  let (state2, alpha2) := friRoundTransition state1 0xDEF0
-  IO.println s!"Round 2: layer size = {state2.layerSize}, alpha = {alpha2}"
+  let commit2 : TestField := FRIField.ofNat 0xDEF0
+  let (state2, alpha2) := friRoundTransition state1 commit2
+  IO.println s!"Round 2: layer size = {state2.layerSize}, alpha = {FRIField.toNat alpha2}"
 
-  let (state3, alpha3) := friRoundTransition state2 0x1234
-  IO.println s!"Round 3: layer size = {state3.layerSize}, alpha = {alpha3}"
+  let commit3 : TestField := FRIField.ofNat 0x1234
+  let (state3, alpha3) := friRoundTransition state2 commit3
+  IO.println s!"Round 3: layer size = {state3.layerSize}, alpha = {FRIField.toNat alpha3}"
 
 #eval! testFRIRound
 

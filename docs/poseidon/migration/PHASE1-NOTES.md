@@ -1,7 +1,8 @@
 # Phase 1: Infrastructure - Progress Notes
 
-**Status**: Not Started
+**Status**: COMPLETED
 **Reference**: [PLAN.md](PLAN.md)
+**Completed**: 2026-01-28
 
 ---
 
@@ -11,194 +12,196 @@ Create the foundational typeclasses and field instances needed for generic FRI.
 
 ---
 
-## Files to Create
+## Files Created/Modified
 
-### 1. `AmoLean/FRI/Hash.lean`
+### 1. `AmoLean/FRI/Fold.lean` (Modified)
 
-**Status**: [ ] Not Started
+**Status**: [x] Completed
 
-**Design**:
+**Changes**:
+- Extended `FRIField` typeclass with:
+  - `BEq F` in extends clause (for equality comparisons in verification)
+  - `toNat : F → Nat` (for Poseidon2 integration)
+  - `modulus : Nat` (for field characteristic)
+- Updated Float instance with placeholder values
+- Updated UInt64 instance in Merkle.lean
+
+**Final FRIField Definition**:
 ```lean
-import AmoLean.FRI.Transcript (DomainTag)
-
-namespace AmoLean.FRI.Hash
-
-class CryptoHash (F : Type) where
-  /-- 2-to-1 hash for Merkle tree nodes -/
-  hash2to1 : F → F → F
-
-  /-- Hash with domain separation tag -/
-  hashWithDomain : DomainTag → F → F → F
-
-  /-- Squeeze challenge from absorbed elements -/
-  squeeze : List F → Nat → F
-
-  /-- Multi-squeeze for multiple challenges -/
-  squeezeMany : List F → Nat → Nat → List F
-
-  /-- Optional: hash many elements (sponge construction) -/
-  hashMany : List F → F := fun xs =>
-    xs.foldl hash2to1 (hash2to1 xs.head! xs.head!)
-
-end AmoLean.FRI.Hash
-```
-
-**Notes**:
-- Import DomainTag from Transcript or DomainSeparation
-- Consider making DomainTag a parameter of CryptoHash
-
----
-
-### 2. `AmoLean/FRI/Fields/BN254.lean`
-
-**Status**: [ ] Not Started
-
-**Design**:
-```lean
-import AmoLean.FRI.Fold (FRIField)
-import AmoLean.FRI.Hash (CryptoHash)
-import AmoLean.Protocols.Poseidon.Integration
-
-namespace AmoLean.FRI.Fields.BN254
-
--- Re-export p from Poseidon constants
-open AmoLean.Protocols.Poseidon.Constants.BN254 (p)
-
-/-- BN254 scalar field element -/
-structure BN254 where
-  val : Nat
-  deriving Repr, BEq, Inhabited
-
-namespace BN254
-
-def ofNat (n : Nat) : BN254 := ⟨n % p⟩
-def toNat (x : BN254) : Nat := x.val
-
--- Arithmetic operations (mod p)
-def add (a b : BN254) : BN254 := ofNat (a.val + b.val)
-def sub (a b : BN254) : BN254 := ofNat (p + a.val - b.val)
-def mul (a b : BN254) : BN254 := ofNat (a.val * b.val)
-def neg (a : BN254) : BN254 := ofNat (p - a.val)
--- ... etc
-
-end BN254
-
-instance : FRIField BN254 where
-  zero := ⟨0⟩
-  one := ⟨1⟩
-  add := BN254.add
-  sub := BN254.sub
-  mul := BN254.mul
-  neg := BN254.neg
-  fdiv := ... -- Uses modular inverse
-  ofNat := BN254.ofNat
-  toNat := BN254.toNat
-  modulus := p
-
-instance : CryptoHash BN254 where
-  hash2to1 := fun a b => BN254.ofNat (poseidon2Hash2to1 bn254Params a.toNat b.toNat)
-  hashWithDomain := fun tag a b =>
-    BN254.ofNat (poseidon2HashWithDomainTag bn254Params tag a.toNat b.toNat)
-  squeeze := fun xs count =>
-    BN254.ofNat (poseidon2Squeeze bn254Params (xs.map BN254.toNat) count)
-  squeezeMany := ...
-
-end AmoLean.FRI.Fields.BN254
-```
-
-**Notes**:
-- Reuse existing Poseidon2 implementation from Integration.lean
-- Need to handle modular inverse for `fdiv`
-
----
-
-### 3. `AmoLean/FRI/Fields/TestField.lean`
-
-**Status**: [ ] Not Started
-
-**Design**:
-```lean
-namespace AmoLean.FRI.Fields.TestField
-
-/-- Small test field for fast testing (NOT cryptographically secure) -/
-def testPrime : Nat := 2^61 - 1  -- Mersenne prime, fits in UInt64
-
-structure TestField where
-  val : Nat
-  deriving Repr, BEq, Inhabited
-
-instance : FRIField TestField where
-  -- Similar to BN254 but with testPrime
-  ...
-
-instance : CryptoHash TestField where
-  hash2to1 := fun a b => ⟨(a.val ^^^ b.val + 0x9e3779b97f4a7c15) % testPrime⟩
-  -- XOR-based, fast, NOT secure
-  ...
-
-end AmoLean.FRI.Fields.TestField
-```
-
-**Notes**:
-- Uses XOR for speed (same as current testHash)
-- Clearly documented as non-cryptographic
-
----
-
-### 4. Extend `AmoLean/FRI/Fold.lean`
-
-**Status**: [ ] Not Started
-
-**Changes needed**:
-```lean
--- Add to FRIField typeclass:
+class FRIField (F : Type) extends Add F, Sub F, Mul F, Neg F, BEq F, Inhabited F where
+  zero : F
+  one : F
+  fdiv : F → F → F
+  ofNat : Nat → F
   toNat : F → Nat
   modulus : Nat
 ```
 
 ---
 
-## Verification Tests
+### 2. `AmoLean/FRI/Hash.lean` (Created)
 
-Before proceeding to Phase 2, verify:
+**Status**: [x] Completed
 
-```lean
--- Test BN254 arithmetic
-#eval BN254.add ⟨5⟩ ⟨7⟩  -- Should be ⟨12⟩
-#eval BN254.mul ⟨3⟩ ⟨4⟩  -- Should be ⟨12⟩
+**Content**:
+- `CryptoHash` typeclass for cryptographic hash operations
+- Functions: `hash2to1`, `hashWithDomain`, `squeeze`, `squeezeMany`, `hashMany`
+- Convenience functions: `merkleHash`, `friFoldChallenge`, `friQueryHash`, `friCommitHash`
+- Uses `DomainTag` from `DomainSeparation.lean`
 
--- Test CryptoHash
-#eval (CryptoHash.hash2to1 (⟨1⟩ : BN254) ⟨2⟩).val
--- Should match poseidon2Hash2to1 bn254Params 1 2
-
--- Test TestField
-#eval (CryptoHash.hash2to1 (⟨1⟩ : TestField) ⟨2⟩).val
--- Should be XOR-based result
-```
+**Design Decisions**:
+- Separate from FRIField (hash algorithm orthogonal to field arithmetic)
+- Domain separation built-in for security
+- Default `hashMany` implementation using `foldl`
 
 ---
 
-## Questions to Resolve
+### 3. `AmoLean/FRI/Fields/BN254.lean` (Created)
 
-1. **DomainTag import**: From Transcript.lean or DomainSeparation.lean?
-   - Answer: TBD in implementation
+**Status**: [x] Completed
 
-2. **Modular inverse**: Implement or use existing?
-   - Answer: TBD
+**Content**:
+- `BN254` structure wrapping `Nat`
+- Arithmetic operations: `add`, `sub`, `mul`, `neg`, `fdiv`
+- Modular inverse using Fermat's Little Theorem: `a^(-1) = a^(p-2) mod p`
+- `FRIField BN254` instance
+- `CryptoHash BN254` instance using Poseidon2 from Integration.lean
 
-3. **BN254 vs ZMod**: Use structure or Lean's ZMod?
-   - Answer: TBD (structure gives more control)
+**Key Implementation Details**:
+```lean
+def modPow (base exp : Nat) : Nat  -- Square-and-multiply
+def modInverse (a : Nat) : Nat := modPow a (p - 2)
+def fdiv (a b : BN254) : BN254 := ofNat (a.val * modInverse b.val)
+```
+
+**Tests**:
+- `testInverse`: 2 * inv(2) = 1
+- `testDivision`: 6 / 2 = 3
+- `testFRIField`: Arithmetic operations
+- `testHashDeterministic`: Same input → same output
+- `testHashDifferent`: Different inputs → different outputs
+
+---
+
+### 4. `AmoLean/FRI/Fields/TestField.lean` (Created)
+
+**Status**: [x] Completed
+
+**Content**:
+- `TestField` structure using Mersenne prime 2^61 - 1
+- Same interface as BN254 (tests work with both)
+- XOR-based `CryptoHash` instance (fast, NOT secure)
+- Clearly documented as non-cryptographic
+
+**Security Warning**:
+```
+╔═══════════════════════════════════════════════════════════════════╗
+║  WARNING: NOT CRYPTOGRAPHICALLY SECURE                            ║
+║  Do NOT use in production or security-sensitive contexts!         ║
+╚═══════════════════════════════════════════════════════════════════╝
+```
+
+**Use Cases**:
+- Fast CI tests (~10x faster than Poseidon2)
+- Algorithm verification
+- Debugging
+
+---
+
+### 5. `AmoLean/FRI/Merkle.lean` (Modified)
+
+**Status**: [x] Updated
+
+**Changes**:
+- Added `toNat` and `modulus` to UInt64 FRIField instance in tests section
+
+---
+
+### 6. `AmoLean/FRI/CodeGen.lean` (Modified)
+
+**Status**: [x] Updated (unrelated to Phase 1 but required for build)
+
+**Changes**:
+- Added missing Kernel cases for Poseidon2 kernels:
+  - `.sbox n alpha`
+  - `.partialSbox n alpha idx`
+  - `.mdsApply name size`
+  - `.mdsInternal size`
+  - `.addRoundConst round size`
+
+---
+
+## Verification
+
+### Build Status
+- [x] `lake build` passes successfully
+- [x] All 716 modules compile without errors
+
+### Test Results
+All tests pass in both BN254.lean and TestField.lean:
+- Inverse test: PASS
+- Division test: PASS
+- FRIField test: PASS
+- Hash deterministic: PASS
+- Hash different: PASS
+- Domain separation: PASS (TestField only)
+
+---
+
+## Questions Resolved
+
+1. **DomainTag import**: Using from `Poseidon.DomainSeparation`
+2. **Modular inverse**: Implemented using Fermat's Little Theorem
+3. **BN254 vs ZMod**: Using custom structure for more control
+4. **BEq vs DecidableEq**: Using BEq in typeclass, DecidableEq available
+
+---
+
+## Design Rationale
+
+### Why Flat Typeclass Hierarchy?
+- `FRIField` extends `Add`, `Sub`, `Mul`, `Neg`, `BEq`, `Inhabited` directly
+- Avoids deep nesting that slows compilation
+- Each trait is explicitly visible in definition
+
+### Why Separate CryptoHash?
+- Hash algorithm is orthogonal to field arithmetic
+- Same field can use different hashes (production vs testing)
+- Different fields may share hash implementation (theoretical)
+
+### Why TestField?
+- Fast testing without full Poseidon2 overhead
+- Same interface ensures code works with real fields
+- CI pipeline remains fast
 
 ---
 
 ## Progress Log
 
-(Add entries as work progresses)
-
 | Date | Work Done | Issues |
 |------|-----------|--------|
 | 2026-01-27 | Created placeholder | None |
+| 2026-01-28 | Extended FRIField typeclass | None |
+| 2026-01-28 | Created Hash.lean | None |
+| 2026-01-28 | Created BN254.lean | None |
+| 2026-01-28 | Created TestField.lean | None |
+| 2026-01-28 | Fixed Merkle.lean UInt64 instance | None |
+| 2026-01-28 | Fixed CodeGen.lean Kernel cases | Pre-existing issue |
+| 2026-01-28 | Verified build passes | None |
+| 2026-01-28 | **PHASE 1 COMPLETE** | None |
 
 ---
 
-*Last updated: 2026-01-27*
+## Next Steps
+
+Phase 2 can now begin:
+1. Migrate `Transcript.lean` to use generic field type
+2. Migrate `Protocol.lean`
+3. Migrate `Merkle.lean` (already mostly generic)
+
+See [PHASE2-NOTES.md](PHASE2-NOTES.md) for details.
+
+---
+
+*Last updated: 2026-01-28*
+*Phase 1 Status: COMPLETED*

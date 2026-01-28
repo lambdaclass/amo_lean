@@ -13,3 +13,10 @@ lean_lib «AmoLean» where
 
 lean_lib «Benchmarks» where
   roots := #[`Benchmarks.FRI_DiffTest]
+
+lean_lib «Tests» where
+  roots := #[`Tests.MigrationRegression, `Tests.AbstractionBenchmark, `Tests.FullStackCheck, `Tests.InfrastructureSanity, `Tests.ExtendedBenchmark, `Tests.E2EProverVerifier, `Tests.Phase3Audit]
+
+-- Native executable for large-scale benchmarks
+lean_exe «fri-benchmark» where
+  root := `Benchmarks.NativeBenchmark

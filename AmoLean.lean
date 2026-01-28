@@ -38,11 +38,17 @@ import AmoLean.EGraph.EMatch
 import AmoLean.EGraph.Saturate
 import AmoLean.FRI.Basic
 import AmoLean.FRI.Fold
+import AmoLean.FRI.Hash
 import AmoLean.FRI.Kernel
 import AmoLean.FRI.Transcript
 import AmoLean.FRI.Merkle
 import AmoLean.FRI.Protocol
 import AmoLean.FRI.CodeGen
+import AmoLean.FRI.Proof
+import AmoLean.FRI.Prover
+import AmoLean.FRI.Verifier
+import AmoLean.FRI.Fields.BN254
+import AmoLean.FRI.Fields.TestField
 import AmoLean.Verification.FRI_Properties
 
 namespace AmoLean

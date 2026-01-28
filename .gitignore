@@ -1,0 +1,27 @@
+# Lake build artifacts
+.lake/
+lake-packages/
+
+# OS files
+.DS_Store
+*.dSYM/
+
+# Compiled binaries
+*.o
+*.a
+generated/fri_test
+Tests/poseidon_c/benchmark_merkle
+Tests/poseidon_c/runner_fuzz
+Tests/poseidon_c/test_*
+Tests/poseidon_c/build/
+
+# Rust build artifacts
+Tests/poseidon_fuzz/target/
+Cargo.lock
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/

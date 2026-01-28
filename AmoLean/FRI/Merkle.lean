@@ -253,13 +253,14 @@ def buildTree [FRIField F] [Inhabited F] (leaves : Array F) (hashFn : HashFn F) 
         initialNodes
 
       -- Build internal layers bottom-up
+      -- Layer start formula: for layer k >= 1, start = 2*n - n/2^(k-1)
       let depth := Nat.log2 n
       let finalNodes := List.range depth |>.foldl
         (fun arr layerIdx =>
           let layer := layerIdx + 1
           let numNodesInLayer := n / (2^layer)
-          let childLayerStart := if layer == 1 then 0 else n - n / (2^(layer - 1))
-          let thisLayerStart := n - n / (2^layer)
+          let childLayerStart := if layer == 1 then 0 else 2 * n - n / (2^(layer - 2))
+          let thisLayerStart := 2 * n - n / (2^(layer - 1))
 
           List.range numNodesInLayer |>.foldl
             (fun arr2 j =>
@@ -286,13 +287,14 @@ def generateProof [FRIField F] [Inhabited F] (tree : FlatMerkle F n) (leafIndex 
   else
     let depth := Nat.log2 n
     -- Accumulate (siblings, pathBits, currentIdx) through layers
+    -- Layer start formula: for layer k >= 1, start = 2*n - n/2^(k-1)
     let (siblings, pathBits, _) := List.range depth |>.foldl
       (fun (sibs, bits, curIdx) layer =>
         let siblingIdx := if curIdx % 2 == 0 then curIdx + 1 else curIdx - 1
         let siblingVal := if layer == 0 then
           tree.nodes.get! siblingIdx
         else
-          let layerStart := n - n / (2^layer)
+          let layerStart := 2 * n - n / (2^(layer - 1))
           tree.nodes.get! (layerStart + siblingIdx)
         (sibs ++ [siblingVal], bits ++ [curIdx % 2 == 1], curIdx / 2))
       ([], [], leafIndex)
@@ -429,12 +431,15 @@ def verifyProofCost (cm : ZKCostModel) (depth : Nat) : Nat :=
 section Tests
 
 -- Test with UInt64 as our field type
+-- NOTE: This is a testing instance, not cryptographically meaningful
 instance : FRIField UInt64 where
   neg := fun x => 0 - x
   zero := 0
   one := 1
   fdiv := (· / ·)
   ofNat := UInt64.ofNat
+  toNat := UInt64.toNat
+  modulus := 2^64  -- UInt64 wraps, not a prime field
 
 /-- Test 1: Memory access pattern for n=8 -/
 def testMemoryAccess : IO Unit := do

@@ -1,126 +1,149 @@
-# AMO-Lean: Verified Cryptographic Code Compiler
+# AMO-Lean: Verified Optimizing Compiler for Cryptographic Primitives
 
 [![Lean 4](https://img.shields.io/badge/Lean-4.16.0-blue.svg)](https://leanprover.github.io/lean4/doc/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Release](https://img.shields.io/badge/Release-v1.0.0--fri--verified-green.svg)](https://github.com/manuelpuebla/amo-lean/releases/tag/v1.0.0-fri-verified)
 
-**AMO-Lean** is a verified compiler that transforms algebraic expressions into optimized C code with formal correctness guarantees. The current release implements the FRI (Fast Reed-Solomon IOP) commit phase with SIMD optimization.
+**AMO-Lean** transforms mathematical specifications into optimized C code with **formal correctness guarantees**. Write your crypto primitives in Lean, get verified optimized code.
 
-## Current Release: v1.0.0-fri-verified
+## Core Idea
 
-The first stable release includes:
-- **MatExpr IR**: Symbolic algebra with Kronecker product optimization
-- **E-Graph Engine**: Equality saturation for automatic optimization
-- **C Code Generation**: SIMD-optimized output (AVX2)
-- **FRI Protocol**: Complete commit phase implementation
-- **Differential Fuzzing**: Testing framework that validates Lean reference against generated C
+```
+Mathematical Spec (Lean)  →  E-Graph Optimization  →  Optimized C/SIMD Code
+                              (verified rules)        (correct by construction)
+```
 
-### Key Achievement
-A critical buffer swap bug was discovered and fixed through differential fuzzing, demonstrating the value of our "Transitive Empirical Verification" methodology.
+## What It Does
+
+- **Input**: Mathematical specification as `MatExpr` (matrix/vector expressions)
+- **Process**: E-Graph equality saturation with proven-correct rewrite rules
+- **Output**: Optimized C code that is **guaranteed equivalent** to the spec
+
+## Current Status
+
+| Component | Status | Purpose |
+|-----------|--------|---------|
+| E-Graph Engine | ✅ Complete | Core optimizer |
+| Verified Rewrite Rules | ✅ 12 rules | Correctness guarantees |
+| MatExpr + elemwise | ✅ Complete | Non-linear operations (x^5) |
+| C/AVX2 CodeGen | ✅ Complete | Code generation |
+| FRI Reference Impl | ✅ Complete | Testing oracle |
+| Poseidon2 Reference | ✅ Complete | Testing oracle |
+
+**Next Step**: Connect FRI and Poseidon2 specs to the optimization pipeline (see [OPTION_A_ROADMAP.md](docs/OPTION_A_ROADMAP.md))
+
+## Quick Start
+
+```bash
+# Clone and build
+git clone https://github.com/manuelpuebla/amo-lean.git
+cd amo-lean
+lake build
+
+# See optimization in action (in Lean editor)
+# Open AmoLean.lean - shows E-Graph optimizing expressions
+
+# Run reference implementation tests
+# Open Tests/E2EProverVerifier.lean
+```
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        OPTIMIZATION PIPELINE                             │
+│                                                                          │
+│   MatExpr           E-Graph              CodeGen           Output        │
+│   (Spec)      →     Saturation     →     C/AVX2      →     .c file      │
+│                     (verified                                            │
+│                      rules)                                              │
+└─────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│                     REFERENCE IMPLEMENTATIONS                            │
+│                     (For testing generated code)                         │
+│                                                                          │
+│   Poseidon2 Spec (Lean)    FRI Prover/Verifier (Lean)                   │
+│   → Test oracle            → Validate proofs from generated C            │
+└─────────────────────────────────────────────────────────────────────────┘
+```
 
 ## Project Structure
 
 ```
 amo-lean/
 ├── AmoLean/
-│   ├── Core.lean           # Re-exports core modules
-│   ├── Backends.lean       # Re-exports code generators
-│   ├── Protocols.lean      # Re-exports protocol implementations
 │   │
-│   ├── EGraph/             # [CORE] Equality saturation engine
-│   ├── Sigma/              # [CORE] MatExpr symbolic algebra
-│   ├── Matrix/             # [CORE] Linear algebra primitives
-│   ├── Vector/             # [CORE] Vector operations
-│   ├── Meta/               # [CORE] Compile-time utilities
+│   │  ═══════════════ OPTIMIZATION PIPELINE ═══════════════
+│   ├── Basic.lean              # Expr AST, rewrite rules (verified)
+│   ├── Correctness.lean        # Soundness proofs (0 sorry)
+│   ├── EGraph/                 # E-Graph + equality saturation
+│   ├── Matrix/                 # MatExpr (Kronecker, elemwise)
+│   ├── Vector/                 # VecExpr (length-indexed)
+│   ├── Sigma/                  # Sigma-SPL intermediate representation
+│   ├── CodeGen.lean            # C/AVX2 code generation
 │   │
-│   ├── CodeGen.lean        # [BACKEND] C code generation (AVX2)
-│   ├── Backends/
-│   │   ├── C_AVX512/       # [FUTURE] AVX-512 backend
-│   │   └── CUDA/           # [FUTURE] GPU backend
-│   │
-│   ├── FRI/                # [PROTOCOL] FRI commit phase (stable)
-│   ├── Protocols/
-│   │   └── Poseidon/       # [FUTURE] ZK-friendly hash
-│   │
-│   └── Verification/       # Formal proofs and testing
+│   │  ═══════════════ REFERENCE IMPLEMENTATIONS ═══════════════
+│   ├── Protocols/Poseidon/     # Poseidon2 reference (for testing)
+│   │   ├── Spec.lean           # Pure Lean specification
+│   │   └── Integration.lean    # FRI adapters
+│   └── FRI/                    # FRI reference (for testing)
+│       ├── Prover.lean         # Reference prover
+│       ├── Verifier.lean       # Reference verifier
+│       └── Fields/             # Field implementations
 │
-├── Benchmarks/             # Differential fuzzing tests
-├── generated/              # Generated C code
-└── docs/                   # Documentation and reports
+├── Tests/                      # Test suites
+└── docs/
+    ├── STATUS.md               # Current state
+    ├── OPTION_A_ROADMAP.md     # Roadmap for formal optimization
+    └── poseidon/               # Poseidon2 documentation
 ```
 
-### Module Organization
+## Example: E-Graph Optimization
 
-| Module | Status | Description |
-|--------|--------|-------------|
-| `AmoLean.Core` | Stable | E-Graph, MatExpr, linear algebra primitives |
-| `AmoLean.Backends` | Stable | C/AVX2 code generation |
-| `AmoLean.Protocols` | Stable | FRI commit phase |
-| `AmoLean.Verification` | Stable | Formal proofs, fuzzing framework |
+```lean
+-- Input expression (unoptimized)
+let expr := Expr.mul (Expr.add (Expr.var 0) (Expr.const 0)) (Expr.const 1)
+-- Represents: (x + 0) * 1
 
-## Quick Start
+-- E-Graph finds equivalent forms and extracts cheapest
+let optimized := saturateAndExtract expr rules
+-- Result: Expr.var 0
+-- Represents: x
 
-### Prerequisites
-
-- [Lean 4](https://leanprover.github.io/lean4/doc/setup.html) (v4.16.0)
-- [Lake](https://github.com/leanprover/lake)
-- GCC with AVX2 support (for generated code)
-
-### Building
-
-```bash
-git clone https://github.com/manuelpuebla/amo-lean.git
-cd amo-lean
-lake build
+-- Generate C code
+let cCode := exprToC optimized
+-- Output: "return x;"
 ```
-
-### Running Differential Fuzzing
-
-```bash
-# Build and run the FRI differential test
-lake build Benchmarks
-cd generated
-gcc -O3 -march=native -o fri_test fri_test.c fri_protocol.c
-./fri_test
-```
-
-## Future Work (zkVM Roadmap)
-
-See [ZKVM_ROADMAP.md](docs/ZKVM_ROADMAP.md) for detailed planning.
-
-| Priority | Component | Time | Description |
-|----------|-----------|------|-------------|
-| #1 Critical | Poseidon Hash | 6-10 weeks | Enables efficient proof recursion |
-| #2 High | CUDA Backend | 3-6 months | 10-100x speedup via GPU |
-| #3 Medium | AVX-512 | 2-3 weeks | 2x incremental CPU speedup |
-| #4 Low | FRI Query Phase | 4-6 weeks | Completes the FRI protocol |
 
 ## Documentation
 
-- [FINAL_REPORT.md](docs/FINAL_REPORT.md) - Complete technical report
-- [ZKVM_ROADMAP.md](docs/ZKVM_ROADMAP.md) - Future work planning
-- [PROJECT_STATUS.md](docs/PROJECT_STATUS.md) - Development history
+- [STATUS.md](docs/STATUS.md) - Current project state
+- [OPTION_A_ROADMAP.md](docs/OPTION_A_ROADMAP.md) - **Roadmap for formal optimization**
+- [poseidon/PROGRESS.md](docs/poseidon/PROGRESS.md) - Implementation history
+
+## Key Design Decisions
+
+1. **Verified rewrite rules**: Every optimization rule is a theorem proven in Lean
+2. **E-Graph for exploration**: Finds all equivalent forms, picks cheapest
+3. **MatExpr for crypto**: Supports matrices, vectors, elemwise ops (for Poseidon2)
+4. **Reference implementations**: FRI and Poseidon2 in pure Lean for testing
+
+## Current Verification Status
+
+| Component | Verified? | Method |
+|-----------|-----------|--------|
+| Rewrite rules | ✅ Proven | Lean theorems (0 sorry) |
+| E-Graph saturation | ✅ Tested | Extensive testing |
+| CodeGen correctness | ⚠️ Empirical | Differential fuzzing |
+| FRI soundness | ⚠️ Empirical | E2E tests + soundness tests |
 
 ## References
 
 1. **egg**: Willsey et al. "egg: Fast and Extensible Equality Saturation" (POPL 2021)
 2. **Fiat-Crypto**: Erbsen et al. "Simple High-Level Code For Cryptographic Arithmetic"
 3. **FRI**: Ben-Sasson et al. "Fast Reed-Solomon Interactive Oracle Proofs of Proximity"
-4. **Poseidon**: Grassi et al. "Poseidon: A New Hash Function for Zero-Knowledge Proof Systems"
-
-## Contributing
-
-Contributions are welcome, especially in these areas:
-- Poseidon hash implementation (Priority #1)
-- CUDA backend development (Priority #2)
-- Additional protocol implementations
+4. **Poseidon2**: Grassi et al. "Poseidon2: A New Hash Function" (2023)
 
 ## License
 
 MIT License - see [LICENSE](LICENSE) for details.
-
-## Acknowledgments
-
-- The Lean 4 community and Mathlib contributors
-- The egg project for equality saturation foundations
-- The Fiat-Crypto team for verified cryptographic code generation methodology

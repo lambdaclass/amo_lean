@@ -1,559 +1,310 @@
-# AMO-Lean: Ruta de Trabajo hacia zkVM
+# AMO-Lean: Roadmap hacia Integración zkVM
 
-## Documento de Planificación Técnica
-
-**Versión**: 1.0
-**Fecha**: Enero 2026
-**Autores**: Equipo AMO-Lean
+**Fecha**: 2026-01-28
+**Versión**: 2.0 (Post-Poseidon)
 
 ---
 
 ## Resumen Ejecutivo
 
-Este documento presenta la planificación detallada para evolucionar AMO-Lean desde su estado actual (compilador FRI verificado) hacia una herramienta capaz de generar primitivos criptográficos optimizados para zkVMs de producción.
+AMO-Lean es un compilador verificado de expresiones matemáticas a código optimizado. El objetivo es que AMO-Lean pueda ser utilizado como componente de una zkVM, tanto para **generación offline de pruebas** como para **verificación en tiempo de ejecución**.
 
-**Priorización basada en impacto para zkVM:**
+### Estado Actual
 
-| Prioridad | Componente | Tiempo | Impacto |
-|-----------|------------|--------|---------|
-| #1 CRÍTICO | Poseidon/Rescue Hash | 6-10 semanas | Habilita recursión eficiente |
-| #2 ALTO | Backend CUDA/GPU | 3-6 meses | 10-100x speedup en proof generation |
-| #3 MEDIO | Variantes AVX-512 | 2-3 semanas | 2x speedup incremental |
-| #4 BAJO | FRI Query Phase | 4-6 semanas | Completa el protocolo |
+| Componente | Estado | Uso en zkVM |
+|------------|--------|-------------|
+| FRI Protocol (Prover + Verifier) | ✅ **Completo** | Verificación de low-degree |
+| Poseidon2 Hash (BN254) | ✅ **Completo** | Merkle commits, Fiat-Shamir |
+| Campo Genérico (`FRIField F`) | ✅ **Completo** | Multi-campo |
+| E-Graph + Saturation | ✅ **Completo** | Optimización de expresiones |
+| CodeGen C/AVX2 | ✅ **Completo** | Prover nativo |
 
----
+### Próximas Fases
 
-## 1. Poseidon2 Hash Integration
-
-> **Documentación detallada**: Ver [docs/poseidon/](poseidon/) para ADRs y progreso.
-
-### 1.1 Contexto y Motivación
-
-AMO-Lean v1.0 maneja solo operaciones **lineales** (add, mul, kron). Poseidon requiere la S-box `x^α`, una operación **no-lineal**. Sin esta extensión, no podemos generar:
-- Merkle trees (commits)
-- Fiat-Shamir completo
-- Recursión de pruebas
-
-**Decisión clave**: Implementar **Poseidon2** (no el original) porque es 2-4x más eficiente.
-
-### 1.2 Desafíos Técnicos Identificados
-
-| Desafío | Solución | ADR |
-|---------|----------|-----|
-| Tipos dependientes en elemwise | Firma `MatExpr m n → MatExpr m n` preserva dimensiones | [ADR-001](poseidon/ADR-001-elemwise.md) |
-| Explosión E-Graph | `elemwise` como barrera opaca, sin expansión | [ADR-001](poseidon/ADR-001-elemwise.md) |
-| Rondas parciales (S-box solo en elemento 0) | Split/Concat de VecExpr existente | [ADR-002](poseidon/ADR-002-partial-rounds.md) |
-| SIMD para rondas parciales | Calcular todo + blend (más eficiente que extract) | [ADR-003](poseidon/ADR-003-codegen-simd.md) |
-
-### 1.3 Plan de Implementación Revisado
-
-```
-┌────────────────────────────────────────────────────────────────┐
-│ Paso 0: Prerrequisitos                                         │
-│ • ZModSIMD con field_mul_avx2                                  │
-│ • pow_chain_5 optimizado (3 multiplicaciones)                  │
-├────────────────────────────────────────────────────────────────┤
-│ Paso 0.5: Especificación Ejecutable (CRÍTICO)                  │
-│ • poseidon2_spec como función PURA en Lean                     │
-│ • Cargar parámetros BN254 (MDS, round constants)               │
-│ • Validar contra test vectors del paper                        │
-│ • Entregable: Referencia ejecutable para fuzzing               │
-├────────────────────────────────────────────────────────────────┤
-│ Paso 1: Extensión del IR                                       │
-│ • ElemOp = pow Nat | custom String                             │
-│ • elemwise : ElemOp → MatExpr α m n → MatExpr α m n            │
-│ • Reglas E-Graph: fusión, constant folding, NO expansión       │
-├────────────────────────────────────────────────────────────────┤
-│ Paso 2: CodeGen                                                │
-│ • S-box escalar: square chain (x→x²→x⁴→x⁵, 3 muls)             │
-│ • S-box AVX2: vectorización paralela                           │
-│ • Patrón split→elemwise→concat detectado → blend SIMD          │
-├────────────────────────────────────────────────────────────────┤
-│ Paso 3: Poseidon2 en MatExpr                                   │
-│ • Full rounds: add_rc → elemwise(pow 5) → mul(MDS)             │
-│ • Partial rounds: split(1) → elemwise → concat → mul(MDS)      │
-│ • Métricas E-Graph para detectar explosión                     │
-├────────────────────────────────────────────────────────────────┤
-│ Paso 4: Verificación                                           │
-│ • Differential fuzzing: poseidon2_spec vs C generado           │
-│ • Benchmark vs HorizenLabs/poseidon2 (Rust)                    │
-│ • Prueba formal: eval(matexpr) = spec                          │
-├────────────────────────────────────────────────────────────────┤
-│ Paso 5: Integración                                            │
-│ • MerkleTree usando Poseidon2                                  │
-│ • Conectar con FRI commits                                     │
-└────────────────────────────────────────────────────────────────┘
-```
-
-### 1.4 Parámetros Target
-
-**Prioridad 1: BN254** (compatible con SNARKs de Ethereum)
-```
-t = 3, α = 5, RF = 8, RP = 56
-```
-
-**Prioridad 2: Goldilocks** (compatible con STARKs de Plonky3)
-```
-t = 12, α = 7, RF = 8, RP = 22
-```
-
-### 1.5 Métricas de Éxito
-
-| Métrica | Target |
-|---------|--------|
-| Throughput | ≥ 1M hashes/segundo (CPU single-thread) |
-| Correctitud | 100% fuzzing pass vs spec |
-| E-Graph | < 10,000 nodos para expresión completa |
-| Sorry count | 0 (o documentados) |
-
-### 1.6 Referencias Bibliográficas
-
-Ver análisis completo en [references/poseidon/notes.md](references/poseidon/notes.md).
-
-Papers críticos:
-- **poseidon2.pdf**: Algoritmo a implementar
-- **security of poseidon.pdf**: Justificación de parámetros
-- **construction lightweight s boxes.pdf**: Propiedades de x^5
+| Prioridad | Fase | Objetivo | Impacto en zkVM |
+|-----------|------|----------|-----------------|
+| **#1** | Optimización de Performance | 10-100x speedup | Provers viables |
+| **#2** | Más Campos y Hashes | Goldilocks, BLAKE3 | Compatibilidad |
+| **#3** | Verificación Formal | Proofs de soundness | Confianza |
+| **#4** | API de Integración | Interfaz para zkVMs | Usabilidad |
 
 ---
 
-## 2. Backend CUDA/GPU
+## Fase 1: Optimización de Performance (Prioridad #1)
 
-### 2.1 Contexto y Motivación
+### 1.1 Backend CUDA/GPU
 
-La industria de ZK se está moviendo hacia proof generation en GPUs:
-- Granjas de GPUs como servicio (proof marketplaces)
-- Paralelismo masivo: miles de hilos vs decenas en CPU
-- Potencial de 10-100x speedup
+**Problema**: BN254/Poseidon2 toma ~113s para degree 4096. Para trazas de zkVM reales (millones de filas), esto es inaceptable.
 
-### 2.2 Desafío Técnico Principal
-
-Las GPUs tienen una jerarquía de memoria diferente:
-
-```
-CPU: RAM ←→ L3 ←→ L2 ←→ L1 ←→ Registros
-
-GPU: Global Memory (lenta, grande)
-         ↕
-     Shared Memory (rápida, pequeña, por bloque)
-         ↕
-     Registers (muy rápida, por hilo)
-```
-
-Nuestro IR actual no modela movimiento de datos entre niveles de memoria.
-
-### 2.3 Plan de Implementación por Fases
-
-#### Fase 2.1: Diseño de GPUExpr IR (Semanas 1-3)
-
-**Objetivo**: Nuevo IR que modela jerarquía de memoria GPU.
+**Solución**: Backend GPU para operaciones masivamente paralelas.
 
 **Entregables**:
+1. `GPUExpr` IR con anotaciones de memoria (global/shared/register)
+2. Lowering de MatExpr → CUDA kernels
+3. Montgomery multiplication optimizada para GPU
+4. Merkle tree paralelo
+
+**Métricas de éxito**:
+| Operación | CPU Actual | GPU Target |
+|-----------|------------|------------|
+| FRI fold (deg 4096) | ~113s | <5s |
+| Merkle tree (1M leaves) | ? | <1s |
+| Poseidon2 batch | ~350 hashes/s | >100K hashes/s |
+
+**Obstáculos técnicos**:
+- Aritmética modular 256-bit en GPU (no tiene instrucciones nativas)
+- Coalesced memory access para Merkle trees
+- Bank conflicts en shared memory
+
+**Referencias**:
+- "Montgomery Multiplication on GPUs" (Emmart et al.)
+- CUDA C Programming Guide, Chapters 5-6
+- Volkov "Better Performance at Lower Occupancy"
+
+### 1.2 AVX-512 Backend
+
+**Para CPUs con soporte AVX-512**: 2x speedup adicional sobre AVX2.
+
+**Entregables**:
+1. Detectar AVX-512 en compilación
+2. 512-bit vector operations
+3. Mask registers para operaciones condicionales
+
+**Beneficio**: Mejora incremental en hardware Intel/AMD moderno.
+
+### 1.3 Paralelización Multi-core
+
+**Problema**: El prover actual es single-threaded.
+
+**Solución**:
+- Merkle tree construction paralelo (cada subárbol independiente)
+- FRI rounds paralelizables por query
+- Poseidon2 batch hashing
+
+**Entregables**:
+1. `async` prover API
+2. Thread pool para Merkle construction
+3. Batch Poseidon2 con paralelismo
+
+---
+
+## Fase 2: Más Campos y Hashes (Prioridad #2)
+
+### 2.1 Campo Goldilocks
+
+**Motivación**: STARKs (Plonky3, RISC0) usan campo Goldilocks (p = 2^64 - 2^32 + 1).
+
+**Estado actual**: Placeholder en `AmoLean/FRI/Fields/Goldilocks.lean`
+
+**Pendiente**:
+1. Obtener parámetros Poseidon2 para Goldilocks (t=12, α=7)
+2. Implementar aritmética de campo optimizada (usa propiedades de p)
+3. Validar contra implementaciones de referencia
+
+**Beneficio**: Compatibilidad con ecosistema STARK.
+
+### 2.2 Hash BLAKE3
+
+**Motivación**: Algunos sistemas usan BLAKE3 en lugar de Poseidon por velocidad.
+
+**Entregables**:
+1. `CryptoHash` instance para BLAKE3
+2. Wrapper sobre implementación C optimizada
+3. Benchmarks comparativos
+
+**Trade-off**: BLAKE3 es más rápido pero no es algebraic-friendly (verificación en-circuit más cara).
+
+### 2.3 Rescue-Prime
+
+**Motivación**: Alternativa a Poseidon usada en algunos sistemas.
+
+**Entregables**:
+1. Especificación ejecutable en Lean
+2. `CryptoHash` instance
+3. Parámetros para BN254 y Goldilocks
+
+---
+
+## Fase 3: Verificación Formal (Prioridad #3)
+
+### 3.1 Soundness del FRI Protocol
+
+**Estado actual**: Tests empíricos (E2E, soundness tests).
+
+**Objetivo**: Pruebas formales en Lean.
+
+**Entregables**:
+1. `theorem fri_soundness`: Si el verifier acepta, el polinomio es low-degree con alta probabilidad
+2. `theorem merkle_binding`: No se puede abrir un commitment a dos valores diferentes
+3. `theorem fiat_shamir_security`: Transcript replay produce mismos challenges
+
+**Dificultad**: Requiere formalizar probabilidad y argument de reducción.
+
+### 3.2 Correctness de CodeGen
+
+**Estado actual**: Differential fuzzing valida output.
+
+**Objetivo**: Prueba de que código C generado preserva semántica.
+
+**Entregables**:
+1. `theorem codegen_correct : ∀ e, eval (exprToC e) = denote e`
+2. Semántica operacional de C subset
+3. Preservación de propiedades aritméticas
+
+### 3.3 Ausencia de Information Leakage
+
+**Objetivo**: Probar que el prover no filtra información del witness.
+
+**Entregables**:
+1. Análisis de flujo de información
+2. `theorem zero_knowledge`: Output del prover es simulable
+
+---
+
+## Fase 4: API de Integración zkVM (Prioridad #4)
+
+### 4.1 Trace Verification Interface
+
+**Caso de uso**: Una zkVM genera una traza de ejecución. AMO-Lean verifica que la traza satisface constraints.
+
+**API propuesta**:
 ```lean
-/-- Niveles de memoria GPU -/
-inductive MemLevel where
-  | global   : MemLevel  -- DDR, alta latencia
-  | shared   : MemLevel  -- Por bloque, baja latencia
-  | register : MemLevel  -- Por hilo
+/-- Constraint system for zkVM trace verification -/
+structure ConstraintSystem (F : Type) [FRIField F] where
+  /-- Number of columns in the trace -/
+  width : Nat
+  /-- Constraints as polynomial equations over trace columns -/
+  constraints : List (TracePolynomial F)
+  /-- Boundary constraints (initial/final values) -/
+  boundaries : List (BoundaryConstraint F)
 
-/-- Expresiones GPU con anotaciones de memoria -/
-inductive GPUExpr where
-  | load   : MemLevel → Address → GPUExpr
-  | store  : MemLevel → Address → GPUExpr → GPUExpr
-  | compute : Kernel → List GPUExpr → GPUExpr
-  | sync   : GPUExpr  -- __syncthreads()
-  | parallel : Nat → Nat → GPUExpr → GPUExpr  -- gridDim, blockDim
+/-- Verify a trace satisfies all constraints -/
+def verifyTrace {F : Type} [FRIField F] [CryptoHash F]
+    (system : ConstraintSystem F)
+    (trace : Array (Array F))  -- rows × columns
+    : IO (VerifyResult F)
 ```
 
-**Obstáculos técnicos**:
-1. **Coalesced memory access**: Accesos a global memory deben ser coalescentes
-   - *Técnica*: Análisis de patrones de acceso en tiempo de compilación
-   - *Bibliografía*: CUDA C Programming Guide, Chapter 5
+### 4.2 Commitment Scheme Interface
 
-2. **Bank conflicts en shared memory**: 32 banks, accesos al mismo bank serializan
-   - *Técnica*: Padding automático de arrays en shared memory
-   - *Bibliografía*: "Optimizing Parallel Reduction in CUDA" (Harris, Nvidia)
+**Caso de uso**: zkVM necesita commitments Merkle con hash específico.
 
-**Testing Fase 2.1**:
-- [ ] Unit tests: GPUExpr bien formado
-- [ ] Análisis estático de coalescing
-- [ ] Simulación de bank conflicts
-
-#### Fase 2.2: Lowering MatExpr → GPUExpr (Semanas 4-7)
-
-**Objetivo**: Transformar operaciones matriciales a kernels GPU.
-
-**Entregables**:
+**API propuesta**:
 ```lean
-/-- Convertir producto Kronecker a kernel paralelo -/
-def lowerKronToGPU (A : MatExpr m n) (B : MatExpr p q) : GPUExpr :=
-  GPUExpr.parallel
-    (gridSize := m * p)
-    (blockSize := 256)
-    (GPUExpr.compute kroneckerKernel [lowerToGPU A, lowerToGPU B])
+/-- Generic polynomial commitment -/
+structure PolyCommitment (F : Type) where
+  root : F
+  degree : Nat
+
+/-- Commit to a polynomial (its evaluations) -/
+def commit {F : Type} [FRIField F] [CryptoHash F]
+    (evaluations : Array F)
+    : IO (PolyCommitment F × MerkleTree F)
+
+/-- Open commitment at specific points -/
+def openAt {F : Type} [FRIField F] [CryptoHash F]
+    (commitment : PolyCommitment F)
+    (tree : MerkleTree F)
+    (indices : List Nat)
+    : IO (List (F × MerkleProof F))
 ```
 
-**Obstáculos técnicos**:
-1. **Tiling para shared memory**: Matrices grandes no caben en shared
-   - *Técnica*: Algoritmos de tiled matrix multiplication
-   - *Bibliografía*: Volkov "Better Performance at Lower Occupancy"
+### 4.3 Prover/Verifier Library
 
-2. **Sincronización entre bloques**: GPU no tiene sync global fácil
-   - *Técnica*: Múltiples kernel launches para fases
-   - *Bibliografía*: "Cooperative Groups" (CUDA 9+)
-
-**Testing Fase 2.2**:
-- [ ] Correctness: GPU result == CPU result
-- [ ] Performance: Medir GFLOPS, memory bandwidth
-- [ ] Occupancy analysis con nvprof
-
-#### Fase 2.3: Generación de CUDA C (Semanas 8-12)
-
-**Objetivo**: Generar código CUDA compilable y eficiente.
+**Caso de uso**: zkVM integra AMO-Lean como biblioteca.
 
 **Entregables**:
-```cuda
-// Código generado por AMO-Lean
-__global__ void fri_fold_kernel(
-    const uint64_t* __restrict__ input,
-    uint64_t* __restrict__ output,
-    uint64_t alpha,
-    size_t n
-) {
-    __shared__ uint64_t shared_input[512];
+1. Header-only C library generada
+2. Rust bindings via FFI
+3. Python bindings para prototipado
+4. Documentación de integración
 
-    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+### 4.4 Runtime vs Offline Mode
 
-    // Coalesced load to shared memory
-    if (idx * 2 + 1 < n * 2) {
-        shared_input[threadIdx.x * 2] = input[idx * 2];
-        shared_input[threadIdx.x * 2 + 1] = input[idx * 2 + 1];
-    }
-    __syncthreads();
+**Offline (Prover)**:
+- Máxima optimización (GPU, paralelo)
+- Puede tomar minutos/horas
+- Genera proof compacto
 
-    // Compute
-    if (idx < n) {
-        output[idx] = shared_input[threadIdx.x * 2]
-                    + alpha * shared_input[threadIdx.x * 2 + 1];
-    }
-}
-```
+**Runtime (Verifier)**:
+- Debe ser rápido (< 1s)
+- Código simple, auditable
+- Puede correr en constrained environments
 
-**Obstáculos técnicos**:
-1. **Aritmética modular en GPU**: GPUs no tienen uint64 mul nativo eficiente
-   - *Técnica*: PTX assembly para umul.wide
-   - *Bibliografía*: "Montgomery Multiplication on GPUs" (Emmart et al.)
-
-2. **Divergencia de warps**: Branches en kernel causan serialización
-   - *Técnica*: Predicación en lugar de branches
-   - *Bibliografía*: CUDA Best Practices Guide
-
-**Testing Fase 2.3**:
-- [ ] Compilación exitosa con nvcc
-- [ ] Correctness vs implementación CPU
-- [ ] Benchmark vs implementaciones estado del arte (bellman, plonky3)
-
-#### Fase 2.4: Optimización y Profiling (Semanas 13-18)
-
-**Objetivo**: Alcanzar performance competitiva con implementaciones manuales.
-
-**Entregables**:
-- Kernels optimizados para Poseidon, FRI fold, Merkle
-- Dashboard de performance
-- Documentación de trade-offs
-
-**Obstáculos técnicos**:
-1. **Memory-bound vs compute-bound**: Diferentes kernels tienen diferentes bottlenecks
-   - *Técnica*: Roofline analysis
-   - *Bibliografía*: Williams et al. "Roofline Model"
-
-2. **Multi-GPU**: Scaling a múltiples GPUs
-   - *Técnica*: NCCL para comunicación
-   - *Bibliografía*: "Scaling Deep Learning on GPU Clusters"
-
-**Testing Fase 2.4**:
-- [ ] Roofline plot para cada kernel
-- [ ] Comparación con prover de referencia (Stone, Plonky3)
-- [ ] Tests de regresión de performance
-
----
-
-## 3. Variantes AVX-512
-
-### 3.1 Contexto y Motivación
-
-AVX-512 ofrece registros de 512 bits (8 doubles o 8 uint64), potencialmente 2x sobre AVX2.
-
-### 3.2 Desafío Técnico Principal
-
-**Thermal throttling**: Muchos CPUs reducen frecuencia 10-20% cuando usan AVX-512 intensivamente.
-
-### 3.3 Plan de Implementación por Fases
-
-#### Fase 3.1: Infraestructura AVX-512 (Semana 1)
-
-**Objetivo**: Detectar soporte y configurar generación condicional.
-
-**Entregables**:
+**API diferenciada**:
 ```lean
-/-- Detectar capacidades SIMD en runtime -/
-structure SIMDCapabilities where
-  hasAVX2 : Bool
-  hasAVX512F : Bool
-  hasAVX512DQ : Bool  -- Double/Quad word
-  hasAVX512IFMA : Bool  -- Integer FMA (para Montgomery)
+/-- Offline prover configuration -/
+structure ProverConfig where
+  useGPU : Bool := true
+  parallelism : Nat := 8
+  optimizationLevel : Nat := 3
 
-/-- Seleccionar backend según capabilities -/
-def selectSIMDBackend (caps : SIMDCapabilities) (kernel : Kernel) : CodeGen :=
-  if caps.hasAVX512IFMA && kernel.needsMontgomery then avx512IFMAGen
-  else if caps.hasAVX512F then avx512Gen
-  else if caps.hasAVX2 then avx2Gen
-  else scalarGen
+/-- Runtime verifier configuration -/
+structure VerifierConfig where
+  /-- Strict mode: reject any anomaly -/
+  strict : Bool := true
+  /-- Log level for debugging -/
+  logLevel : Nat := 0
 ```
-
-**Obstáculos técnicos**:
-1. **Runtime dispatch**: Seleccionar versión óptima en runtime
-   - *Técnica*: Function multi-versioning (GCC/Clang __attribute__((target)))
-   - *Bibliografía*: Intel Architecture Optimization Manual
-
-**Testing Fase 3.1**:
-- [ ] Detección correcta en varios CPUs
-- [ ] Fallback graceful si no hay soporte
-
-#### Fase 3.2: Kernels AVX-512 (Semana 2)
-
-**Objetivo**: Portar kernels existentes a AVX-512.
-
-**Entregables**:
-```c
-// FRI fold con AVX-512
-void fri_fold_avx512(size_t n, const uint64_t* input,
-                     uint64_t* output, uint64_t alpha) {
-    __m512i valpha = _mm512_set1_epi64(alpha);
-
-    for (size_t i = 0; i < n; i += 8) {
-        // Cargar 16 elementos (8 pares)
-        __m512i even = _mm512_loadu_si512(&input[i * 2]);
-        __m512i odd = _mm512_loadu_si512(&input[i * 2 + 8]);
-
-        // Deinterleave
-        __m512i evens = _mm512_unpacklo_epi64(even, odd);
-        __m512i odds = _mm512_unpackhi_epi64(even, odd);
-
-        // output = even + alpha * odd
-        __m512i prod = _mm512_mullo_epi64(valpha, odds);
-        __m512i result = _mm512_add_epi64(evens, prod);
-
-        _mm512_storeu_si512(&output[i], result);
-    }
-}
-```
-
-**Obstáculos técnicos**:
-1. **Alineación 64 bytes**: AVX-512 requiere alineación estricta para loads/stores alineados
-   - *Técnica*: `aligned_alloc(64, size)` o pragmas de alineación
-   - *Bibliografía*: Intel Intrinsics Guide
-
-**Testing Fase 3.2**:
-- [ ] Correctness vs versión escalar
-- [ ] Benchmark vs AVX2
-
-#### Fase 3.3: Cost Model con Thermal Awareness (Semana 3)
-
-**Objetivo**: Decidir cuándo usar AVX-512 considerando throttling.
-
-**Entregables**:
-```lean
-/-- Cost model que considera thermal throttling -/
-structure AVX512CostModel extends CostModel where
-  thermalPenalty : Float := 0.85  -- 15% frequency reduction typical
-  transitionCost : Nat := 1000   -- Cycles para cambiar de modo
-
-/-- Decidir si usar AVX-512 para un kernel -/
-def shouldUseAVX512 (model : AVX512CostModel) (kernel : Kernel) : Bool :=
-  let avx512Cost := kernel.computeCost / 2 * model.thermalPenalty + model.transitionCost
-  let avx2Cost := kernel.computeCost
-  avx512Cost < avx2Cost
-```
-
-**Obstáculos técnicos**:
-1. **Variabilidad entre CPUs**: Throttling varía significativamente
-   - *Técnica*: Benchmarking adaptativo en warmup
-   - *Bibliografía*: Agner Fog "Microarchitecture of Intel/AMD CPUs"
-
-**Testing Fase 3.3**:
-- [ ] Benchmark en varios CPUs (Xeon, desktop)
-- [ ] Verificar que selección automática es óptima
 
 ---
 
-## 4. FRI Query Phase
+## Timeline Estimado
 
-### 4.1 Contexto y Motivación
+| Fase | Componente | Duración | Dependencias |
+|------|------------|----------|--------------|
+| 1.1 | CUDA Backend | 3-4 meses | - |
+| 1.2 | AVX-512 | 2-3 semanas | - |
+| 1.3 | Multi-core | 3-4 semanas | - |
+| 2.1 | Goldilocks | 2-3 semanas | Parámetros externos |
+| 2.2 | BLAKE3 | 1-2 semanas | - |
+| 2.3 | Rescue-Prime | 3-4 semanas | - |
+| 3.1 | FRI Soundness | 2-3 meses | - |
+| 3.2 | CodeGen Correctness | 1-2 meses | - |
+| 4.1 | Trace Verification | 1 mes | - |
+| 4.2 | Commitment API | 2 semanas | - |
+| 4.3 | Library Bindings | 1 mes | - |
 
-La Query Phase verifica la proximidad:
-1. El verificador envía índices aleatorios
-2. El prover responde con valores y Merkle proofs
-3. El verificador chequea consistencia
-
-### 4.2 Desafío Técnico Principal
-
-**Patrón de acceso aleatorio**: A diferencia de Commit (secuencial, vectorizable), Query hace saltos aleatorios en memoria, causando cache misses.
-
-### 4.3 Plan de Implementación por Fases
-
-#### Fase 4.1: Modelado de Query (Semanas 1-2)
-
-**Objetivo**: Definir tipos y operaciones para Query phase.
-
-**Entregables**:
-```lean
-/-- Índices de query (generados por verificador vía Fiat-Shamir) -/
-structure QueryIndices where
-  indices : Array Nat
-  round : Nat
-
-/-- Respuesta del prover -/
-structure QueryResponse where
-  values : Array FieldElement
-  merkleProofs : Array MerkleProof
-  siblingValues : Array FieldElement
-
-/-- Verificar una query -/
-def verifyQuery (commitment : MerkleRoot) (query : QueryIndices)
-    (response : QueryResponse) : Bool :=
-  -- Verificar Merkle proofs
-  response.merkleProofs.all (verifyMerkleProof commitment) &&
-  -- Verificar consistencia de fold
-  verifyFoldConsistency query.indices response.values response.siblingValues
-```
-
-**Obstáculos técnicos**:
-1. **Generación de índices determinística**: Debe ser reproducible
-   - *Técnica*: Derivar de transcript usando squeeze
-   - *Bibliografía*: FRI paper, Section 4
-
-**Testing Fase 4.1**:
-- [ ] Roundtrip: commit → query → verify
-- [ ] Verificar que índices son determinísticos
-
-#### Fase 4.2: Optimización de Merkle Proofs (Semanas 3-4)
-
-**Objetivo**: Minimizar accesos a memoria en verificación.
-
-**Entregables**:
-```lean
-/-- Batch multiple Merkle proofs para amortizar accesos -/
-def batchMerkleProofs (root : MerkleRoot) (indices : Array Nat)
-    (tree : FlatMerkle) : Array MerkleProof :=
-  -- Ordenar índices para localidad de acceso
-  let sortedIndices := indices.qsort (· < ·)
-  -- Extraer proofs compartiendo nodos comunes
-  extractBatchedProofs root sortedIndices tree
-```
-
-**Obstáculos técnicos**:
-1. **Prefetching**: Indicar al CPU qué memoria necesitaremos
-   - *Técnica*: `__builtin_prefetch` basado en patrón de queries
-   - *Bibliografía*: "What Every Programmer Should Know About Memory" (Drepper)
-
-**Testing Fase 4.2**:
-- [ ] Benchmark: batched vs naive
-- [ ] Profile cache misses con perf
-
-#### Fase 4.3: CodeGen para Query (Semanas 5-6)
-
-**Objetivo**: Generar código C optimizado para verificación.
-
-**Entregables**:
-- `generateQueryVerifier : QueryParams → String`
-- Código con prefetching hints
-- Proof anchors para verificación
-
-**Obstáculos técnicos**:
-1. **Branch prediction**: Verificación tiene muchos branches
-   - *Técnica*: Branchless comparisons donde sea posible
-   - *Bibliografía*: "Branch Prediction" (Patterson & Hennessy)
-
-**Testing Fase 4.3**:
-- [ ] Differential fuzzing vs implementación Lean
-- [ ] Benchmark en diferentes tamaños de árbol
+**Total estimado**: 8-12 meses para completar todas las fases.
 
 ---
 
-## Dependencias y Orden de Ejecución
+## Priorización para zkVM
 
-```
-                    ┌─────────────────┐
-                    │   Estado Actual │
-                    │   (FRI Commit)  │
-                    └────────┬────────┘
-                             │
-              ┌──────────────┼──────────────┐
-              ▼              ▼              ▼
-       ┌──────────┐   ┌──────────┐   ┌──────────┐
-       │ AVX-512  │   │ Poseidon │   │  Query   │
-       │ (3 sem)  │   │ (10 sem) │   │ (6 sem)  │
-       └────┬─────┘   └────┬─────┘   └────┬─────┘
-            │              │              │
-            │              ▼              │
-            │       ┌──────────┐          │
-            │       │   CUDA   │          │
-            │       │ (6 meses)│          │
-            │       └────┬─────┘          │
-            │              │              │
-            └──────────────┼──────────────┘
-                           ▼
-                    ┌──────────────┐
-                    │ zkVM-Ready   │
-                    │  AMO-Lean    │
-                    └──────────────┘
-```
+Si el objetivo es **usar AMO-Lean en una zkVM de producción**, recomiendo:
 
-**Camino crítico**: Poseidon → CUDA (máxima duración)
+### Corto plazo (1-2 meses)
+1. **Multi-core parallelization** - Speedup inmediato con bajo esfuerzo
+2. **Trace Verification API** - Interfaz clara para integración
+3. **Goldilocks field** - Compatibilidad con STARKs
 
-**Paralelizable**: AVX-512 y Query pueden desarrollarse en paralelo con Poseidon.
+### Mediano plazo (3-6 meses)
+1. **CUDA backend** - 10-100x speedup para provers
+2. **FRI soundness proofs** - Confianza formal
+
+### Largo plazo (6-12 meses)
+1. **Full formal verification** - Auditable y trustless
+2. **Production library** - Bindings, docs, testing
 
 ---
 
-## Métricas de Éxito
+## Referencias
 
-| Hito | Métrica | Target |
-|------|---------|--------|
-| Poseidon | Throughput | ≥ 1M hashes/segundo (CPU) |
-| AVX-512 | Speedup vs AVX2 | ≥ 1.5x |
-| CUDA | Speedup vs CPU | ≥ 10x |
-| Query | Verificación | < 100ms para árbol de 2^20 hojas |
-| Correctness | Tests | 100% passing, differential fuzzing |
-| Verificación | Sorry count | Mínimo, documentados |
+### Papers Fundamentales
+1. Ben-Sasson et al. "Fast Reed-Solomon Interactive Oracle Proofs of Proximity"
+2. Grassi et al. "Poseidon2: A New Hash Function for Zero-Knowledge Proof Systems"
+3. Willsey et al. "egg: Fast and Extensible Equality Saturation"
 
----
+### Implementaciones de Referencia
+1. [HorizenLabs/poseidon2](https://github.com/HorizenLabs/poseidon2) - Rust
+2. [Plonky3](https://github.com/Plonky3/Plonky3) - Goldilocks STARKs
+3. [RISC0](https://github.com/risc0/risc0) - zkVM usando STARKs
 
-## Bibliografía Completa
-
-### Criptografía ZK
-1. Grassi et al. "Poseidon: A New Hash Function for Zero-Knowledge Proof Systems" (USENIX 2021)
-2. Ben-Sasson et al. "Fast Reed-Solomon Interactive Oracle Proofs of Proximity" (ICALP 2018)
-3. Ames et al. "Ligero: Lightweight Sublinear Arguments Without a Trusted Setup" (CCS 2017)
-
-### Optimización SIMD/GPU
-4. Intel Architecture Optimization Reference Manual
-5. CUDA C Programming Guide (Nvidia)
-6. Harris "Optimizing Parallel Reduction in CUDA"
-7. Volkov "Better Performance at Lower Occupancy"
-8. Emmart et al. "Montgomery Multiplication on GPUs"
-
-### Compiladores y Verificación
-9. Willsey et al. "egg: Fast and Extensible Equality Saturation" (POPL 2021)
-10. Gross et al. "Accelerating Verified-Compiler Development with a Verified Rewriting Engine" (ITP 2022)
-11. Xi & Pfenning "Dependent Types in Practical Programming" (POPL 1999)
-
-### Performance
-12. Drepper "What Every Programmer Should Know About Memory"
-13. Agner Fog "Instruction Tables" y "Microarchitecture"
-14. Williams et al. "Roofline: An Insightful Visual Performance Model"
+### Recursos GPU
+1. CUDA C Programming Guide
+2. "Montgomery Multiplication on GPUs" (Emmart et al.)
+3. Volkov "Better Performance at Lower Occupancy"
 
 ---
 
-*Documento generado: Enero 2026*
-*Próxima revisión: Al completar Fase 1 (Poseidon)*
+*Última actualización: 2026-01-28*

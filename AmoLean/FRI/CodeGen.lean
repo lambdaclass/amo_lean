@@ -257,6 +257,32 @@ def kernelToC (state : CodeGenState) (kernel : Kernel) (gather : Gather) (scatte
     s!"{pad}// Scalar scaling
 {pad}out[{scatterAddr}] = in[{gatherAddr}] * scale_factor;"
 
+  -- Poseidon2 kernels (added in Step 3)
+  -- .sbox: size, exponent (x^α for all elements)
+  | .sbox n alpha =>
+    s!"{pad}// S-box x^{alpha} (size={n})
+{pad}sbox_{n}_{alpha}(&in[{gatherAddr}], &out[{scatterAddr}]);"
+
+  -- .partialSbox: size, exponent, index (x^α only at index)
+  | .partialSbox n alpha idx =>
+    s!"{pad}// Partial S-box x^{alpha} at position {idx} (size={n})
+{pad}partial_sbox_{n}_{alpha}_{idx}(&in[{gatherAddr}], &out[{scatterAddr}]);"
+
+  -- .mdsApply: name, size
+  | .mdsApply name size =>
+    s!"{pad}// MDS matrix apply (name={name}, size={size})
+{pad}mds_{name}(&in[{gatherAddr}], &out[{scatterAddr}]);"
+
+  -- .mdsInternal: size (Poseidon2 internal MDS optimization)
+  | .mdsInternal size =>
+    s!"{pad}// Internal MDS (Poseidon2 optimization, size={size})
+{pad}mds_internal_{size}(&in[{gatherAddr}], &out[{scatterAddr}]);"
+
+  -- .addRoundConst: round, size
+  | .addRoundConst round size =>
+    s!"{pad}// Add round constants (round={round}, size={size})
+{pad}add_round_const_{round}_{size}(&in[{gatherAddr}], &out[{scatterAddr}], round_constants);"
+
 /-! ## Part 8: CryptoSigma Code Generation -/
 
 /-- Generate C code from CryptoSigma -/

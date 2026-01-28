@@ -1,7 +1,8 @@
 # Step 5.3 Migration Plan: Generic Field Type
 
-**Status**: In Progress
+**Status**: Phase 1 COMPLETE, Phase 2 Pending
 **Started**: 2026-01-27
+**Phase 1 Completed**: 2026-01-28
 **Reference**: [ADR-009](../ADR-009-step53-generic-field-migration.md)
 
 ---
@@ -12,12 +13,12 @@ This document tracks the detailed migration plan for converting FRI from `UInt64
 
 ---
 
-## Phase 1: Infrastructure (NEW FILES)
+## Phase 1: Infrastructure (NEW FILES) - COMPLETED
 
 ### 1.1 Extend FRIField Typeclass
 
 **File**: `AmoLean/FRI/Fold.lean`
-**Status**: [ ] Not Started
+**Status**: [x] COMPLETED
 
 Changes:
 ```lean
@@ -33,7 +34,7 @@ class FRIField (F : Type) extends Add F, Sub F, Mul F, Neg F, Inhabited F where
 ### 1.2 Create CryptoHash Typeclass
 
 **File**: `AmoLean/FRI/Hash.lean` (NEW)
-**Status**: [ ] Not Started
+**Status**: [x] COMPLETED
 
 ```lean
 class CryptoHash (F : Type) where
@@ -46,7 +47,7 @@ class CryptoHash (F : Type) where
 ### 1.3 Create BN254 Field Instance
 
 **File**: `AmoLean/FRI/Fields/BN254.lean` (NEW)
-**Status**: [ ] Not Started
+**Status**: [x] COMPLETED
 
 - Define `BN254` structure
 - Implement `FRIField BN254`
@@ -55,7 +56,7 @@ class CryptoHash (F : Type) where
 ### 1.4 Create TestField Instance
 
 **File**: `AmoLean/FRI/Fields/TestField.lean` (NEW)
-**Status**: [ ] Not Started
+**Status**: [x] COMPLETED
 
 - Define `TestField` (wraps `Nat` with small modulus)
 - Implement `FRIField TestField`
@@ -63,7 +64,7 @@ class CryptoHash (F : Type) where
 
 ---
 
-## Phase 2: Migration (MODIFY EXISTING)
+## Phase 2: Migration (MODIFY EXISTING) - PENDING
 
 ### 2.1 Transcript.lean
 
@@ -128,19 +129,19 @@ Already mostly generic. Changes:
 
 - [ ] Update `docs/poseidon/PROGRESS.md`
 - [ ] Update `docs/poseidon/README.md`
-- [ ] Create `docs/poseidon/migration/PHASE1-NOTES.md`
-- [ ] Create `docs/poseidon/migration/PHASE2-NOTES.md`
-- [ ] Create `docs/poseidon/migration/DECISIONS.md`
+- [x] Create `docs/poseidon/migration/PHASE1-NOTES.md`
+- [x] Create `docs/poseidon/migration/PHASE2-NOTES.md`
+- [x] Create `docs/poseidon/migration/DECISIONS.md`
 
 ---
 
 ## Verification Checklist
 
 ### Phase 1 Complete When:
-- [ ] `lake build` succeeds with new files
-- [ ] BN254 field arithmetic correct (basic tests)
-- [ ] TestField arithmetic correct (basic tests)
-- [ ] CryptoHash instances work in isolation
+- [x] `lake build` succeeds with new files
+- [x] BN254 field arithmetic correct (basic tests)
+- [x] TestField arithmetic correct (basic tests)
+- [x] CryptoHash instances work in isolation
 
 ### Phase 2 Complete When:
 - [ ] Transcript compiles with generic F
@@ -177,4 +178,5 @@ All commits are incremental. Each phase can be reverted independently.
 
 ---
 
-*Last updated: 2026-01-27*
+*Last updated: 2026-01-28*
+*Phase 1 Status: COMPLETED*

@@ -27,15 +27,18 @@
 
 import AmoLean.FRI.Basic
 import AmoLean.FRI.Fold
+import AmoLean.FRI.Hash
 import AmoLean.FRI.Transcript
 import AmoLean.FRI.Merkle
 import AmoLean.FRI.Kernel
+import AmoLean.FRI.Fields.TestField
 import AmoLean.Matrix.Basic
 
 namespace AmoLean.FRI.Protocol
 
 open AmoLean.FRI (ZKCostModel defaultZKCost FRIParams FieldConfig)
 open AmoLean.FRI.Fold (FRIField friFold)
+open AmoLean.FRI.Hash (CryptoHash)
 open AmoLean.FRI.Transcript (TranscriptState Intrinsic CryptoSigma DomainTag)
 open AmoLean.FRI.Transcript (absorb squeeze enterDomain exitDomain nextRound absorbCommitment)
 open AmoLean.FRI.Merkle (FlatMerkle MerkleProof buildTreeSigma generateAccessTrace)
@@ -43,6 +46,7 @@ open AmoLean.FRI.Kernel (FRILayerKernel lowerToSigma)
 open AmoLean.Sigma (Gather Scatter LoopVar IdxExpr Kernel SigmaExpr)
 open AmoLean.Matrix (MatExpr)
 open AmoLean.Vector (Vec)
+open AmoLean.FRI.Fields.TestField (TestField)
 
 /-! ## Part 1: Protocol State Definition -/
 
@@ -95,26 +99,30 @@ end PolyExpr
 
     The state is semantic: it knows about the polynomial being processed,
     not just raw data.
+
+    Phase 2.2: Parametrized over field type F.
 -/
-structure RoundState where
+structure RoundState (F : Type) where
   /-- Current polynomial (symbolic) -/
   poly : PolyExpr
   /-- Current domain size (N) -/
   domain : Nat
   /-- Transcript state (Fiat-Shamir) -/
-  transcript : TranscriptState
+  transcript : TranscriptState F
   /-- Round number (0-indexed) -/
   round : Nat
   /-- Merkle commitment of current layer (after commit phase) -/
-  commitment : Option UInt64
+  commitment : Option F
   /-- Challenge α for folding (after squeeze phase) -/
-  challenge : Option UInt64
+  challenge : Option F
   deriving Repr
 
 namespace RoundState
 
+variable {F : Type}
+
 /-- Create initial state for FRI protocol -/
-def init (initialDegree : Nat) (blowup : Nat := 2) : RoundState :=
+def init (initialDegree : Nat) (blowup : Nat := 2) : RoundState F :=
   let domain := initialDegree * blowup
   { poly := .initial initialDegree
     domain := domain
@@ -124,17 +132,17 @@ def init (initialDegree : Nat) (blowup : Nat := 2) : RoundState :=
     challenge := none }
 
 /-- Check if we've reached the final round -/
-def isFinal (s : RoundState) : Bool :=
+def isFinal (s : RoundState F) : Bool :=
   s.domain <= 1
 
 /-- Get the number of fold operations in this round -/
-def foldCount (s : RoundState) : Nat :=
+def foldCount (s : RoundState F) : Nat :=
   s.domain / 2
 
-def toString (s : RoundState) : String :=
+def toString [FRIField F] (s : RoundState F) : String :=
   s!"RoundState(round={s.round}, domain={s.domain}, poly={s.poly})"
 
-instance : ToString RoundState := ⟨RoundState.toString⟩
+instance [FRIField F] : ToString (RoundState F) := ⟨RoundState.toString⟩
 
 end RoundState
 
@@ -145,13 +153,15 @@ end RoundState
     Input: Current polynomial evaluations (implicit in domain size)
     Output: Merkle root commitment
     CryptoSigma: Tree construction intrinsics
+
+    Phase 2.2: Returns F instead of UInt64.
 -/
-def commitPhase (state : RoundState) : CryptoSigma × UInt64 :=
+def commitPhase {F : Type} [FRIField F] (state : RoundState F) : CryptoSigma × F :=
   -- Generate Merkle tree construction IR
   let treeSigma := buildTreeSigma state.domain
 
   -- Simulate commitment (in real impl, this would be computed)
-  let simulatedRoot : UInt64 := UInt64.ofNat (state.domain * 0x9e3779b9 + state.round)
+  let simulatedRoot : F := FRIField.ofNat (state.domain * 0x9e3779b9 + state.round)
 
   (treeSigma, simulatedRoot)
 
@@ -160,8 +170,11 @@ def commitPhase (state : RoundState) : CryptoSigma × UInt64 :=
     Input: Merkle root, current transcript
     Output: Updated transcript
     CryptoSigma: Absorb intrinsic
+
+    Phase 2.2: Uses generic F for commitment.
 -/
-def absorbPhase (state : RoundState) (commitment : UInt64) : CryptoSigma × TranscriptState :=
+def absorbPhase {F : Type} (state : RoundState F) (commitment : F) :
+    CryptoSigma × TranscriptState F :=
   let dummyGather := Gather.contiguous 1 (.const 0)
   let dummyScatter := Scatter.contiguous 1 (.const 0)
 
@@ -178,8 +191,11 @@ def absorbPhase (state : RoundState) (commitment : UInt64) : CryptoSigma × Tran
     Input: Current transcript
     Output: Challenge α, updated transcript
     CryptoSigma: Squeeze intrinsic (BARRIER)
+
+    Phase 2.2: Now requires [FRIField F] [CryptoHash F] constraints.
 -/
-def squeezePhase (transcript : TranscriptState) : CryptoSigma × UInt64 × TranscriptState :=
+def squeezePhase {F : Type} [FRIField F] [CryptoHash F] (transcript : TranscriptState F) :
+    CryptoSigma × F × TranscriptState F :=
   let dummyGather := Gather.contiguous 1 (.const 0)
   let dummyScatter := Scatter.contiguous 1 (.const 0)
 
@@ -200,8 +216,10 @@ def squeezePhase (transcript : TranscriptState) : CryptoSigma × UInt64 × Trans
     CryptoSigma: FRI fold loop
 
     The fold operation: out[i] = in[2i] + α * in[2i+1]
+
+    Phase 2.2: alpha is now generic F, state is RoundState F.
 -/
-def foldPhase (state : RoundState) (alpha : UInt64) : CryptoSigma × PolyExpr :=
+def foldPhase {F : Type} (state : RoundState F) (alpha : F) : CryptoSigma × PolyExpr :=
   let n := state.domain / 2  -- Output size
 
   -- Generate fold IR using FRI kernel
@@ -227,10 +245,12 @@ where
 
 /-! ## Part 3: Complete Round Transition -/
 
-/-- Output of a single FRI round -/
-structure RoundOutput where
+/-- Output of a single FRI round.
+    Phase 2.2: Parametrized over field type F.
+-/
+structure RoundOutput (F : Type) where
   /-- New state after the round -/
-  nextState : RoundState
+  nextState : RoundState F
   /-- Combined IR for the entire round -/
   sigma : CryptoSigma
   /-- Phases executed (for debugging) -/
@@ -261,8 +281,10 @@ structure RoundOutput where
         )
       )
     )
+
+    Phase 2.2: Requires [FRIField F] [CryptoHash F] for squeeze operation.
 -/
-def friRound (state : RoundState) : RoundOutput :=
+def friRound {F : Type} [FRIField F] [CryptoHash F] (state : RoundState F) : RoundOutput F :=
   let dummyGather := Gather.contiguous 1 (.const 0)
   let dummyScatter := Scatter.contiguous 1 (.const 0)
 
@@ -293,7 +315,7 @@ def friRound (state : RoundState) : RoundOutput :=
             (.seq foldSigma domainExitSigma))))
 
   -- Create next state
-  let nextState : RoundState := {
+  let nextState : RoundState F := {
     poly := foldedPoly
     domain := state.domain / 2
     transcript := nextRound transcriptAfterSqueeze
@@ -308,22 +330,28 @@ def friRound (state : RoundState) : RoundOutput :=
 
 /-! ## Part 4: Multi-Round Protocol Execution -/
 
-/-- Execute multiple FRI rounds until reaching minimum domain size -/
-partial def runFRIRounds (state : RoundState) (maxRounds : Nat) (acc : List RoundOutput) :
-    List RoundOutput × RoundState :=
+/-- Execute multiple FRI rounds until reaching minimum domain size.
+    Phase 2.2: Requires [FRIField F] [CryptoHash F] constraints.
+-/
+partial def runFRIRounds {F : Type} [FRIField F] [CryptoHash F]
+    (state : RoundState F) (maxRounds : Nat) (acc : List (RoundOutput F)) :
+    List (RoundOutput F) × RoundState F :=
   if state.isFinal || acc.length >= maxRounds then
     (acc.reverse, state)
   else
     let output := friRound state
     runFRIRounds output.nextState maxRounds (output :: acc)
 
-/-- Complete FRI commit phase (all rounds) -/
-def friCommitPhase (initialDegree : Nat) (numRounds : Nat) : List RoundOutput × RoundState :=
-  let initialState := RoundState.init initialDegree
+/-- Complete FRI commit phase (all rounds).
+    Phase 2.2: Requires [FRIField F] [CryptoHash F] constraints.
+-/
+def friCommitPhase {F : Type} [FRIField F] [CryptoHash F]
+    (initialDegree : Nat) (numRounds : Nat) : List (RoundOutput F) × RoundState F :=
+  let initialState : RoundState F := RoundState.init initialDegree
   runFRIRounds initialState numRounds []
 
 /-- Combine all round sigmas into single IR -/
-def combineRoundSigmas (outputs : List RoundOutput) : CryptoSigma :=
+def combineRoundSigmas {F : Type} (outputs : List (RoundOutput F)) : CryptoSigma :=
   outputs.foldl (fun acc out => CryptoSigma.seq acc out.sigma) CryptoSigma.nop
 
 /-! ## Part 5: Protocol Analysis -/
@@ -341,15 +369,19 @@ def analyzeFlow (sigma : CryptoSigma) : List String :=
     | .merkleHash => "⊕ MERKLE_HASH"
     | .barrier => "| BARRIER"
 
-/-- Pretty print the protocol flow -/
-def printFlow (outputs : List RoundOutput) : IO Unit := do
+/-- Pretty print the protocol flow.
+    Phase 2.2: Uses FRIField.toNat to display field elements.
+-/
+def printFlow {F : Type} [FRIField F] (outputs : List (RoundOutput F)) : IO Unit := do
   IO.println "FRI Protocol Flow:"
   IO.println "=================="
   for (i, out) in outputs.enum do
     IO.println s!"\n--- Round {i} ---"
     IO.println s!"State: domain={out.nextState.domain}, poly={out.nextState.poly}"
-    IO.println s!"Commitment: {out.nextState.commitment.getD 0}"
-    IO.println s!"Challenge α: {out.nextState.challenge.getD 0}"
+    let commitNat := out.nextState.commitment.map FRIField.toNat |>.getD 0
+    let challengeNat := out.nextState.challenge.map FRIField.toNat |>.getD 0
+    IO.println s!"Commitment: {commitNat}"
+    IO.println s!"Challenge α: {challengeNat}"
     IO.println "Phases:"
     for phase in out.phases do
       IO.println s!"  • {phase}"
@@ -383,14 +415,16 @@ def protocolCost (cm : ZKCostModel) (initialDomain : Nat) (numRounds : Nat) : Na
 
 section Tests
 
+-- Phase 2.2: Tests now use TestField for fast execution
+
 /-- Test 1: Single round execution -/
 def testSingleRound : IO Unit := do
   IO.println "╔══════════════════════════════════════════════════════════════╗"
-  IO.println "║       FRI SINGLE ROUND TEST (N = 16)                         ║"
+  IO.println "║       FRI SINGLE ROUND TEST (N = 16) - Phase 2.2 TestField   ║"
   IO.println "╚══════════════════════════════════════════════════════════════╝"
   IO.println ""
 
-  let initialState := RoundState.init 8 2  -- degree=8, blowup=2 → domain=16
+  let initialState : RoundState TestField := RoundState.init 8 2  -- degree=8, blowup=2 → domain=16
   IO.println s!"Initial state: {initialState}"
 
   let output := friRound initialState
@@ -406,11 +440,12 @@ def testSingleRound : IO Unit := do
 /-- Test 2: Two-round protocol (N=16) -/
 def testTwoRounds : IO Unit := do
   IO.println "\n╔══════════════════════════════════════════════════════════════╗"
-  IO.println "║       FRI TWO-ROUND TEST (N = 16)                            ║"
+  IO.println "║       FRI TWO-ROUND TEST (N = 16) - Phase 2.2 TestField      ║"
   IO.println "╚══════════════════════════════════════════════════════════════╝"
   IO.println ""
 
-  let (outputs, finalState) := friCommitPhase 8 2  -- 2 rounds
+  let (outputs, finalState) : List (RoundOutput TestField) × RoundState TestField :=
+    friCommitPhase 8 2  -- 2 rounds
 
   IO.println s!"Executed {outputs.length} rounds"
   IO.println s!"Final state: domain={finalState.domain}, round={finalState.round}"
@@ -433,11 +468,12 @@ def testTwoRounds : IO Unit := do
 /-- Test 3: Verify flow pattern -/
 def testFlowPattern : IO Unit := do
   IO.println "\n╔══════════════════════════════════════════════════════════════╗"
-  IO.println "║       FRI FLOW PATTERN VERIFICATION                          ║"
+  IO.println "║       FRI FLOW PATTERN VERIFICATION - Phase 2.2 TestField    ║"
   IO.println "╚══════════════════════════════════════════════════════════════╝"
   IO.println ""
 
-  let (outputs, _) := friCommitPhase 8 3  -- 3 rounds
+  let (outputs, _) : List (RoundOutput TestField) × RoundState TestField :=
+    friCommitPhase 8 3  -- 3 rounds
   let combined := combineRoundSigmas outputs
 
   IO.println "Expected pattern per round:"
