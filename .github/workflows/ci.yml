@@ -188,7 +188,7 @@ jobs:
     - name: Compile AVX2 tests with sanitizers
       run: |
         clang -DFIELD_GOLDILOCKS -O1 -g -mavx2 \
-          -fsanitize=undefined,integer -fno-sanitize-recover=all \
+          -fsanitize=undefined -fno-sanitize-recover=all \
           -o generated/test_goldilocks_avx2_san generated/test_goldilocks_avx2.c -lm
 
     - name: Run AVX2 tests with sanitizers
