@@ -1,6 +1,6 @@
-# AMO-Lean Option A: Optimización Formal
+# AMO-Lean: Automatic Mathematical Optimizer
 
-**AMO-Lean Option A es un compilador optimizador formal.**
+**AMO-Lean es un optimizador formal escrito en Lean.**
 
 ```
 Spec Matemática  →  E-Graph Saturation  →  Código C Optimizado
@@ -15,7 +15,7 @@ Spec Matemática  →  E-Graph Saturation  →  Código C Optimizado
 |------|-------------|--------|
 | 0 | Proof of Concept | ✅ COMPLETADA |
 | 1 | Goldilocks Field | ✅ COMPLETADA |
-| 2 | Reglas de Optimización | 🔄 EN CURSO |
+| 2 | Reglas de Optimización | 🔄 SIGUIENTE |
 | 3 | CodeGen SIMD | ⏳ Pendiente |
 | 4 | API Producción | ⏳ Pendiente |
 
@@ -25,18 +25,11 @@ Spec Matemática  →  E-Graph Saturation  →  Código C Optimizado
 
 | Documento | Propósito |
 |-----------|-----------|
-| **[ROADMAP.md](ROADMAP.md)** | **Plan oficial y único** - fases, entregables, criterios de éxito |
+| **[ROADMAP.md](ROADMAP.md)** | **Plan oficial** - fases, entregables, criterios de éxito |
 | [DESIGN_DECISIONS.md](DESIGN_DECISIONS.md) | Decisiones técnicas (DD-001 a DD-006) |
 | [PROGRESS.md](PROGRESS.md) | Log de trabajo completado |
 | [BENCHMARKS.md](BENCHMARKS.md) | Resultados de rendimiento |
-| [TESTING_ANALYSIS.md](TESTING_ANALYSIS.md) | Análisis de testing y cobertura |
-
----
-
-## Regla de Oro
-
-> **ROADMAP.md es el documento autoritativo.**
-> Si hay conflicto entre documentos, el ROADMAP tiene precedencia.
+| [TESTING_ANALYSIS.md](TESTING_ANALYSIS.md) | Análisis de testing |
 
 ---
 
@@ -47,17 +40,8 @@ Spec Matemática  →  E-Graph Saturation  →  Código C Optimizado
 | Tests | 98/98 pass |
 | Speedup Lean→C | 32.3x |
 | Goldilocks throughput | 568 M elem/s |
-| Fases completadas | 2/4 |
+| Fases completadas | 2 de 4 |
 
 ---
 
-## Cómo Contribuir
-
-1. Leer [ROADMAP.md](ROADMAP.md) para entender el plan actual
-2. Ver [PROGRESS.md](PROGRESS.md) para trabajo en curso
-3. Documentar decisiones en [DESIGN_DECISIONS.md](DESIGN_DECISIONS.md)
-4. Registrar benchmarks en [BENCHMARKS.md](BENCHMARKS.md)
-
----
-
-*AMO-Lean Option A: Optimización Formal de Primitivos Criptográficos*
+*AMO-Lean: Automatic Mathematical Optimizer in Lean*

@@ -1,12 +1,25 @@
 # AMO-Lean: Documentación
 
-## Estructura
+## Qué es AMO-Lean
+
+**AMO-Lean** = *Automatic Mathematical Optimizer in Lean*
+
+Un optimizador formal que toma especificaciones matemáticas y genera código C optimizado con garantías de corrección.
+
+```
+Spec Matemática  →  E-Graph Saturation  →  Código C Optimizado
+  (MatExpr)          (reglas verificadas)   (correcto por construcción)
+```
+
+---
+
+## Estructura de Documentación
 
 ```
 docs/
 ├── README.md                    # Este archivo
-├── option-a/                    # ← DOCUMENTACIÓN PRINCIPAL
-│   ├── README.md               # Overview
+├── project/                     # ← DOCUMENTACIÓN PRINCIPAL
+│   ├── README.md               # Overview del proyecto
 │   ├── ROADMAP.md              # ** ROADMAP OFICIAL **
 │   ├── DESIGN_DECISIONS.md     # Decisiones técnicas
 │   ├── PROGRESS.md             # Log de progreso
@@ -14,39 +27,40 @@ docs/
 │   └── TESTING_ANALYSIS.md     # Análisis de testing
 ├── archive/                     # Documentación obsoleta (no usar)
 ├── references/                  # Material de referencia
-└── poseidon/                    # Documentación específica de Poseidon
+└── poseidon/                    # Docs de Poseidon (caso de prueba)
 ```
 
 ---
 
-## Option A: Optimización Formal
-
-**AMO-Lean Option A es un compilador optimizador formal.**
-
-Para toda la documentación de Option A, ver:
-- **[option-a/README.md](option-a/README.md)** - Punto de entrada
-- **[option-a/ROADMAP.md](option-a/ROADMAP.md)** - Plan oficial
-
----
-
-## Otros Documentos
+## Documentación Principal
 
 | Documento | Propósito |
 |-----------|-----------|
-| [STATUS.md](STATUS.md) | Estado general del proyecto |
-| [ZKVM_ROADMAP.md](ZKVM_ROADMAP.md) | Roadmap hacia zkVM (contexto general) |
-| [poseidon/](poseidon/) | Documentación específica de Poseidon2 |
+| **[project/ROADMAP.md](project/ROADMAP.md)** | **Plan oficial** - fases, entregables, criterios |
+| [project/README.md](project/README.md) | Overview y estado actual |
+| [project/DESIGN_DECISIONS.md](project/DESIGN_DECISIONS.md) | Decisiones técnicas |
+| [project/PROGRESS.md](project/PROGRESS.md) | Log de trabajo completado |
+| [project/BENCHMARKS.md](project/BENCHMARKS.md) | Resultados de rendimiento |
+
+---
+
+## Material de Referencia
+
+| Documento | Propósito |
+|-----------|-----------|
+| [poseidon/](poseidon/) | Documentación de Poseidon2 (caso de prueba) |
 | [references/](references/) | Papers y notas de referencia |
+| [LEGACY_STATUS.md](LEGACY_STATUS.md) | Estado histórico (contexto) |
 
 ---
 
 ## Nota Importante
 
-> **El roadmap autoritativo para Option A está en `option-a/ROADMAP.md`.**
+> **El roadmap oficial está en `project/ROADMAP.md`.**
 >
-> No hay otros roadmaps válidos. La carpeta `archive/` contiene documentos
-> obsoletos que causaron confusión anteriormente.
+> La carpeta `archive/` contiene documentos obsoletos que causaron
+> confusión anteriormente (múltiples roadmaps, "Option A", etc.)
 
 ---
 
-*AMO-Lean Documentation*
+*AMO-Lean: Automatic Mathematical Optimizer in Lean*
