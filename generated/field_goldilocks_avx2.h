@@ -307,20 +307,46 @@ static inline __m256i goldilocks_avx2_reduce128(__m256i hi, __m256i lo) {
 
 /**
  * Vector addition: (a + b) mod p (element-wise)
+ *
+ * Must handle two cases:
+ * 1. No overflow: if sum >= P, subtract P
+ * 2. Overflow (sum wrapped): add EPSILON (since 2^64 ≡ EPSILON mod P)
+ *
+ * When a + b overflows 64 bits, the result after adding EPSILON is
+ * guaranteed to be < P (proven: sum + EPSILON < P when overflow occurs).
  */
 static inline __m256i goldilocks_avx2_add(__m256i a, __m256i b) {
     const __m256i P_VEC = goldilocks_avx2_p();
+    const __m256i EPSILON_VEC = goldilocks_avx2_epsilon();
 
     __m256i sum = _mm256_add_epi64(a, b);
 
-    /* If sum >= P, subtract P */
-    /* For sum >= P: (sum > P-1) or equivalently check if subtraction doesn't underflow */
-    __m256i reduced = _mm256_sub_epi64(sum, P_VEC);
+    /*
+     * Check for overflow: sum < a means overflow occurred (unsigned)
+     * This works because if a + b >= 2^64, then sum = a + b - 2^64 < a
+     */
+    __m256i overflow_mask = goldilocks_avx2_cmplt_epu64(sum, a);
 
-    /* CRITICAL: Must use unsigned comparison! */
-    /* If sum < P, use sum; otherwise use reduced */
-    __m256i mask = goldilocks_avx2_cmpgt_epu64(P_VEC, sum);
-    return _mm256_blendv_epi8(reduced, sum, mask);
+    /*
+     * Handle overflow: add EPSILON
+     * When overflow occurs: result = sum + EPSILON = a + b - 2^64 + EPSILON
+     *                              = a + b - P (since 2^64 - EPSILON = P)
+     * This result is guaranteed < P, so no further reduction needed.
+     */
+    __m256i overflow_correction = _mm256_and_si256(overflow_mask, EPSILON_VEC);
+    __m256i sum_corrected = _mm256_add_epi64(sum, overflow_correction);
+
+    /*
+     * Handle no-overflow case: if sum >= P, subtract P
+     * Only apply this when no overflow occurred.
+     */
+    __m256i reduced = _mm256_sub_epi64(sum_corrected, P_VEC);
+
+    /* Check if sum_corrected >= P (only matters when no overflow) */
+    __m256i ge_p_mask = goldilocks_avx2_cmplt_epu64(sum_corrected, P_VEC);
+
+    /* If sum_corrected < P, use sum_corrected; else use reduced */
+    return _mm256_blendv_epi8(reduced, sum_corrected, ge_p_mask);
 }
 
 /**
