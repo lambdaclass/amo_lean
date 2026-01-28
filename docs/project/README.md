@@ -15,8 +15,8 @@ Spec Matemática  →  E-Graph Saturation  →  Código C Optimizado
 |------|-------------|--------|
 | 0 | Proof of Concept | ✅ COMPLETADA |
 | 1 | Goldilocks Field | ✅ COMPLETADA |
-| 2 | Reglas de Optimización | 🔄 SIGUIENTE |
-| 3 | CodeGen SIMD | ⏳ Pendiente |
+| 2 | Reglas de Optimización | ✅ COMPLETADA |
+| 3 | CodeGen SIMD | 🔄 SIGUIENTE |
 | 4 | API Producción | ⏳ Pendiente |
 
 ---
@@ -37,10 +37,11 @@ Spec Matemática  →  E-Graph Saturation  →  Código C Optimizado
 
 | Métrica | Valor |
 |---------|-------|
-| Tests | 98/98 pass |
+| Tests | 120/120 pass |
 | Speedup Lean→C | 32.3x |
 | Goldilocks throughput | 568 M elem/s |
-| Fases completadas | 2 de 4 |
+| **Optimization reduction** | **91.67%** |
+| Fases completadas | 3 de 4 |
 
 ---
 

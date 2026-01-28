@@ -12,10 +12,10 @@ lean_lib «AmoLean» where
   roots := #[`AmoLean]
 
 lean_lib «Benchmarks» where
-  roots := #[`Benchmarks.FRI_DiffTest, `Benchmarks.Phase0.FriFold]
+  roots := #[`Benchmarks.FRI_DiffTest, `Benchmarks.Phase0.FriFold, `Benchmarks.Phase2.Optimization]
 
 lean_lib «Tests» where
-  roots := #[`Tests.MigrationRegression, `Tests.AbstractionBenchmark, `Tests.FullStackCheck, `Tests.InfrastructureSanity, `Tests.ExtendedBenchmark, `Tests.E2EProverVerifier, `Tests.Phase3Audit, `Tests.Safety.CodeGenChecks, `Tests.Oracle.FriFoldOracle]
+  roots := #[`Tests.MigrationRegression, `Tests.AbstractionBenchmark, `Tests.FullStackCheck, `Tests.InfrastructureSanity, `Tests.ExtendedBenchmark, `Tests.E2EProverVerifier, `Tests.Phase3Audit, `Tests.Safety.CodeGenChecks, `Tests.Oracle.FriFoldOracle, `Tests.Optimization.QABenchmark]
 
 -- Phase 0 test executables
 lean_exe «safety-checks» where
