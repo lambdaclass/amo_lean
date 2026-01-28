@@ -72,6 +72,34 @@ static inline __m256i goldilocks_avx2_one(void) {
     return _mm256_set1_epi64x(1);
 }
 
+/** Sign bit mask for unsigned comparison trick */
+static inline __m256i goldilocks_avx2_sign_bit(void) {
+    return _mm256_set1_epi64x((int64_t)0x8000000000000000ULL);
+}
+
+/**
+ * Unsigned 64-bit comparison: a < b (element-wise)
+ *
+ * AVX2 only has signed comparison, so we flip the sign bit of both
+ * operands to convert unsigned comparison to signed.
+ */
+static inline __m256i goldilocks_avx2_cmplt_epu64(__m256i a, __m256i b) {
+    __m256i sign_bit = goldilocks_avx2_sign_bit();
+    __m256i a_flipped = _mm256_xor_si256(a, sign_bit);
+    __m256i b_flipped = _mm256_xor_si256(b, sign_bit);
+    return _mm256_cmpgt_epi64(b_flipped, a_flipped);
+}
+
+/**
+ * Unsigned 64-bit comparison: a > b (element-wise)
+ */
+static inline __m256i goldilocks_avx2_cmpgt_epu64(__m256i a, __m256i b) {
+    __m256i sign_bit = goldilocks_avx2_sign_bit();
+    __m256i a_flipped = _mm256_xor_si256(a, sign_bit);
+    __m256i b_flipped = _mm256_xor_si256(b, sign_bit);
+    return _mm256_cmpgt_epi64(a_flipped, b_flipped);
+}
+
 /*===========================================================================
  * Helper Functions (Internal)
  *===========================================================================*/
@@ -222,14 +250,13 @@ static inline __m256i goldilocks_avx2_reduce128(__m256i hi, __m256i lo) {
      * Step 2: t0 = lo - hi_hi (with wraparound)
      *
      * If lo < hi_hi, we need to add P to compensate.
-     * Use comparison to create a mask.
+     * Use UNSIGNED comparison to create a mask.
      */
     __m256i t0 = _mm256_sub_epi64(lo, hi_hi);
 
     /* Check for borrow: lo < hi_hi means we need to add P */
-    /* Note: _mm256_cmpgt_epi64 does signed comparison, but for our range it's OK */
-    /* For correctness with unsigned, we use a different technique */
-    __m256i borrow_mask = _mm256_cmpgt_epi64(hi_hi, lo);
+    /* CRITICAL: Must use unsigned comparison for correctness! */
+    __m256i borrow_mask = goldilocks_avx2_cmpgt_epu64(hi_hi, lo);
 
     /* Add P where borrow occurred */
     __m256i correction = _mm256_and_si256(borrow_mask, P_VEC);
@@ -252,9 +279,10 @@ static inline __m256i goldilocks_avx2_reduce128(__m256i hi, __m256i lo) {
     /*
      * Step 5: Check for overflow and reduce again if needed
      *
-     * If result < t0 (overflow), we add EPSILON (since 2^64 ≡ EPSILON).
+     * If result < t0 (overflow occurred), we add EPSILON (since 2^64 ≡ EPSILON).
+     * CRITICAL: Must use unsigned comparison!
      */
-    __m256i overflow_mask = _mm256_cmpgt_epi64(t0, result);
+    __m256i overflow_mask = goldilocks_avx2_cmpgt_epu64(t0, result);
     __m256i overflow_correction = _mm256_and_si256(overflow_mask, EPSILON_VEC);
     result = _mm256_add_epi64(result, overflow_correction);
 
@@ -263,8 +291,9 @@ static inline __m256i goldilocks_avx2_reduce128(__m256i hi, __m256i lo) {
      *
      * Note: For performance, we often skip this step and work with
      * non-canonical representatives. Add this only if canonical form is required.
+     * CRITICAL: Must use unsigned comparison!
      */
-    __m256i ge_p_mask = _mm256_cmpgt_epi64(result, _mm256_sub_epi64(P_VEC, goldilocks_avx2_one()));
+    __m256i ge_p_mask = goldilocks_avx2_cmpgt_epu64(result, _mm256_sub_epi64(P_VEC, goldilocks_avx2_one()));
     /* Equivalent to: result >= P */
     __m256i final_correction = _mm256_and_si256(ge_p_mask, P_VEC);
     result = _mm256_sub_epi64(result, final_correction);
@@ -288,9 +317,9 @@ static inline __m256i goldilocks_avx2_add(__m256i a, __m256i b) {
     /* For sum >= P: (sum > P-1) or equivalently check if subtraction doesn't underflow */
     __m256i reduced = _mm256_sub_epi64(sum, P_VEC);
 
-    /* Use the sign bit of the original subtraction to select */
-    /* If sum < P, reduced will have "borrowed" (be very large), so use sum */
-    __m256i mask = _mm256_cmpgt_epi64(P_VEC, sum);
+    /* CRITICAL: Must use unsigned comparison! */
+    /* If sum < P, use sum; otherwise use reduced */
+    __m256i mask = goldilocks_avx2_cmpgt_epu64(P_VEC, sum);
     return _mm256_blendv_epi8(reduced, sum, mask);
 }
 
@@ -303,7 +332,8 @@ static inline __m256i goldilocks_avx2_sub(__m256i a, __m256i b) {
     __m256i diff = _mm256_sub_epi64(a, b);
 
     /* If a < b (borrow occurred), add P */
-    __m256i borrow_mask = _mm256_cmpgt_epi64(b, a);
+    /* CRITICAL: Must use unsigned comparison! */
+    __m256i borrow_mask = goldilocks_avx2_cmpgt_epu64(b, a);
     __m256i correction = _mm256_and_si256(borrow_mask, P_VEC);
 
     return _mm256_add_epi64(diff, correction);
