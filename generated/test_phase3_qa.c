@@ -396,6 +396,7 @@ static BenchmarkResult benchmark_fri_fold(void) {
     BenchmarkResult result = {0};
 
     const size_t N = 1024;
+    const int ITERS = 100000;  /* More iterations for measurable time */
     uint64_t *even = aligned_alloc(32, N * sizeof(uint64_t));
     uint64_t *odd = aligned_alloc(32, N * sizeof(uint64_t));
     uint64_t *out = aligned_alloc(32, N * sizeof(uint64_t));
@@ -407,14 +408,14 @@ static BenchmarkResult benchmark_fri_fold(void) {
     uint64_t alpha = rand_field();
 
     /* Scalar benchmark */
-    for (int w = 0; w < BENCH_WARMUP / 100; w++) {
+    for (int w = 0; w < 1000; w++) {
         for (size_t i = 0; i < N; i++) {
             out[i] = goldilocks_add(even[i], goldilocks_mul(alpha, odd[i]));
         }
     }
 
     clock_t start = clock();
-    for (int iter = 0; iter < BENCH_ITERATIONS / 1000; iter++) {
+    for (int iter = 0; iter < ITERS; iter++) {
         for (size_t i = 0; i < N; i++) {
             out[i] = goldilocks_add(even[i], goldilocks_mul(alpha, odd[i]));
         }
@@ -422,21 +423,25 @@ static BenchmarkResult benchmark_fri_fold(void) {
     clock_t end = clock();
 
     double scalar_time = (double)(end - start) / CLOCKS_PER_SEC;
-    result.scalar_throughput = ((double)BENCH_ITERATIONS / 1000 * N) / scalar_time / 1e6;
+    /* Guard against division by zero */
+    if (scalar_time < 0.001) scalar_time = 0.001;
+    result.scalar_throughput = ((double)ITERS * N) / scalar_time / 1e6;
 
     /* AVX2 benchmark */
-    for (int w = 0; w < BENCH_WARMUP / 100; w++) {
+    for (int w = 0; w < 1000; w++) {
         fri_fold_avx2(N, even, odd, out, alpha);
     }
 
     start = clock();
-    for (int iter = 0; iter < BENCH_ITERATIONS / 1000; iter++) {
+    for (int iter = 0; iter < ITERS; iter++) {
         fri_fold_avx2(N, even, odd, out, alpha);
     }
     end = clock();
 
     double avx2_time = (double)(end - start) / CLOCKS_PER_SEC;
-    result.avx2_throughput = ((double)BENCH_ITERATIONS / 1000 * N) / avx2_time / 1e6;
+    /* Guard against division by zero */
+    if (avx2_time < 0.001) avx2_time = 0.001;
+    result.avx2_throughput = ((double)ITERS * N) / avx2_time / 1e6;
 
     result.speedup = result.avx2_throughput / result.scalar_throughput;
     result.meets_criteria = result.speedup >= 1.5;
