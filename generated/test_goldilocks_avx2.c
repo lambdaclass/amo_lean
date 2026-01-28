@@ -31,14 +31,26 @@ static int tests_failed = 0;
 #define PASS() do { printf("PASS\n"); tests_passed++; } while(0)
 #define FAIL(msg) do { printf("FAIL: %s\n", msg); tests_failed++; } while(0)
 
-/* Simple PRNG for test vectors */
+/* Simple PRNG for test vectors (xorshift64) */
 static uint64_t test_rng_state = 0x123456789ABCDEF0ULL;
 
+/*
+ * Disable unsigned-integer-overflow sanitizer for this function.
+ * The xorshift PRNG intentionally uses wraparound arithmetic which is
+ * well-defined for unsigned types but flagged by -fsanitize=integer.
+ */
+#if defined(__clang__)
+__attribute__((no_sanitize("unsigned-integer-overflow")))
+#elif defined(__GNUC__)
+__attribute__((no_sanitize_undefined))
+#endif
 static uint64_t test_rand64(void) {
-    test_rng_state ^= test_rng_state << 13;
-    test_rng_state ^= test_rng_state >> 7;
-    test_rng_state ^= test_rng_state << 17;
-    return test_rng_state % GOLDILOCKS_P;
+    uint64_t x = test_rng_state;
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
+    test_rng_state = x;
+    return x % GOLDILOCKS_P;
 }
 
 /*===========================================================================
