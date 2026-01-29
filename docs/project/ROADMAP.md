@@ -1,7 +1,10 @@
 # AMO-Lean: Roadmap Oficial
 
-**Última actualización**: 2026-01-28
+**Última actualización**: 2026-01-29
 **Este es el único roadmap del proyecto.**
+
+> **IMPORTANTE:** Ver [UNIFIED_PLAN.md](UNIFIED_PLAN.md) para el plan detallado
+> que incluye la arquitectura dual (Verificador + Generador).
 
 ---
 
