@@ -110,6 +110,20 @@ end IdentityRules
 
 section PowerRules
 
+/-- Helper: foldl with identity function preserves accumulator -/
+theorem foldl_id (acc : α) (l : List β) :
+    l.foldl (fun a _ => a) acc = acc := by
+  induction l with
+  | nil => simp [List.foldl]
+  | cons _ _ ih => simp [List.foldl, ih]
+
+/-- Helper: foldl with constant 0 yields 0 -/
+theorem foldl_const_zero (l : List α) :
+    l.foldl (fun _ _ => (0 : Int)) 0 = 0 := by
+  induction l with
+  | nil => simp [List.foldl]
+  | cons _ _ ih => simp [List.foldl, ih]
+
 /-- x^0 = 1 -/
 theorem pow_zero_correct (env : VarId → Int) (e : Expr Int) :
     eval env (.pow e 0) = eval env (.const 1) := by
@@ -120,19 +134,32 @@ theorem pow_zero_correct (env : VarId → Int) (e : Expr Int) :
 theorem pow_one_correct (env : VarId → Int) (e : Expr Int) :
     eval env (.pow e 1) = eval env e := by
   simp only [eval]
-  sorry  -- Requires unfolding foldl for specific n
+  show (List.range 1).foldl (fun acc _ => acc * eval env e) 1 = eval env e
+  simp only [List.range_succ, List.range_zero, List.foldl_append, List.foldl_nil,
+             List.foldl_cons, Int.one_mul]
 
 /-- 1^n = 1 (for any n) -/
 theorem one_pow_correct (env : VarId → Int) (n : Nat) :
     eval env (.pow (.const (1 : Int)) n) = eval env (.const 1) := by
-  simp only [eval]
-  sorry  -- Requires induction on List.foldl
+  simp only [eval, Int.mul_one]
+  exact foldl_id 1 (List.range n)
+
+/-- Helper: foldl of (*0) always yields 0 after at least one step -/
+theorem foldl_mul_zero_eq_zero (l : List α) (h : l ≠ []) :
+    l.foldl (fun (acc : Int) _ => acc * 0) 1 = 0 := by
+  cases l with
+  | nil => contradiction
+  | cons x xs =>
+    simp only [List.foldl_cons, Int.mul_zero]
+    exact foldl_const_zero xs
 
 /-- 0^(n+1) = 0 -/
 theorem zero_pow_succ_correct (env : VarId → Int) (n : Nat) :
     eval env (.pow (.const (0 : Int)) (n + 1)) = eval env (.const 0) := by
   simp only [eval]
-  sorry  -- Requires induction on List.foldl
+  apply foldl_mul_zero_eq_zero
+  simp only [List.range_succ, ne_eq, List.append_eq_nil, List.cons_ne_self, and_false,
+             not_false_eq_true]
 
 end PowerRules
 
@@ -256,9 +283,9 @@ def isFullyVerified (ruleName : String) : Bool :=
   | "mul_zero_right" => true
   | "mul_zero_left" => true
   | "pow_zero" => true
-  | "pow_one" => false  -- Uses sorry
-  | "one_pow" => false  -- Uses sorry
-  | "zero_pow" => false -- Uses sorry
+  | "pow_one" => true   -- Now fully verified
+  | "one_pow" => true   -- Now fully verified
+  | "zero_pow" => true  -- Now fully verified
   | "factor_left" => true
   | "factor_right" => true
   | "const_add" => true
@@ -297,7 +324,7 @@ def hasTheorem (ruleName : String) : Bool :=
   | _ => false
 
 /-- Count of fully verified rules (no sorry) -/
-def fullyVerifiedRuleCount : Nat := 16
+def fullyVerifiedRuleCount : Nat := 19
 
 /-- Count of rules with theorems (including those with sorry) -/
 def theoremRuleCount : Nat := 20
@@ -307,7 +334,7 @@ def verifiedRuleNames : List String := [
   "add_zero_right", "add_zero_left",
   "mul_one_right", "mul_one_left",
   "mul_zero_right", "mul_zero_left",
-  "pow_zero",
+  "pow_zero", "pow_one", "one_pow", "zero_pow",
   "factor_left", "factor_right",
   "const_add", "const_mul",
   "add_assoc", "mul_assoc",
