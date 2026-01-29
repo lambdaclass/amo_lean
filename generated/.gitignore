@@ -1,0 +1,17 @@
+# Compiled binaries (local only, not tracked)
+bench_fri_fold
+bench_goldilocks_fri
+fri_test
+fri_validation
+ntt_test
+oracle_test
+test_fri_fold
+test_fri_fold_opt
+test_goldilocks
+test_ntt_oracle
+
+# Debug symbols
+*.dSYM/
+
+# Sanitizer output
+test_*_sanitized

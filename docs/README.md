@@ -21,11 +21,13 @@ docs/
 ├── project/                     # ← DOCUMENTACIÓN PRINCIPAL
 │   ├── README.md               # Overview del proyecto
 │   ├── ROADMAP.md              # ** ROADMAP OFICIAL **
-│   ├── DESIGN_DECISIONS.md     # Decisiones técnicas
+│   ├── DESIGN_DECISIONS.md     # Decisiones técnicas (DD-001 a DD-024)
 │   ├── PROGRESS.md             # Log de progreso
 │   ├── BENCHMARKS.md           # Resultados de rendimiento
-│   └── TESTING_ANALYSIS.md     # Análisis de testing
-├── archive/                     # Documentación obsoleta (no usar)
+│   ├── PHASE5_NTT_PLAN.md      # Plan NTT (completado)
+│   ├── PHASE5_ISSUES.md        # Issues Fase 5
+│   └── PHASE5_BIBLIOGRAPHY.md  # Fuentes NTT
+├── archive/                     # Documentación obsoleta (NO USAR)
 ├── references/                  # Material de referencia
 └── poseidon/                    # Docs de Poseidon (caso de prueba)
 ```
@@ -50,7 +52,7 @@ docs/
 |-----------|-----------|
 | [poseidon/](poseidon/) | Documentación de Poseidon2 (caso de prueba) |
 | [references/](references/) | Papers y notas de referencia |
-| [LEGACY_STATUS.md](LEGACY_STATUS.md) | Estado histórico (contexto) |
+| [archive/](archive/) | Documentación histórica (no usar) |
 
 ---
 

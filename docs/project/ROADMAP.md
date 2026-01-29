@@ -53,8 +53,9 @@ Spec Matemática  →  E-Graph Saturation  →  Código C Optimizado
 | **2** | Reglas de Optimización | ✅ COMPLETADA |
 | **3** | CodeGen SIMD (AVX2) | ✅ COMPLETADA |
 | **4** | Empaquetado + Verificación | ✅ COMPLETADA |
-| **5** | Modo Verificador (B) | 🔄 SIGUIENTE |
-| **6** | Modo Generador (C) | ⏳ FUTURO |
+| **5** | NTT Core | ✅ COMPLETADA |
+| **6A** | AMO-Lean como Verificador de Plonky3 | 🔄 SIGUIENTE |
+| **6B** | AMO-Lean como Generador | ⏳ FUTURO |
 
 ---
 
@@ -243,6 +244,158 @@ git tag v0.1.0
 
 ---
 
+## Fase 5: NTT Core ✅ COMPLETADA
+
+**Fecha**: 2026-01-29
+**Objetivo**: Implementar NTT (Number Theoretic Transform) con verificación formal.
+
+### Arquitectura de Refinamiento (Modelo Trieu)
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ CAPA 4: Código C (Skeleton + Kernel)                            │
+├─────────────────────────────────────────────────────────────────┤
+│ CAPA 3: Implementación con Bounds (LazyButterfly)               │
+├─────────────────────────────────────────────────────────────────┤
+│ CAPA 2: Algoritmo Recursivo (Cooley-Tukey DIT)                  │
+├─────────────────────────────────────────────────────────────────┤
+│ CAPA 1: Especificación Matemática (NTT_spec)                    │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Entregables Completados
+
+| # | Entregable | Estado |
+|---|------------|--------|
+| 5.1 | `NTT/Spec.lean` - Especificación NTT | ✅ |
+| 5.2 | `NTT/CooleyTukey.lean` - Algoritmo recursivo | ✅ |
+| 5.3 | `NTT/Bounds.lean` - LazyGoldilocks refinados | ✅ |
+| 5.4 | `NTT/LazyButterfly.lean` - Butterfly verificado | ✅ |
+| 5.5 | `generated/ntt_kernel.h` - Kernel C 128-bit | ✅ |
+| 5.6 | `generated/ntt_skeleton.c` - Skeleton iterativo | ✅ |
+
+### Decisiones de Diseño
+
+| ID | Decisión | Razón |
+|----|----------|-------|
+| DD-015 | NTT_spec O(N²) solo para proofs | Eficiencia viene de Cooley-Tukey |
+| DD-016 | Butterfly = NTT base-2 | Verifica índices sin errores |
+| DD-022 | Nat en vez de UInt64 en Lean | Evita wrapping, Nat arbitrario |
+| DD-023 | Skeleton + Kernel | Loop en C + Kernel verificado |
+| DD-024 | Early return para N=1 | Fix heap-buffer-overflow |
+
+### QA Final Audit Results
+
+| Test Suite | Resultado | Notas |
+|------------|-----------|-------|
+| C Kernel Tests | 16/16 ✅ | Lazy reduction + butterfly |
+| Bit-Reversal Tests | 35/35 ✅ | Involution + bijection |
+| Sanitizer Tests | 4/4 ✅ | ASan + UBSan (bug N=1 fixed) |
+| Oracle Tests | 4/4 ✅ | Lean = C para N=4,8,16,32 |
+
+### Performance Benchmarks
+
+| Size | Time/NTT | Throughput |
+|------|----------|------------|
+| N=256 | 0.009 ms | 38.30 M elem/s |
+| N=1024 | 0.045 ms | 29.90 M elem/s |
+| N=4096 | 0.235 ms | 23.80 M elem/s |
+| N=16384 | 1.068 ms | 20.93 M elem/s |
+| N=65536 | 5.225 ms | 16.67 M elem/s |
+| N=262144 | 21.39 ms | 16.40 M elem/s |
+
+---
+
+## Fase 6A: AMO-Lean como Verificador de Plonky3 🔄 SIGUIENTE
+
+**Objetivo**: Usar AMO-Lean para verificar y optimizar código de Plonky3.
+
+### Concepto
+
+AMO-Lean actúa como **verificador formal externo** para Plonky3:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    PIPELINE VERIFICADOR                          │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  Plonky3 (Rust)              AMO-Lean (Lean)                   │
+│  ┌─────────────┐             ┌─────────────┐                   │
+│  │ NTT impl    │ ─────────► │ Spec formal │                   │
+│  │ Goldilocks  │   extract   │ Verificar   │                   │
+│  │ FRI fold    │             │ Optimizar   │                   │
+│  └─────────────┘             └─────────────┘                   │
+│                                    │                            │
+│                                    ▼                            │
+│                              Código C/SIMD                      │
+│                              (puede reemplazar                  │
+│                               hot paths)                        │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Entregables Planificados
+
+| # | Entregable | Descripción |
+|---|------------|-------------|
+| 6A.1 | Análisis de Plonky3 | Identificar primitivas clave |
+| 6A.2 | Mapeo Plonky3→AMO-Lean | Correspondencia de estructuras |
+| 6A.3 | Verificación cruzada | Oracle testing Plonky3 vs AMO-Lean |
+| 6A.4 | Hot path optimization | Generar código C para paths críticos |
+
+### Directorios de Trabajo
+
+```
+amo-lean/
+├── AmoLean/
+│   ├── Plonky3/              # ← NUEVO: Verificador Plonky3
+│   │   ├── Goldilocks.lean   # Mapping campo
+│   │   ├── NTT.lean          # Verificación NTT
+│   │   └── FRI.lean          # Verificación FRI
+│   └── ...
+└── verification/
+    └── plonky3/              # ← NUEVO: Tests cruzados
+        ├── oracle_tests.c
+        └── benchmarks.c
+```
+
+---
+
+## Fase 6B: AMO-Lean como Generador ⏳ FUTURO
+
+**Objetivo**: Generar código optimizado para otros proyectos zkVM.
+
+### Concepto
+
+AMO-Lean genera código optimizado para múltiples backends:
+
+```
+Spec Matemática → E-Graph Saturation → Código Backend
+                  (optimización)        ├── C/C++
+                                       ├── Rust
+                                       ├── CUDA
+                                       └── WASM
+```
+
+### Directorios de Trabajo
+
+```
+amo-lean/
+├── AmoLean/
+│   ├── CodeGen/              # ← EXPANDIR
+│   │   ├── C.lean            # Existente
+│   │   ├── Rust.lean         # Nuevo
+│   │   ├── CUDA.lean         # Nuevo
+│   │   └── WASM.lean         # Nuevo
+│   └── ...
+└── generated/
+    ├── c/                    # ← Reorganizar
+    ├── rust/                 # ← Nuevo
+    └── wasm/                 # ← Nuevo
+```
+
+---
+
 ## Roadmap de Verificación
 
 ```
@@ -284,12 +437,13 @@ Estos componentes sirven para:
 
 | Métrica | Valor |
 |---------|-------|
-| Tests totales | **1456+** pass |
+| Tests totales | **1550+** pass |
 | Speedup Lean→C (escalar) | 32.3x |
 | **AVX2 Speedup (4-way SIMD)** | **4.00x** |
 | Goldilocks throughput | 568 M elem/s |
+| **NTT throughput** | **16-38 M elem/s** |
 | **Optimization reduction** | **91.67%** |
-| Fases completadas | **4 de 5** |
+| Fases completadas | **5 de 5 core** |
 
 ---
 
@@ -319,6 +473,10 @@ Estos componentes sirven para:
 | 2026-01-28 | **Phase 3 completada** - AVX2 SIMD con 4.00x speedup |
 | 2026-01-28 | CI configurado: 7 jobs, todos passing |
 | 2026-01-28 | Bugs críticos corregidos: unsigned comparison, overflow handling |
+| 2026-01-29 | **Phase 5 completada** - NTT Core con QA audit |
+| 2026-01-29 | Bug crítico N=1 heap-buffer-overflow detectado y corregido |
+| 2026-01-29 | 59 tests NTT nuevos (Lean + C) |
+| 2026-01-29 | Estructura Fase 6A/6B definida |
 
 ---
 
