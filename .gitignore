@@ -25,3 +25,15 @@ Cargo.lock
 *~
 .vscode/
 .idea/
+verification/plonky3/plonky3_source/
+verification/plonky3/plonky3_shim/target/
+verification/plonky3/*_test
+verification/plonky3/benchmark_test
+
+# Hardening test binaries
+Tests/Plonky3/Hardening/ffi_stress
+Tests/Plonky3/Hardening/panic_test
+Tests/Plonky3/Hardening/deep_fuzz
+Tests/Plonky3/Hardening/layout_test
+Tests/Plonky3/Hardening/ffi_overhead
+Tests/Plonky3/Hardening/*.txt

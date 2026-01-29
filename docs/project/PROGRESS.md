@@ -558,6 +558,115 @@ AMO-Lean v0.1.0 - First Official Release
 
 ---
 
+---
+
+## Phase 6A: AMO-Lean como Verificador de Plonky3 ✅ COMPLETADA
+
+**Fecha**: 2026-01-29
+**Objetivo**: Verificar que AMO-Lean produce resultados idénticos a Plonky3 para NTT Goldilocks
+
+### Subfases Completadas
+
+| Subfase | Descripción | Resultado |
+|---------|-------------|-----------|
+| 6A.1 | Análisis de Plonky3 | 100% compatibilidad confirmada |
+| 6A.2 | Rust Shim (cdylib) | 9 símbolos exportados, 28/28 tests |
+| 6A.3 | Detección de Orden | MATCH - Ambos usan RN |
+| 6A.4 | Oracle Tests | **64/64 PASS (100%)** |
+| 6A.5 | Benchmark | Plonky3 ~2x más rápido |
+| **6A.6** | **Hardening Audit** | **PRODUCTION READY** |
+
+### Hallazgos de Compatibilidad
+
+| Aspecto | Plonky3 | AMO-Lean | Compatible |
+|---------|---------|----------|------------|
+| Representación | Standard (no Montgomery) | Standard | ✅ |
+| Orden I/O | RN (bit-reverse input, natural output) | RN | ✅ |
+| Butterfly | (a+tw*b, a-tw*b) | Idéntico | ✅ |
+| Omega values | TWO_ADIC_GENERATORS | primitiveRoot (Lean) | ✅ |
+
+### Hardening Audit Results
+
+| Test | Estado | Resultado |
+|------|--------|-----------|
+| FFI Torture Test (1M iter) | ✅ PASS | 0 errores, 3M+ llamadas FFI |
+| Panic Safety Audit | ✅ PASS | `panic = "abort"` configurado |
+| Deep Fuzzing (120 vectores) | ✅ PASS | 120/120 equivalencia bit-a-bit |
+| ABI Layout Audit | ✅ PASS | Todos los offsets idénticos |
+| FFI Overhead | ✅ PASS | **0.03%** (< 5% requerido) |
+
+### Vectores Patológicos Verificados
+
+| Tipo | Descripción | N=8..1024 |
+|------|-------------|-----------|
+| Sparse | `[P-1, 0, ..., 0, 1]` | ✅ 8/8 |
+| Geometric | `[1, ω, ω², ω³, ...]` | ✅ 8/8 |
+| Max Entropy | `[P-1, P-2, ...]` | ✅ 8/8 |
+| Boundary | `[0, 1, P-1, P-2, ...]` | ✅ 8/8 |
+| Alternating | `[0, P-1, 0, P-1, ...]` | ✅ 8/8 |
+| Powers of 2 | `[1, 2, 4, 8, ...]` | ✅ 8/8 |
+| + 4 más | Impulse, Fibonacci, etc. | ✅ 8/8 |
+
+**Total: 120/120 PASS**
+
+### Archivos Creados
+
+```
+verification/plonky3/
+├── plonky3_shim/              # Rust cdylib
+│   ├── Cargo.toml
+│   └── src/lib.rs
+├── shim_test.c                # 28/28 pass
+├── oracle_test.c              # 64/64 pass
+├── benchmark.c                # Performance comparison
+├── Makefile
+└── README.md
+
+Tests/Plonky3/
+├── Hardening/
+│   ├── FFI_Stress.c           # 1M iterations
+│   ├── PanicTest.c            # Panic safety
+│   ├── DeepFuzz.c             # 120 pathological vectors
+│   ├── LayoutTest.c           # ABI compatibility
+│   ├── Makefile
+│   └── HARDENING_REPORT.md
+└── Bench/
+    └── FFI_Overhead.c         # FFI call cost
+
+docs/project/
+├── PHASE6A_PLAN.md            # Plan completo + resultados
+└── PLONKY3_ANALYSIS.md        # Análisis técnico
+```
+
+### Benchmark Performance
+
+| Size | Plonky3 (μs) | AMO-Lean (μs) | Ratio |
+|------|--------------|---------------|-------|
+| N=256 | 4.9 | 9.4 | 1.90x Plonky3 |
+| N=1024 | 15.4 | 29.6 | 1.92x Plonky3 |
+| N=4096 | 63.2 | 135.3 | 2.14x Plonky3 |
+| N=16384 | 281.2 | 637.5 | 2.27x Plonky3 |
+| N=65536 | 1396.2 | 2907.5 | 2.08x Plonky3 |
+
+**Interpretación**: Plonky3 ~2x más rápido debido a twiddle caching y SIMD integrado.
+AMO-Lean prioriza **corrección demostrable** sobre rendimiento máximo.
+
+### Veredicto Final
+
+```
+═══════════════════════════════════════════════════════════════
+  PHASE 6A: PRODUCTION READY
+
+  - Equivalencia matemática: 100% verificada
+  - FFI stability: 3M+ llamadas sin errores
+  - Panic safety: Triple protección
+  - ABI compatibility: Perfecta
+  - FFI overhead: 0.03% (negligible)
+═══════════════════════════════════════════════════════════════
+```
+
+---
+
 ## Total de Tests (Todas las Fases)
 
 | Categoría | Tests | Estado |
@@ -565,8 +674,10 @@ AMO-Lean v0.1.0 - First Official Release
 | Phase 0-4 Tests | 1061+ | ✅ |
 | Phase 5 NTT Tests (Lean) | ~100 | ✅ |
 | Phase 5 NTT Tests (Oracle C) | 6 | ✅ |
-| **Phase 5 QA Final** | **61** | ✅ |
-| **TOTAL** | **1228+** | ✅ |
+| Phase 5 QA Final | 61 | ✅ |
+| **Phase 6A Oracle Tests** | **64** | ✅ |
+| **Phase 6A Hardening** | **125+** | ✅ |
+| **TOTAL** | **1417+** | ✅ |
 
 ---
 

@@ -1,0 +1,25 @@
+[package]
+name = "plonky3_shim"
+version = "0.1.0"
+edition = "2021"
+description = "C FFI wrapper for Plonky3 NTT operations"
+license = "MIT OR Apache-2.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# Plonky3 crates from GitHub
+p3-goldilocks = { git = "https://github.com/Plonky3/Plonky3", branch = "main" }
+p3-dft = { git = "https://github.com/Plonky3/Plonky3", branch = "main" }
+p3-field = { git = "https://github.com/Plonky3/Plonky3", branch = "main" }
+p3-matrix = { git = "https://github.com/Plonky3/Plonky3", branch = "main" }
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
+panic = "abort"  # CRITICAL: Prevent UB from unwinding across FFI boundary
+
+[profile.dev]
+panic = "abort"  # Also for debug builds
