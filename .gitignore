@@ -37,3 +37,7 @@ Tests/Plonky3/Hardening/deep_fuzz
 Tests/Plonky3/Hardening/layout_test
 Tests/Plonky3/Hardening/ffi_overhead
 Tests/Plonky3/Hardening/*.txt
+
+# Phase 6B build artifacts
+Tests/NTT/cached_benchmark
+generated/ntt_cached_test
