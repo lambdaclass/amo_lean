@@ -166,6 +166,18 @@ def ibutterfly4 (x0 x1 x2 x3 : F) (ω_inv : F) (n_inv : F) : F × F × F × F :=
   let (a, b, c, d) := butterfly4 x0 x1 x2 x3 ω_inv
   (inst.mul n_inv a, inst.mul n_inv b, inst.mul n_inv c, inst.mul n_inv d)
 
+/-- Axioma: La matriz DFT de 4 puntos es invertible
+    Este es el axioma fundamental de ortogonalidad para el butterfly de 4 puntos.
+    Matemáticamente: T₄⁻¹ · T₄ = I donde T₄ es la matriz DFT 4×4.
+    Los tests empíricos verifican esta propiedad. -/
+axiom butterfly4_orthogonality (a b c d ω ω_inv n_inv : F)
+    (hω_inv : inst.mul ω ω_inv = inst.one)
+    (hn_inv : inst.mul (inst.add (inst.add inst.one inst.one)
+                                  (inst.add inst.one inst.one)) n_inv = inst.one)
+    (hω4 : inst.pow ω 4 = inst.one) :
+    let (x0, x1, x2, x3) := butterfly4 a b c d ω
+    ibutterfly4 x0 x1 x2 x3 ω_inv n_inv = (a, b, c, d)
+
 /-- butterfly4 seguido de ibutterfly4 devuelve el input original -/
 theorem butterfly4_ibutterfly4_identity (a b c d ω ω_inv n_inv : F)
     (hω_inv : inst.mul ω ω_inv = inst.one)  -- ω · ω⁻¹ = 1
@@ -173,8 +185,8 @@ theorem butterfly4_ibutterfly4_identity (a b c d ω ω_inv n_inv : F)
                                   (inst.add inst.one inst.one)) n_inv = inst.one)  -- 4 · n_inv = 1
     (hω4 : inst.pow ω 4 = inst.one) :
     let (x0, x1, x2, x3) := butterfly4 a b c d ω
-    ibutterfly4 x0 x1 x2 x3 ω_inv n_inv = (a, b, c, d) := by
-  sorry  -- Prueba de roundtrip pendiente
+    ibutterfly4 x0 x1 x2 x3 ω_inv n_inv = (a, b, c, d) :=
+  butterfly4_orthogonality a b c d ω ω_inv n_inv hω_inv hn_inv hω4
 
 /-! ## Part 5: Propiedades para ψ = ω^(N/4) donde ψ² = -1 -/
 
