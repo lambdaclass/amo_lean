@@ -187,6 +187,147 @@ static int has_avx2(void) {
 
 ---
 
+### ADR-6B-005: Fail-Fast Microbenchmark para AVX2
+
+**Estado**: APROBADA (2026-01-29)
+**Decisores**: Equipo de desarrollo + Revisión QA #2
+
+#### Contexto
+
+Antes de invertir semanas en implementar AVX2 para NTT, debemos **verificar
+empíricamente** que nuestras suposiciones sobre rendimiento son correctas.
+
+#### Problema Identificado
+
+En la revisión del plan, se identificó que:
+- Asumimos que `mul` AVX2 emulado sería lento basándonos en Plonky3
+- Pero NO planeamos verificarlo con nuestro propio código
+- Esto es un **error metodológico**: construir sobre supuestos no verificados
+
+#### Decisión
+
+**Fail-Fast Microbenchmark (Día 1 de 6B.2)**
+
+```
+ANTES de escribir código NTT AVX2:
+1. Implementar goldilocks_mul_avx2() aislada (emulación 4-way)
+2. Implementar goldilocks_mul_scalar() como baseline
+3. Benchmark: 100M operaciones
+4. Criterio GO: AVX2 ≥ 2.5x escalar (4 elem / ~1.6x overhead)
+5. Criterio NO-GO: < 2x → Confirmar estrategia "Add-Sub Only"
+```
+
+#### Justificación
+
+1. **Costo bajo**: 2-4 horas de trabajo
+2. **Beneficio alto**: Confirmación empírica antes de invertir semanas
+3. **Riesgo eliminado**: No construir sobre supuestos falsos
+4. **Flexibilidad**: Resultado informa estrategia óptima
+
+#### Consecuencias
+
+- **Si pasa (≥2.5x)**: Proceder con mul AVX2 en NTT
+- **Si falla (<2x)**: Confirmar estrategia "Add-Sub Only", ahorrar tiempo
+
+---
+
+### ADR-6B-006: Scalar Loop Unrolling Antes de SIMD
+
+**Estado**: APROBADA (2026-01-29)
+**Decisores**: Equipo de desarrollo + Revisión QA #2
+
+#### Contexto
+
+El plan original saltaba directamente de twiddle caching a AVX2, ignorando
+optimizaciones escalares de bajo riesgo.
+
+#### Problema Identificado (Blind Spot)
+
+1. **ILP (Instruction Level Parallelism)** no estaba contemplado
+2. Loop unrolling puede dar **10-15% de speedup** sin complejidad SIMD
+3. Es más seguro y debería hacerse PRIMERO
+4. CPUs modernas con ejecución Out-of-Order se benefician enormemente
+
+#### Decisión
+
+**Nueva subtarea 6B.1.6: Scalar Loop Unrolling**
+
+```c
+// ANTES: 1 butterfly por iteración
+for (size_t j = 0; j < half_m; j++) {
+    lazy_butterfly(&work[idx_a], &work[idx_b], tw);
+    tw = goldilocks_mul(tw, omega_m);
+}
+
+// DESPUÉS: 4 butterflies por iteración (unroll x4)
+for (size_t j = 0; j < half_m; j += 4) {
+    goldilocks_t tw0 = tw;
+    goldilocks_t tw1 = goldilocks_mul(tw0, omega_m);
+    goldilocks_t tw2 = goldilocks_mul(tw1, omega_m);
+    goldilocks_t tw3 = goldilocks_mul(tw2, omega_m);
+
+    lazy_butterfly(&work[k+j+0], &work[k+j+0+half_m], tw0);
+    lazy_butterfly(&work[k+j+1], &work[k+j+1+half_m], tw1);
+    lazy_butterfly(&work[k+j+2], &work[k+j+2+half_m], tw2);
+    lazy_butterfly(&work[k+j+3], &work[k+j+3+half_m], tw3);
+
+    tw = goldilocks_mul(tw3, omega_m);
+}
+// + manejo de remainder si half_m % 4 != 0
+```
+
+#### Justificación
+
+1. **Bajo riesgo**: No introduce complejidad de SIMD
+2. **Alto beneficio**: +10-15% estimado
+3. **ILP**: CPU puede ejecutar múltiples butterflies en paralelo
+4. **Reduce overhead**: Menos branches, menos incrementos de contador
+5. **Fundamento para SIMD**: El mismo patrón se aplica después a AVX2
+
+#### Consecuencias
+
+- **Positivas**: Speedup "gratis" antes de SIMD
+- **Negativas**: Código más largo (pero más rápido)
+- **Orden de ejecución**: ANTES de AVX2, DESPUÉS de twiddle caching
+
+---
+
+### ADR-6B-007: Metodología de Benchmark - Wall Clock Time
+
+**Estado**: APROBADA (2026-01-29)
+**Decisores**: Equipo de desarrollo + Revisión QA #2
+
+#### Contexto
+
+El plan original mencionaba medir con `turbostat` pero no enfatizaba medir
+**wall clock time real** además de ciclos/frecuencia.
+
+#### Problema
+
+AVX2 intensivo puede causar **frequency throttling** en CPUs Intel. Si solo
+medimos ciclos, podríamos no detectar que el throttling se come la ganancia.
+
+#### Decisión
+
+**Medir AMBOS: wall clock + frecuencia**
+
+```bash
+# Wall clock real (lo que importa al usuario)
+time ./benchmark
+
+# Frecuencia durante ejecución (diagnóstico)
+sudo turbostat --show Avg_MHz,Busy%,Bzy_MHz ./benchmark
+
+# Métrica de éxito: Wall clock time, NO ciclos
+```
+
+#### Consecuencias
+
+- **Positivas**: Detectamos throttling que afecta rendimiento real
+- **Negativas**: Requiere permisos root para turbostat (opcional)
+
+---
+
 ### Resumen de Decisiones
 
 | ADR | Decisión | Impacto en Rendimiento |
@@ -195,8 +336,11 @@ static int has_avx2(void) {
 | 002 | Twiddle cache parcial (16KB) | +25% (igual que full para N grande) |
 | 003 | vmovdqu para C, align(32) para Rust | -5% en C API |
 | 004 | Mitigaciones para R6-R10 | Prevención de failures |
+| **005** | **Fail-Fast Microbenchmark** | **Validación antes de invertir** |
+| **006** | **Scalar Loop Unrolling** | **+10-15% adicional** |
+| **007** | **Wall clock time** | **Detectar throttling** |
 
-**Estimación de rendimiento final**: 72-82% de Plonky3 (meta: ≥80%)
+**Estimación de rendimiento REVISADA**: 78-88% de Plonky3 (meta: ≥80%)
 
 ---
 
@@ -278,12 +422,12 @@ void ntt_inverse_cached(NttContext* ctx, goldilocks_t* data);
 ```
 
 **Tareas**:
-- [ ] 6B.1.1: Diseñar estructura `NttContext` con cache parcial
-- [ ] 6B.1.2: Implementar heurística de selección de capas
+- [x] 6B.1.1: Diseñar estructura `NttContext` con cache parcial
+- [x] 6B.1.2: Implementar heurística de selección de capas
 - [ ] 6B.1.3: Generar código híbrido (cache + on-the-fly)
 - [ ] 6B.1.4: Benchmark por tamaño (N=256 hasta N=2^18)
 - [ ] 6B.1.5: Tests de regresión vs Plonky3
-- [ ] 6B.1.6: Validar que no hay cache thrashing (perf stat)
+- [ ] 6B.1.7: Validar que no hay cache thrashing (perf stat)
 
 **Obstáculos técnicos**:
 
@@ -295,6 +439,90 @@ void ntt_inverse_cached(NttContext* ctx, goldilocks_t* data);
 | Overhead de branch | Bajo | Branch predictor maneja bien el patrón |
 
 **Entregable**: `generated/ntt_cached.c` + `ntt_context.h`
+
+---
+
+### 6B.1.6: Scalar Loop Unrolling (NUEVO - ADR-6B-006)
+
+**Problema**: El loop interno de NTT procesa 1 butterfly por iteración,
+desperdiciando ILP (Instruction Level Parallelism).
+
+**Solución**: Unroll x4 para permitir ejecución paralela en CPUs OoO.
+
+```c
+// ANTES: 1 butterfly por iteración (baja ILP)
+for (size_t j = 0; j < half_m; j++) {
+    lazy_butterfly(&work[idx_a], &work[idx_b], tw);
+    tw = goldilocks_mul(tw, omega_m);
+}
+
+// DESPUÉS: 4 butterflies por iteración (alta ILP)
+size_t j = 0;
+for (; j + 4 <= half_m; j += 4) {
+    // Pre-compute 4 twiddles
+    goldilocks_t tw0 = tw;
+    goldilocks_t tw1 = goldilocks_mul(tw0, omega_m);
+    goldilocks_t tw2 = goldilocks_mul(tw1, omega_m);
+    goldilocks_t tw3 = goldilocks_mul(tw2, omega_m);
+
+    // 4 butterflies - CPU puede ejecutar en paralelo
+    lazy_butterfly(&work[k+j+0], &work[k+j+0+half_m], tw0);
+    lazy_butterfly(&work[k+j+1], &work[k+j+1+half_m], tw1);
+    lazy_butterfly(&work[k+j+2], &work[k+j+2+half_m], tw2);
+    lazy_butterfly(&work[k+j+3], &work[k+j+3+half_m], tw3);
+
+    tw = goldilocks_mul(tw3, omega_m);
+}
+// Remainder loop for half_m % 4 != 0
+for (; j < half_m; j++) {
+    lazy_butterfly(&work[k+j], &work[k+j+half_m], tw);
+    tw = goldilocks_mul(tw, omega_m);
+}
+```
+
+**Tareas**:
+- [ ] 6B.1.6.1: Implementar loop unrolling x4 en ntt_cached.c
+- [ ] 6B.1.6.2: Manejar remainder (half_m % 4 != 0)
+- [ ] 6B.1.6.3: Benchmark vs versión sin unroll
+- [ ] 6B.1.6.4: Probar unroll x2 y x8 para comparar
+
+**Estimación**: +10-15% speedup con bajo riesgo
+
+**Entregable**: `generated/ntt_cached.c` actualizado con loop unrolling
+
+---
+
+### 6B.2.0: Fail-Fast Microbenchmark (NUEVO - ADR-6B-005)
+
+**Objetivo**: Validar empíricamente si AVX2 mul vale la pena ANTES de invertir
+tiempo en implementación completa.
+
+**Procedimiento**:
+
+```bash
+# Día 1 de 6B.2 (2-4 horas máximo)
+
+1. Implementar goldilocks_mul_scalar() - baseline
+2. Implementar goldilocks_mul_avx2()   - emulación 4-way
+3. Benchmark: 100M operaciones cada una
+4. Comparar throughput (ops/segundo)
+```
+
+**Criterios de decisión**:
+
+| Resultado | Ratio AVX2/Escalar | Acción |
+|-----------|-------------------|--------|
+| **GO** | ≥ 2.5x | Proceder con mul AVX2 en NTT |
+| **BORDERLINE** | 1.5x - 2.5x | Evaluar caso por caso |
+| **NO-GO** | < 1.5x | Confirmar "Add-Sub Only", ahorrar tiempo |
+
+**Tareas**:
+- [ ] 6B.2.0.1: Implementar goldilocks_mul_avx2() aislada
+- [ ] 6B.2.0.2: Crear microbenchmark (100M ops)
+- [ ] 6B.2.0.3: Ejecutar y documentar resultados
+- [ ] 6B.2.0.4: Decidir GO/NO-GO basado en datos
+
+**Entregable**: `Tests/Plonky3/Bench/mul_avx2_microbench.c` + decisión documentada
 
 ---
 
