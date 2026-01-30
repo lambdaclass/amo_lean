@@ -23,6 +23,7 @@
 #include <string.h>
 
 #include "field_goldilocks.h"
+#include "ntt_kernel.h"  /* For lazy_goldilocks_t (ADR-6B-009) */
 
 /*===========================================================================
  * Configuration
@@ -63,6 +64,23 @@
  * Plus we store them in a flat array indexed by layer, so we need 2^CACHED_LAYERS total.
  */
 #define NTT_MAX_CACHED_TWIDDLES (1UL << NTT_CACHED_LAYERS)
+
+/*===========================================================================
+ * Bit-Reversal Helper (ADR-6B-010)
+ *===========================================================================*/
+
+/**
+ * Compute bit-reversal of x with log2_n bits.
+ * Used to pre-compute the bit-reversal table.
+ */
+static inline size_t ntt_bit_reverse(size_t x, size_t log2_n) {
+    size_t result = 0;
+    for (size_t i = 0; i < log2_n; i++) {
+        result = (result << 1) | (x & 1);
+        x >>= 1;
+    }
+    return result;
+}
 
 /*===========================================================================
  * NTT Context Structure
@@ -114,6 +132,22 @@ typedef struct {
 
     /* For on-the-fly computation of uncached layers */
     goldilocks_t* omega_powers;     /* omega^(2^k) for k = 0, 1, ..., log_n-1 */
+
+    /**
+     * ADR-6B-009: Pre-allocated work buffer
+     *
+     * Eliminates malloc/free overhead on each NTT call.
+     * For small N (256 elements, ~6μs), malloc can be 5-10% of total time.
+     */
+    lazy_goldilocks_t* work_buffer; /* Pre-allocated working array of size n */
+
+    /**
+     * ADR-6B-010: Pre-computed bit-reversal table
+     *
+     * bit_reverse_table[i] = bit_reverse(i, log_n)
+     * Eliminates per-element bit-reversal computation.
+     */
+    size_t* bit_reverse_table;      /* Pre-computed bit-reversal permutation */
 
 } NttContext;
 
@@ -243,6 +277,31 @@ static inline NttContext* ntt_context_create(size_t log_n) {
         ctx->omega_powers[k] = goldilocks_pow(ctx->omega, exp);
     }
 
+    /* ADR-6B-009: Pre-allocate work buffer to avoid malloc/free per NTT call */
+    ctx->work_buffer = (lazy_goldilocks_t*)malloc(ctx->n * sizeof(lazy_goldilocks_t));
+    if (!ctx->work_buffer) {
+        free(ctx->omega_powers);
+        free(ctx->cached_twiddles);
+        free(ctx->layer_offsets);
+        free(ctx);
+        return NULL;
+    }
+
+    /* ADR-6B-010: Pre-compute bit-reversal table */
+    ctx->bit_reverse_table = (size_t*)malloc(ctx->n * sizeof(size_t));
+    if (!ctx->bit_reverse_table) {
+        free(ctx->work_buffer);
+        free(ctx->omega_powers);
+        free(ctx->cached_twiddles);
+        free(ctx->layer_offsets);
+        free(ctx);
+        return NULL;
+    }
+
+    for (size_t i = 0; i < ctx->n; i++) {
+        ctx->bit_reverse_table[i] = ntt_bit_reverse(i, log_n);
+    }
+
     return ctx;
 }
 
@@ -251,6 +310,8 @@ static inline NttContext* ntt_context_create(size_t log_n) {
  */
 static inline void ntt_context_destroy(NttContext* ctx) {
     if (ctx) {
+        free(ctx->bit_reverse_table); /* ADR-6B-010 */
+        free(ctx->work_buffer);       /* ADR-6B-009 */
         free(ctx->omega_powers);
         free(ctx->cached_twiddles);
         free(ctx->layer_offsets);

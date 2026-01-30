@@ -1,10 +1,14 @@
 /**
  * benchmark.c - Plonky3 vs AMO-Lean Performance Benchmark
  *
- * Phase 6A.5: Comparative Performance Analysis
+ * Phase 6B: Comparative Performance Analysis with Optimizations
  *
  * This benchmark compares the performance of Plonky3's NTT implementation
  * against AMO-Lean's verified implementation for the Goldilocks field.
+ *
+ * Phase 6B Optimizations:
+ *   - Full twiddle caching via NttContext (ADR-6B-002)
+ *   - x4 loop unrolling for ILP (ADR-6B-006)
  *
  * Note: This is NOT a competition. The goal is to understand performance
  * characteristics and validate that our verified implementation is practical.
@@ -19,16 +23,11 @@
 #include <math.h>
 #include <dlfcn.h>
 
-/* Include AMO-Lean NTT implementation */
+/* Include AMO-Lean NTT implementation - Phase 6B optimized version */
 #include "../../generated/field_goldilocks.h"
 #include "../../generated/ntt_kernel.h"
-
-/* Forward declarations */
-static int ntt_forward(goldilocks_t* data, size_t n, goldilocks_t omega);
-static int ntt_inverse(goldilocks_t* data, size_t n, goldilocks_t omega, goldilocks_t n_inv);
-
-/* Include the skeleton implementation */
-#include "../../generated/ntt_skeleton.c"
+#include "../../generated/ntt_context.h"
+#include "../../generated/ntt_cached.c"
 
 /*===========================================================================
  * Plonky3 Function Types
@@ -129,7 +128,7 @@ static BenchResult benchmark_size(plonky3_ntt_fn plonky3_ntt,
     result.n = params->n;
 
     size_t n = params->n;
-    uint64_t omega = params->omega;
+    size_t log2_n = params->log2_n;
 
     /* Allocate buffers */
     uint64_t* data = malloc(n * sizeof(uint64_t));
@@ -148,6 +147,19 @@ static BenchResult benchmark_size(plonky3_ntt_fn plonky3_ntt,
     /* Initialize with pseudo-random data */
     for (size_t i = 0; i < n; i++) {
         backup[i] = (i * 0x9E3779B97F4A7C15ULL + 0x6A09E667F3BCC908ULL) % GOLDILOCKS_ORDER;
+    }
+
+    /*
+     * Phase 6B: Create NttContext with cached twiddles
+     * This is the optimized version with full twiddle caching + loop unrolling
+     */
+    NttContext* ctx = ntt_context_create(log2_n);
+    if (!ctx) {
+        result.plonky3_us = -1;
+        result.amolean_us = -1;
+        free(data);
+        free(backup);
+        return result;
     }
 
     /* Warmup Plonky3 */
@@ -172,17 +184,17 @@ static BenchResult benchmark_size(plonky3_ntt_fn plonky3_ntt,
         plonky3_times[i] = end - start;
     }
 
-    /* Warmup AMO-Lean */
+    /* Warmup AMO-Lean (using cached context) */
     for (int i = 0; i < WARMUP_ITERATIONS; i++) {
         memcpy(data, backup, n * sizeof(uint64_t));
-        ntt_forward(data, n, omega);
+        ntt_forward_ctx(ctx, data);
     }
 
-    /* Benchmark AMO-Lean */
+    /* Benchmark AMO-Lean (using cached context with loop unrolling) */
     for (int i = 0; i < iterations; i++) {
         memcpy(data, backup, n * sizeof(uint64_t));
         double start = get_time_us();
-        ntt_forward(data, n, omega);
+        ntt_forward_ctx(ctx, data);
         double end = get_time_us();
         amolean_times[i] = end - start;
     }
@@ -209,6 +221,7 @@ static BenchResult benchmark_size(plonky3_ntt_fn plonky3_ntt,
     free(backup);
     free(plonky3_times);
     free(amolean_times);
+    ntt_context_destroy(ctx);
 
     return result;
 }
