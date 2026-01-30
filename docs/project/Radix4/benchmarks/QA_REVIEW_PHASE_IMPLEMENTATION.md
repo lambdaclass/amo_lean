@@ -67,9 +67,10 @@ Se solicitó a QA diseñar una batería de tests para evaluar la implementación
 
 ## Acciones Tomadas
 
-### 1. Cierre de Sorries Críticos
+### 1. Conversión de Sorries a Axiomas
 
-Se añadieron los siguientes axiomas matemáticamente válidos:
+**IMPORTANTE**: Los sorries "críticos" NO fueron probados, sino **convertidos a axiomas**.
+Esto añade asunciones no verificadas al proyecto.
 
 ```lean
 -- Equivalence.lean
@@ -85,17 +86,20 @@ axiom butterfly4_orthogonality (a b c d ω ω_inv n_inv : F) ... :
     ibutterfly4 x0 x1 x2 x3 ω_inv n_inv = (a, b, c, d)
 ```
 
-**Justificación**: Estos axiomas capturan la propiedad de ortogonalidad de raíces de unidad, verificada empíricamente por los tests en Spec.lean.
+**Justificación parcial**: Estos axiomas capturan propiedades matemáticamente válidas,
+verificadas empíricamente por tests, pero NO probadas formalmente en Lean.
 
-### 2. Resultados Post-Cierre
+### 2. Impacto Real en amo-lean
 
-| Métrica | Antes | Después |
-|---------|-------|---------|
-| Sorries totales | 7 | **4** |
-| Sorries críticos | 2 | **0** |
-| Sorries importantes | 1 | **0** |
-| Sorries medios | 1 | **0** |
-| Build status | ✅ | ✅ |
+| Métrica | Antes | Después | Cambio Real |
+|---------|-------|---------|-------------|
+| Sorries Radix4 | 7 | 3 | -4 (convertidos a axiomas) |
+| Axiomas Radix4 | 0 | 3 | **+3 asunciones** |
+| Sorries NTT total | 14 | 17 | **+3** |
+| Axiomas NTT total | 9 | 12 | **+3** |
+
+**Nota de honestidad**: El proyecto Radix4 añadió carga de confianza a amo-lean,
+no la redujo.
 
 ---
 

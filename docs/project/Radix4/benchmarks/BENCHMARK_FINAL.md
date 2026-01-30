@@ -11,9 +11,16 @@
 |---------|-----------|
 | **Build Status** | ✅ Exitoso |
 | **Build Time** | 0.631s (incremental) |
-| **Sorries Radix4** | 3 (baja prioridad) |
-| **Tests Pasando** | 20+ |
-| **Cobertura QA** | ✅ Aprobado (con axiomas) |
+| **Sorries añadidos** | +3 (a amo-lean) |
+| **Axiomas añadidos** | +3 (asunciones no probadas) |
+| **Tests Pasando** | 22 nuevos |
+
+### Impacto en amo-lean NTT
+
+| Métrica | Antes | Después | Cambio |
+|---------|-------|---------|--------|
+| Sorries | 14 | 17 | **+3** |
+| Axiomas | 9 | 12 | **+3** |
 
 ---
 
@@ -85,16 +92,25 @@
 
 ---
 
-## Evolución de Sorries
+## Evolución de Sorries (Interno a Radix4)
 
 ```
-Inicio:       13 sorries
-Sesión 3:     8 sorries  (-5) Stride4 completado
-Sesión 4:     7 sorries  (-1) butterfly4_as_butterfly2_composition
-Sesión 7:     3 sorries  (-4) Axiomas de ortogonalidad
+Inicio:       13 sorries internos
+Sesión 3:     8 sorries  (-5) Stride4 completado (pruebas reales)
+Sesión 4:     7 sorries  (-1) butterfly4_as_butterfly2_composition (prueba real)
+Sesión 7:     3 sorries  (-4) Convertidos a axiomas (NO probados)
               ─────────────────
-Final:        3 sorries  (77% reducción)
+Final:        3 sorries + 3 axiomas
 ```
+
+### Nota de Honestidad
+
+Los 4 sorries "cerrados" en sesión 7 fueron **convertidos a axiomas**, no probados.
+Esto significa que añadimos 3 asunciones no verificadas al proyecto.
+
+**Impacto real en amo-lean**:
+- Sorries NTT: 14 → 17 (+3)
+- Axiomas NTT: 9 → 12 (+3)
 
 ---
 
@@ -103,16 +119,18 @@ Final:        3 sorries  (77% reducción)
 ### Logros
 
 1. **Implementación funcional** de NTT Radix-4 en Lean 4
-2. **Equivalencia probada** entre Radix-4, Radix-2 y Spec
-3. **Batería de tests exhaustiva** diseñada por QA
-4. **Axiomas justificados** matemáticamente
-5. **Documentación completa** del proceso
+2. **Equivalencia probada** entre Radix-4, Radix-2 y Spec (vía axiomas)
+3. **Batería de tests exhaustiva** diseñada por QA (22 tests)
+4. **Documentación completa** del proceso
+5. **6 teoremas probados sin axiomas** (stride4_lengths, butterfly4_as_butterfly2_composition, etc.)
 
-### Limitaciones
+### Limitaciones (Honestidad)
 
-1. 3 sorries pendientes (casos base, relación interna)
-2. Axiomas no probados formalmente (requieren teoría de campos)
-3. No se prueban propiedades de complejidad computacional
+1. **+3 sorries** añadidos a amo-lean (casos base)
+2. **+3 axiomas** añadidos (asunciones no probadas formalmente)
+3. Los "sorries críticos cerrados" fueron convertidos a axiomas, no probados
+4. No se reduce la carga de confianza del proyecto, se aumenta
+5. No se prueban propiedades de complejidad computacional
 
 ### Recomendaciones para Futuro
 

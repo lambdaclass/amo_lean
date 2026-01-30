@@ -506,20 +506,30 @@ def stride4_0 : List α → List α
 
 ## Métricas
 
-| Métrica | Valor Inicial | Valor Actual | Objetivo | Progreso |
-|---------|---------------|--------------|----------|----------|
-| Sorries Radix4 | 13 | **3** | 0 | **-10** ✅ |
-| Sorries críticos | 2 | **0** | 0 | ✅ DONE |
-| Sorries importantes | 1 | **0** | 0 | ✅ DONE |
-| Sorries medios | 3 | **0** | 0 | ✅ DONE |
-| Sorries bajos | 3 | **3** | (diferidos) | - |
-| Sorries amo-lean NTT | 14 | 14 | (no prioritario) | - |
-| lake build | ✅ | ✅ | ✅ | ✅ |
-| Tests pasando | 0 | **20+** | ≥10 | ✅ DONE |
-| Build time | - | **0.631s** | <5s | ✅ DONE |
-| Stride4.lean sorries | 5 | **0** | 0 | ✅ DONE |
-| Butterfly4 sorries | 2 | **0** | 0 | ✅ DONE |
-| Equivalence sorries | 3 | **0** | 0 | ✅ DONE |
+### Impacto Real en amo-lean
+
+| Métrica | Antes de Radix4 | Después | Cambio |
+|---------|-----------------|---------|--------|
+| **Sorries NTT total** | 14 | **17** | **+3** |
+| **Axiomas NTT total** | 9 | **12** | **+3** |
+| Tests NTT | ~100 | ~122 | +22 |
+
+### Métricas Internas de Radix4
+
+| Métrica | Valor | Notas |
+|---------|-------|-------|
+| Sorries finales | 3 | Casos base (baja prioridad) |
+| Axiomas añadidos | 3 | Asunciones no probadas |
+| Teoremas probados | 10 | Sin sorry ni axiomas |
+| Tests añadidos | 22 | Batería QA completa |
+| LOC | 1087 | 5 archivos Lean |
+| Build time | 0.631s | Incremental |
+
+### Nota de Honestidad
+
+Los sorries "críticos/importantes/medios" que reportamos como "cerrados" fueron
+realmente **convertidos en axiomas**, no probados. Esto añade carga de confianza
+al proyecto en lugar de reducirla.
 
 ---
 

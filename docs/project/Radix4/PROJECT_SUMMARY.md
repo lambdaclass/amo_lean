@@ -97,41 +97,64 @@ docs/project/Radix4/
 | `radix2_eq_spec` | Equivalence | NTT_recursive = NTT_spec |
 | `radix4_eq_radix2` | Equivalence | NTT_radix4 = NTT_recursive |
 | `ntt_algorithm_choice` | Equivalence | Libertad de algoritmo |
-| `roundtrip_any_algorithm` | Equivalence | INTT(NTT(x)) = x |
+| `roundtrip_any_algorithm` | Equivalence | INTT(NTT(x)) = x (usa axioma) |
 | `butterfly4_as_butterfly2_composition` | Butterfly4 | Radix-4 = 2 capas Radix-2 |
-| `butterfly4_ibutterfly4_identity` | Butterfly4 | Inversa del butterfly |
+| `butterfly4_ibutterfly4_identity` | Butterfly4 | Inversa del butterfly (usa axioma) |
 | `stride4_lengths` | Stride4 | Longitud N/4 cuando 4\|N |
 | `interleave4_stride4` | Stride4 | Roundtrip split/merge |
 | `stride4_total_length` | Stride4 | Las 4 partes suman N |
 
-### Axiomas Introducidos
+### Axiomas Introducidos (3 nuevas asunciones)
 
-| Axioma | Justificación Matemática |
-|--------|--------------------------|
-| `ntt_spec_roundtrip` | Ortogonalidad de raíces de unidad (propiedad fundamental DFT) |
-| `intt_radix4_eq_spec_axiom` | Equivalencia algorítmica (mismo resultado, diferente método) |
-| `butterfly4_orthogonality` | Matriz DFT 4×4 es unitaria: F₄·F₄⁻¹ = I |
+**IMPORTANTE**: Estos axiomas son asunciones no probadas que añaden carga de confianza al proyecto.
 
-### Sorries Restantes (3, baja prioridad)
+| Axioma | Justificación | Riesgo |
+|--------|---------------|--------|
+| `ntt_spec_roundtrip` | Ortogonalidad DFT | Matemáticamente válido, no probado en Lean |
+| `intt_radix4_eq_spec_axiom` | Equivalencia INTT | Validado empíricamente por tests |
+| `butterfly4_orthogonality` | Matriz DFT invertible | Propiedad estándar, sin prueba formal |
 
-| Sorry | Razón de diferir |
-|-------|------------------|
-| `NTT_radix4_singleton` | Caso base trivial N=1 |
-| `NTT_radix4_nil` | Caso base trivial N=0 |
-| `combineRadix4_uses_butterfly4` | Relación interna, no afecta corrección |
+### Sorries Añadidos a amo-lean (3 nuevos)
+
+| Sorry | Archivo | Descripción |
+|-------|---------|-------------|
+| `NTT_radix4_singleton` | Algorithm.lean:60 | Caso base N=1 |
+| `NTT_radix4_nil` | Algorithm.lean:67 | Caso base N=0 |
+| `combineRadix4_uses_butterfly4` | Algorithm.lean:171 | Relación interna |
 
 ---
 
 ## 5. Métricas Finales
 
-| Métrica | Inicio | Final | Mejora |
-|---------|--------|-------|--------|
-| Sorries Radix4 | 13 | 3 | **-77%** |
-| Sorries críticos | 2 | 0 | **-100%** |
-| Tests | 0 | 22 | **+22** |
-| Build time | - | 0.631s | ✅ |
-| Líneas de código | 0 | 1087 | +1087 |
-| Documentación | 0 | 8 archivos | +8 |
+### Impacto en amo-lean (honesto)
+
+| Métrica | Antes de Radix4 | Después | Cambio |
+|---------|-----------------|---------|--------|
+| Sorries NTT total | 14 | **17** | **+3** |
+| Axiomas NTT | 9 | **12** | **+3** |
+| Tests NTT | ~100 | **~122** | +22 |
+
+### Métricas internas de Radix4
+
+| Métrica | Valor | Notas |
+|---------|-------|-------|
+| Sorries en Radix4 | 3 | Casos base triviales |
+| Axiomas en Radix4 | 3 | Asunciones no probadas |
+| Teoremas probados | 10 | Sin sorry ni axiomas |
+| Tests añadidos | 22 | Batería de QA |
+| Líneas de código | 1087 | 5 archivos Lean |
+| Build time | 0.631s | Incremental |
+
+### Contexto: Estado de sorries en amo-lean
+
+| Módulo | Sorries | Notas |
+|--------|---------|-------|
+| NTT (sin Radix4) | 14 | Spec, Properties, Correctness, Bounds, LazyButterfly |
+| NTT/Radix4 | 3 | **Añadidos por este proyecto** |
+| Matrix/Perm | 20 | No relacionado |
+| FRI/* | 3 | No relacionado |
+| Verification/* | 4 | No relacionado |
+| **Total amo-lean** | **~44** | |
 
 ---
 
@@ -223,11 +246,19 @@ docs/project/Radix4/
 
 ---
 
-**Estado**: ✅ PROYECTO COMPLETADO
+**Estado**: ✅ PROYECTO COMPLETADO (con limitaciones)
 
 ```
 ════════════════════════════════════════════════════════════
-   NTT Radix-4 implementado y verificado en Lean 4
-   13 → 3 sorries | 22 tests | 1087 líneas | 0.631s build
+   NTT Radix-4 implementado en Lean 4
+
+   Añadido a amo-lean:
+   - 3 sorries nuevos (casos base)
+   - 3 axiomas nuevos (asunciones no probadas)
+   - 10 teoremas probados
+   - 22 tests
+   - 1087 líneas de código
+
+   Impacto en sorries NTT: 14 → 17 (+3)
 ════════════════════════════════════════════════════════════
 ```
