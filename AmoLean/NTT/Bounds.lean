@@ -23,6 +23,7 @@
 -/
 
 import AmoLean.Field.Goldilocks
+import Mathlib.Tactic
 
 namespace AmoLean.NTT
 
@@ -190,14 +191,67 @@ theorem lazy_add_simulates (a b : LazyGoldilocks)
 def strictSubNat (a b : Nat) : Nat :=
   (a + GOLDILOCKS_PRIME - b % GOLDILOCKS_PRIME) % GOLDILOCKS_PRIME
 
+/-! ### Helper lemmas for lazy_sub_simulates -/
+
+private theorem p_pos : GOLDILOCKS_PRIME > 0 := by native_decide
+
+private lemma p_add_mod (x : Nat) : (GOLDILOCKS_PRIME + x) % GOLDILOCKS_PRIME = x % GOLDILOCKS_PRIME := by
+  rw [Nat.add_mod, Nat.mod_self, Nat.zero_add, Nat.mod_mod]
+
+private lemma case_b_lt_p (b : Nat) (h : b < GOLDILOCKS_PRIME) :
+    (2 * GOLDILOCKS_PRIME - b) % GOLDILOCKS_PRIME = (GOLDILOCKS_PRIME - b % GOLDILOCKS_PRIME) % GOLDILOCKS_PRIME := by
+  have hb_mod : b % GOLDILOCKS_PRIME = b := Nat.mod_eq_of_lt h
+  rw [hb_mod]
+  have h_sub : 2 * GOLDILOCKS_PRIME - b = GOLDILOCKS_PRIME + (GOLDILOCKS_PRIME - b) := by omega
+  rw [h_sub, p_add_mod]
+
+private lemma case_b_eq_p : (2 * GOLDILOCKS_PRIME - GOLDILOCKS_PRIME) % GOLDILOCKS_PRIME =
+    (GOLDILOCKS_PRIME - GOLDILOCKS_PRIME % GOLDILOCKS_PRIME) % GOLDILOCKS_PRIME := by
+  have h1 : 2 * GOLDILOCKS_PRIME - GOLDILOCKS_PRIME = GOLDILOCKS_PRIME := by omega
+  have h2 : GOLDILOCKS_PRIME % GOLDILOCKS_PRIME = 0 := Nat.mod_self GOLDILOCKS_PRIME
+  simp only [h1, h2, Nat.sub_zero, Nat.mod_self]
+
+private lemma case_b_gt_p (b : Nat) (h_gt : GOLDILOCKS_PRIME < b) (h_lt : b < 2 * GOLDILOCKS_PRIME) :
+    (2 * GOLDILOCKS_PRIME - b) % GOLDILOCKS_PRIME = (GOLDILOCKS_PRIME - b % GOLDILOCKS_PRIME) % GOLDILOCKS_PRIME := by
+  have h_rem_lt : b - GOLDILOCKS_PRIME < GOLDILOCKS_PRIME := by omega
+  have h_diff_lt : 2 * GOLDILOCKS_PRIME - b < GOLDILOCKS_PRIME := by omega
+  have h_b_eq : b = GOLDILOCKS_PRIME + (b - GOLDILOCKS_PRIME) := by omega
+  have hb_mod : b % GOLDILOCKS_PRIME = b - GOLDILOCKS_PRIME := by
+    conv_lhs => rw [h_b_eq]
+    rw [Nat.add_mod, Nat.mod_self, Nat.zero_add, Nat.mod_mod, Nat.mod_eq_of_lt h_rem_lt]
+  have h_lhs : (2 * GOLDILOCKS_PRIME - b) % GOLDILOCKS_PRIME = 2 * GOLDILOCKS_PRIME - b :=
+    Nat.mod_eq_of_lt h_diff_lt
+  have h_eq : GOLDILOCKS_PRIME - b % GOLDILOCKS_PRIME = 2 * GOLDILOCKS_PRIME - b := by rw [hb_mod]; omega
+  have h_rhs : (GOLDILOCKS_PRIME - b % GOLDILOCKS_PRIME) % GOLDILOCKS_PRIME = 2 * GOLDILOCKS_PRIME - b := by
+    rw [h_eq, h_lhs]
+  rw [h_lhs, h_rhs]
+
+private lemma two_p_sub_mod_eq (b : Nat) (hb : b < 2 * GOLDILOCKS_PRIME) :
+    (2 * GOLDILOCKS_PRIME - b) % GOLDILOCKS_PRIME = (GOLDILOCKS_PRIME - b % GOLDILOCKS_PRIME) % GOLDILOCKS_PRIME := by
+  rcases Nat.lt_trichotomy b GOLDILOCKS_PRIME with h_lt | h_eq | h_gt
+  · exact case_b_lt_p b h_lt
+  · subst h_eq; exact case_b_eq_p
+  · exact case_b_gt_p b h_gt hb
+
+private theorem lazy_sub_equiv (a b : Nat) (_ha : a < 2 * GOLDILOCKS_PRIME) (hb : b < 2 * GOLDILOCKS_PRIME) :
+    (a + 2 * GOLDILOCKS_PRIME - b) % GOLDILOCKS_PRIME =
+    (a % GOLDILOCKS_PRIME + GOLDILOCKS_PRIME - b % GOLDILOCKS_PRIME) % GOLDILOCKS_PRIME := by
+  have hb_mod_lt : b % GOLDILOCKS_PRIME < GOLDILOCKS_PRIME := Nat.mod_lt b p_pos
+  have h_rhs : a % GOLDILOCKS_PRIME + GOLDILOCKS_PRIME - b % GOLDILOCKS_PRIME =
+      a % GOLDILOCKS_PRIME + (GOLDILOCKS_PRIME - b % GOLDILOCKS_PRIME) := by omega
+  rw [h_rhs]
+  have h_lhs : a + 2 * GOLDILOCKS_PRIME - b = a + (2 * GOLDILOCKS_PRIME - b) := by omega
+  rw [h_lhs]
+  rw [Nat.add_mod a (2 * GOLDILOCKS_PRIME - b), Nat.add_mod (a % GOLDILOCKS_PRIME) (GOLDILOCKS_PRIME - b % GOLDILOCKS_PRIME)]
+  rw [two_p_sub_mod_eq b hb, Nat.mod_mod a GOLDILOCKS_PRIME]
+
 /-- Lazy sub then reduce equals strict sub -/
 theorem lazy_sub_simulates (a b : LazyGoldilocks)
     (ha : a.val < BOUND_2P) (hb : b.val < BOUND_2P) :
     (sub a b ha hb).reduceNat = strictSubNat a.reduceNat b.reduceNat := by
   simp only [sub, reduceNat, strictSubNat, BOUND_2P]
-  -- This requires modular arithmetic reasoning
-  -- (a + 2p - b) % p = (a % p + p - b % p) % p = (a - b) % p
-  sorry -- Modular arithmetic proof
+  rw [Nat.mod_mod b.val GOLDILOCKS_PRIME]
+  exact lazy_sub_equiv a.val b.val ha hb
 
 /-! ## Part 7: Bounds Preservation Theorems -/
 
@@ -208,12 +262,12 @@ theorem reduceToLazy_bound (x : LazyGoldilocks) :
   have hp : GOLDILOCKS_PRIME > 0 := by simp only [GOLDILOCKS_PRIME]; omega
   exact Nat.mod_lt x.val hp
 
-/-- Values from strict field are < p -/
-theorem ofStrict_bound (x : GoldilocksField) :
+/-- Values from strict field are < p (when well-formed) -/
+theorem ofStrict_bound (x : GoldilocksField) (hx : x.value.toNat < ORDER.toNat) :
     (ofStrict x).val < GOLDILOCKS_PRIME := by
   simp only [ofStrict]
-  -- x.value.toNat < 2^64, and well-formed values < ORDER = GOLDILOCKS_PRIME
-  sorry -- Requires GoldilocksField invariant
+  rw [goldilocks_prime_eq]
+  exact hx
 
 /-- Add preserves 4p bound -/
 theorem add_bound (a b : LazyGoldilocks)

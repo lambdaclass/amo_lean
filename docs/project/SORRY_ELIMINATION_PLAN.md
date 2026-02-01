@@ -1,7 +1,44 @@
 # Plan de Eliminacion de Sorries - amo-lean NTT
 
-**Fecha**: 2026-01-30
+**Fecha Inicio**: 2026-01-30
+**Ultima Actualizacion**: 2026-02-01
 **Objetivo**: Cerrar TODOS los sorries del modulo NTT (17 sorries + 7 axiomas)
+
+---
+
+## ESTADO ACTUAL - 2026-02-01
+
+### Progreso General
+
+| Fase | Estado | Sorries Cerrados |
+|------|--------|------------------|
+| Fase 1: Fundamentos | EN PROGRESO | 0/4 |
+| Fase 2: Lazy Butterfly | PENDIENTE | 0/3 |
+| Fase 3: Cooley-Tukey | **COMPLETA** | **3/3** (S8, S9, S10) |
+| Fase 4: Identidad | PENDIENTE | 0/3 |
+| Fase 5: Radix4 Sorries | PENDIENTE | 0/3 |
+| Fase 6: Radix4 Axiomas | PENDIENTE | 0/7 |
+| Fase 7: Parseval | PENDIENTE | 0/1 |
+
+### Hitos Alcanzados
+
+- [x] **2026-01-31**: Sesion 2 - Bridge lemmas para DFT splitting
+- [x] **2026-02-01**: Sesion 3 - **TEOREMA CENTRAL S10 COMPLETADO**
+
+### Sorries Cerrados en Esta Fase
+
+| ID | Teorema | Archivo | Fecha |
+|----|---------|---------|-------|
+| S8 | `cooley_tukey_upper_half` | Phase3Proof.lean | 2026-01-31 |
+| S9 | `cooley_tukey_lower_half` | Phase3Proof.lean | 2026-01-31 |
+| **S10** | **`ct_recursive_eq_spec`** | Correctness.lean:163 | **2026-02-01** |
+
+### Documentacion de Sesiones
+
+- `SORRY_ELIMINATION_SESSION_1.md` - Configuracion inicial
+- `SORRY_ELIMINATION_SESSION_2.md` - Bridge lemmas y Fase 3 parcial
+- `SORRY_ELIMINATION_SESSION_3.md` - **Teorema S10 completado**
+- `LECCIONES_QA.md` - Estrategias y patrones del QA
 
 ---
 
@@ -278,35 +315,42 @@ X_k = Σ_{j=0}^{n-1} a_j · ω^{jk}
 
 ### NIVEL 3: Correccion del Algoritmo
 
-#### S10. `ct_recursive_eq_spec` (Correctness.lean:120)
+#### S10. `ct_recursive_eq_spec` (Correctness.lean:163) ✅ COMPLETADO
+
 ```lean
 theorem ct_recursive_eq_spec (ω : F) (input : List F)
-    (h_pow2 : ∃ k : ℕ, input.length = 2^k) :
+    (h_pow2 : ∃ k : ℕ, input.length = 2^k)
+    (hω : IsPrimitiveRoot ω input.length) :
     NTT_recursive ω input = NTT_spec ω input
 ```
 
 | Aspecto | Detalle |
 |---------|---------|
-| **Dificultad** | 🔴 ALTA |
-| **Dependencias** | S8, S9 |
-| **Tecnica** | Induccion fuerte sobre input.length |
-| **Bibliografia** | CLRS Cap. 30, "Introduction to Algorithms" |
-| **Estimacion** | 8-12 horas |
+| **Estado** | ✅ **COMPLETADO** (2026-02-01) |
+| **Dificultad Real** | 🔴 ALTA (como se estimo) |
+| **Dependencias** | S8, S9, Phase3Proof lemmas |
+| **Tecnica** | Induccion sobre exponente + List.ext_getElem? |
+| **Tiempo Real** | ~4 horas |
 
 **Este es el teorema central del proyecto NTT.**
 
-**Estrategia**:
-1. Induccion fuerte sobre `input.length`
-2. Caso base (n=1): Ya probado como `ntt_eq_singleton`
-3. Caso inductivo:
-   - Dividir en evens/odds
-   - Aplicar hipotesis inductiva a cada mitad
-   - Usar S8 y S9 para combinar
+**Estrategia Final Utilizada** (sugerida por QA):
+1. Crear unfolding lemmas (`NTT_recursive_unfold`, `NTT_recursive_getElem_*`)
+2. Induccion sobre exponente: `cases exp with | zero => | succ exp' =>`
+3. Usar `List.ext_getElem?` para igualdad elemento-a-elemento
+4. Caso especial n=2 con prueba directa (no usa `cooley_tukey_lower_half`)
 
-**Lemas auxiliares necesarios**:
-- `evens_length`, `odds_length` (preservacion de longitud)
-- `squared_is_primitive` (ya probado)
-- Propiedades de `List.zip`
+**Lemas auxiliares creados**:
+- `NTT_recursive_unfold` (CooleyTukey.lean:158)
+- `NTT_recursive_getElem_upper` (CooleyTukey.lean:177)
+- `NTT_recursive_getElem_lower` (CooleyTukey.lean:189)
+- `NTT_recursive_getElem_none` (CooleyTukey.lean:209)
+
+**Decisiones de diseño clave**:
+- DD-038: Usar `cases exp` en lugar de match sobre lista
+- DD-039: Crear unfolding lemmas para exposicion de estructura
+- DD-040: Caso especial n=2 con prueba directa
+- DD-041: Usar `List.ext_getElem?` para igualdad de listas
 
 ---
 
@@ -469,15 +513,22 @@ theorem parseval {n : ℕ} (hn : n > 1) (ω : F) (hω : IsPrimitiveRoot ω n)
 | 2.3 | S7 `lazy_butterfly_sum` | 2 | S5, S6 |
 | **Total** | **3 sorries** | **~7 horas** | |
 
-### Fase 3: Cooley-Tukey (Dias 5-8)
-**Objetivo**: Probar recurrencia CT y teorema central
+### Fase 3: Cooley-Tukey (Dias 5-8) ✅ COMPLETADA
 
-| Orden | Sorry | Horas Est. | Dependencias |
-|-------|-------|------------|--------------|
-| 3.1 | S8 `cooley_tukey_upper_half` | 5 | - |
-| 3.2 | S9 `cooley_tukey_lower_half` | 3 | S8 |
-| 3.3 | S10 `ct_recursive_eq_spec` | 10 | S8, S9 |
-| **Total** | **3 sorries** | **~18 horas** | |
+**Objetivo**: Probar recurrencia CT y teorema central
+**Estado**: ✅ COMPLETADA (2026-02-01)
+
+| Orden | Sorry | Estado | Horas Reales |
+|-------|-------|--------|--------------|
+| 3.1 | S8 `cooley_tukey_upper_half` | ✅ | ~4h |
+| 3.2 | S9 `cooley_tukey_lower_half` | ✅ | ~2h |
+| 3.3 | S10 `ct_recursive_eq_spec` | ✅ | ~4h |
+| **Total** | **3 sorries** | **100%** | **~10 horas** |
+
+**Nota**: Tiempo real significativamente menor al estimado gracias a:
+- Estrategia de capas sugerida por QA
+- Reutilizacion de lemas de Phase3Proof.lean
+- Unfolding lemmas que simplificaron la prueba principal
 
 ### Fase 4: Identidad Central (Dias 9-11)
 **Objetivo**: Probar INTT(NTT(x)) = x

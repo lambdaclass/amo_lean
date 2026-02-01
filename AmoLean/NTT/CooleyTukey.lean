@@ -51,25 +51,25 @@ def NTT_recursive (ω : F) (a : List F) : List F :=
     let a_even := evens a
     let a_odd := odds a
 
-    -- ω² is primitive (n/2)-th root
-    let ω_squared := inst.mul ω ω
+    -- ω² is primitive (n/2)-th root (using standard * operator)
+    let ω_squared := ω * ω
 
     -- Recursive calls (termination: evens/odds reduce list size)
     let E := NTT_recursive ω_squared a_even
     let O := NTT_recursive ω_squared a_odd
 
-    -- Combine using butterfly operations
+    -- Combine using butterfly operations (using standard operators)
     let upper := (List.range half).map fun k =>
-      let twiddle := inst.pow ω k
-      let ek := E[k]?.getD inst.zero
-      let ok := O[k]?.getD inst.zero
-      inst.add ek (inst.mul twiddle ok)
+      let twiddle := ω ^ k
+      let ek := E[k]?.getD 0
+      let ok := O[k]?.getD 0
+      ek + twiddle * ok
 
     let lower := (List.range half).map fun k =>
-      let twiddle := inst.pow ω k
-      let ek := E[k]?.getD inst.zero
-      let ok := O[k]?.getD inst.zero
-      inst.sub ek (inst.mul twiddle ok)
+      let twiddle := ω ^ k
+      let ek := E[k]?.getD 0
+      let ok := O[k]?.getD 0
+      ek - twiddle * ok
 
     upper ++ lower
 termination_by a.length
@@ -93,11 +93,11 @@ decreasing_by
 def INTT_recursive (ω : F) (n_inv : F) (X : List F) : List F :=
   let n := X.length
   if h : n > 0 then
-    -- ω⁻¹ = ω^(n-1) for primitive n-th root
-    let ω_inv := inst.pow ω (n - 1)
+    -- ω⁻¹ = ω^(n-1) for primitive n-th root (using standard ^ operator)
+    let ω_inv := ω ^ (n - 1)
     let result := NTT_recursive ω_inv X
-    -- Multiply each element by n⁻¹
-    result.map (inst.mul n_inv)
+    -- Multiply each element by n⁻¹ (using standard * operator)
+    result.map (n_inv * ·)
   else
     []
 
@@ -148,7 +148,73 @@ theorem NTT_recursive_length (ω : F) (a : List F)
     simp only [hm]
     omega
 
-/-! ## Part 5: Quick Tests -/
+/-! ## Part 5: Unfolding Lemma for Correctness Proof -/
+
+/-- Unfolding lemma: NTT_recursive on a list of length ≥ 2 equals upper ++ lower
+
+    This lemma exposes the structure of NTT_recursive without let bindings,
+    making it suitable for use in the correctness proof.
+-/
+theorem NTT_recursive_unfold (ω : F) (a : List F) (ha : a.length ≥ 2) :
+    NTT_recursive ω a =
+    let half := a.length / 2
+    let E := NTT_recursive (ω * ω) (evens a)
+    let O := NTT_recursive (ω * ω) (odds a)
+    let upper := (List.range half).map fun k =>
+      E[k]?.getD 0 + ω ^ k * O[k]?.getD 0
+    let lower := (List.range half).map fun k =>
+      E[k]?.getD 0 - ω ^ k * O[k]?.getD 0
+    upper ++ lower := by
+  -- a has length ≥ 2, so it matches x :: y :: xs
+  match h : a with
+  | [] => simp at ha
+  | [_] => simp at ha
+  | x :: y :: xs =>
+    -- Unfold NTT_recursive for the x :: y :: xs case
+    simp only [NTT_recursive, h]
+    -- The structure matches directly (simp already closes the goal)
+
+/-- Element access for NTT_recursive upper half (k < n/2) -/
+theorem NTT_recursive_getElem_upper (ω : F) (a : List F) (ha : a.length ≥ 2) (k : ℕ)
+    (hk : k < a.length / 2) :
+    (NTT_recursive ω a)[k]? =
+    some ((NTT_recursive (ω * ω) (evens a))[k]?.getD 0 +
+          ω ^ k * (NTT_recursive (ω * ω) (odds a))[k]?.getD 0) := by
+  rw [NTT_recursive_unfold ω a ha]
+  simp only []
+  rw [List.getElem?_append_left (by simp only [List.length_map, List.length_range]; exact hk)]
+  rw [List.getElem?_map, List.getElem?_range hk]
+  simp only [Option.map_some']
+
+/-- Element access for NTT_recursive lower half (n/2 ≤ k < n) -/
+theorem NTT_recursive_getElem_lower (ω : F) (a : List F) (ha : a.length ≥ 2)
+    (heven : 2 ∣ a.length) (k : ℕ) (hk_ge : k ≥ a.length / 2) (hk_lt : k < a.length) :
+    (NTT_recursive ω a)[k]? =
+    some ((NTT_recursive (ω * ω) (evens a))[k - a.length / 2]?.getD 0 -
+          ω ^ (k - a.length / 2) * (NTT_recursive (ω * ω) (odds a))[k - a.length / 2]?.getD 0) := by
+  rw [NTT_recursive_unfold ω a ha]
+  simp only []
+  have h_upper_len : ((List.range (a.length / 2)).map fun k =>
+      (NTT_recursive (ω * ω) (evens a))[k]?.getD 0 +
+      ω ^ k * (NTT_recursive (ω * ω) (odds a))[k]?.getD 0).length = a.length / 2 := by
+    simp only [List.length_map, List.length_range]
+  rw [List.getElem?_append_right (by simp only [List.length_map, List.length_range]; exact hk_ge)]
+  simp only [List.length_map, List.length_range]
+  have hk_sub : k - a.length / 2 < a.length / 2 := by
+    have h2 := Nat.mul_div_cancel' heven
+    omega
+  rw [List.getElem?_map, List.getElem?_range hk_sub]
+  simp only [Option.map_some']
+
+/-- NTT_recursive returns none for indices ≥ length -/
+theorem NTT_recursive_getElem_none (ω : F) (a : List F) (k : ℕ)
+    (hpow2 : ∃ e : ℕ, a.length = 2^e) (hk : k ≥ a.length) :
+    (NTT_recursive ω a)[k]? = none := by
+  rw [List.getElem?_eq_none]
+  rw [NTT_recursive_length ω a hpow2]
+  exact hk
+
+/-! ## Part 6: Quick Tests -/
 
 section Tests
 

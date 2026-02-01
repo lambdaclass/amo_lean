@@ -18,6 +18,7 @@
 
 import AmoLean.NTT.Bounds
 import AmoLean.NTT.Butterfly
+import AmoLean.NTT.Phase2Proof
 
 namespace AmoLean.NTT
 
@@ -142,9 +143,8 @@ theorem lazy_butterfly_fst_simulates (a b : LazyGoldilocks)
     (strict_butterfly_nat a.reduceNat b.reduceNat twiddle).1 := by
   simp only [lazy_butterfly_fst, lazy_butterfly, strict_butterfly_nat, reduceNat]
   simp only [add, mulReduce]
-  -- The key: (a.val + (b.val * tw) % p) % p = (a.val % p + (b.val % p * tw) % p) % p
-  -- This requires modular arithmetic properties
-  sorry -- Modular arithmetic proof
+  -- Apply the Phase2Proof lemma: fst_mod_eq
+  exact Phase2Proof.fst_mod_eq a.val b.val twiddle
 
 /-- The second output of lazy_butterfly reduced equals strict butterfly second output -/
 theorem lazy_butterfly_snd_simulates (a b : LazyGoldilocks)
@@ -156,8 +156,8 @@ theorem lazy_butterfly_snd_simulates (a b : LazyGoldilocks)
     (strict_butterfly_nat a.reduceNat b.reduceNat twiddle).2 := by
   simp only [lazy_butterfly_snd, lazy_butterfly, strict_butterfly_nat, reduceNat]
   simp only [sub, mulReduce, BOUND_2P]
-  -- This requires modular arithmetic for subtraction
-  sorry -- Modular arithmetic proof
+  -- Apply the Phase2Proof lemma: snd_mod_eq
+  exact Phase2Proof.snd_mod_eq a.val b.val twiddle
 
 /-! ## Part 5: Sum Preservation
 
@@ -177,8 +177,8 @@ theorem lazy_butterfly_sum (a b : LazyGoldilocks)
     (htw : twiddle < GOLDILOCKS_PRIME) :
     ((lazy_butterfly a b twiddle ha hb htw).1.reduceNat +
      (lazy_butterfly a b twiddle ha hb htw).2.reduceNat) % GOLDILOCKS_PRIME =
-    (2 * a.reduceNat) % GOLDILOCKS_PRIME := by
-  sorry -- Requires modular arithmetic
+    (2 * a.reduceNat) % GOLDILOCKS_PRIME :=
+  Phase2Proof.butterfly_sum_mod a.val _ (Nat.mod_lt (b.val * twiddle) (by decide))
 
 /-! ## Part 6: Integration with Standard Butterfly
 
