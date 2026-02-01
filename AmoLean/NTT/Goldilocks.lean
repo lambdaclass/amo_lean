@@ -28,16 +28,17 @@ open AmoLean.Field.Goldilocks
 
 /-! ## Part 1: NTTField Instance for Goldilocks -/
 
-/-- NTTField instance for GoldilocksField -/
+/-- NTTField instance for GoldilocksField
+
+    Since NTTField extends CommRing, and GoldilocksField already has a CommRing
+    instance (from AmoLean.Field.Goldilocks), we only need to provide the
+    NTT-specific operations: inv, char, isZero.
+
+    Exponentiation uses the standard ^ operator which is already defined for
+    GoldilocksField via the Pow instance (using GoldilocksField.pow).
+-/
 instance : NTTField GoldilocksField where
-  add := GoldilocksField.add
-  sub := GoldilocksField.sub
-  neg := GoldilocksField.neg
-  mul := GoldilocksField.mul
-  zero := GoldilocksField.zero
-  one := GoldilocksField.one
   inv := GoldilocksField.inv
-  pow := GoldilocksField.pow
   char := ORDER.toNat
   isZero := fun a => a.value == 0
 

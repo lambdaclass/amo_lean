@@ -18,6 +18,7 @@
 import AmoLean.NTT.Field
 import AmoLean.NTT.RootsOfUnity
 import AmoLean.NTT.Goldilocks
+import Mathlib.Tactic
 
 namespace AmoLean.NTT
 
@@ -36,7 +37,7 @@ def NTT_spec (ω : F) (a : List F) : List F :=
     (List.range n).foldl (init := inst.zero)
       fun acc i =>
         match a[i]? with
-        | some aᵢ => inst.add acc (inst.mul aᵢ (inst.pow ω (i * k)))
+        | some aᵢ => inst.add acc (inst.mul aᵢ (HPow.hPow ω (i * k)))
         | none => acc
 
 /-! ## Part 2: Alternative definition using ntt_coeff -/
@@ -46,7 +47,7 @@ def ntt_coeff (ω : F) (a : List F) (k : Nat) : F :=
   (List.range a.length).foldl (init := inst.zero)
     fun acc i =>
       match a[i]? with
-      | some aᵢ => inst.add acc (inst.mul aᵢ (inst.pow ω (i * k)))
+      | some aᵢ => inst.add acc (inst.mul aᵢ (HPow.hPow ω (i * k)))
       | none => acc
 
 /-- NTT_spec expressed in terms of ntt_coeff -/
@@ -68,7 +69,7 @@ theorem NTT_spec_length (ω : F) (a : List F) :
 
 /-- NTT of singleton [a] results in [a * ω⁰] -/
 theorem NTT_spec_singleton (ω : F) (a : F) :
-    NTT_spec ω [a] = [inst.add inst.zero (inst.mul a (inst.pow ω 0))] := by
+    NTT_spec ω [a] = [inst.add inst.zero (inst.mul a (HPow.hPow ω 0))] := by
   rfl
 
 /-! ## Part 4: First coefficient theorem -/
@@ -82,20 +83,156 @@ theorem NTT_spec_coeff_zero (ω : F) (a : List F) (hne : a ≠ []) :
   simp only [List.getElem?_range hlen]
   rfl
 
-/-! ## Part 5: Linearity properties (deferred) -/
+/-! ## Part 5: Linearity properties -/
+
+section Linearity
+variable {F : Type*} [instL : NTTFieldLawful F]
+
+-- Helper lemmas for foldl proofs
+private lemma getElem?_map_mul (a : List F) (c : F) (i : Nat) :
+    (a.map (c * ·))[i]? = (a[i]?).map (c * ·) := List.getElem?_map (c * ·) a i
+
+private lemma length_map_mul (a : List F) (c : F) : (a.map (c * ·)).length = a.length :=
+  List.length_map a (c * ·)
+
+private lemma scale_term (c aᵢ ωpow : F) :
+    (c * aᵢ) * ωpow = c * (aᵢ * ωpow) := mul_assoc c aᵢ ωpow
+
+private lemma mul_add_distrib (c acc x : F) :
+    c * (acc + x) = c * acc + c * x := by
+  rw [mul_comm c, add_mul, mul_comm acc, mul_comm x]
+
+private lemma foldl_scale_general (c : F) (a : List F) (ω : F) (k : Nat)
+    (indices : List Nat) (acc : F) :
+    indices.foldl
+      (fun ac i => match (a.map (c * ·))[i]? with
+        | some aᵢ => ac + aᵢ * HPow.hPow ω (i * k)
+        | none => ac)
+      (c * acc) =
+    c * (indices.foldl
+      (fun ac i => match a[i]? with
+        | some aᵢ => ac + aᵢ * HPow.hPow ω (i * k)
+        | none => ac)
+      acc) := by
+  induction indices generalizing acc with
+  | nil => simp only [List.foldl_nil]
+  | cons i rest ih =>
+    simp only [List.foldl_cons]
+    rw [getElem?_map_mul]
+    cases ha : a[i]? with
+    | none =>
+      simp only [Option.map_none']
+      exact ih acc
+    | some aᵢ =>
+      simp only [Option.map_some']
+      have h_acc_eq : c * acc + (c * aᵢ) * HPow.hPow ω (i * k) =
+          c * (acc + aᵢ * HPow.hPow ω (i * k)) := by
+        rw [mul_add_distrib, scale_term]
+      rw [h_acc_eq]
+      exact ih (acc + aᵢ * HPow.hPow ω (i * k))
+
+/-- ntt_coeff scales linearly: NTT(c·a)ₖ = c · NTT(a)ₖ -/
+theorem ntt_coeff_scale (ω : F) (a : List F) (c : F) (k : Nat) :
+    ntt_coeff ω (a.map (c * ·)) k = c * (ntt_coeff ω a k) := by
+  simp only [ntt_coeff]
+  rw [length_map_mul]
+  have h_init : c * (0 : F) = (0 : F) := by
+    rw [mul_comm, zero_mul]
+  have h := foldl_scale_general c a ω k (List.range a.length) (0 : F)
+  simp only [h_init] at h
+  exact h
+
+-- Helper lemmas for S1 (addition)
+private lemma getElem?_zipWith_add (a b : List F) (i : Nat) :
+    (List.zipWith (· + ·) a b)[i]? = match a[i]?, b[i]? with
+      | some x, some y => some (x + y)
+      | _, _ => none := by
+  cases ha : a[i]? <;> cases hb : b[i]? <;> simp [List.getElem?_zipWith, ha, hb]
+
+private lemma length_zipWith_add (a b : List F) :
+    (List.zipWith (· + ·) a b).length = min a.length b.length :=
+  List.length_zipWith (· + ·) a b
+
+private lemma add_term_distrib (aᵢ bᵢ ωpow : F) :
+    (aᵢ + bᵢ) * ωpow = aᵢ * ωpow + bᵢ * ωpow := add_mul aᵢ bᵢ ωpow
+
+private lemma add_assoc_4 (w x y z : F) :
+    (w + x) + (y + z) = (w + y) + (x + z) := by
+  calc (w + x) + (y + z) = w + (x + (y + z)) := by rw [add_assoc]
+    _ = w + ((x + y) + z) := by rw [← add_assoc x y z]
+    _ = w + ((y + x) + z) := by rw [add_comm x y]
+    _ = w + (y + (x + z)) := by rw [add_assoc y x z]
+    _ = (w + y) + (x + z) := by rw [← add_assoc w y (x + z)]
+
+private lemma foldl_add_general (a b : List F) (ω : F) (k : Nat)
+    (indices : List Nat) (acc_ab acc_a acc_b : F)
+    (heq : a.length = b.length)
+    (h_acc : acc_ab = acc_a + acc_b) :
+    indices.foldl
+      (fun ac i => match (List.zipWith (· + ·) a b)[i]? with
+        | some xi => ac + xi * HPow.hPow ω (i * k)
+        | none => ac)
+      acc_ab =
+    (indices.foldl
+        (fun ac i => match a[i]? with
+          | some aᵢ => ac + aᵢ * HPow.hPow ω (i * k)
+          | none => ac)
+        acc_a) +
+      (indices.foldl
+        (fun ac i => match b[i]? with
+          | some bᵢ => ac + bᵢ * HPow.hPow ω (i * k)
+          | none => ac)
+        acc_b) := by
+  induction indices generalizing acc_ab acc_a acc_b with
+  | nil =>
+    simp only [List.foldl_nil]
+    exact h_acc
+  | cons i rest ih =>
+    simp only [List.foldl_cons]
+    rw [getElem?_zipWith_add]
+    cases ha : a[i]? with
+    | none =>
+      simp only
+      have hb : b[i]? = none := by
+        by_contra hne
+        push_neg at hne
+        have ⟨bi, hbi⟩ := Option.ne_none_iff_exists'.mp hne
+        have hi_lt_b : i < b.length := List.getElem?_eq_some_iff.mp hbi |>.1
+        have hi_lt_a : i < a.length := by omega
+        have hsome : a[i]? = some (a[i]'hi_lt_a) := List.getElem?_eq_some_iff.mpr ⟨hi_lt_a, rfl⟩
+        rw [ha] at hsome
+        exact Option.noConfusion hsome
+      simp only [hb]
+      exact ih acc_ab acc_a acc_b h_acc
+    | some aᵢ =>
+      cases hb : b[i]? with
+      | none =>
+        simp only
+        have hi_lt_a : i < a.length := List.getElem?_eq_some_iff.mp ha |>.1
+        have hi_lt_b : i < b.length := by omega
+        have hsome : b[i]? = some (b[i]'hi_lt_b) := List.getElem?_eq_some_iff.mpr ⟨hi_lt_b, rfl⟩
+        rw [hb] at hsome
+        exact Option.noConfusion hsome
+      | some bᵢ =>
+        simp only
+        have h_new_acc : acc_ab + (aᵢ + bᵢ) * HPow.hPow ω (i * k) =
+            (acc_a + aᵢ * HPow.hPow ω (i * k)) +
+            (acc_b + bᵢ * HPow.hPow ω (i * k)) := by
+          rw [h_acc, add_term_distrib, add_assoc_4]
+        exact ih _ _ _ h_new_acc
 
 /-- ntt_coeff is additive in the input list (coefficient-wise) -/
 theorem ntt_coeff_add (ω : F) (a b : List F) (k : Nat)
     (heq : a.length = b.length) :
-    ntt_coeff ω (List.zipWith inst.add a b) k =
-    inst.add (ntt_coeff ω a k) (ntt_coeff ω b k) := by
-  sorry  -- Requires proving foldl distributes over addition
+    ntt_coeff ω (List.zipWith (· + ·) a b) k = (ntt_coeff ω a k) + (ntt_coeff ω b k) := by
+  simp only [ntt_coeff]
+  rw [length_zipWith_add]
+  have h_min : min a.length b.length = a.length := by omega
+  rw [h_min, heq]
+  have h_init : (0 : F) = 0 + 0 := by rw [add_zero]
+  exact foldl_add_general a b ω k (List.range b.length) 0 0 0 heq h_init
 
-/-- ntt_coeff scales linearly: NTT(c·a)ₖ = c · NTT(a)ₖ -/
-theorem ntt_coeff_scale (ω : F) (a : List F) (c : F) (k : Nat) :
-    ntt_coeff ω (a.map (inst.mul c)) k =
-    inst.mul c (ntt_coeff ω a k) := by
-  sorry  -- Requires commutativity and distributivity
+end Linearity
 
 /-! ## Part 6: Inverse NTT Specification -/
 
@@ -119,7 +256,7 @@ def INTT_spec (ω : F) (n_inv : F) (X : List F) : List F :=
         -- ω^(-ik) = ω^(n - (ik mod n)) when ik > 0
         | some Xₖ =>
           let exp := if i * k = 0 then 0 else n - ((i * k) % n)
-          inst.add acc (inst.mul Xₖ (inst.pow ω exp))
+          inst.add acc (inst.mul Xₖ (HPow.hPow ω exp))
         | none => acc
     inst.mul n_inv sum
 
@@ -131,7 +268,7 @@ def intt_coeff (ω : F) (n_inv : F) (X : List F) (i : Nat) : F :=
       match X[k]? with
       | some Xₖ =>
         let exp := if i * k = 0 then 0 else n - ((i * k) % n)
-        inst.add acc (inst.mul Xₖ (inst.pow ω exp))
+        inst.add acc (inst.mul Xₖ (HPow.hPow ω exp))
       | none => acc
   inst.mul n_inv sum
 
@@ -159,7 +296,7 @@ theorem INTT_spec_length (ω n_inv : F) (X : List F) :
     NOTE: For the formal statement with IsPrimitiveRoot, see the
     specialized module with proper type class constraints. -/
 theorem ntt_intt_identity (ω n_inv : F) (a : List F) (n_as_field : F)
-    (hω_n : inst.pow ω a.length = inst.one)
+    (hω_n : HPow.hPow ω a.length = inst.one)
     (hn_inv : inst.mul n_inv n_as_field = inst.one)
     (hne : a ≠ []) :
     INTT_spec ω n_inv (NTT_spec ω a) = a := by
