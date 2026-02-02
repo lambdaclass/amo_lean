@@ -21,6 +21,7 @@ import AmoLean.NTT.CooleyTukey
 import AmoLean.NTT.Goldilocks
 import AmoLean.NTT.Properties
 import AmoLean.NTT.Phase3Proof
+import AmoLean.NTT.ListFinsetBridge
 
 namespace AmoLean.NTT
 
@@ -407,9 +408,37 @@ theorem ntt_intt_recursive_roundtrip (ω n_inv : F) (input : List F)
   -- By correctness, NTT_recursive = NTT_spec
   have h_ntt := ct_recursive_eq_spec ω input h_pow2 hω
   rw [h_ntt]
-  -- Now we need to show INTT_recursive(NTT_spec(...)) = input
-  -- This follows from INTT_recursive = INTT_spec and the spec roundtrip
-  sorry -- Uses INTT correctness
+  -- INTT_recursive = INTT_spec (from ListFinsetBridge)
+  by_cases hne : input = []
+  · -- Empty input case
+    subst hne
+    simp only [NTT_spec_nil, INTT_recursive, List.length_nil]
+    -- 0 > 0 is false, so the if returns []
+    simp
+  · -- Non-empty input
+    have h_intt_eq := intt_recursive_eq_spec ω n_inv (NTT_spec ω input)
+        (by rw [NTT_spec_length]; exact h_pow2)
+        (by rw [NTT_spec_length]; exact hω)
+        (by intro h; have := congrArg List.length h; simp [NTT_spec_length] at this; exact hne this)
+    rw [h_intt_eq]
+    -- Now use INTT_spec(NTT_spec(input)) = input
+    -- This requires n > 1 for the Finset roundtrip theorem
+    obtain ⟨exp, hexp⟩ := h_pow2
+    cases exp with
+    | zero =>
+      -- n = 1, degenerate case: single element
+      -- For n=1, the transform is identity (Σ over single element)
+      sorry -- Single element case (n=1 is degenerate)
+    | succ e =>
+      -- n = 2^(e+1) ≥ 2, so n > 1
+      have hn_gt1 : input.length > 1 := by
+        rw [hexp]
+        have : 2^(e+1) ≥ 2 := by
+          have h2e : 2^e ≥ 1 := Nat.one_le_pow e 2 (by norm_num)
+          simp only [Nat.pow_succ]; omega
+        omega
+      -- Use the List roundtrip theorem from ListFinsetBridge
+      exact ntt_intt_identity_list hn_gt1 ω n_inv hω h_inv input rfl
 
 end MainTheorem
 

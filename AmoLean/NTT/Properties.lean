@@ -103,12 +103,19 @@ theorem intt_ntt_identity_finset {n : ℕ} (hn : n > 1) {ω n_inv : F}
   -- = n_inv * Σ_j a_j * Σ_k ω^(jk) * ω^(n - (ik mod n))
   rw [Finset.sum_comm]
 
-  -- Step 3: Pull a_j out of the inner sum
-  conv_lhs =>
-    arg 2
-    ext j
-    rw [← Finset.mul_sum]
-    rw [mul_comm (a j)]
+  -- Step 3: Pull a_j out of the inner sum and rearrange
+  -- We need to show that the inner sum over k can be factored
+  have h_factor : ∀ j : Fin n,
+      (Finset.univ.sum fun k : Fin n => a j * ω ^ (j.val * k.val) * ω ^ (n - (i.val * k.val) % n)) =
+      (Finset.univ.sum fun k : Fin n => ω ^ (j.val * k.val) * ω ^ (n - (i.val * k.val) % n)) * a j := by
+    intro j
+    have h_rearrange : (fun k : Fin n => a j * ω ^ (j.val * k.val) * ω ^ (n - (i.val * k.val) % n)) =
+                       (fun k : Fin n => (ω ^ (j.val * k.val) * ω ^ (n - (i.val * k.val) % n)) * a j) := by
+      ext k
+      ring
+    rw [h_rearrange, ← Finset.sum_mul]
+
+  simp_rw [h_factor]
 
   -- Step 4: Apply orthogonality theorem to the inner sum
   -- Σ_k ω^(jk) * ω^(n - (ik mod n)) = n if j = i, else 0

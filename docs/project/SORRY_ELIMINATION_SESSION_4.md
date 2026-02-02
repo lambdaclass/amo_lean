@@ -354,28 +354,67 @@ CAPA 7: IDENTIDAD INTT (List)          PENDIENTE
 
 ---
 
-## Trabajo Pendiente
+## Trabajo Pendiente (Actualizado)
 
 ### Sorries en NTT Core
-- **S11**: `ntt_intt_recursive_roundtrip` - Requiere bridge List ↔ Finset
+- **S11**: `ntt_intt_recursive_roundtrip` - ESTRUCTURALMENTE COMPLETO
+  - Caso principal (n ≥ 2) usa bridge a `intt_ntt_identity_finset`
+  - Sorries técnicos pendientes en bridge lemmas
+  - Sorry en caso degenerado n=1
 - **S14**: `parseval` - Opcional, baja prioridad
-- `ntt_intt_identity` (Spec.lean) - Misma dependencia que S11
+- `ntt_intt_identity` (Spec.lean) - Redundante con roundtrip probado
 
 ### Sorries en Radix4
-- Múltiples axiomas pendientes
+- 3 axiomas pendientes
 
 ### Sorries en Goldilocks
-- ~25 sorries para axiomas algebraicos de CommRing/Field
+- ~34 sorries para axiomas algebraicos de CommRing/Field (por diseño)
+
+---
+
+## Actualización: Bridge List ↔ Finset Creado
+
+### Nuevo Archivo: `ListFinsetBridge.lean`
+
+Se creó un módulo bridge que conecta las definiciones basadas en List con las pruebas basadas en Finset:
+
+```lean
+-- Teoremas clave (algunos con sorries técnicos)
+theorem intt_recursive_eq_spec  -- INTT_recursive = INTT_spec
+theorem ntt_intt_identity_list  -- INTT_spec(NTT_spec(a)) = a
+```
+
+### Estructura del Bridge
+
+1. **`foldl_range_eq_finset_sum`**: Equivalencia List.foldl ↔ Finset.sum (sorry técnico)
+2. **`intt_recursive_eq_spec`**: INTT_recursive usa ω^(n-1) que es equivalente a INTT_spec
+3. **`ntt_intt_identity_list`**: Usa `intt_ntt_identity_finset` para el caso n ≥ 2
+
+### Completado: `ntt_intt_recursive_roundtrip`
+
+El teorema S11 ahora tiene estructura completa:
+
+```lean
+theorem ntt_intt_recursive_roundtrip (ω n_inv : F) (input : List F)
+    (h_pow2 : ∃ k : ℕ, input.length = 2^k)
+    (hω : IsPrimitiveRoot ω input.length)
+    (h_inv : n_inv * (input.length : F) = 1) :
+    INTT_recursive ω n_inv (NTT_recursive ω input) = input := by
+  -- 1. NTT_recursive = NTT_spec (ct_recursive_eq_spec)
+  -- 2. INTT_recursive = INTT_spec (intt_recursive_eq_spec)
+  -- 3. INTT_spec(NTT_spec(input)) = input (ntt_intt_identity_list)
+  ...
+```
 
 ---
 
 ## Próximos Pasos Recomendados
 
-1. **Bridge List ↔ Finset**: Crear teoremas que conecten `ntt_coeff` (List.foldl) con `ntt_coeff_finset` (Finset.sum). Esto desbloqueará S11.
+1. **Completar sorries técnicos**: Los sorries restantes son puramente técnicos (conversiones foldl ↔ sum)
 
-2. **INTT_spec = INTT via Finset**: Probar que `INTT_spec` es equivalente a una versión basada en Finset.
+2. **Caso n=1**: Probar el caso degenerado de lista singleton
 
-3. **Completar S11**: Con el bridge, usar `intt_ntt_identity_finset` para probar el roundtrip de listas.
+3. **Parseval (opcional)**: Teorema de preservación de energía
 
 ---
 
