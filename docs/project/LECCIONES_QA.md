@@ -15,6 +15,9 @@
 5. [Manejo de Instance Diamonds](#5-instance-diamonds)
 6. [Tecnicas Especificas de Lean 4](#6-tecnicas-lean4)
 7. [Anti-patrones a Evitar](#7-anti-patrones)
+8. [Cuerpos Finitos y Caracteristica](#8-cuerpos-finitos) ← CRITICO
+9. [Estrategia del Homomorfismo (Goldilocks)](#9-homomorfismo)
+10. [Tacticas para Expresiones Grandes (Radix-4)](#10-radix4)
 
 ---
 
@@ -384,6 +387,171 @@ set_option trace.Meta.Tactic.simp true
 
 -- Encontrar lemas sobre un concepto
 #check @List.foldl
+```
+
+---
+
+## 8. Cuerpos Finitos y Caracteristica (CRITICO)
+
+### 8.1 La Trampa de la Division por N
+
+Para probar `INTT(NTT(x)) = x`, necesitamos dividir por `n` (el tamaño de la lista).
+
+```lean
+-- ⚠️ INCORRECTO: Falta hipotesis
+theorem intt_ntt_identity (ω : F) (a : List F)
+    (hω : IsPrimitiveRoot ω a.length) :
+    INTT ω (NTT ω a) = a
+
+-- ✓ CORRECTO: Hipotesis explicita
+theorem intt_ntt_identity (ω : F) (a : List F)
+    (hn : (a.length : F) ≠ 0)  -- ← CRITICO
+    (hω : IsPrimitiveRoot ω a.length) :
+    INTT ω (NTT ω a) = a
+```
+
+**Razon**: En un cuerpo finito `𝔽_p`, la division por `n` solo es posible si `n ≢ 0 (mod p)`.
+
+**Contexto Goldilocks**: `p ≈ 2^64`, `n ≤ 2^32`, asi que es seguro, pero Lean necesita la hipotesis.
+
+### 8.2 Lemas de Mathlib para Series Geometricas
+
+```lean
+-- Para probar ortogonalidad de raices de unidad:
+-- ∑_{m=0}^{N-1} ω^{m(j-k)} = N si j=k, 0 si j≠k
+
+-- Usar:
+#check Finset.geom_sum_eq
+#check Finset.sum_pow_mul_eq_zero_of_ne
+
+-- La serie geometrica: ∑_{i=0}^{n-1} r^i = (1 - r^n)/(1 - r) para r ≠ 1
+-- Si ω es raiz N-esima primitiva y j ≠ k:
+-- ω^{(j-k)N} = (ω^N)^{j-k} = 1^{j-k} = 1
+-- Entonces numerador = 1 - 1 = 0
+```
+
+---
+
+## 9. Estrategia del Homomorfismo (Goldilocks)
+
+### 9.1 El Problema: Sorries en Axiomas Algebraicos
+
+Los sorries en `add_assoc`, `mul_comm`, `distrib`, etc. hacen que:
+- `ring` puede fallar silenciosamente
+- `simp` puede dejar goals en estado inconsistente
+- Las pruebas de alto nivel son fragiles
+
+### 9.2 La Solucion Elegante: Proyeccion a ZMod
+
+En lugar de probar axiomas bit a bit (infierno de UInt64):
+
+```lean
+-- 1. Definir proyeccion canonica
+def toZMod (x : GoldilocksField) : ZMod p :=
+  ⟨x.value.toNat, ...⟩
+
+-- 2. Probar que respeta operaciones
+theorem toZMod_add (a b : GoldilocksField) :
+    toZMod (a + b) = toZMod a + toZMod b := by
+  -- Solo necesita mostrar que la reduccion modular es correcta
+  ...
+
+theorem toZMod_mul (a b : GoldilocksField) :
+    toZMod (a * b) = toZMod a * toZMod b := by
+  ...
+
+-- 3. Los axiomas se HEREDAN automaticamente de ZMod p
+-- add_assoc, mul_comm, distrib, etc. son gratis!
+```
+
+**Ventaja**: Cierra 25 sorries de golpe con matematicas elegantes.
+
+### 9.3 Verificar Inyectividad
+
+```lean
+-- Para que la herencia funcione, necesitamos:
+theorem toZMod_injective : Function.Injective toZMod := by
+  intro a b hab
+  -- a.value mod p = b.value mod p
+  -- Como 0 ≤ value < p, esto implica a = b
+  ...
+```
+
+---
+
+## 10. Tacticas para Expresiones Grandes (Radix-4)
+
+### 10.1 Cuando `ring` se Ahoga
+
+Las expresiones Radix-4 expanden mucho (4 salidas por butterfly). Si `ring` falla:
+
+```lean
+-- Opcion 1: linear_combination
+-- Mas eficiente para igualdades lineales
+linear_combination h1 + 2 * h2 - h3
+
+-- Opcion 2: Dividir en sub-casos
+-- Una prueba por cada salida del butterfly
+theorem radix4_output_0 : ... := by ...
+theorem radix4_output_1 : ... := by ...
+theorem radix4_output_2 : ... := by ...
+theorem radix4_output_3 : ... := by ...
+
+theorem radix4_correct := by
+  constructor
+  · exact radix4_output_0
+  constructor
+  · exact radix4_output_1
+  ...
+```
+
+### 10.2 Simplificacion Incremental
+
+```lean
+-- En lugar de un solo ring gigante:
+calc expresion_compleja
+    = paso_1 := by ring
+  _ = paso_2 := by ring
+  _ = resultado := by ring
+```
+
+---
+
+## Resumen: Checklist Pre-Prueba (Actualizado)
+
+Antes de atacar cualquier sorry:
+
+- [ ] Verificar dependencias: Estan probados los sorries de los que depende?
+- [ ] Leer el codigo: Que hace exactamente la funcion/teorema?
+- [ ] Identificar lemas: Que lemas de Mathlib o propios necesito?
+- [ ] Verificar terminacion: Si es recursivo, termina correctamente?
+- [ ] Crear unfolding lemmas: Puedo exponer la estructura interna?
+- [ ] Construir bridge lemmas: Que puentes necesito entre representaciones?
+- [ ] Elegir estrategia de induccion: Sobre que variable/estructura induzco?
+- [ ] Manejar casos especiales: Hay casos borde que requieren tratamiento especial?
+- [ ] **NUEVO: Hipotesis de caracteristica**: Si divido por n, tengo `(n : F) ≠ 0`?
+- [ ] **NUEVO: Axiomas base estables**: Los axiomas algebraicos tienen sorry?
+- [ ] Documentar el plan: Escribir los pasos antes de implementar
+
+---
+
+## Anexo: Comandos Utiles
+
+```lean
+-- Ver el goal actual con tipos explicitos
+#check @nombre_teorema
+
+-- Ver que simp rules aplican
+set_option trace.Meta.Tactic.simp true
+
+-- Ver informacion de instancias
+#print instances Mul
+
+-- Encontrar lemas sobre un concepto
+#check @List.foldl
+
+-- Ver si un tipo tiene CommRing
+#check (inferInstance : CommRing GoldilocksField)
 ```
 
 ---
