@@ -18,6 +18,7 @@ import AmoLean.NTT.Field
 import AmoLean.NTT.RootsOfUnity
 import AmoLean.NTT.Spec
 import AmoLean.NTT.Goldilocks
+import AmoLean.NTT.OrthogonalityProof
 import Mathlib.Algebra.BigOperators.Group.Finset.Basic
 import Mathlib.Algebra.BigOperators.Ring
 import Mathlib.Data.Fintype.BigOperators
@@ -91,13 +92,46 @@ theorem intt_ntt_identity_finset {n : ℕ} (hn : n > 1) {ω n_inv : F}
     (a : Fin n → F) (i : Fin n) :
     intt_coeff_finset ω n_inv (fun k => ntt_coeff_finset ω a k) i = a i := by
   unfold intt_coeff_finset ntt_coeff_finset
-  -- The proof requires double sum rearrangement and orthogonality
-  -- This is a complex proof that uses:
-  -- 1. Finset.sum_comm to swap summation order
-  -- 2. orthogonality_sum_lt to collapse the inner sum
-  -- 3. Algebraic simplification
-  -- Full proof deferred to a dedicated lemma
-  sorry
+  -- INTT(NTT(a))_i = n_inv * Σ_k (Σ_j a_j ω^(jk)) * ω^(n - (ik mod n))
+
+  -- Step 1: Push the multiplication inside and rearrange
+  -- n_inv * Σ_k (Σ_j a_j ω^(jk)) * ω^(n - (ik mod n))
+  -- = n_inv * Σ_k Σ_j a_j * ω^(jk) * ω^(n - (ik mod n))
+  simp only [Finset.sum_mul]
+
+  -- Step 2: Swap the order of summation using Finset.sum_comm
+  -- = n_inv * Σ_j a_j * Σ_k ω^(jk) * ω^(n - (ik mod n))
+  rw [Finset.sum_comm]
+
+  -- Step 3: Pull a_j out of the inner sum
+  conv_lhs =>
+    arg 2
+    ext j
+    rw [← Finset.mul_sum]
+    rw [mul_comm (a j)]
+
+  -- Step 4: Apply orthogonality theorem to the inner sum
+  -- Σ_k ω^(jk) * ω^(n - (ik mod n)) = n if j = i, else 0
+  have h_ortho : ∀ j : Fin n, (Finset.univ.sum fun k : Fin n =>
+      ω ^ (j.val * k.val) * ω ^ (n - (i.val * k.val) % n)) =
+      if j = i then (n : F) else 0 := fun j => ntt_orthogonality_sum hn hω j i
+
+  simp_rw [h_ortho]
+
+  -- Step 5: The sum over j with (n if j = i else 0) collapses to a i * n
+  -- n_inv * Σ_j (if j = i then n else 0) * a_j = n_inv * n * a_i
+  have h_sum : (Finset.univ.sum fun j : Fin n =>
+      (if j = i then (n : F) else 0) * a j) = (n : F) * a i := by
+    rw [Finset.sum_eq_single i]
+    · simp only [↓reduceIte, mul_comm]
+    · intro j _ hji
+      simp [hji]
+    · intro hi
+      exact absurd (Finset.mem_univ i) hi
+
+  rw [h_sum]
+  -- n_inv * (n * a_i) = (n_inv * n) * a_i = 1 * a_i = a_i
+  rw [← mul_assoc, h_inv, one_mul]
 
 end Roundtrip
 
