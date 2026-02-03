@@ -929,15 +929,32 @@ instance : CommRing GoldilocksField where
     simp only [beq_self_eq_true, ↓reduceIte, GoldilocksField.ofUInt64]
     native_decide
   zsmul_succ' := fun n a => by
-    -- zsmul (n + 1) a = zsmul n a + a  for n : ℕ
-    -- Computationally verified; mathematically straightforward
-    -- (n+1) • a = n • a + a by definition of scalar multiplication
-    sorry
+    -- zsmul (↑n + 1) a = zsmul ↑n a + a  for n : ℕ
+    -- Both ↑n and ↑n.succ are ≥ 0, so first branch
+    simp only [ge_iff_le]
+    rw [if_pos (Int.natCast_nonneg n.succ)]
+    rw [if_pos (Int.natCast_nonneg n)]
+    simp only [Int.toNat_natCast]
+    -- Now: ofNat n.succ * a = ofNat n * a + a
+    -- Note: x.mul y = x * y by definition
+    change GoldilocksField.ofNat n.succ * a = GoldilocksField.ofNat n * a + a
+    -- Use toZMod_injective and algebraic identity
+    apply toZMod_injective
+    rw [toZMod_mul, toZMod_add, toZMod_mul, toZMod_ofNat, toZMod_ofNat]
+    -- Goal: (n.succ : ZMod p) * toZMod a = (n : ZMod p) * toZMod a + toZMod a
+    -- n.succ = n + 1
+    have h : ((n.succ : ℕ) : ZMod ORDER_NAT) = (n : ZMod ORDER_NAT) + 1 := by
+      simp only [Nat.succ_eq_add_one, Nat.cast_add, Nat.cast_one]
+    rw [h, add_mul, one_mul]
   zsmul_neg' := fun n a => by
-    -- zsmul (Int.negSucc n) a = -zsmul (n + 1) a
-    -- Computationally verified; mathematically straightforward
-    -- -(n+1) • a = -((n+1) • a) by definition
-    sorry
+    -- zsmul (Int.negSucc n) a = -zsmul (↑(n + 1)) a
+    -- LHS: Int.negSucc n < 0 → else branch → neg (ofNat (n+1) * a)
+    -- RHS: ↑(n+1) ≥ 0 → first branch → ofNat (n+1) * a → negate
+    simp only [ge_iff_le]
+    rw [if_neg (Int.not_le.mpr (Int.negSucc_lt_zero n))]
+    rw [if_pos (Int.natCast_nonneg (n + 1))]
+    simp only [Int.negSucc_eq, neg_neg, Int.toNat_natCast]
+    rfl
   -- Subtraction
   sub := GoldilocksField.sub
   sub_eq_add_neg := fun a b => by
@@ -1056,8 +1073,12 @@ instance : CommRing GoldilocksField where
                       else GoldilocksField.neg (GoldilocksField.ofNat (-n).toNat)
   intCast_negSucc := fun n => by
     -- intCast (Int.negSucc n) = -((n + 1) : GoldilocksField)
-    -- Computationally verified; proof deferred
-    sorry
+    -- LHS: Int.negSucc n < 0, so else branch: neg (ofNat (n+1))
+    -- RHS: -(natCast (n+1)) = neg (ofNat (n+1))
+    simp only [ge_iff_le]
+    rw [if_neg (Int.not_le.mpr (Int.negSucc_lt_zero n))]
+    simp only [Int.negSucc_eq, neg_neg, Int.toNat_natCast]
+    rfl
   intCast_ofNat := fun n => by
     -- Int cast of Nat n equals Nat cast of n
     -- intCast (↑n) = natCast n
@@ -1073,9 +1094,11 @@ instance : CommRing GoldilocksField where
     rfl
   npow_succ := fun n a => by
     -- a^(n+1) = a * a^n
-    -- The pow definition uses fast exponentiation, but the result is the same
-    -- Computationally verified; proof deferred
-    sorry
+    -- Use toZMod_pow axiom to transfer to ZMod where pow_succ holds
+    apply toZMod_injective
+    rw [toZMod_mul, toZMod_pow, toZMod_pow]
+    -- Goal: toZMod a ^ (n + 1) = toZMod a * toZMod a ^ n
+    rw [pow_succ]
 
 /-- Field instance for GoldilocksField via ZMod isomorphism.
 
@@ -1115,14 +1138,39 @@ instance : Field GoldilocksField where
     -- The condition 0 ≥ 0 is true, so we use the first branch
     simp only [ge_iff_le, le_refl, ↓reduceIte, Int.toNat_zero, GoldilocksField.pow]
     rfl
-  zpow_succ' := fun n a => by sorry
-  zpow_neg' := fun n a => by sorry
-  nnqsmul := fun q a => GoldilocksField.mul (GoldilocksField.ofNat q.num) (GoldilocksField.inv (GoldilocksField.ofNat q.den)) * a
-  nnqsmul_def := fun q a => by sorry
-  qsmul := fun q a => if q.num ≥ 0
-                      then GoldilocksField.mul (GoldilocksField.ofNat q.num.toNat) (GoldilocksField.inv (GoldilocksField.ofNat q.den)) * a
-                      else GoldilocksField.neg (GoldilocksField.mul (GoldilocksField.ofNat (-q.num).toNat) (GoldilocksField.inv (GoldilocksField.ofNat q.den)) * a)
-  qsmul_def := fun q a => by sorry
+  zpow_succ' := fun n a => by
+    -- zpow (↑n + 1) a = zpow ↑n a * a for n : ℕ
+    -- Both ↑n and ↑n+1 ≥ 0, so first branch: pow a (n+1) = pow a n * a
+    simp only [ge_iff_le]
+    rw [if_pos (Int.natCast_nonneg n.succ)]
+    rw [if_pos (Int.natCast_nonneg n)]
+    simp only [Int.toNat_natCast]
+    -- Goal: pow a (n+1) = pow a n * a
+    -- Use toZMod_pow and pow_succ
+    apply toZMod_injective
+    rw [toZMod_mul, toZMod_pow, toZMod_pow]
+    -- Goal: toZMod a ^ (n+1) = toZMod a ^ n * toZMod a
+    rw [pow_succ', mul_comm]
+  zpow_neg' := fun n a => by
+    -- zpow (Int.negSucc n) a = (zpow (↑(n + 1)) a)⁻¹
+    -- LHS: Int.negSucc n < 0 → else branch → inv (pow a (n+1))
+    -- RHS: ↑(n+1) ≥ 0 → first branch → pow a (n+1) → invert
+    simp only [ge_iff_le]
+    rw [if_neg (Int.not_le.mpr (Int.negSucc_lt_zero n))]
+    rw [if_pos (Int.natCast_nonneg (n + 1))]
+    simp only [Int.negSucc_eq, neg_neg, Int.toNat_natCast]
+    rfl
+  -- Rational operations
+  -- Define ratCast/nnratCast explicitly using standard q.num / q.den formula
+  -- intCast comes from CommRing, natCast comes from AddMonoidWithOne
+  nnratCast := fun q => (q.num : GoldilocksField) / (q.den : GoldilocksField)
+  nnratCast_def := fun q => by rfl
+  nnqsmul := fun q a => ((q.num : GoldilocksField) / (q.den : GoldilocksField)) * a
+  nnqsmul_def := fun q a => by rfl
+  ratCast := fun q => (q.num : GoldilocksField) / (q.den : GoldilocksField)
+  ratCast_def := fun q => by rfl
+  qsmul := fun q a => ((q.num : GoldilocksField) / (q.den : GoldilocksField)) * a
+  qsmul_def := fun q a => by rfl
 
 end AmoLean.Field.Goldilocks
 

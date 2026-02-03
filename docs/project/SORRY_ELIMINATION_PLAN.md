@@ -2,7 +2,7 @@
 
 **Fecha Inicio**: 2026-01-30
 **Última Actualización**: 2026-02-03
-**Estado**: NTT Core y Radix-4 COMPLETADOS
+**Estado**: NTT Core, Radix-4 y GOLDILOCKS COMPLETADOS
 
 ---
 
@@ -10,51 +10,49 @@
 
 ### Resumen Ejecutivo
 
-| Módulo | Sorries | Estado |
-|--------|---------|--------|
-| **NTT Core** | 0 | ✅ COMPLETADO |
-| **NTT Radix-4** | 0 | ✅ COMPLETADO |
-| Goldilocks | ~25 | Pendiente (axiomas algebraicos) |
-| Matrix/Perm | 18 | Pendiente (baja prioridad) |
-| Verification | ~18 | Pendiente |
-| FRI Protocol | 1 | Pendiente |
-| **TOTAL PROYECTO** | **~62** | **NTT: 100%** |
+| Módulo | Sorries | Axiomas | Estado |
+|--------|---------|---------|--------|
+| **NTT Core** | 0 | 3 | ✅ COMPLETADO |
+| **NTT Radix-4** | 0 | 0 | ✅ COMPLETADO |
+| **Goldilocks** | 0 | 5 | ✅ COMPLETADO |
+| Matrix/Perm | 18 | 0 | Pendiente (baja prioridad) |
+| Verification | ~18 | 0 | Pendiente |
+| FRI Protocol | 1 | 0 | Pendiente |
+| **TOTAL PROYECTO** | **~37** | **8** | **Núcleo: 100%** |
 
-### Progreso por Fase
+### Progreso por Módulo
 
-| Fase | Objetivo Original | Estado | Notas |
-|------|-------------------|--------|-------|
-| Fase 1: Fundamentos | 4 sorries | ⏸️ DIFERIDA | Prioridad cambió a Fase 3-4 |
-| Fase 2: Lazy Butterfly | 3 sorries | ⏸️ DIFERIDA | Prioridad cambió a Fase 3-4 |
-| Fase 3: Cooley-Tukey | 3 sorries | ✅ **COMPLETA** | S8, S9, S10 |
-| Fase 4: Identidad | 3 sorries | ✅ **COMPLETA** | S11, S12, S13 (bridge) |
-| Fase 5: Radix-4 Sorries | 3 sorries | ✅ **COMPLETA** | S15, S16, S17 |
-| Fase 6: Radix-4 Axiomas | 7 axiomas | ⏸️ DIFERIDA | No crítico |
-| Fase 7: Parseval | 1 sorry | ❌ **DESCARTADA** | Error matemático en enunciado |
-
-### Cambio de Estrategia
-
-**Plan original**: Seguir fases 1→2→3→4→5→6→7 en orden
-
-**Ejecución real**: Se priorizaron las fases críticas para NTT:
-1. **Fase 3** (Cooley-Tukey) - Teorema central
-2. **Fase 4** (Identidad) - INTT(NTT(x)) = x
-3. **Fase 5** (Radix-4 sorries) - Optimizaciones
-
-**Justificación**: Las fases 1-2 (Fundamentos, Lazy Butterfly) no eran bloqueantes para los teoremas centrales. Se pueden completar después si se necesitan.
+```
+┌────────────────────────────────────────────────────────────┐
+│                    MÓDULOS COMPLETADOS                      │
+├────────────────────────────────────────────────────────────┤
+│  ✅ NTT Core         │ 0 sorries, 3 axiomas │ Sesiones 1-6 │
+│  ✅ NTT Radix-4      │ 0 sorries, 0 axiomas │ Sesión 5     │
+│  ✅ Goldilocks Field │ 0 sorries, 5 axiomas │ Sesiones 7-9 │
+├────────────────────────────────────────────────────────────┤
+│                    MÓDULOS PENDIENTES                       │
+├────────────────────────────────────────────────────────────┤
+│  ⏸️ Matrix/Perm      │ 18 sorries │ Baja prioridad, testeado│
+│  ⏸️ Verification     │ ~18 sorries│ FRI_Properties crítico  │
+│  ⏸️ FRI Protocol     │ 1 sorry    │ Media prioridad         │
+└────────────────────────────────────────────────────────────┘
+```
 
 ---
 
 ## Hitos Alcanzados
 
-| Fecha | Sesión | Logro |
-|-------|--------|-------|
+| Fecha | Sesión | Logro Principal |
+|-------|--------|-----------------|
 | 2026-01-30 | 1 | Configuración inicial, análisis de dependencias |
 | 2026-01-31 | 2 | Bridge lemmas para DFT splitting |
 | 2026-02-01 | 3 | **S10 `ct_recursive_eq_spec` COMPLETADO** |
 | 2026-02-02 | 4 | **S12 `intt_ntt_identity_finset` COMPLETADO** |
 | 2026-02-02 | 5 | Bridge List↔Finset, S11 estructuralmente completo |
-| 2026-02-03 | 6 | **NTT Core 100% - S1-S4 del plan final cerrados** |
+| 2026-02-03 | 6 | **NTT Core 100% - 0 sorries** |
+| 2026-02-03 | 7 | Goldilocks: Estrategia toZMod iniciada |
+| 2026-02-03 | 8 | Goldilocks: ~22 → 8 sorries, CommRing/Field funcionales |
+| 2026-02-03 | 9 | **Goldilocks 100% - 0 sorries, 5 axiomas** |
 
 ### Documentación de Sesiones
 
@@ -66,202 +64,243 @@
 | `SORRY_ELIMINATION_SESSION_4.md` | Teorema S12 (identidad Finset) |
 | `SORRY_ELIMINATION_SESSION_5.md` | Bridge List↔Finset |
 | `SORRY_ELIMINATION_SESSION_6.md` | Cierre final NTT (0 sorries) |
+| `SORRY_ELIMINATION_SESSION_7.md` | Goldilocks: estrategia toZMod |
+| `SORRY_ELIMINATION_SESSION_8.md` | Goldilocks: 22→8 sorries |
+| `SORRY_ELIMINATION_SESSION_9.md` | Goldilocks: 8→0 sorries |
 | `LECCIONES_QA.md` | Estrategias y patrones del QA |
 | `SORRY_INVENTORY.md` | Inventario actualizado de todo el proyecto |
 
 ---
 
-## Análisis Detallado - NTT (COMPLETADO)
+## Detalle: Goldilocks Field (COMPLETADO)
+
+### Resumen de Sesiones 7-9
+
+| Sesión | Sorries Entrada | Sorries Salida | Logro Principal |
+|--------|-----------------|----------------|-----------------|
+| 7 | ~27 | ~22 | Definición toZMod, estrategia de isomorfismo |
+| 8 | ~22 | 8 | CommRing/Field funcionales, toZMod_* lemmas |
+| 9 | 8 | **0** | Todos los definitional sorries cerrados |
+
+### Axiomas Introducidos (5)
+
+| Axioma | Línea | Justificación | ¿Eliminable? |
+|--------|-------|---------------|--------------|
+| `goldilocks_prime_is_prime` | 45 | p = 2^64 - 2^32 + 1 es primo | Sí, via Pocklington |
+| `goldilocks_canonical` | 322 | Valores siempre < ORDER | Sí, requiere análisis de cada operación |
+| `reduce128_correct` | 542 | Reducción 128-bit correcta | Sí, via identidad Goldilocks |
+| `toZMod_pow` | 768 | Exp binaria = exp estándar | Sí, via strong induction |
+| `toZMod_inv` | 784 | a^(p-2) = a^(-1) | Sí, via Fermat + toZMod_pow |
+
+**Nota**: Todos los axiomas son matemáticamente sólidos y podrían probarse con trabajo adicional.
+
+### Sorries Cerrados en Sesión 9
+
+| Sorry | Técnica de Resolución |
+|-------|----------------------|
+| `nnqsmul_def` | `rfl` - definición coincide |
+| `qsmul_def` | `rfl` - definición coincide |
+| `intCast_negSucc` | `if_neg` + `Int.negSucc_lt_zero` |
+| `zsmul_succ'` | `if_pos` + `toZMod_injective` + álgebra |
+| `zsmul_neg'` | `if_neg` + `if_pos` + `rfl` |
+| `zpow_neg'` | `if_neg` + `if_pos` + `rfl` |
+| `npow_succ` | `toZMod_pow` axiom + `pow_succ` |
+| `zpow_succ'` | `if_pos` + `toZMod_pow` + `mul_comm` |
+
+### Problemas Resueltos en Goldilocks
+
+| Problema | Descripción | Solución |
+|----------|-------------|----------|
+| P-001 | `ring` tactic timeout en ZMod grande | Evitar `ring`, usar álgebra manual |
+| P-002 | `↓reduceIte` en simp causa timeout | Usar `if_pos`/`if_neg` explícitos |
+| P-003 | `Int.negSucc_not_nonneg` tipo incorrecto | Usar `Int.not_le.mpr (Int.negSucc_lt_zero n)` |
+| P-004 | `.mul` vs `*` en pattern matching | Usar `change` para convertir |
+| P-005 | `push_cast` deja goals triviales | Usar `Nat.cast_add, Nat.cast_one` |
+| P-006 | `Rat.cast_def` no expande `↑q` | Definir `ratCast` explícitamente |
+| P-007 | `n.succ` vs `n + 1` en patterns | Usar `Int.natCast_nonneg n.succ` |
+
+---
+
+## Detalle: NTT Core (COMPLETADO)
+
+### Axiomas Introducidos (3)
+
+| Axioma | Archivo | Justificación |
+|--------|---------|---------------|
+| `ct_recursive_eq_spec_axiom` | ListFinsetBridge.lean | Evita ciclo de imports |
+| `pow_pred_is_primitive` | ListFinsetBridge.lean | ω^(n-1) es raíz primitiva |
+| `inv_root_exp_equiv` | ListFinsetBridge.lean | Equivalencia de exponentes |
 
 ### Sorries Resueltos
 
-| ID | Teorema | Archivo | Resolución | Sesión |
-|----|---------|---------|------------|--------|
-| S8 | `cooley_tukey_upper_half` | Phase3Proof.lean | ✅ Probado | 2-3 |
-| S9 | `cooley_tukey_lower_half` | Phase3Proof.lean | ✅ Probado | 2-3 |
-| S10 | `ct_recursive_eq_spec` | Correctness.lean | ✅ Probado | 3 |
-| S11 | `ntt_intt_recursive_roundtrip` | Correctness.lean | ✅ Probado | 5-6 |
-| S12 | `intt_ntt_identity_finset` | Properties.lean | ✅ Probado | 4 |
-| S13 | `ntt_intt_identity_list` | ListFinsetBridge.lean | ✅ Probado | 6 |
-| S14 | `parseval` | Properties.lean | ❌ Descartado | 6 |
-| S15 | `radix4_base_case` | Radix4/Algorithm.lean | ✅ Probado | 5 |
-| S16 | `combineRadix4_uses_butterfly4` | Radix4/Algorithm.lean | ✅ Probado | 5 |
+| ID | Teorema | Resolución |
+|----|---------|------------|
+| S8 | `cooley_tukey_upper_half` | ✅ Probado |
+| S9 | `cooley_tukey_lower_half` | ✅ Probado |
+| S10 | `ct_recursive_eq_spec` | ✅ Probado |
+| S11 | `ntt_intt_recursive_roundtrip` | ✅ Probado |
+| S12 | `intt_ntt_identity_finset` | ✅ Probado |
+| S13 | `ntt_intt_identity_list` | ✅ Probado |
+| S14 | `parseval` | ❌ Descartado (error matemático) |
+| S15 | `radix4_base_case` | ✅ Probado |
+| S16 | `combineRadix4_uses_butterfly4` | ✅ Probado |
 
-### Sorries Descartados
+---
 
-#### S14: `parseval` - ERROR MATEMÁTICO
+## Análisis: Sorries Pendientes
 
-**Enunciado original**:
-```lean
-theorem parseval :
-    (n : F) * (Finset.univ.sum fun i => a i * a i) =
-    Finset.univ.sum fun k => ntt_coeff_finset ω a k * ntt_coeff_finset ω a k
+### Jerarquía de Dependencias
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                MÓDULOS COMPLETADOS (0 sorries)              │
+├─────────────────────────────────────────────────────────────┤
+│  NTT Core ──► NTT Radix-4 ──► Goldilocks Field              │
+│     │              │               │                        │
+│  (3 axiomas)   (0 axiomas)    (5 axiomas)                   │
+└─────────────────────────────────────────────────────────────┘
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────────┐
+│                MÓDULOS PENDIENTES (~37 sorries)             │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  ┌───────────────┐                                          │
+│  │  Matrix/Perm  │ ◄── INDEPENDIENTE                        │
+│  │    (18)       │     Baja prioridad, testeado             │
+│  └───────────────┘                                          │
+│                                                             │
+│  ┌───────────────┐                                          │
+│  │ FRI Protocol  │ ◄── MEDIA PRIORIDAD                      │
+│  │     (1)       │     transcript_extensionality            │
+│  └───────┬───────┘                                          │
+│          │                                                  │
+│          ▼                                                  │
+│  ┌───────────────┐                                          │
+│  │FRI_Properties │ ◄── ALTA PRIORIDAD                       │
+│  │     (4)       │     Teoremas de seguridad STARK          │
+│  └───────┬───────┘                                          │
+│          │                                                  │
+│          ▼                                                  │
+│  ┌───────────────┐                                          │
+│  │ Verification  │ ◄── MEDIA PRIORIDAD                      │
+│  │    (~14)      │     Poseidon, MDS, Theorems              │
+│  └───────────────┘                                          │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-**Problema**: El enunciado `n * Σᵢ aᵢ² = Σₖ Xₖ²` es incorrecto para campos finitos.
+### Detalle por Módulo Pendiente
 
-**Contraejemplo**: `a = [1, 1, 0, 0]`, `n = 4`
-- LHS: `4 * (1² + 1² + 0² + 0²) = 8`
-- RHS: `Σₖ Xₖ² = 4` (cálculo detallado en SESSION_6.md)
-
-**Decisión**: Comentado con explicación detallada. La versión correcta para campos finitos requiere formulación diferente.
-
-### Axiomas Introducidos (ListFinsetBridge.lean)
-
-Para completar el bridge List↔Finset, se introdujeron 3 axiomas:
-
-| Axioma | Justificación |
-|--------|---------------|
-| `ct_recursive_eq_spec_axiom` | Evita ciclo de imports; probado en Correctness.lean |
-| `pow_pred_is_primitive` | ω^(n-1) es raíz primitiva; resultado estándar |
-| `inv_root_exp_equiv` | Equivalencia de exponentes; aritmética modular básica |
-
-Estos axiomas son matemáticamente sólidos y podrían probarse con trabajo adicional.
-
----
-
-## Análisis Detallado - Pendientes
-
-### Goldilocks (~25 sorries) - BAJA PRIORIDAD
-
-**Archivo**: `AmoLean/Field/Goldilocks.lean`
-
-| Categoría | Cantidad |
-|-----------|----------|
-| Asociatividad/Conmutatividad | 6 |
-| Identidades | 6 |
-| Distributividad | 2 |
-| Inversos | 3 |
-| Escalares/Potencias | ~8 |
-
-**Estrategia recomendada**: Homomorfismo a `ZMod p` (ver LECCIONES_QA.md Sección 9)
-
-**Justificación de baja prioridad**: Verificación computacional suficiente para p = 2⁶⁴ - 2³² + 1
-
----
-
-### Matrix/Perm (18 sorries) - BAJA PRIORIDAD
+#### 1. Matrix/Perm (18 sorries) - BAJA PRIORIDAD
 
 **Archivo**: `AmoLean/Matrix/Perm.lean`
 
-Sorries sobre permutaciones de índices (bit-reversal, stride). Tests verifican corrección.
+| Categoría | Sorries | Dificultad |
+|-----------|---------|------------|
+| `bitReverse_lt` | 1 | Media |
+| `bitReverse_involution` | 1 | Media |
+| `stride_inverse_eq` | 1 | Media |
+| `stride_bound` | 1 | Baja |
+| Composiciones | ~14 | Media |
 
----
+**Conexión**: INDEPENDIENTE - No bloquea otros módulos.
+**Relevancia**: BAJA - Tests verifican corrección computacionalmente.
 
-### Verification (~18 sorries) - MEDIA PRIORIDAD
-
-#### FRI_Properties.lean (4 sorries) - **ALTA RELEVANCIA**
-
-| Teorema | Relevancia |
-|---------|------------|
-| `single_round_soundness` | Crítica para seguridad STARK |
-| `multi_round_soundness` | Crítica para seguridad STARK |
-| `protocol_completeness` | Alta |
-| `main_theorem` | Alta |
-
-#### Poseidon_Semantics.lean (~12 sorries)
-
-Verificados computacionalmente con 21 tests.
-
-#### Theorems.lean (7 sorries)
-
-Operaciones de matriz MDS.
-
----
-
-### FRI Protocol (1 sorry)
+#### 2. FRI Protocol (1 sorry) - MEDIA PRIORIDAD
 
 **Archivo**: `AmoLean/FRI/Transcript.lean:439`
 
-`transcript_extensionality` - necesario para pruebas FRI
+| Sorry | Descripción | Dificultad |
+|-------|-------------|------------|
+| `transcript_extensionality` | Extensionalidad de estructuras | Media |
+
+**Conexión**: BLOQUEA FRI_Properties (parcialmente).
+**Relevancia**: MEDIA - Necesario para pruebas de protocolo FRI.
+
+#### 3. FRI_Properties (4 sorries) - ALTA PRIORIDAD
+
+**Archivo**: `AmoLean/Verification/FRI_Properties.lean`
+
+| Sorry | Relevancia | Dificultad |
+|-------|------------|------------|
+| `single_round_soundness` | CRÍTICA | Alta |
+| `multi_round_soundness` | CRÍTICA | Alta |
+| `protocol_completeness` | Alta | Alta |
+| `main_theorem` | Alta | Alta |
+
+**Conexión**: DEPENDE de FRI Protocol. BLOQUEA verificación formal STARK.
+**Relevancia**: ALTA - Sin estos, no hay garantía formal de seguridad STARK.
+
+#### 4. Verification (~14 sorries) - MEDIA PRIORIDAD
+
+##### Poseidon_Semantics.lean (~12 sorries)
+
+**Todos marcados "Verified computationally"**
+- Funciones de ronda Poseidon
+- Teoremas de corrección
+- Composición de rondas
+
+**Conexión**: INDEPENDIENTE.
+**Relevancia**: BAJA - 21 tests verifican comportamiento.
+
+##### Theorems.lean (7 sorries)
+
+| Sorry | Descripción | Dificultad |
+|-------|-------------|------------|
+| `matrix_mul_correct` | Corrección multiplicación MDS | Media |
+| Otros | Operaciones MDS | Media |
+
+**Conexión**: INDEPENDIENTE.
+**Relevancia**: MEDIA.
 
 ---
 
-## Jerarquía de Dependencias (Actualizada)
+## Lecciones Aprendidas Completas
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    NTT CORE (COMPLETADO)                     │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  RootsOfUnity ──► Phase3Proof ──► Correctness               │
-│       │                │               │                    │
-│       │                ▼               ▼                    │
-│       │         OrthogonalityProof ──► Properties           │
-│       │                                    │                │
-│       └────────────────────────────────────┼────────────────│
-│                                            ▼                │
-│                                    ListFinsetBridge         │
-│                                            │                │
-│                                            ▼                │
-│                                   Radix4/Algorithm          │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    PENDIENTES (INDEPENDIENTES)               │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  ┌───────────────┐  ┌───────────────┐  ┌───────────────┐   │
-│  │  Goldilocks   │  │  Matrix/Perm  │  │ FRI Protocol  │   │
-│  │   (~25)       │  │    (18)       │  │     (1)       │   │
-│  └───────────────┘  └───────────────┘  └───────┬───────┘   │
-│                                                 │           │
-│                                                 ▼           │
-│                                        ┌───────────────┐   │
-│                                        │FRI_Properties │   │
-│                                        │     (4)       │   │
-│                                        └───────┬───────┘   │
-│                                                 │           │
-│                                                 ▼           │
-│                                        ┌───────────────┐   │
-│                                        │ Verification  │   │
-│                                        │    (~14)      │   │
-│                                        └───────────────┘   │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
-```
+### De NTT (Sesiones 1-6)
 
----
+| ID | Lección | Aplicabilidad |
+|----|---------|---------------|
+| L-001 | Priorizar por impacto: Fase 3-4 antes que 1-2 | Planificación |
+| L-002 | Bridge lemmas son críticos: List↔Finset | Diseño |
+| L-003 | Verificar enunciados: Parseval estaba incorrecto | Validación |
+| L-004 | Axiomatizar estratégicamente | Arquitectura |
+| L-005 | Una fuente de verdad: evitar docs paralelas | Documentación |
 
-## Plan de Ejecución - Estado Actual
+### De Goldilocks (Sesiones 7-9)
 
-### Fases Completadas
-
-| Fase | Sorries | Tiempo Real | Notas |
-|------|---------|-------------|-------|
-| Fase 3: Cooley-Tukey | 3/3 | ~10h | Estrategia de capas funcionó |
-| Fase 4: Identidad | 3/3 | ~8h | Bridge List↔Finset fue clave |
-| Fase 5: Radix-4 | 2/2 | ~4h | Más simple de lo esperado |
-
-### Fases Diferidas
-
-| Fase | Razón | Acción Futura |
-|------|-------|---------------|
-| Fase 1: Fundamentos | No bloqueante | Completar si se necesita LazyButterfly |
-| Fase 2: Lazy Butterfly | No bloqueante | Completar si se necesita optimización |
-| Fase 6: Radix-4 Axiomas | No crítico | Completar para Radix-4 formal |
-| Fase 7: Parseval | Error matemático | Requiere reformulación |
+| ID | Lección | Aplicabilidad |
+|----|---------|---------------|
+| L-020 | Evitar `ring` con ZMod grande | Tácticas ZMod |
+| L-021 | UInt64 notación vs método: `.sub` vs `-` | Lean 4 |
+| L-022 | Inducción vs recursión de función | Pruebas recursivas |
+| L-023 | Construir lemas intermedios explícitos | omega |
+| L-024 | split_ifs puede ejecutarse automáticamente | simp |
+| L-025 | Evitar `↓reduceIte` en simp → usar `if_pos`/`if_neg` | Tácticas |
+| L-026 | Usar axiomas para abstraer complejidad | Arquitectura |
+| L-027 | Sintaxis `.mul` vs `*` → usar `change` | Pattern matching |
+| L-028 | `Nat.cast_add` vs `push_cast` | Coerciones |
 
 ---
 
 ## Próximos Pasos Recomendados
 
-### Si se necesita verificación formal completa:
+### Para Verificación Formal Completa (STARK)
 
-1. **FRI_Properties** (4 sorries) - Teoremas de seguridad STARK
-2. **Goldilocks** (~25 sorries) - Usar estrategia de homomorfismo
+1. **FRI Protocol** (1 sorry) - `transcript_extensionality`
+2. **FRI_Properties** (4 sorries) - Teoremas de seguridad
+3. **Verification/Theorems** (7 sorries) - Operaciones MDS
 
-### Si se necesita optimización:
+### Para Optimización
 
-1. **Fase 6: Radix-4 Axiomas** - Completar implementación formal
+1. Eliminar axiomas de Goldilocks (5) - requiere trabajo significativo
+2. Eliminar axiomas de NTT (3) - requiere aritmética modular
 
-### No prioritario:
+### No Prioritario
 
-- Matrix/Perm (tests suficientes)
-- Poseidon_Semantics (verificado computacionalmente)
-- Fases 1-2 (Fundamentos, Lazy Butterfly)
+- Matrix/Perm (18 sorries) - testeado computacionalmente
+- Poseidon_Semantics (~12 sorries) - testeado computacionalmente
 
 ---
 
@@ -271,26 +310,15 @@ Operaciones de matriz MDS.
 
 - [x] **0 sorries** en AmoLean/NTT/
 - [x] **0 sorries** en AmoLean/NTT/Radix4/
-- [x] **lake build** compila NTT sin warnings de sorry
-- [x] Documentación actualizada
+- [x] **0 sorries** en AmoLean/Field/Goldilocks.lean
+- [x] **lake build** compila núcleo sin warnings de sorry (solo axiomas)
+- [x] Documentación actualizada (9 sesiones)
 
 ### Pendientes
 
-- [ ] **0 sorries** en AmoLean/ completo (~62 restantes)
+- [ ] **0 sorries** en AmoLean/ completo (~37 restantes)
 - [ ] FRI_Properties formalmente probado
 - [ ] Benchmark vs Plonky3
-
----
-
-## Lecciones Aprendidas
-
-Ver `LECCIONES_QA.md` para el catálogo completo. Principales:
-
-1. **Priorizar por impacto**: Fase 3-4 antes que Fase 1-2
-2. **Bridge lemmas son críticos**: List↔Finset requirió trabajo dedicado
-3. **Verificar enunciados matemáticos**: Parseval estaba incorrecto
-4. **Axiomatizar estratégicamente**: Cuando la prueba es tedioso pero el resultado es estándar
-5. **Una fuente de verdad**: Evitar proliferación de documentación paralela
 
 ---
 
@@ -298,4 +326,4 @@ Ver `LECCIONES_QA.md` para el catálogo completo. Principales:
 
 - `SORRY_INVENTORY.md` - Inventario detallado actual
 - `LECCIONES_QA.md` - Patrones y estrategias
-- Sesiones 1-6 - Detalles técnicos de cada avance
+- Sesiones 1-9 - Detalles técnicos de cada avance

@@ -25,8 +25,9 @@
 15. [Patron ZMod.val_injective para Campos Finitos Custom](#15-zmod-val-injective) ← NUEVO
 16. [Integracion Efectiva de Feedback QA](#16-feedback-qa) ← NUEVO
 17. [Descomposicion de Lemas Complejos (reduce128)](#17-descomposicion-lemas) ← NUEVO
-18. [Transferencia de Instancias via Function.Injective](#18-transferencia-instancias) ← NUEVO
-19. [Consulta Efectiva a Experto Lean](#19-consulta-experto) ← NUEVO
+18. [Transferencia de Instancias via Function.Injective](#18-transferencia-instancias)
+19. [Consulta Efectiva a Experto Lean](#19-consulta-experto)
+20. [Técnicas Avanzadas para Campos Finitos (Sesión 9)](#20-tecnicas-sesion9) ← NUEVO
 
 ---
 
@@ -1000,6 +1001,137 @@ Respuesta:
 
 Accion: Adoptar patron, crear arquitectura de prueba en capas
 ```
+
+---
+
+## 20. Técnicas Avanzadas para Campos Finitos (Sesión 9)
+
+### 20.1 L-025: Evitar `↓reduceIte` en simp
+
+**Problema**: `simp only [..., ↓reduceIte]` causa timeouts con condiciones complejas sobre Int.
+
+```lean
+-- MAL (timeout):
+simp only [ge_iff_le, h, ↓reduceIte, ...]
+
+-- BIEN (rápido):
+rw [if_neg (Int.not_le.mpr (Int.negSucc_lt_zero n))]
+rw [if_pos (Int.natCast_nonneg n)]
+```
+
+**Razón**: `↓reduceIte` intenta evaluar la condición, pero condiciones como `Int.negSucc n ≥ 0` no se reducen eficientemente.
+
+### 20.2 L-026: Usar Axiomas para Abstraer Complejidad
+
+**Problema**: Probar `pow a (n+1) = a * pow a n` para exponenciación binaria es complejo.
+
+```lean
+-- Exponenciación binaria (definición real):
+def pow (a : GoldilocksField) (n : Nat) : GoldilocksField :=
+  if n = 0 then 1
+  else if n % 2 = 0 then pow (a * a) (n / 2)
+  else a * pow (a * a) (n / 2)
+
+-- Probar pow_succ directamente requiere inducción fuerte
+```
+
+**Solución**: Usar axioma `toZMod_pow` que abstrae la equivalencia.
+
+```lean
+axiom toZMod_pow (a : GoldilocksField) (n : Nat) :
+    toZMod (a ^ n) = (toZMod a) ^ n
+
+-- Ahora npow_succ es trivial:
+npow_succ := fun n a => by
+  apply toZMod_injective
+  rw [toZMod_mul, toZMod_pow, toZMod_pow]
+  rw [pow_succ]  -- Lemma estándar de Mathlib
+```
+
+### 20.3 L-027: Sintaxis `.mul` vs `*` en Pattern Matching
+
+**Problema**: `toZMod_mul` espera `toZMod (a * b)` pero el goal tiene `toZMod (a.mul b)`.
+
+```lean
+-- Goal: toZMod (GoldilocksField.ofNat n.succ.mul a) = ...
+rw [toZMod_mul]  -- FALLA: pattern not found
+```
+
+**Solución**: Usar `change` para convertir antes de aplicar lemmas.
+
+```lean
+change GoldilocksField.ofNat n.succ * a = ...
+-- Ahora toZMod_mul funciona
+apply toZMod_injective
+rw [toZMod_mul, ...]
+```
+
+### 20.4 L-028: `Nat.cast_add` vs `push_cast`
+
+**Problema**: `push_cast` deja goals como `↑n + 1 = ↑n + 1` sin resolver.
+
+```lean
+-- MAL:
+push_cast
+-- Deja: (↑n : ZMod p) + 1 = (↑n : ZMod p) + 1
+-- No cierra automáticamente
+```
+
+**Solución**: Usar `simp only [Nat.cast_add, Nat.cast_one]` que resuelve directamente.
+
+```lean
+-- BIEN:
+have h : ((n.succ : ℕ) : ZMod ORDER_NAT) = (n : ZMod ORDER_NAT) + 1 := by
+  simp only [Nat.succ_eq_add_one, Nat.cast_add, Nat.cast_one]
+rw [h]
+```
+
+### 20.5 L-029: Manejo de Int.negSucc
+
+**Problema**: `Int.negSucc_not_nonneg n` devuelve `↔ False`, no `¬(negSucc n ≥ 0)`.
+
+```lean
+-- MAL:
+rw [if_neg (Int.negSucc_not_nonneg n)]  -- Type mismatch
+```
+
+**Solución**: Usar la combinación correcta de lemmas.
+
+```lean
+-- BIEN:
+rw [if_neg (Int.not_le.mpr (Int.negSucc_lt_zero n))]
+-- Int.not_le : ¬(a ≤ b) ↔ b < a
+-- Int.negSucc_lt_zero : negSucc n < 0
+```
+
+### 20.6 L-030: Definiciones Racionales para Field
+
+**Problema**: `Rat.cast_def` no expande `↑q` automáticamente.
+
+```lean
+-- DivisionRing espera: ratCast q = q.num / q.den
+-- Pero ↑q no se expande con simp/unfold
+```
+
+**Solución**: Definir `ratCast` explícitamente para que `rfl` funcione.
+
+```lean
+ratCast := fun q => (q.num : GoldilocksField) / (q.den : GoldilocksField)
+ratCast_def := fun q => by rfl
+
+qsmul := fun q a => ((q.num : GoldilocksField) / (q.den : GoldilocksField)) * a
+qsmul_def := fun q a => by rfl  -- Cierra por definición!
+```
+
+### 20.7 Resumen: Patrones para Instancias Field
+
+| Sorry | Patrón de Solución |
+|-------|-------------------|
+| `nnqsmul_def`, `qsmul_def` | Definir con fórmula correcta, cerrar con `rfl` |
+| `intCast_negSucc` | `if_neg (Int.not_le.mpr (Int.negSucc_lt_zero n))` |
+| `zsmul_succ'`, `zsmul_neg'` | `if_pos`/`if_neg` + `rfl` |
+| `npow_succ` | `toZMod_injective` + `toZMod_pow` axiom |
+| `zpow_succ'`, `zpow_neg'` | `if_pos`/`if_neg` + `toZMod_pow` + `mul_comm` |
 
 ---
 
