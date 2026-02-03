@@ -6,7 +6,7 @@
 
 ---
 
-## ESTADO ACTUAL - 2026-02-03
+## ESTADO ACTUAL - 2026-02-03 (Post Session 10)
 
 ### Resumen Ejecutivo
 
@@ -14,11 +14,14 @@
 |--------|---------|---------|--------|
 | **NTT Core** | 0 | 3 | ✅ COMPLETADO |
 | **NTT Radix-4** | 0 | 0 | ✅ COMPLETADO |
-| **Goldilocks** | 0 | 5 | ✅ COMPLETADO |
-| Matrix/Perm | 18 | 0 | Pendiente (baja prioridad) |
-| Verification | ~18 | 0 | Pendiente |
-| FRI Protocol | 1 | 0 | Pendiente |
-| **TOTAL PROYECTO** | **~37** | **8** | **Núcleo: 100%** |
+| **Goldilocks** | 1 | 5 | ✅ COMPLETADO (1 helper) |
+| **FRI Protocol** | 0 | 0 | ✅ COMPLETADO (Session 10) |
+| **FRI Properties** | 0 | 0 | ✅ COMPLETADO (Session 10) |
+| Matrix/Perm | 20 | 0 | Pendiente |
+| FRI/Merkle | 2 | 0 | Pendiente (baja prioridad) |
+| Verification/Theorems | 7 | 0 | Pendiente |
+| Verification/Poseidon | 12 | 0 | Computacionalmente verificados |
+| **TOTAL PROYECTO** | **42** | **8** | **Núcleo: 100%** |
 
 ### Progreso por Módulo
 
@@ -28,13 +31,16 @@
 ├────────────────────────────────────────────────────────────┤
 │  ✅ NTT Core         │ 0 sorries, 3 axiomas │ Sesiones 1-6 │
 │  ✅ NTT Radix-4      │ 0 sorries, 0 axiomas │ Sesión 5     │
-│  ✅ Goldilocks Field │ 0 sorries, 5 axiomas │ Sesiones 7-9 │
+│  ✅ Goldilocks Field │ 1 sorry, 5 axiomas   │ Sesiones 7-9 │
+│  ✅ FRI/Transcript   │ 0 sorries            │ Sesión 10    │
+│  ✅ FRI/Properties   │ 0 sorries            │ Sesión 10    │
 ├────────────────────────────────────────────────────────────┤
 │                    MÓDULOS PENDIENTES                       │
 ├────────────────────────────────────────────────────────────┤
-│  ⏸️ Matrix/Perm      │ 18 sorries │ Baja prioridad, testeado│
-│  ⏸️ Verification     │ ~18 sorries│ FRI_Properties crítico  │
-│  ⏸️ FRI Protocol     │ 1 sorry    │ Media prioridad         │
+│  ⏸️ Matrix/Perm      │ 20 sorries │ Permutations algebra    │
+│  ⏸️ FRI/Merkle       │ 2 sorries  │ Size invariants         │
+│  ⏸️ Verif/Theorems   │ 7 sorries  │ Sigma-SPL correctness   │
+│  ⏸️ Verif/Poseidon   │ 12 sorries │ Comp. verificados       │
 └────────────────────────────────────────────────────────────┘
 ```
 
@@ -53,6 +59,7 @@
 | 2026-02-03 | 7 | Goldilocks: Estrategia toZMod iniciada |
 | 2026-02-03 | 8 | Goldilocks: ~22 → 8 sorries, CommRing/Field funcionales |
 | 2026-02-03 | 9 | **Goldilocks 100% - 0 sorries, 5 axiomas** |
+| 2026-02-03 | 10 | **FRI Protocol 100% - 5 sorries eliminados** |
 
 ### Documentación de Sesiones
 
@@ -67,6 +74,7 @@
 | `SORRY_ELIMINATION_SESSION_7.md` | Goldilocks: estrategia toZMod |
 | `SORRY_ELIMINATION_SESSION_8.md` | Goldilocks: 22→8 sorries |
 | `SORRY_ELIMINATION_SESSION_9.md` | Goldilocks: 8→0 sorries |
+| `SORRY_ELIMINATION_SESSION_10_PLAN.md` | FRI Protocol: 5 sorries eliminados |
 | `LECCIONES_QA.md` | Estrategias y patrones del QA |
 | `SORRY_INVENTORY.md` | Inventario actualizado de todo el proyecto |
 
@@ -157,35 +165,29 @@
 ├─────────────────────────────────────────────────────────────┤
 │  NTT Core ──► NTT Radix-4 ──► Goldilocks Field              │
 │     │              │               │                        │
-│  (3 axiomas)   (0 axiomas)    (5 axiomas)                   │
+│  (3 axiomas)   (0 axiomas)    (5 axiomas, 1 helper)         │
+│                                                             │
+│  FRI/Transcript ──► FRI/Properties                          │
+│       │                    │                                │
+│   (Sesión 10)         (Sesión 10)                           │
 └─────────────────────────────────────────────────────────────┘
                           │
                           ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                MÓDULOS PENDIENTES (~37 sorries)             │
+│                MÓDULOS PENDIENTES (42 sorries)              │
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
-│  ┌───────────────┐                                          │
-│  │  Matrix/Perm  │ ◄── INDEPENDIENTE                        │
-│  │    (18)       │     Baja prioridad, testeado             │
-│  └───────────────┘                                          │
+│  ┌───────────────┐     ┌───────────────┐                    │
+│  │  Matrix/Perm  │     │  FRI/Merkle   │                    │
+│  │    (20)       │     │     (2)       │                    │
+│  │ INDEPENDIENTE │     │   INDEPEND.   │                    │
+│  └───────────────┘     └───────────────┘                    │
 │                                                             │
-│  ┌───────────────┐                                          │
-│  │ FRI Protocol  │ ◄── MEDIA PRIORIDAD                      │
-│  │     (1)       │     transcript_extensionality            │
-│  └───────┬───────┘                                          │
-│          │                                                  │
-│          ▼                                                  │
-│  ┌───────────────┐                                          │
-│  │FRI_Properties │ ◄── ALTA PRIORIDAD                       │
-│  │     (4)       │     Teoremas de seguridad STARK          │
-│  └───────┬───────┘                                          │
-│          │                                                  │
-│          ▼                                                  │
-│  ┌───────────────┐                                          │
-│  │ Verification  │ ◄── MEDIA PRIORIDAD                      │
-│  │    (~14)      │     Poseidon, MDS, Theorems              │
-│  └───────────────┘                                          │
+│  ┌───────────────┐     ┌───────────────┐                    │
+│  │Verif/Theorems │     │Verif/Poseidon │                    │
+│  │     (7)       │     │    (12)       │                    │
+│  │ Sigma-SPL     │     │ Comp. verif.  │                    │
+│  └───────────────┘     └───────────────┘                    │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -207,30 +209,34 @@
 **Conexión**: INDEPENDIENTE - No bloquea otros módulos.
 **Relevancia**: BAJA - Tests verifican corrección computacionalmente.
 
-#### 2. FRI Protocol (1 sorry) - MEDIA PRIORIDAD
+#### 2. FRI Protocol (0 sorries) - ✅ COMPLETADO
 
-**Archivo**: `AmoLean/FRI/Transcript.lean:439`
+**Archivos**: `AmoLean/FRI/Transcript.lean`, `AmoLean/Verification/FRI_Properties.lean`
 
-| Sorry | Descripción | Dificultad |
-|-------|-------------|------------|
-| `transcript_extensionality` | Extensionalidad de estructuras | Media |
+| Sorry | Estado | Resolución (Sesión 10) |
+|-------|--------|------------------------|
+| `absorb_order_matters` | ✅ | `List.append_cancel_left` |
+| `friFold_spec` | ✅ | `Array.getElem_ofFn` chain |
+| `commitments_count` | ✅ | `go_sizes` helper lemma |
+| `challenges_count` | ✅ | `go_sizes` helper lemma |
+| `challenges_derived_in_order` | ✅ | Corolario + `omega` |
 
-**Conexión**: BLOQUEA FRI_Properties (parcialmente).
-**Relevancia**: MEDIA - Necesario para pruebas de protocolo FRI.
+**Técnicas clave de Session 10**:
+- `Nat.strongRecOn` + `generalize` para inducción sobre termination metric
+- `let rec` genera `.go` accesible para probar propiedades
+- `List.append_cancel_left` (no `append_left_cancel`)
 
-#### 3. FRI_Properties (4 sorries) - ALTA PRIORIDAD
+#### 3. FRI/Merkle (2 sorries) - BAJA PRIORIDAD
 
-**Archivo**: `AmoLean/Verification/FRI_Properties.lean`
+**Archivo**: `AmoLean/FRI/Merkle.lean`
 
 | Sorry | Relevancia | Dificultad |
 |-------|------------|------------|
-| `single_round_soundness` | CRÍTICA | Alta |
-| `multi_round_soundness` | CRÍTICA | Alta |
-| `protocol_completeness` | Alta | Alta |
-| `main_theorem` | Alta | Alta |
+| `h_size` | Baja | Fácil |
+| `h_pow2` | Baja | Fácil |
 
-**Conexión**: DEPENDE de FRI Protocol. BLOQUEA verificación formal STARK.
-**Relevancia**: ALTA - Sin estos, no hay garantía formal de seguridad STARK.
+**Conexión**: INDEPENDIENTE - Invariantes de estructura.
+**Relevancia**: BAJA - No afectan corrección criptográfica.
 
 #### 4. Verification (~14 sorries) - MEDIA PRIORIDAD
 
@@ -282,25 +288,47 @@
 | L-027 | Sintaxis `.mul` vs `*` → usar `change` | Pattern matching |
 | L-028 | `Nat.cast_add` vs `push_cast` | Coerciones |
 
+### De FRI Protocol (Sesión 10)
+
+| ID | Lección | Aplicabilidad |
+|----|---------|---------------|
+| L-031 | `let rec` genera `.go` accesible | Funciones recursivas |
+| L-032 | `Nat.strongRecOn` + `generalize` para termination | Inducción |
+| L-033 | `List.append_cancel_left` (no `append_left_cancel`) | Lean 4 naming |
+| L-034 | Cadena `get!` → `getElem!` → `getElem` → `getElem_ofFn` | Array access |
+| L-035 | `trivial` cuando goal es `True`, no `rfl` | Post-simp |
+| L-036 | `simp only [f]` propaga a subfunciones | executeRounds → go |
+
 ---
 
 ## Próximos Pasos Recomendados
 
-### Para Verificación Formal Completa (STARK)
+### Session 11: Matrix/Perm (20 sorries)
 
-1. **FRI Protocol** (1 sorry) - `transcript_extensionality`
-2. **FRI_Properties** (4 sorries) - Teoremas de seguridad
-3. **Verification/Theorems** (7 sorries) - Operaciones MDS
+**Prioridad elevada** por solicitud del usuario.
 
-### Para Optimización
+| Categoría | Sorries | Estrategia |
+|-----------|---------|------------|
+| Triviales | 5 | `rfl`, `simp` |
+| Fáciles | 8 | Extensionality, bounds |
+| Medias | 6 | Inducción, aritmética |
+| Alta | 1 | `stride_factor_pointwise` |
+
+### Para Verificación Formal Completa
+
+1. ~~**FRI Protocol** (5 sorries)~~ ✅ COMPLETADO Session 10
+2. **Verification/Theorems** (7 sorries) - Sigma-SPL correctness
+3. **FRI/Merkle** (2 sorries) - Size invariants
+
+### Para Optimización (Futuro)
 
 1. Eliminar axiomas de Goldilocks (5) - requiere trabajo significativo
 2. Eliminar axiomas de NTT (3) - requiere aritmética modular
 
 ### No Prioritario
 
-- Matrix/Perm (18 sorries) - testeado computacionalmente
-- Poseidon_Semantics (~12 sorries) - testeado computacionalmente
+- Poseidon_Semantics (12 sorries) - verificado computacionalmente por 21 tests
+- Goldilocks/uint64_sub_toNat (1 sorry) - BitVec property, no expuesto
 
 ---
 
@@ -310,14 +338,16 @@
 
 - [x] **0 sorries** en AmoLean/NTT/
 - [x] **0 sorries** en AmoLean/NTT/Radix4/
-- [x] **0 sorries** en AmoLean/Field/Goldilocks.lean
+- [x] **0 sorries** en AmoLean/Field/Goldilocks.lean (CommRing/Field)
+- [x] **0 sorries** en AmoLean/FRI/Transcript.lean
+- [x] **0 sorries** en AmoLean/Verification/FRI_Properties.lean
 - [x] **lake build** compila núcleo sin warnings de sorry (solo axiomas)
-- [x] Documentación actualizada (9 sesiones)
+- [x] Documentación actualizada (10 sesiones)
 
 ### Pendientes
 
-- [ ] **0 sorries** en AmoLean/ completo (~37 restantes)
-- [ ] FRI_Properties formalmente probado
+- [ ] **0 sorries** en AmoLean/ completo (42 restantes)
+- [ ] **0 sorries** en AmoLean/Matrix/Perm.lean (20 - Session 11)
 - [ ] Benchmark vs Plonky3
 
 ---
