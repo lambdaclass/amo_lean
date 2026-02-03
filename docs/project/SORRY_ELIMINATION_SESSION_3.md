@@ -1,4 +1,4 @@
-# Sesion 3: Eliminacion de Sorries - Teorema S10 Completado
+# Sesión 3: Eliminación de Sorries - Teorema S10 Completado
 
 **Fecha**: 2026-02-01
 **Objetivo**: Completar el teorema central `ct_recursive_eq_spec` (S10)
