@@ -27,7 +27,8 @@
 17. [Descomposicion de Lemas Complejos (reduce128)](#17-descomposicion-lemas) ← NUEVO
 18. [Transferencia de Instancias via Function.Injective](#18-transferencia-instancias)
 19. [Consulta Efectiva a Experto Lean](#19-consulta-experto)
-20. [Técnicas Avanzadas para Campos Finitos (Sesión 9)](#20-tecnicas-sesion9) ← NUEVO
+20. [Técnicas Avanzadas para Campos Finitos (Sesión 9)](#20-tecnicas-sesion9)
+21. [Técnicas para Funciones Recursivas con `let rec` (Sesión 10)](#21-funciones-recursivas) ← NUEVO
 
 ---
 
@@ -1132,6 +1133,111 @@ qsmul_def := fun q a => by rfl  -- Cierra por definición!
 | `zsmul_succ'`, `zsmul_neg'` | `if_pos`/`if_neg` + `rfl` |
 | `npow_succ` | `toZMod_injective` + `toZMod_pow` axiom |
 | `zpow_succ'`, `zpow_neg'` | `if_pos`/`if_neg` + `toZMod_pow` + `mul_comm` |
+
+---
+
+## 21. Técnicas para Funciones Recursivas con `let rec` (Sesión 10)
+
+### 21.1 L-031: Acceso a Funciones Internas `let rec`
+
+**Descubrimiento**: En Lean 4, las funciones definidas con `let rec` dentro de otra función son accesibles externamente.
+
+```lean
+-- Definición original:
+def executeRounds (initialPoly : Array UInt64) (numRounds : Nat) ... :=
+  let rec go (poly : Array UInt64) (ts : TranscriptState)
+             (commitments challenges : Array UInt64) (round : Nat) :=
+    if round >= numRounds then ...
+    else ...
+  termination_by numRounds - round
+  go initialPoly TranscriptState.init #[] #[] 0
+
+-- Lean genera: executeRounds.go es accesible!
+#check @executeRounds.go  -- ✓ Funciona
+```
+
+**Uso**: Probar propiedades sobre `go` directamente y luego conectar con `executeRounds`.
+
+### 21.2 L-032: Inducción sobre Métricas de Terminación
+
+**Problema**: `Nat.strongInductionOn` no siempre coincide con la estructura de funciones con `termination_by`.
+
+**Solución**: Usar `Nat.strongRecOn` + `generalize` para alinear con la métrica.
+
+```lean
+-- MAL (puede fallar):
+induction numRounds with ...
+
+-- BIEN:
+generalize h_term : numRounds - round = n
+induction n using Nat.strongRecOn generalizing poly ts commits round h_bound with
+| ind n ih => ...
+```
+
+**Razón**: `generalize` crea una igualdad explícita que permite conectar el caso inductivo.
+
+### 21.3 L-033: Naming de Lemmas en Lean 4 vs Mathlib
+
+**Problema**: Nombres de lemmas consultados pueden no coincidir con Lean 4/Mathlib actual.
+
+| Sugerido (incorrecto) | Real (Lean 4) |
+|-----------------------|---------------|
+| `List.append_left_cancel` | `List.append_cancel_left` |
+| `List.append_right_cancel` | `List.append_cancel_right` |
+| `Array.get_ofFn` | `Array.getElem_ofFn` |
+
+**Regla**: Siempre verificar con `#check @LemmaName` antes de usar.
+
+### 21.4 L-034: Cadena de Conversión para Array Access
+
+**Patrón** para probar propiedades sobre `Array.ofFn`:
+
+```lean
+Array.get! → getElem! → getElem → Array.getElem_ofFn
+```
+
+**Implementación**:
+```lean
+rw [Array.get!_eq_getElem!]
+rw [getElem!_pos arr i h_bound]  -- Requiere proof de bounds
+rw [Array.getElem_ofFn]          -- Acceso a función
+```
+
+### 21.5 L-035: `trivial` vs `rfl` después de Simplificación
+
+**Problema**: Después de `simp`/`subst`, la meta puede ser `True` (no una igualdad).
+
+```lean
+-- Después de subst y simp:
+-- Goal: True
+rfl      -- FALLA: expected binary relation
+trivial  -- ✓ Funciona
+```
+
+**Regla**: Si `rfl` falla con "expected binary relation", probar `trivial`.
+
+### 21.6 L-036: Conexión executeRounds ↔ go con simp
+
+**Problema**: Teoremas sobre `go` no se aplican directamente al goal sobre `executeRounds`.
+
+**Solución**: Usar `simp only [executeRounds]` que expande la definición.
+
+```lean
+-- Goal involucra: executeRounds initialPoly numRounds computeCommitment
+-- Tienes: h : go ... .size = numRounds
+
+simp only [executeRounds] at h ⊢  -- Unifica executeRounds con go
+omega  -- Ahora puede usar h
+```
+
+### 21.7 Resumen: Checklist para Funciones Recursivas
+
+- [ ] Verificar si `FunctionName.go` existe con `#check`
+- [ ] Usar `generalize h_term : termination_metric = n`
+- [ ] Inducir con `Nat.strongRecOn generalizing` sobre variables que cambian
+- [ ] En caso base, usar `subst` para eliminar variable generalizada
+- [ ] Cerrar caso base con `trivial` si es `True`
+- [ ] Conectar `go` con función principal via `simp only [FunctionName]`
 
 ---
 

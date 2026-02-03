@@ -86,9 +86,17 @@ This is the formal statement of the PROOF_ANCHOR postcondition:
 theorem friFold_spec (input : Array UInt64) (alpha : UInt64)
     (i : Nat) (hi : i < input.size / 2) :
     (friFold input alpha).get! i = input.get! (2 * i) + alpha * input.get! (2 * i + 1) := by
-  simp only [friFold]
-  -- The array is constructed via ofFn, so element i is the function applied to i
-  sorry -- Full proof requires Array lemmas; statement is correct
+  unfold friFold
+  -- Show that i is within bounds of the Array.ofFn
+  have h_bound : i < (Array.ofFn fun j : Fin (input.size / 2) =>
+      input.get! (2 * j.val) + alpha * input.get! (2 * j.val + 1)).size := by
+    simp only [Array.size_ofFn]; exact hi
+  -- Rewrite get! using the bound
+  rw [Array.get!_eq_getElem!]
+  rw [getElem!_pos (Array.ofFn fun j : Fin (input.size / 2) =>
+      input.get! (2 * j.val) + alpha * input.get! (2 * j.val + 1)) i h_bound]
+  -- Access Array.ofFn at index i gives the function applied to ⟨i, _⟩
+  rw [Array.getElem_ofFn]
 
 /-! ## Part 3: Domain Size Reduction
 
@@ -263,19 +271,81 @@ def executeRounds (initialPoly : Array UInt64) (numRounds : Nat)
 
   go initialPoly TranscriptState.init #[] #[] 0
 
-/-- THEOREM: Number of commitments equals number of rounds -/
+/-- Helper lemma: go preserves the invariant that final sizes equal initial + remaining rounds -/
+private theorem go_sizes (numRounds : Nat) (computeCommitment : Array UInt64 → UInt64)
+    (poly : Array UInt64) (ts : TranscriptState)
+    (commits challenges : Array UInt64) (round : Nat)
+    (h_bound : round ≤ numRounds) :
+    let (finalCommits, finalChallenges, _) :=
+      executeRounds.go numRounds computeCommitment poly ts commits challenges round
+    finalCommits.size = commits.size + (numRounds - round) ∧
+    finalChallenges.size = challenges.size + (numRounds - round) := by
+  -- Induction on the difference (numRounds - round), matching termination proof
+  generalize h_term : numRounds - round = n
+  induction n using Nat.strongRecOn generalizing poly ts commits challenges round h_bound with
+  | ind n ih =>
+    unfold executeRounds.go
+    simp only
+    split
+    · -- Base case: round >= numRounds
+      rename_i h_done
+      have h_zero : numRounds - round = 0 := Nat.sub_eq_zero_of_le h_done
+      have h_n_zero : n = 0 := by rw [← h_term]; exact h_zero
+      subst h_n_zero
+      simp only [Nat.add_zero]
+      trivial
+    · -- Inductive case: round < numRounds
+      rename_i h_continue
+      have h_lt : round < numRounds := Nat.lt_of_not_ge h_continue
+      have h_next_bound : round + 1 ≤ numRounds := h_lt
+      have h_next_n : numRounds - (round + 1) = n - 1 := by
+        rw [← h_term]; omega
+      have h_lt_n : n - 1 < n := by
+        have h_pos : n > 0 := by rw [← h_term]; omega
+        omega
+      -- Apply IH with n - 1
+      have h_rec := ih (n - 1) h_lt_n
+        (executeRound poly ts computeCommitment).outputPoly
+        (executeRound poly ts computeCommitment).finalTranscript
+        (commits.push (executeRound poly ts computeCommitment).commitment)
+        (challenges.push (executeRound poly ts computeCommitment).challenge)
+        (round + 1)
+        h_next_bound
+        h_next_n
+      simp only [Array.size_push] at h_rec
+      -- Conclude using arithmetic
+      rw [← h_term]
+      constructor
+      · have := h_rec.1; omega
+      · have := h_rec.2; omega
+
+/-- THEOREM: Number of commitments equals number of rounds
+
+    This follows from the structure of executeRounds: each iteration of the
+    internal go function pushes exactly one commitment, and the loop runs
+    exactly numRounds times (from round 0 to numRounds - 1).
+-/
 theorem commitments_count (initialPoly : Array UInt64) (numRounds : Nat)
     (computeCommitment : Array UInt64 → UInt64) :
     let (commitments, _, _) := executeRounds initialPoly numRounds computeCommitment
     commitments.size = numRounds := by
-  sorry -- Requires induction on numRounds
+  simp only [executeRounds]
+  have h := go_sizes numRounds computeCommitment initialPoly TranscriptState.init #[] #[] 0 (Nat.zero_le _)
+  simp only [Array.size_empty, Nat.zero_add, Nat.sub_zero] at h
+  exact h.1
 
-/-- THEOREM: Number of challenges equals number of rounds -/
+/-- THEOREM: Number of challenges equals number of rounds
+
+    Same reasoning as commitments_count: each round pushes exactly one challenge.
+-/
 theorem challenges_count (initialPoly : Array UInt64) (numRounds : Nat)
     (computeCommitment : Array UInt64 → UInt64) :
     let (_, challenges, _) := executeRounds initialPoly numRounds computeCommitment
     challenges.size = numRounds := by
-  sorry -- Requires induction on numRounds
+  simp only [executeRounds]
+  have h := go_sizes numRounds computeCommitment initialPoly TranscriptState.init #[] #[] 0 (Nat.zero_le _)
+  simp only [Array.size_empty, Nat.zero_add, Nat.sub_zero] at h
+  exact h.2
 
 /-- THEOREM: Challenges are derived in order
 
@@ -288,7 +358,13 @@ theorem challenges_derived_in_order (initialPoly : Array UInt64) (numRounds : Na
     let (commitments, challenges, _) := executeRounds initialPoly numRounds computeCommitment
     -- Challenge i depends on all commitments up to and including i
     commitments.size ≥ i + 1 → challenges.size ≥ i + 1 := by
-  sorry -- Requires detailed induction
+  intro _
+  -- challenges.size = numRounds by the count theorem
+  have h2 := challenges_count initialPoly numRounds computeCommitment
+  -- Unfold executeRounds to match the let binding in the goal
+  simp only [executeRounds] at h2 ⊢
+  -- Now h2 says the challenges size = numRounds, and i < numRounds
+  omega
 
 /-! ## Part 7: Summary of Verified Properties
 

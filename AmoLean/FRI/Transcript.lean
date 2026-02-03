@@ -29,6 +29,7 @@ import AmoLean.FRI.Hash
 import AmoLean.FRI.Fields.TestField
 import AmoLean.Vector.Basic
 import AmoLean.Sigma.Basic
+import Mathlib.Data.List.Basic
 
 namespace AmoLean.FRI.Transcript
 
@@ -430,13 +431,32 @@ def verifyIntrinsicSequence (seq : List Intrinsic) : Bool × List String :=
 
 /-- Theorem: Absorb operations cannot be reordered.
     Phase 2.1: Parametrized over generic field type F.
+
+    The proof shows that if we absorb a then b, the resulting transcript state
+    differs from absorbing b then a (when a ≠ b). This is because the absorbed
+    list would be s.absorbed ++ [a, b] vs s.absorbed ++ [b, a], which are
+    different lists when a ≠ b.
 -/
 theorem absorb_order_matters {F : Type} (s1 s2 : TranscriptState F) (a b : F) (h : a ≠ b) :
     absorb (absorb s1 a) b ≠ absorb (absorb s1 b) a := by
-  simp [absorb]
+  simp only [absorb]
+  -- Goal: { absorbed := s1.absorbed ++ [a] ++ [b], ... } ≠ { absorbed := s1.absorbed ++ [b] ++ [a], ... }
   intro heq
-  -- The absorbed lists would differ
-  sorry  -- Full proof requires list extensionality
+  -- If the states are equal, their absorbed fields must be equal
+  have h_absorbed : s1.absorbed ++ [a] ++ [b] = s1.absorbed ++ [b] ++ [a] := by
+    have := congrArg TranscriptState.absorbed heq
+    simp only [List.append_assoc] at this ⊢
+    exact this
+  -- By list append associativity: s1.absorbed ++ [a, b] = s1.absorbed ++ [b, a]
+  simp only [List.append_assoc, List.singleton_append] at h_absorbed
+  -- Cancel the common prefix s1.absorbed
+  have h_suffix : [a, b] = [b, a] := List.append_cancel_left h_absorbed
+  -- Extract that a = b from [a, b] = [b, a]
+  have h_eq : a = b := by
+    have := List.cons.inj h_suffix
+    exact this.1
+  -- Contradiction with h : a ≠ b
+  exact h h_eq
 
 /-- Theorem: Squeeze is deterministic given transcript state.
     Phase 2.1: Requires CryptoHash constraint.
