@@ -72,6 +72,22 @@ theorem NTT_spec_singleton (ω : F) (a : F) :
     NTT_spec ω [a] = [inst.add inst.zero (inst.mul a (HPow.hPow ω 0))] := by
   rfl
 
+section SingletonSimplified
+variable {F : Type*} [NTTFieldLawful F]
+
+/-- NTT of singleton simplifies to identity: NTT_spec ω [a] = [a]
+
+    Proof: ω^0 = 1, a * 1 = a, 0 + a = a -/
+@[simp] theorem NTT_spec_singleton_simp (ω : F) (a : F) :
+    NTT_spec ω [a] = [a] := by
+  rw [NTT_spec_singleton]
+  -- Goal: [inst.add inst.zero (inst.mul a (ω^0))] = [a]
+  -- ω^0 = 1, a * 1 = a, 0 + a = a
+  show [0 + a * (ω ^ 0)] = [a]
+  simp [pow_zero]
+
+end SingletonSimplified
+
 /-! ## Part 4: First coefficient theorem -/
 
 /-- The first coefficient X₀ = Σᵢ aᵢ (sum of all elements)
@@ -282,25 +298,60 @@ theorem INTT_spec_length (ω n_inv : F) (X : List F) :
     INTT_spec ω n_inv ([] : List F) = [] := by
   simp [INTT_spec]
 
+section SingletonINTT
+variable {F : Type*} [NTTFieldLawful F]
+
+/-- INTT of singleton [a] with n_inv = 1 gives [a]
+
+    When n = 1, the INTT is: n_inv * (a * ω^0) = 1 * (a * 1) = a -/
+@[simp] theorem INTT_spec_singleton_simp (ω : F) (a : F) :
+    INTT_spec ω 1 [a] = [a] := by
+  simp only [INTT_spec, List.length_singleton]
+  have hr1 : List.range 1 = [0] := rfl
+  rw [hr1]
+  -- Goal: [(1 : F) * (0 + a * ω^(if ...))] = [a]
+  show [1 * (0 + a * ω ^ (if 0 * 0 = 0 then 0 else 1 - 0 * 0 % 1))] = [a]
+  simp [pow_zero]
+
+/-- When n_inv * 1 = 1, we have n_inv = 1 -/
+theorem n_inv_eq_one_of_mul_one {n_inv : F} (h : n_inv * 1 = 1) : n_inv = 1 := by
+  rw [mul_one] at h; exact h
+
+/-- INTT roundtrip for singleton: INTT(NTT([a])) = [a] when n_inv * 1 = 1 -/
+theorem INTT_NTT_singleton_roundtrip (ω n_inv : F) (a : F) (h_inv : n_inv * (1 : F) = 1) :
+    INTT_spec ω n_inv (NTT_spec ω [a]) = [a] := by
+  have h_ninv_one : n_inv = 1 := n_inv_eq_one_of_mul_one h_inv
+  rw [NTT_spec_singleton_simp, h_ninv_one, INTT_spec_singleton_simp]
+
+end SingletonINTT
+
 /-! ## Part 7: Roundtrip property (the key theorem) -/
 
 /-- The central identity: INTT(NTT(a)) = a
 
-    This requires:
-    - ω^n = 1 and ω^k ≠ 1 for 0 < k < n (ω is primitive)
-    - n_inv · n = 1 (n_inv is the multiplicative inverse of n in F)
+    **IMPORTANT**: The original formulation with only `ω^n = 1` is mathematically
+    INSUFFICIENT. The proof requires `IsPrimitiveRoot ω n` (full primitivity).
 
-    The proof uses the orthogonality of roots of unity:
-    Σₖ ω^(jk) = n if j ≡ 0 (mod n), else 0
+    Counterexample: n=4, F = ℤ/5ℤ, ω = -1 ≡ 4 (mod 5). Here ω^4 = 1 but ω is NOT
+    a primitive 4th root (its order is 2). The NTT matrix would be singular.
 
-    NOTE: For the formal statement with IsPrimitiveRoot, see the
-    specialized module with proper type class constraints. -/
-theorem ntt_intt_identity (ω n_inv : F) (a : List F) (n_as_field : F)
+    The correct theorem is `ntt_intt_identity_list` in ListFinsetBridge.lean
+    which has the correct hypotheses:
+    - `IsPrimitiveRoot ω n` (ω is primitive n-th root)
+    - `n_inv * n = 1` (n_inv is the multiplicative inverse of n in F)
+    - `n > 1` (non-degenerate case)
+
+    The deprecated version below is commented out because it has insufficient
+    hypotheses and cannot be proven without strengthening them to IsPrimitiveRoot. -/
+
+/-  DEPRECATED: This theorem has insufficient hypotheses
+theorem ntt_intt_identity_deprecated (ω n_inv : F) (a : List F) (n_as_field : F)
     (hω_n : HPow.hPow ω a.length = inst.one)
     (hn_inv : inst.mul n_inv n_as_field = inst.one)
     (hne : a ≠ []) :
     INTT_spec ω n_inv (NTT_spec ω a) = a := by
-  sorry  -- Main correctness theorem - requires orthogonality
+  sorry
+-/
 
 /-! ## Part 8: Quick Tests (small N only!) -/
 

@@ -87,7 +87,7 @@ Esquema:
     Esta es la relacion clave que conecta radix-4 con radix-2.
 -/
 theorem butterfly4_as_butterfly2_composition (a b c d ω : F)
-    (hω4 : inst.pow ω 4 = inst.one)  -- ω es raiz cuarta de la unidad
+    (hω4 : ω ^ 4 = 1)  -- ω es raiz cuarta de la unidad
     (hω2_neg : inst.mul ω ω = inst.neg inst.one)  -- ω² = -1
     (h_add_comm : ∀ x y : F, inst.add x y = inst.add y x)
     (h_add_assoc : ∀ x y z : F, inst.add (inst.add x y) z = inst.add x (inst.add y z))
@@ -174,7 +174,7 @@ axiom butterfly4_orthogonality (a b c d ω ω_inv n_inv : F)
     (hω_inv : inst.mul ω ω_inv = inst.one)
     (hn_inv : inst.mul (inst.add (inst.add inst.one inst.one)
                                   (inst.add inst.one inst.one)) n_inv = inst.one)
-    (hω4 : inst.pow ω 4 = inst.one) :
+    (hω4 : ω ^ 4 = 1) :
     let (x0, x1, x2, x3) := butterfly4 a b c d ω
     ibutterfly4 x0 x1 x2 x3 ω_inv n_inv = (a, b, c, d)
 
@@ -183,7 +183,7 @@ theorem butterfly4_ibutterfly4_identity (a b c d ω ω_inv n_inv : F)
     (hω_inv : inst.mul ω ω_inv = inst.one)  -- ω · ω⁻¹ = 1
     (hn_inv : inst.mul (inst.add (inst.add inst.one inst.one)
                                   (inst.add inst.one inst.one)) n_inv = inst.one)  -- 4 · n_inv = 1
-    (hω4 : inst.pow ω 4 = inst.one) :
+    (hω4 : ω ^ 4 = 1) :
     let (x0, x1, x2, x3) := butterfly4 a b c d ω
     ibutterfly4 x0 x1 x2 x3 ω_inv n_inv = (a, b, c, d) :=
   butterfly4_orthogonality a b c d ω ω_inv n_inv hω_inv hn_inv hω4

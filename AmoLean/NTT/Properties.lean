@@ -255,19 +255,43 @@ theorem ntt_constant_nonzero {n : ℕ} (hn : n > 1) (ω : F) (hω : IsPrimitiveR
 
 end SpecialInputs
 
-/-! ## Part 6: Parseval's Theorem -/
+/-! ## Part 6: Parseval's Theorem - SKIPPED
 
+The classical Parseval identity for complex DFT states:
+  n * Σᵢ |aᵢ|² = Σₖ |Xₖ|²
+
+However, for finite fields without complex conjugation, the naive translation
+  n * Σᵢ aᵢ² = Σₖ Xₖ²
+is **mathematically incorrect**.
+
+Counterexample: For a = [1, 1, 0, 0] with n = 4 and ω a primitive 4th root:
+- LHS: n * Σᵢ aᵢ² = 4 * (1² + 1² + 0² + 0²) = 8
+- RHS: Σₖ Xₖ² where X₀=2, X₁=1+ω, X₂=0, X₃=1+ω³
+  = 4 + (1+ω)² + 0 + (1+ω³)²
+  = 4 + 1 + 2ω + ω² + 1 + 2ω³ + ω⁶
+  = 6 + 2(ω + ω³) + (ω² + ω⁶)
+  = 6 + 2(-1-ω²) + ω²(1 + ω⁴)  [using ω⁴=1, 1+ω+ω²+ω³=0]
+  = 6 - 2 - 2ω² + ω² + ω² = 4 ≠ 8
+
+The correct version for finite fields would involve the "correlation" form:
+  Σᵢ aᵢ * a_{-i mod n} = (1/n) * Σₖ Xₖ²
+
+This is left for future work as it requires additional machinery.
+-/
+
+/-
+-- Original (incorrect) statement preserved for reference:
 section Parseval
 
 variable {F : Type*} [CommRing F] [IsDomain F]
 
-/-- Parseval's identity (energy preservation) -/
 theorem parseval {n : ℕ} (hn : n > 1) (ω : F) (hω : IsPrimitiveRoot ω n)
     (a : Fin n → F) :
     (n : F) * (Finset.univ.sum fun i => a i * a i) =
     Finset.univ.sum fun k => ntt_coeff_finset ω a k * ntt_coeff_finset ω a k := by
-  sorry -- Proof uses orthogonality
+  sorry
 
 end Parseval
+-/
 
 end AmoLean.NTT

@@ -556,4 +556,162 @@ set_option trace.Meta.Tactic.simp true
 
 ---
 
+---
+
+## 11. Axiomatización Estratégica
+
+### 11.1 Cuándo Axiomatizar vs Probar
+
+No todos los sorries deben probarse formalmente. Axiomatizar es apropiado cuando:
+
+| Criterio | Probar | Axiomatizar |
+|----------|--------|-------------|
+| Resultado bien conocido | No disponible en Mathlib | Estándar en teoría de números |
+| Complejidad técnica | Manejable | Desproporcionada al valor |
+| Dependencias | Pocas | Muchas, tedioso en Lean |
+| Audibilidad | Prueba es el valor | Enunciado es claro |
+
+### 11.2 Ejemplo: Aritmética Modular para NTT
+
+```lean
+-- Probar esto directamente es tedioso (casos de Nat.sub, módulos, etc.)
+-- Pero el resultado es estándar y el enunciado es autoevidente
+
+axiom pow_pred_is_primitive {n : ℕ} (hn : n > 0) {ω : F}
+    (hω : IsPrimitiveRoot ω n) :
+    IsPrimitiveRoot (ω ^ (n - 1)) n
+-- Justificación: (ω^(n-1))^k = ω^((n-1)k) = ω^(-k mod n)
+```
+
+### 11.3 Documentación Obligatoria
+
+Cada axiom DEBE tener:
+1. Docstring con justificación matemática
+2. Referencia a resultado estándar si aplica
+3. Explicación de por qué no se prueba formalmente
+
+```lean
+/-- ω^(n-1) es raíz primitiva cuando ω lo es.
+
+    Prueba: (ω^(n-1))^n = ω^(n*(n-1)) = 1, y para 0 < k < n,
+    (ω^(n-1))^k = ω^((n-1)*k) donde (n-1)*k ≢ 0 (mod n).
+
+    No se prueba formalmente porque requiere manejar muchos casos
+    de aritmética de Nat.sub que son tediosos pero no informativos. -/
+axiom pow_pred_is_primitive ...
+```
+
+---
+
+## 12. Verificación Matemática ANTES de Implementación
+
+### 12.1 El Error de Parseval
+
+La sesión 6 descubrió que el teorema de Parseval estaba **matemáticamente incorrecto**:
+
+```lean
+-- INCORRECTO para campos finitos:
+theorem parseval :
+    n * Σᵢ aᵢ² = Σₖ Xₖ²
+
+-- Contraejemplo: a = [1, 1, 0, 0], n = 4
+-- LHS: 4 * 2 = 8
+-- RHS: 4 + (1+ω)² + 0 + (1+ω³)² = 4 (con cálculo)
+```
+
+### 12.2 Checklist Pre-Implementación
+
+Antes de atacar cualquier teorema matemático:
+
+- [ ] **Verificar enunciado numéricamente**: Probar con valores concretos
+- [ ] **Buscar contraejemplos**: Casos pequeños (n=2, n=4)
+- [ ] **Comparar con literatura**: ¿El enunciado coincide con la versión estándar?
+- [ ] **Considerar dominio**: ¿Funciona igual en ℂ que en campos finitos?
+
+### 12.3 Diferencias Campos Finitos vs Complejos
+
+| Concepto | ℂ | Campo Finito 𝔽_p |
+|----------|---|------------------|
+| Conjugado | conj(z) | No existe |
+| Norma | \|z\|² = z * conj(z) | z² (diferente!) |
+| Parseval | n*Σ\|aᵢ\|² = Σ\|Xₖ\|² | Requiere reformulación |
+| Raíz inversa | ω⁻¹ = conj(ω) si \|ω\|=1 | ω⁻¹ = ω^(n-1) |
+
+---
+
+## 13. Patrones de Bridge List ↔ Finset
+
+### 13.1 Estrategia General
+
+```
+List.foldl ──────────────────────────────► Finset.sum
+    │            foldl_range_eq_finset_sum      │
+    │                                           │
+    ▼                                           ▼
+match a[i]? ──────────────────────────────► a[i]'hlt
+    │         getElem?_eq_getElem               │
+    │                                           │
+    ▼                                           ▼
+Spec definition ─────────────────────────► Finset definition
+                 ntt_coeff_list_eq_finset
+```
+
+### 13.2 Lemas Clave del Bridge
+
+```lean
+-- 1. Conversión fundamental
+lemma foldl_range_eq_finset_sum (n : ℕ) (f : ℕ → F) :
+    (List.range n).foldl (fun acc i => acc + f i) 0 =
+    Finset.univ.sum (fun i : Fin n => f i.val)
+
+-- 2. Eliminar match/Option
+lemma getElem?_eq_getElem (h : i < a.length) :
+    a[i]? = some a[i]
+
+-- 3. getD con prueba de bounds
+lemma getD_eq_getElem (h : i < a.length) :
+    a.getD i d = a[i]
+```
+
+### 13.3 Manejo de Exponentes Condicionales
+
+```lean
+-- INTT_spec usa: if i*k = 0 then 0 else n - (i*k % n)
+-- intt_coeff_finset usa: n - (i*k % n)
+
+-- Bridge: son iguales bajo raíz primitiva
+lemma intt_exp_equiv (hω : IsPrimitiveRoot ω n) :
+    ω ^ (if i*k = 0 then 0 else n - (i*k % n)) = ω ^ (n - (i*k % n))
+-- Prueba: cuando i*k = 0, ambos dan ω^0 = 1 = ω^n
+```
+
+---
+
+## 14. Uso Efectivo de `rfl` para Igualdad Definicional
+
+### 14.1 El Problema
+
+```lean
+let n := X.length
+...
+-- Goal: ω ^ (n - k) = ω ^ (X.length - k)
+simp only [h]  -- Deja: ω ^ (n - k) vs ω ^ (X.length - k)
+```
+
+### 14.2 La Solución
+
+```lean
+-- n y X.length son definicionalmente iguales (let binding)
+simp only [h]
+rfl  -- Cierra por igualdad definicional
+```
+
+### 14.3 Cuándo Usar `rfl`
+
+- Después de `let x := expr`, `x` y `expr` son definicionalmente iguales
+- Después de `simp` que no simplificó lo suficiente
+- Cuando el goal tiene la misma estructura pero con nombres diferentes
+
+---
+
 *Este documento es un recurso vivo. Agregar nuevas lecciones aprendidas en cada sesion de trabajo.*

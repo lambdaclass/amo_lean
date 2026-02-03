@@ -426,9 +426,17 @@ theorem ntt_intt_recursive_roundtrip (ω n_inv : F) (input : List F)
     obtain ⟨exp, hexp⟩ := h_pow2
     cases exp with
     | zero =>
-      -- n = 1, degenerate case: single element
-      -- For n=1, the transform is identity (Σ over single element)
-      sorry -- Single element case (n=1 is degenerate)
+      -- n = 1, degenerate case: single element [x]
+      -- For n=1, NTT_spec ω [x] = [x] and INTT_spec ω 1 [x] = [x]
+      have h_len : input.length = 1 := by simp [hexp]
+      match h : input with
+      | [] => simp at h_len
+      | [x] =>
+        -- h_inv : n_inv * (1 : F) = 1, so n_inv = 1
+        have h_inv' : n_inv * (1 : F) = 1 := by simp only [h_len] at h_inv; exact h_inv
+        rw [h]
+        exact INTT_NTT_singleton_roundtrip ω n_inv x h_inv'
+      | _ :: _ :: _ => simp at h_len
     | succ e =>
       -- n = 2^(e+1) ≥ 2, so n > 1
       have hn_gt1 : input.length > 1 := by
