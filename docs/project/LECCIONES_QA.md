@@ -18,6 +18,15 @@
 8. [Cuerpos Finitos y Caracteristica](#8-cuerpos-finitos) ← CRITICO
 9. [Estrategia del Homomorfismo (Goldilocks)](#9-homomorfismo)
 10. [Tacticas para Expresiones Grandes (Radix-4)](#10-radix4)
+11. [Axiomatizacion Estrategica](#11-axiomatizacion-estrategica)
+12. [Verificacion Matematica ANTES de Implementacion](#12-verificacion-matematica)
+13. [Patrones de Bridge List - Finset](#13-bridge-list-finset)
+14. [Uso Efectivo de rfl](#14-uso-rfl)
+15. [Patron ZMod.val_injective para Campos Finitos Custom](#15-zmod-val-injective) ← NUEVO
+16. [Integracion Efectiva de Feedback QA](#16-feedback-qa) ← NUEVO
+17. [Descomposicion de Lemas Complejos (reduce128)](#17-descomposicion-lemas) ← NUEVO
+18. [Transferencia de Instancias via Function.Injective](#18-transferencia-instancias) ← NUEVO
+19. [Consulta Efectiva a Experto Lean](#19-consulta-experto) ← NUEVO
 
 ---
 
@@ -711,6 +720,286 @@ rfl  -- Cierra por igualdad definicional
 - Después de `let x := expr`, `x` y `expr` son definicionalmente iguales
 - Después de `simp` que no simplificó lo suficiente
 - Cuando el goal tiene la misma estructura pero con nombres diferentes
+
+---
+
+## 15. Patron ZMod.val_injective para Campos Finitos Custom
+
+### 15.1 El Problema con ZMod Directo
+
+Cuando se trabaja con un campo finito custom (como GoldilocksField) y se quiere probar
+homomorfismo a `ZMod p`, trabajar directamente con ZMod causa problemas:
+
+```lean
+-- MAL: Intentar probar directamente
+theorem toZMod_add (a b : GoldilocksField) :
+    toZMod (a + b) = toZMod a + toZMod b := by
+  simp [toZMod]
+  ring  -- TIMEOUT: 5+ minutos
+  -- o
+  norm_cast  -- ERROR: maximum recursion depth exceeded
+```
+
+**Causa raiz**: ZMod usa `Nat.rec` internamente para representar elementos, y las tacticas
+de simplificacion no manejan bien esta representacion para modulos grandes.
+
+### 15.2 La Solucion: ZMod.val_injective
+
+```lean
+-- BIEN: Reducir a aritmetica de Nat
+theorem toZMod_add (a b : GoldilocksField) :
+    toZMod (a + b) = toZMod a + toZMod b := by
+  apply ZMod.val_injective  -- Convierte goal de ZMod a Nat
+  simp only [toZMod, ZMod.val_add]
+  rw [ZMod.val_cast_of_lt (add_canonical a b)]
+  rw [ZMod.val_cast_of_lt (a_canonical)]
+  rw [ZMod.val_cast_of_lt (b_canonical)]
+  exact add_val_eq a b  -- Lema a nivel Nat
+```
+
+### 15.3 Teoremas Clave de Mathlib
+
+| Teorema | Tipo | Uso |
+|---------|------|-----|
+| `ZMod.val_injective` | `Injective ZMod.val` | Convertir igualdad ZMod → Nat |
+| `ZMod.val_add` | `(a + b).val = (a.val + b.val) % n` | Expandir suma |
+| `ZMod.val_mul` | `(a * b).val = (a.val * b.val) % n` | Expandir producto |
+| `ZMod.val_cast_of_lt h` | si `x < n`, `(x : ZMod n).val = x` | Eliminar cast |
+
+### 15.4 Arquitectura de Prueba Recomendada
+
+```
+Nivel 1: Lemas de canonicidad (a nivel UInt64/Nat)
+         add_canonical, neg_canonical, mul_canonical
+                        |
+                        v
+Nivel 2: Lemas val_eq (a nivel Nat puro)
+         add_val_eq: (a+b).value.toNat = (a + b) % ORDER
+                        |
+                        v
+Nivel 3: Lemas toZMod_* (combinan niveles anteriores)
+         toZMod_add = ZMod.val_injective + val_add + val_cast_of_lt + val_eq
+                        |
+                        v
+Nivel 4: Instancias via Function.Injective.commRing
+         CommRing, Field
+```
+
+---
+
+## 16. Integracion Efectiva de Feedback QA
+
+### 16.1 Cuando Consultar QA
+
+Consultar `/collab-qa` es apropiado cuando:
+- [ ] Plan tiene mas de 3 subfases
+- [ ] Hay decisiones arquitectonicas significativas
+- [ ] No estas seguro si el enfoque es optimo
+- [ ] Quieres validar antes de invertir tiempo
+
+### 16.2 Como Estructurar la Consulta
+
+```
+CONTEXTO:
+- Que estas tratando de lograr
+- Estado actual (que ya funciona, que falta)
+- Restricciones tecnicas
+
+PROBLEMA:
+- Descripcion precisa del bloqueo
+- Que has intentado y por que fallo
+
+ESTRATEGIAS CONSIDERADAS:
+- Lista de opciones con pros/contras
+- Tu preferencia actual y por que
+
+PREGUNTAS PARA QA:
+- Preguntas especificas, no "que opinas?"
+- Pedir evaluacion de riesgos
+- Pedir alternativas no consideradas
+```
+
+### 16.3 Como Procesar el Feedback
+
+El QA tipicamente responde con:
+1. **Assessment**: Evaluacion general
+2. **Issues Found**: Problemas identificados
+3. **Proposed Improvements**: Sugerencias concretas
+4. **Recommendation**: APPROVE / NEEDS_REVISION / PROPOSE_ALTERNATIVE
+
+**Acciones por tipo**:
+- **Issues Found**: Evaluar si son validos, incorporar mitigaciones
+- **Proposed Improvements**: Adoptar las que mejoren el plan
+- **Recommendation**: Si es NEEDS_REVISION, iterar antes de implementar
+
+### 16.4 Ejemplo: Sesion 7
+
+```
+Feedback QA: "goldilocks_canonical como axioma es una debilidad"
+
+Evaluacion:
+- Valido: si alguna operacion no preserva canonicidad, el axioma seria falso
+- Impacto: medio (tests pasan, pero reduce confianza formal)
+- Costo de fix: bajo (probar canonicidad por operacion)
+
+Decision: Adoptar sugerencia - reemplazar axioma por lemas individuales
+```
+
+---
+
+## 17. Descomposicion de Lemas Complejos (reduce128)
+
+### 17.1 Identificar Complejidad
+
+Un lema es "complejo" cuando:
+- Involucra multiples representaciones (UInt64, Nat, ZMod)
+- Tiene logica condicional anidada
+- Usa identidades matematicas no triviales
+- La definicion tiene mas de 10 lineas
+
+### 17.2 Estrategia de Descomposicion
+
+```
+                    reduce128_correct
+                          |
+        +-----------------+-----------------+
+        |                 |                 |
+goldilocks_modulus   decomposition_128   reduce_step
+   (native_decide)    (algebra)         (modular arith)
+```
+
+**Principio**: Cada sub-lema debe ser probable con una sola tecnica dominante.
+
+### 17.3 Tipos de Sub-lemas
+
+| Tipo | Tacticas | Ejemplo |
+|------|----------|---------|
+| Computacional | `native_decide` | `2^64 % p = epsilon + 1` |
+| Algebraico | `ring`, `omega` | Descomposicion de expresiones |
+| Modular | `Nat.add_mul_mod_*` | Propiedades de % |
+| Condicional | `split_ifs` | Manejo de if-then-else |
+
+### 17.4 Template para reduce128
+
+```lean
+-- Sub-lema 1: Identidad de Goldilocks (computacional)
+theorem goldilocks_modulus_property :
+    (2^64 : Nat) % ORDER_NAT = EPSILON_NAT + 1 := by native_decide
+
+-- Sub-lema 2: Equivalencia modular (modular arithmetic)
+theorem reduce128_equiv (lo hi : Nat) :
+    (lo + hi * 2^64) % ORDER_NAT = (lo + hi * (EPSILON_NAT + 1)) % ORDER_NAT := by
+  conv_lhs => rw [show (2^64 : Nat) = ORDER_NAT + EPSILON_NAT + 1 by native_decide]
+  rw [Nat.add_mul_mod_self_left]
+
+-- Teorema principal: composicion
+theorem reduce128_correct (lo hi : UInt64) :
+    (reduce128 lo hi).toNat = (lo.toNat + hi.toNat * 2^64) % ORDER_NAT := by
+  simp [reduce128]
+  rw [reduce128_equiv]
+  -- Continuar con pasos adicionales...
+```
+
+---
+
+## 18. Transferencia de Instancias via Function.Injective
+
+### 18.1 Teorema de Mathlib
+
+```lean
+def Function.Injective.commRing {α : Type*} {β : Type*} [CommRing β]
+    (f : α → β) (hf : Injective f)
+    (zero : f 0 = 0) (one : f 1 = 1)
+    (add : ∀ x y, f (x + y) = f x + f y)
+    (mul : ∀ x y, f (x * y) = f x * f y)
+    (neg : ∀ x, f (-x) = -f x)
+    (sub : ∀ x y, f (x - y) = f x - f y)
+    (nsmul : ∀ (n : ℕ) x, f (n • x) = n • f x)
+    (zsmul : ∀ (n : ℤ) x, f (n • x) = n • f x)
+    (npow : ∀ x (n : ℕ), f (x ^ n) = f x ^ n)
+    (natCast : ∀ n : ℕ, f n = n)
+    (intCast : ∀ n : ℤ, f n = n) : CommRing α
+```
+
+### 18.2 Aplicacion a GoldilocksField
+
+```lean
+-- Prerequisitos
+theorem toZMod_injective : Function.Injective toZMod := ...
+theorem toZMod_zero : toZMod 0 = 0 := ...
+theorem toZMod_one : toZMod 1 = 1 := ...
+theorem toZMod_add : ∀ a b, toZMod (a + b) = toZMod a + toZMod b := ...
+theorem toZMod_mul : ∀ a b, toZMod (a * b) = toZMod a * toZMod b := ...
+theorem toZMod_neg : ∀ a, toZMod (-a) = -toZMod a := ...
+-- ... etc
+
+-- Instancia (cierra ~15 sorries de golpe)
+instance : CommRing GoldilocksField :=
+  toZMod_injective.commRing toZMod
+    toZMod_zero toZMod_one toZMod_add toZMod_mul
+    toZMod_neg toZMod_sub toZMod_nsmul toZMod_zsmul
+    toZMod_npow toZMod_natCast toZMod_intCast
+```
+
+### 18.3 Para Field
+
+```lean
+-- Prerequisito adicional
+theorem toZMod_inv : ∀ a, toZMod a⁻¹ = (toZMod a)⁻¹ := ...
+
+-- Instancia
+instance : Field GoldilocksField :=
+  toZMod_injective.field toZMod
+    toZMod_zero toZMod_one toZMod_add toZMod_mul
+    toZMod_neg toZMod_sub toZMod_inv ...
+```
+
+---
+
+## 19. Consulta Efectiva a Experto Lean (/ask-lean)
+
+### 19.1 Cuando Usar /ask-lean vs /lean-search
+
+| Situacion | Herramienta | Razon |
+|-----------|-------------|-------|
+| Buscar teorema existente | /lean-search | Dataset indexado |
+| Entender patron de prueba | /ask-lean | Explicacion contextual |
+| Tactica para goal especifico | /lean-search --suggest | Modelo entrenado |
+| Estrategia general | /ask-lean | Razonamiento |
+| Debugging de error | /ask-lean | Analisis de contexto |
+
+### 19.2 Estructura de Consulta Efectiva
+
+```
+CONTEXTO TECNICO:
+- Estructura del tipo (structure GoldilocksField where value : UInt64)
+- Que ya tienes probado (toZMod_injective)
+- Que necesitas probar (toZMod_add)
+
+PROBLEMA ESPECIFICO:
+- Error que obtienes (timeout, recursion depth)
+- Que tacticas has intentado
+
+PREGUNTA CONCRETA:
+- "Cual es el patron recomendado para probar homomorfismo a ZMod?"
+- NO: "Como pruebo todo?"
+```
+
+### 19.3 Ejemplo de Consulta Exitosa
+
+```
+Consulta:
+"Tengo GoldilocksField (p = 2^64 - 2^32 + 1) con toZMod_injective probado.
+Los lemmas toZMod_add/mul/neg tienen sorries porque ZMod usa Nat.rec y
+ring/norm_cast fallan. ¿Patron recomendado?"
+
+Respuesta:
+"Usar ZMod.val_injective para reducir a Nat:
+1. Probar add_val_eq: (a+b).value.toNat = (a + b) % ORDER a nivel Nat
+2. Luego: apply ZMod.val_injective; rw [ZMod.val_add]; exact add_val_eq"
+
+Accion: Adoptar patron, crear arquitectura de prueba en capas
+```
 
 ---
 

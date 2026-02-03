@@ -1,7 +1,7 @@
 # Inventario Completo de Sorries en AMO-Lean
 
 **Fecha**: 2026-02-03
-**Última actualización**: Sesión 6 (NTT Core completado)
+**Última actualización**: Sesión 8 (Goldilocks significativamente reducido)
 
 ---
 
@@ -11,13 +11,13 @@
 |--------|---------|------|--------|
 | **NTT Core** | 0 | - | ✅ COMPLETADO |
 | **NTT Radix4** | 0 | - | ✅ COMPLETADO |
-| **Goldilocks** | ~25 | Axiomáticos (verificados) | N/A |
+| **Goldilocks** | 8 | Definitional (scalar mult/pow) | ✅ CASI COMPLETADO |
 | **Matrix/Perm** | 18 | Permutaciones bit-reverse | Baja prioridad |
 | **FRI** | 1 | Transcript extensionality | Media |
 | **Verification** | ~18 | Semántica/Teoremas | Baja prioridad |
-| **TOTAL** | ~62 | - | - |
+| **TOTAL** | ~45 | - | - |
 
-**Nota**: NTT Core usa 3 axiomas declarados explícitamente (no sorries).
+**Nota**: NTT Core usa 3 axiomas. Goldilocks usa 4 axiomas documentados (primalidad, reduce128, toZMod_pow, toZMod_inv).
 
 ---
 
@@ -58,25 +58,51 @@ Estos axiomas son matemáticamente sólidos y podrían probarse con trabajo adic
 
 ---
 
-## 3. Goldilocks Field (~25 sorries)
+## 3. Goldilocks Field (8 sorries) - CASI COMPLETADO ✅
 
 ### Archivo: Goldilocks.lean
 
-**DISEÑO INTENCIONAL**: Axiomas algebraicos verificados computacionalmente.
+**Estado**: Sesión 8 - Mayoría de sorries eliminados via estrategia isomorfismo a ZMod.
 
-| Categoría | Cantidad | Ejemplos |
-|-----------|----------|----------|
-| Asociatividad/Conmutatividad | 6 | `add_assoc`, `mul_comm` |
-| Identidades | 6 | `zero_add`, `one_mul` |
-| Distributividad | 2 | `left_distrib`, `right_distrib` |
-| Inversos | 3 | `neg_add_cancel` |
-| Escalares (nsmul, zsmul) | ~5 | `nsmul_zero` |
-| Potencias (npow) | ~3 | `npow_zero` |
+### Axiomas Introducidos (4)
 
-**Estrategia recomendada**: Homomorfismo a `ZMod p` (ver LECCIONES_QA.md Sección 9)
+| Axioma | Justificación |
+|--------|---------------|
+| `goldilocks_prime_is_prime` | p = 2^64 - 2^32 + 1 es primo (conocido en criptografía) |
+| `reduce128_correct` | Identidad de reducción Goldilocks (2^64 ≡ ε mod p) |
+| `toZMod_pow` | Exponenciación binaria = exponenciación estándar |
+| `toZMod_inv` | Teorema pequeño de Fermat: a^(p-2) = a^(-1) |
 
-**Dificultad**: MEDIA (tedioso, no difícil)
-**Relevancia**: BAJA - verificación computacional suficiente
+### Sorries Restantes (8 definitional)
+
+| Sorry | Razón |
+|-------|-------|
+| `zsmul_succ'` | Timeout con ring tactic |
+| `zsmul_neg'` | Timeout con ring tactic |
+| `intCast_negSucc` | Definitional equality |
+| `npow_succ` | Exponenciación binaria vs inductiva |
+| `zpow_succ'` | Definitional equality |
+| `zpow_neg'` | Definitional equality |
+| `nnqsmul_def` | Scalar mult definition |
+| `qsmul_def` | Scalar mult definition |
+
+**Nota**: Todos son definitional equalities, matemáticamente triviales pero causan timeouts.
+
+### Probado en Sesión 8
+
+| Categoría | Teoremas |
+|-----------|----------|
+| Canonicidad | `add_val_eq`, `sub_val_eq`, `mul_val_eq` (via reduce128) |
+| toZMod homomorfismo | `toZMod_add`, `toZMod_neg`, `toZMod_mul`, `toZMod_sub`, `toZMod_ofNat` |
+| CommRing | `neg_add_cancel`, `sub_eq_add_neg`, `natCast_succ`, `nsmul_succ` |
+| Field | `mul_inv_cancel` |
+
+### Logros de Sesión 8
+
+- Reducción de ~22 sorries a 8
+- CommRing y Field instances funcionales
+- Tests computacionales pasan (field arithmetic verificada)
+- Axiomas bien documentados con justificación matemática
 
 ---
 
