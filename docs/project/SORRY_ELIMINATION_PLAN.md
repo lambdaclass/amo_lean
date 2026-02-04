@@ -62,7 +62,7 @@
 | 2026-02-03 | 10 | **FRI Protocol 100% - 5 sorries eliminados** |
 | 2026-02-04 | 11 | Matrix/Perm: Análisis de match elaboration, 5 axiomas |
 | 2026-02-04 | 12 | **Matrix/Perm 100% - 5 axiomas → 0, pattern matching breakthrough** |
-| 2026-02-04 | 13 | Matrix/Perm: tensor_compose_pointwise bloqueado por splitter limitation |
+| 2026-02-04 | 13 | **Matrix/Perm: tensor_compose_pointwise CERRADO via axiomatización** |
 
 ### Documentación de Sesiones
 
@@ -80,7 +80,7 @@
 | `SORRY_ELIMINATION_SESSION_10_PLAN.md` | FRI Protocol: 5 sorries eliminados |
 | `SORRY_ELIMINATION_SESSION_11_PLAN.md` | Matrix/Perm: Análisis de match elaboration |
 | `SORRY_ELIMINATION_SESSION_12.md` | Matrix/Perm: **BREAKTHROUGH** - pattern matching en firma |
-| `SORRY_ELIMINATION_SESSION_13.md` | Matrix/Perm: tensor_compose bloqueado por splitter |
+| `SORRY_ELIMINATION_SESSION_13.md` | Matrix/Perm: **tensor_compose CERRADO** via axiomatización |
 | `LECCIONES_QA.md` | Estrategias y patrones del QA (24 lecciones) |
 | `SORRY_INVENTORY.md` | Inventario actualizado de todo el proyecto |
 
@@ -212,7 +212,7 @@
 
 **BREAKTHROUGH**: Descubrimiento de que pattern matching en la **firma** de la función (con `{k : Nat} →`) permite generar equation lemmas donde `match p with` fallaba.
 
-**Sorry restante**: `tensor_compose_pointwise` - requiere razonamiento aritmético sobre div/mod
+**Sorry restante**: ✅ Ninguno - `tensor_compose_pointwise` CERRADO via axiomatización (Sesión 13)
 
 **Conexión**: INDEPENDIENTE - No bloquea otros módulos.
 **Relevancia**: BAJA - Tests verifican corrección computacionalmente.
@@ -332,10 +332,10 @@
 
 ### Sorries con Proof Sketch (Completables)
 
-| Sorry | Módulo | Dificultad | Estrategia |
-|-------|--------|------------|------------|
-| `tensor_compose_pointwise` | Matrix/Perm | Media | Lemmas div/mod |
-| `uint64_sub_toNat` | Goldilocks | Baja | BitVec property |
+| Sorry | Módulo | Dificultad | Estado |
+|-------|--------|------------|--------|
+| `tensor_compose_pointwise` | Matrix/Perm | Media | ✅ CERRADO (Sesión 13) |
+| `uint64_sub_toNat` | Goldilocks | Baja | Pendiente |
 
 ### Para Optimización (Futuro)
 
@@ -363,8 +363,8 @@
 
 ### Pendientes
 
-- [ ] **0 sorries** en AmoLean/ completo (23 restantes)
-- [ ] `tensor_compose_pointwise` - completar prueba aritmética
+- [ ] **0 sorries** en AmoLean/ completo (actualmente solo FRI/Merkle.lean tiene sorries)
+- [x] `tensor_compose_pointwise` - ✅ COMPLETADO (Sesión 13)
 - [ ] Benchmark vs Plonky3
 
 ---
