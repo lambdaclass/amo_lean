@@ -60,22 +60,22 @@ theorem butterfly_snd_eq (a b twiddle : F) :
 
 /-- Apply butterfly to corresponding elements of two lists at position k -/
 def butterfly_at (E O : List F) (twiddles : List F) (k : Nat) : F × F :=
-  let ek := E[k]?.getD inst.zero
-  let ok := O[k]?.getD inst.zero
-  let tw := twiddles[k]?.getD inst.one
+  let ek := E[k]?.getD 0
+  let ok := O[k]?.getD 0
+  let tw := twiddles[k]?.getD 1
   butterfly ek ok tw
 
 /-- Compute upper half of NTT combination: [E[k] + ω^k·O[k] for k in 0..n/2-1] -/
 def butterfly_upper (E O : List F) (ω : F) (half : Nat) : List F :=
   (List.range half).map fun k =>
-    let twiddle := inst.pow ω k
-    butterfly_fst (E[k]?.getD inst.zero) (O[k]?.getD inst.zero) twiddle
+    let twiddle := ω ^ k
+    butterfly_fst (E[k]?.getD 0) (O[k]?.getD 0) twiddle
 
 /-- Compute lower half of NTT combination: [E[k] - ω^k·O[k] for k in 0..n/2-1] -/
 def butterfly_lower (E O : List F) (ω : F) (half : Nat) : List F :=
   (List.range half).map fun k =>
-    let twiddle := inst.pow ω k
-    butterfly_snd (E[k]?.getD inst.zero) (O[k]?.getD inst.zero) twiddle
+    let twiddle := ω ^ k
+    butterfly_snd (E[k]?.getD 0) (O[k]?.getD 0) twiddle
 
 /-- Length of butterfly_upper is half -/
 theorem butterfly_upper_length (E O : List F) (ω : F) (half : Nat) :
@@ -126,53 +126,28 @@ abbrev butterfly (a b twiddle : F) : F × F := AmoLean.NTT.butterfly a b twiddle
 /-- Sum of butterfly outputs equals 2a (twiddle terms cancel)
 
     Proof: (a + t·b) + (a - t·b) = a + a
-    Uses: associativity, commutativity, and x + (-x) = 0
+    Uses: ring tactic (algebraic identity)
 -/
 theorem butterfly_sum (a b twiddle : F) :
     (butterfly a b twiddle).1 + (butterfly a b twiddle).2 = a + a := by
   simp only [butterfly, AmoLean.NTT.butterfly]
-  -- Goal: (a + twiddle * b) + (a - twiddle * b) = a + a
-  -- Expand subtraction using sub_def and use cancellation
-  have hsub : a - twiddle * b = a + (-(twiddle * b)) := NTTFieldLawful.sub_def a (twiddle * b)
-  calc (a + twiddle * b) + (a - twiddle * b)
-      = (a + twiddle * b) + (a + (-(twiddle * b))) := by rw [hsub]
-    _ = a + (twiddle * b + (a + (-(twiddle * b)))) := by rw [NTTFieldLawful.add_assoc]
-    _ = a + ((twiddle * b + a) + (-(twiddle * b))) := by rw [← NTTFieldLawful.add_assoc (twiddle * b)]
-    _ = a + ((a + twiddle * b) + (-(twiddle * b))) := by rw [NTTFieldLawful.add_comm (twiddle * b) a]
-    _ = a + (a + (twiddle * b + (-(twiddle * b)))) := by rw [NTTFieldLawful.add_assoc a]
-    _ = a + (a + 0) := by rw [NTTFieldLawful.add_neg]
-    _ = a + a := by rw [NTTFieldLawful.add_zero]
+  ring
 
 /-- Difference of butterfly outputs equals 2·twiddle·b
 
     Proof: (a + t·b) - (a - t·b) = t·b + t·b
-    Uses: sub_def, neg_sub, and algebraic cancellation
+    Uses: ring tactic (algebraic identity)
 -/
 theorem butterfly_diff (a b twiddle : F) :
     (butterfly a b twiddle).1 - (butterfly a b twiddle).2 =
     twiddle * b + twiddle * b := by
   simp only [butterfly, AmoLean.NTT.butterfly]
-  -- Goal: (a + twiddle * b) - (a - twiddle * b) = twiddle * b + twiddle * b
-  have hsub1 : (a + twiddle * b) - (a - twiddle * b) =
-               (a + twiddle * b) + (-(a - twiddle * b)) :=
-    NTTFieldLawful.sub_def (a + twiddle * b) (a - twiddle * b)
-  have hneg : -(a - twiddle * b) = -a + twiddle * b := NTTFieldLawful.neg_sub a (twiddle * b)
-  calc (a + twiddle * b) - (a - twiddle * b)
-      = (a + twiddle * b) + (-(a - twiddle * b)) := hsub1
-    _ = (a + twiddle * b) + (-a + twiddle * b) := by rw [hneg]
-    _ = a + (twiddle * b + (-a + twiddle * b)) := by rw [NTTFieldLawful.add_assoc]
-    _ = a + ((twiddle * b + (-a)) + twiddle * b) := by rw [← NTTFieldLawful.add_assoc (twiddle * b) (-a)]
-    _ = a + (((-a) + twiddle * b) + twiddle * b) := by rw [NTTFieldLawful.add_comm (twiddle * b) (-a)]
-    _ = a + ((-a) + (twiddle * b + twiddle * b)) := by rw [NTTFieldLawful.add_assoc (-a)]
-    _ = (a + (-a)) + (twiddle * b + twiddle * b) := by rw [← NTTFieldLawful.add_assoc a]
-    _ = 0 + (twiddle * b + twiddle * b) := by rw [NTTFieldLawful.add_neg]
-    _ = twiddle * b + twiddle * b := by rw [NTTFieldLawful.zero_add]
+  ring
 
 /-- Butterfly with twiddle = 1 gives (a + b, a - b) -/
 theorem butterfly_twiddle_one (a b : F) :
     butterfly a b 1 = (a + b, a - b) := by
-  simp only [butterfly, AmoLean.NTT.butterfly]
-  congr 1 <;> rw [NTTFieldLawful.one_mul]
+  simp only [butterfly, AmoLean.NTT.butterfly, one_mul]
 
 /-- Butterfly with twiddle = -1 gives (a - b, a + b)
 
@@ -180,16 +155,8 @@ theorem butterfly_twiddle_one (a b : F) :
 -/
 theorem butterfly_twiddle_neg_one (a b : F) :
     butterfly a b (-1) = (a - b, a + b) := by
-  simp only [butterfly, AmoLean.NTT.butterfly]
-  -- Goal: (a + (-1) * b, a - (-1) * b) = (a - b, a + b)
-  -- Use: (-1) * b = -b, then a + (-b) = a - b and a - (-b) = a + b
-  rw [NTTFieldLawful.neg_one_mul]
-  -- Goal: (a + -b, a - -b) = (a - b, a + b)
-  congr 1
-  · -- First component: a + (-b) = a - b
-    rw [← NTTFieldLawful.sub_def]
-  · -- Second component: a - (-b) = a + b
-    rw [NTTFieldLawful.sub_neg]
+  simp only [butterfly, AmoLean.NTT.butterfly, neg_one_mul, sub_neg_eq_add]
+  ext <;> ring
 
 end AmoLean.NTT.Algebraic
 

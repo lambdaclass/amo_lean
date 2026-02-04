@@ -432,9 +432,10 @@ theorem ntt_intt_recursive_roundtrip (ω n_inv : F) (input : List F)
       match h : input with
       | [] => simp at h_len
       | [x] =>
-        -- h_inv : n_inv * (1 : F) = 1, so n_inv = 1
-        have h_inv' : n_inv * (1 : F) = 1 := by simp only [h_len] at h_inv; exact h_inv
-        rw [h]
+        -- h_inv : n_inv * ↑[x].length = 1, and [x].length = 1
+        have h_inv' : n_inv * (1 : F) = 1 := by
+          simp only [List.length_singleton, Nat.cast_one] at h_inv
+          exact h_inv
         exact INTT_NTT_singleton_roundtrip ω n_inv x h_inv'
       | _ :: _ :: _ => simp at h_len
     | succ e =>

@@ -51,6 +51,9 @@ import AmoLean.FRI.Fields.BN254
 import AmoLean.FRI.Fields.TestField
 import AmoLean.Verification.FRI_Properties
 
+-- NTT Module: Re-enabled after fixing Butterfly.lean and related files
+import AmoLean.NTT
+
 namespace AmoLean
 
 /-! ## API Principal -/

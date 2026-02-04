@@ -26,7 +26,7 @@ import AmoLean.NTT.Radix4.Algorithm
 
 namespace AmoLean.NTT.Radix4
 
-variable {F : Type*} [inst : NTTField F]
+variable {F : Type*} [NTTFieldLawful F] [IsDomain F]
 
 /-! ## Part 1: Equivalencia Radix-4 = Spec -/
 
@@ -42,16 +42,18 @@ theorem radix4_eq_spec (ω : F) (a : List F)
 /-- NTT_recursive (radix-2) produce el mismo resultado que NTT_spec.
     Este es el teorema ct_recursive_eq_spec de Correctness.lean. -/
 theorem radix2_eq_spec (ω : F) (a : List F)
-    (hlen : ∃ k, a.length = 2^k) :
+    (hlen : ∃ k, a.length = 2^k)
+    (hω : IsPrimitiveRoot ω a.length) :
     NTT_recursive ω a = NTT_spec ω a :=
-  ct_recursive_eq_spec ω a hlen
+  ct_recursive_eq_spec ω a hlen hω
 
 /-! ## Part 3: Equivalencia Radix-4 = Radix-2 -/
 
 /-- NTT_radix4 y NTT_recursive producen el mismo resultado
     cuando la longitud es potencia de 4 (que tambien es potencia de 2). -/
 theorem radix4_eq_radix2 (ω : F) (a : List F)
-    (hlen4 : ∃ k, a.length = 4^k) :
+    (hlen4 : ∃ k, a.length = 4^k)
+    (hω : IsPrimitiveRoot ω a.length) :
     NTT_radix4 ω a = NTT_recursive ω a := by
   -- 4^k = (2²)^k = 2^(2k), asi que potencia de 4 implica potencia de 2
   obtain ⟨k, hk⟩ := hlen4
@@ -65,14 +67,15 @@ theorem radix4_eq_radix2 (ω : F) (a : List F)
     exact h
   -- Reconstruct hlen4 for the call
   have hlen4' : ∃ k, a.length = 4^k := ⟨k, hk⟩
-  rw [radix4_eq_spec ω a hlen4', radix2_eq_spec ω a hlen2]
+  rw [radix4_eq_spec ω a hlen4', radix2_eq_spec ω a hlen2 hω]
 
 /-! ## Part 4: Teorema de eleccion de algoritmo -/
 
 /-- Para cualquier longitud que sea potencia de 4, los tres algoritmos
     son equivalentes. Esto permite elegir el mas conveniente. -/
 theorem ntt_algorithm_choice (ω : F) (a : List F)
-    (hlen : ∃ k, a.length = 4^k) :
+    (hlen : ∃ k, a.length = 4^k)
+    (hω : IsPrimitiveRoot ω a.length) :
     NTT_spec ω a = NTT_recursive ω a ∧
     NTT_recursive ω a = NTT_radix4 ω a := by
   constructor
@@ -84,10 +87,10 @@ theorem ntt_algorithm_choice (ω : F) (a : List F)
       calc 4^k = (2^2)^k := by norm_num
            _ = 2^(2*k) := by rw [← Nat.pow_mul]
     symm
-    exact radix2_eq_spec ω a hlen2
+    exact radix2_eq_spec ω a hlen2 hω
   · -- recursive = radix4
     symm
-    exact radix4_eq_radix2 ω a hlen
+    exact radix4_eq_radix2 ω a hlen hω
 
 /-! ## Part 5: Cuando usar cada algoritmo -/
 
@@ -139,8 +142,8 @@ Los tests empíricos en Spec.lean verifican que se cumplen.
 /-- Axioma: El roundtrip NTT/INTT funciona para la especificación
     Esta es la propiedad de ortogonalidad de la DFT, verificada empíricamente -/
 axiom ntt_spec_roundtrip (ω n_inv : F) (a : List F)
-    (hω_n : inst.pow ω a.length = inst.one)
-    (hn_inv_correct : ∀ n_field : F, inst.mul n_inv n_field = inst.one → True)
+    (hω_n : ω ^ a.length = 1)
+    (hn_inv_correct : ∀ n_field : F, n_inv * n_field = 1 → True)
     (hne : a ≠ []) :
     INTT_spec ω n_inv (NTT_spec ω a) = a
 
@@ -150,12 +153,12 @@ axiom ntt_spec_roundtrip (ω n_inv : F) (a : List F)
     Ambos implementan la misma transformación inversa, solo difieren en algoritmo -/
 axiom intt_radix4_eq_spec_axiom (ω n_inv : F) (X : List F)
     (hlen : ∃ k, X.length = 4^k) :
-    INTT_radix4 (inst.inv ω) n_inv X = INTT_spec ω n_inv X
+    INTT_radix4 (NTTField.inv ω) n_inv X = INTT_spec ω n_inv X
 
 /-- INTT_radix4 tambien es equivalente a INTT_spec -/
 theorem intt_radix4_eq_spec (ω n_inv : F) (X : List F)
     (hlen : ∃ k, X.length = 4^k) :
-    INTT_radix4 (inst.inv ω) n_inv X = INTT_spec ω n_inv X :=
+    INTT_radix4 (NTTField.inv ω) n_inv X = INTT_spec ω n_inv X :=
   intt_radix4_eq_spec_axiom ω n_inv X hlen
 
 /-! ## Part 7: Roundtrip via cualquier algoritmo -/
@@ -163,19 +166,19 @@ theorem intt_radix4_eq_spec (ω n_inv : F) (X : List F)
 /-- El roundtrip funciona independientemente del algoritmo usado -/
 theorem roundtrip_any_algorithm (ω n_inv : F) (a : List F) (n_as_field : F)
     (hlen : ∃ k, a.length = 4^k)
-    (hω_n : inst.pow ω a.length = inst.one)
-    (hω_inv : inst.mul ω (inst.inv ω) = inst.one)  -- ω * ω⁻¹ = 1
-    (hn_inv : inst.mul n_inv n_as_field = inst.one)
+    (hω_n : ω ^ a.length = 1)
+    (hω_inv : ω * NTTField.inv ω = 1)  -- ω * ω⁻¹ = 1
+    (hn_inv : n_inv * n_as_field = 1)
     (hne : a ≠ []) :
     -- Usando spec
     INTT_spec ω n_inv (NTT_spec ω a) = a ∧
     -- Usando radix-4
-    INTT_radix4 (inst.inv ω) n_inv (NTT_radix4 ω a) = a := by
+    INTT_radix4 (NTTField.inv ω) n_inv (NTT_radix4 ω a) = a := by
   constructor
   · -- Via spec: usa axioma ntt_spec_roundtrip
     exact ntt_spec_roundtrip ω n_inv a hω_n (fun _ _ => trivial) hne
   · -- Via radix-4: usa el axioma INTT_radix4_NTT_radix4_identity
-    exact INTT_radix4_NTT_radix4_identity ω (inst.inv ω) n_inv a hω_inv hω_n hlen
+    exact INTT_radix4_NTT_radix4_identity ω (NTTField.inv ω) n_inv a hω_inv hω_n hlen
 
 /-! ## Part 8: Comentario sobre complejidad
 

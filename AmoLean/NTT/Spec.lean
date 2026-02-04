@@ -327,7 +327,7 @@ end SingletonINTT
 
 /-! ## Part 7: Roundtrip property (the key theorem) -/
 
-/-- The central identity: INTT(NTT(a)) = a
+/- The central identity: INTT(NTT(a)) = a
 
     **IMPORTANT**: The original formulation with only `ω^n = 1` is mathematically
     INSUFFICIENT. The proof requires `IsPrimitiveRoot ω n` (full primitivity).
