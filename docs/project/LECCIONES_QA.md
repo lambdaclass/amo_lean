@@ -31,6 +31,7 @@
 21. [Técnicas para Funciones Recursivas con `let rec` (Sesión 10)](#21-funciones-recursivas)
 22. [Indexed Inductive Types y Match Elaboration (Sesión 11)](#22-indexed-inductives)
 23. [Pattern Matching en Firma - BREAKTHROUGH (Sesión 12)](#23-signature-pattern-matching) ← BREAKTHROUGH
+24. [Limitaciones de Splitters y Técnicas Alternativas (Sesión 13)](#24-splitter-limitations) ← NUEVO
 
 ---
 
@@ -1489,6 +1490,105 @@ Usar pattern matching en firma cuando:
 4. **Usar `@constructor`** cuando necesites acceso a parámetros del constructor
 5. **Validar** con prototipo mínimo antes de modificar código real
 6. **Reemplazar axiomas** por teoremas con `rfl`
+
+---
+
+## 24. Limitaciones de Splitters y Técnicas Alternativas (Sesión 13)
+
+### 24.1 Contexto
+
+El pattern matching en firma (Lección 23) permite generar equation lemmas para constructores individuales, habilitando proofs con `rfl`. Sin embargo, cuando necesitamos **desplegar** la función completa en una prueba (no solo aplicar un equation lemma), Lean intenta generar un "splitter" - una función auxiliar que permite razonar sobre todos los casos simultáneamente.
+
+### 24.2 El Problema del Splitter
+
+**Error típico**:
+```
+failed to generate splitter for match auxiliary declaration
+'MyModule.myFunction.match_1', unsolved subgoal...
+```
+
+**Causa**: Los indexed inductives con índices solapados no pueden tener splitters generados automáticamente porque Lean no puede determinar estáticamente qué caso aplicar.
+
+**Diferencia clave**:
+- **Equation lemma**: Se aplica cuando el **constructor es conocido** en el goal
+- **Splitter**: Se usa cuando `simp`/`unfold` necesita descomponer **todos los casos**
+
+### 24.3 Cuándo Ocurre
+
+```lean
+-- Funciona (equation lemma):
+theorem apply_compose : applyIndex (compose p q) i = ... := rfl
+
+-- FALLA (necesita splitter):
+theorem tensor_compose ... := by
+  simp only [applyIndex]  -- Error: cannot generate splitter
+```
+
+La diferencia: `rfl` solo verifica que las definiciones coinciden para el constructor específico (`compose`), mientras que `simp` intenta reescribir cualquier ocurrencia de `applyIndex`.
+
+### 24.4 Técnicas que NO Funcionan
+
+| Técnica | Por qué falla |
+|---------|---------------|
+| `simp only [applyIndex]` | Intenta generar splitter |
+| `unfold applyIndex` | Mismo problema |
+| `rw [applyIndex]` | Requiere eq_lemma para el caso específico |
+| `conv` tactics | No disponible en core Lean 4 |
+| `ring` | No disponible sin Mathlib tactic |
+
+### 24.5 Técnicas que SÍ Funcionan (Parcialmente)
+
+1. **Equation lemmas individuales** para constructores específicos
+2. **Lemmas auxiliares** que prueban propiedades de la aritmética subyacente
+3. **by_cases** para manejar condiciones de `dite`
+4. **Fin.ext** para convertir igualdades de Fin a igualdades de Nat
+
+### 24.6 Estrategia de Mitigación
+
+Cuando un teorema está bloqueado por splitter limitation:
+
+1. **Documentar claramente** el bloqueo en el docstring
+2. **Implementar lemmas auxiliares** que prueben las partes resolubles
+3. **Verificar computacionalmente** con `#eval` para valores concretos
+4. **Mantener el sorry** con documentación del por qué
+
+### 24.7 Lemmas Auxiliares Implementados (Sesión 13)
+
+```lean
+-- Para probar que (a*n + b) / n = a cuando b < n
+private theorem nat_mul_add_div_eq (a b n : Nat) (hn : n > 0) (hb : b < n) :
+    (a * n + b) / n = a
+
+-- Para probar que (a*n + b) % n = b cuando b < n
+private theorem nat_mul_add_mod_eq (a b n : Nat) (hn : n > 0) (hb : b < n) :
+    (a * n + b) % n = b
+```
+
+Estos lemmas son reutilizables para cualquier trabajo con tensor products.
+
+### 24.8 Errores Comunes con Nat Lemmas
+
+| Error | Solución |
+|-------|----------|
+| `simp` causa maximum recursion | Usar `rw` explícito |
+| `Nat.mul_mod_right` tiene forma incorrecta | Usar `Nat.mul_mod_left` |
+| `Nat.add_mod` deja `(x % n) % n` | Añadir `Nat.mod_eq_of_lt` |
+| `Nat.div_eq_of_lt_le` requiere dos bounds | Calcular ambos explícitamente |
+
+### 24.9 Trabajo Futuro
+
+| Opción | Complejidad | Beneficio |
+|--------|-------------|-----------|
+| Custom eliminator `@[elab_as_elim]` | Alta | Habilita simp para este tipo |
+| Restructurar tipo inductivo | Muy alta | Solución fundamental |
+| Usar `native_decide` para n pequeño | Media | Solo para casos concretos |
+
+### 24.10 Impacto en el Proyecto
+
+- **1 sorry** permanece en `Perm.lean`: `tensor_compose_pointwise`
+- **Computacionalmente verificado** via `#eval`
+- **Matemáticamente correcto** pero formalmente bloqueado
+- **Prioridad baja** para resolución - no bloquea NTT verification
 
 ---
 

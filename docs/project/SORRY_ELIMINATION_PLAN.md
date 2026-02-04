@@ -6,7 +6,7 @@
 
 ---
 
-## ESTADO ACTUAL - 2026-02-04 (Post Session 12)
+## ESTADO ACTUAL - 2026-02-04 (Post Session 13)
 
 ### Resumen Ejecutivo
 
@@ -62,6 +62,7 @@
 | 2026-02-03 | 10 | **FRI Protocol 100% - 5 sorries eliminados** |
 | 2026-02-04 | 11 | Matrix/Perm: Análisis de match elaboration, 5 axiomas |
 | 2026-02-04 | 12 | **Matrix/Perm 100% - 5 axiomas → 0, pattern matching breakthrough** |
+| 2026-02-04 | 13 | Matrix/Perm: tensor_compose_pointwise bloqueado por splitter limitation |
 
 ### Documentación de Sesiones
 
@@ -79,7 +80,8 @@
 | `SORRY_ELIMINATION_SESSION_10_PLAN.md` | FRI Protocol: 5 sorries eliminados |
 | `SORRY_ELIMINATION_SESSION_11_PLAN.md` | Matrix/Perm: Análisis de match elaboration |
 | `SORRY_ELIMINATION_SESSION_12.md` | Matrix/Perm: **BREAKTHROUGH** - pattern matching en firma |
-| `LECCIONES_QA.md` | Estrategias y patrones del QA (23 lecciones) |
+| `SORRY_ELIMINATION_SESSION_13.md` | Matrix/Perm: tensor_compose bloqueado por splitter |
+| `LECCIONES_QA.md` | Estrategias y patrones del QA (24 lecciones) |
 | `SORRY_INVENTORY.md` | Inventario actualizado de todo el proyecto |
 
 ---
