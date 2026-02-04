@@ -252,8 +252,11 @@ def adjustStride (loopVar : LoopVar) (innerSize mSize nSize : Nat) : SigmaExpr �
   | .temp sz body => .temp sz (adjustStride loopVar innerSize mSize nSize body)
   | .nop => .nop
 
-/-- Lower MatExpr to SigmaExpr -/
-partial def lower (m n : Nat) (state : LowerState) : MatExpr α m n → (SigmaExpr × LowerState)
+/-- Lower MatExpr to SigmaExpr.
+    Termination: Uses nodeCount as decreasing measure.
+    Each recursive call is on a strict sub-expression with smaller nodeCount. -/
+def lower (m n : Nat) (state : LowerState) (mExpr : MatExpr α m n) : (SigmaExpr × LowerState) :=
+  match mExpr with
   | .identity n' =>
     (.compute (.identity n') (Gather.contiguous n' (.const 0)) (Scatter.contiguous n' (.const 0)), state)
 
@@ -364,6 +367,11 @@ partial def lower (m n : Nat) (state : LowerState) : MatExpr α m n → (SigmaEx
       (Gather.contiguous stateSize (.const 0))
       (Scatter.contiguous stateSize (.const 0))
     (.seq innerExpr rcExpr, state1)
+termination_by mExpr.nodeCount
+decreasing_by
+  all_goals simp_wf
+  all_goals simp only [MatExpr.nodeCount]
+  all_goals omega
 
 def lowerFresh (m n : Nat) (e : MatExpr α m n) : SigmaExpr :=
   (lower m n {} e).1
