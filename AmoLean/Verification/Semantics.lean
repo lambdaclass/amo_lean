@@ -216,6 +216,11 @@ def evalKernel (k : Kernel) (input : List Float) : List Float :=
   | .scale => evalScaleKernel input
   | .butterfly => evalButterflyKernel input
   | .sbox _ α => evalSboxKernel α input  -- Poseidon2 S-box
+  -- Poseidon2 operations - not yet implemented in evaluator
+  | .partialSbox _ _ _ => panic! "evalKernel: partialSbox not yet implemented"
+  | .mdsApply _ _ => panic! "evalKernel: mdsApply not yet implemented"
+  | .mdsInternal _ => panic! "evalKernel: mdsInternal not yet implemented"
+  | .addRoundConst _ _ => panic! "evalKernel: addRoundConst not yet implemented"
 
 /-! ## Part 6: Main Sigma Evaluator
 

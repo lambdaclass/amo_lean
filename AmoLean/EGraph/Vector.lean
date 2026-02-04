@@ -584,6 +584,13 @@ def addMatExpr (g : MatEGraph) (m n : Nat) : MatExpr α m n → (MatEClassId × 
     -- elemwise is an OPAQUE BARRIER - it enters the E-graph but rules don't penetrate it
     let (idA, g1) := addMatExpr g m' n' a
     g1.add (MatENode.mkElemwise op idA m' n')
+  -- Poseidon2 operations - not yet implemented in E-graph
+  | @MatExpr.partialElemwise _ _ _ _ _ _ =>
+    panic! "addMatExpr: partialElemwise not yet implemented"
+  | @MatExpr.mdsApply _ _ _ _ _ =>
+    panic! "addMatExpr: mdsApply not yet implemented"
+  | @MatExpr.addRoundConst _ _ _ _ _ =>
+    panic! "addMatExpr: addRoundConst not yet implemented"
 
 /-- Create a MatEGraph from a MatExpr -/
 def fromMatExpr (e : MatExpr α m n) : (MatEClassId × MatEGraph) :=

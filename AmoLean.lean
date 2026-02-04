@@ -50,6 +50,10 @@ import AmoLean.FRI.Verifier
 import AmoLean.FRI.Fields.BN254
 import AmoLean.FRI.Fields.TestField
 import AmoLean.Verification.FRI_Properties
+import AmoLean.Verification.Poseidon_Semantics
+
+-- Sigma Module: SIMD code generation with Matrix/Perm support
+import AmoLean.Sigma.Basic
 
 -- NTT Module: Re-enabled after fixing Butterfly.lean and related files
 import AmoLean.NTT
