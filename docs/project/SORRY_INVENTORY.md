@@ -1,7 +1,7 @@
 # Inventario Completo de Sorries en AMO-Lean
 
 **Fecha**: 2026-02-04
-**Última actualización**: Sesión 12 (Matrix/Perm completado)
+**Última actualización**: Sesión 14 (Integración completa, 2641 módulos compilando)
 
 ---
 
@@ -11,14 +11,17 @@
 |--------|---------|------|--------|
 | **NTT Core** | 0 | - | ✅ COMPLETADO |
 | **NTT Radix4** | 0 | - | ✅ COMPLETADO |
-| **Goldilocks** | 1 | uint64_sub_toNat | Media prioridad |
-| **Matrix/Perm** | 0 | - | ✅ COMPLETADO (Sesión 12) |
+| **NTT Butterfly** | 0 | - | ✅ COMPLETADO (Sesión 14) |
+| **Goldilocks** | 1 | uint64_sub_toNat | Baja prioridad |
+| **Matrix/Perm** | 0 | - | ✅ COMPLETADO (Sesión 12-13) |
 | **FRI/Transcript** | 0 | - | ✅ COMPLETADO (Sesión 10) |
 | **FRI/Merkle** | 2 | Size invariants | Baja prioridad |
 | **Verification/FRI_Properties** | 0 | - | ✅ COMPLETADO (Sesión 10) |
-| **Verification/Theorems** | 7 | Sigma-SPL correctness | Media prioridad |
-| **Verification/Poseidon** | 12 | Computacionalmente verificados | Baja prioridad |
-| **TOTAL ACTIVOS** | 22 | - | - |
+| **Verification/Theorems** | 7 | Sigma-SPL correctness | **CRÍTICA** |
+| **Verification/Poseidon** | 12 | Computacionalmente verificados | Media prioridad |
+| **TOTAL ACTIVOS** | 27* | - | - |
+
+*Incluye 2 sorries en secciones comentadas (NTT/Spec deprecated, NTT/Properties Parseval)
 
 ### Clasificación de Sorries
 
@@ -326,6 +329,8 @@ De los 22 sorries activos en AMO-Lean:
 
 | Sesión | Sorries Eliminados | Módulo |
 |--------|-------------------|--------|
+| Sesión 14 | - | Integración completa (2641 módulos compilando) |
+| Sesión 13 | 1 | tensor_compose_pointwise probado |
 | Sesión 12 | 20→0 | Matrix/Perm (4 axiomas + 6 teoremas comentados) |
 | Sesión 11 | 4 | Matrix/Perm (bitReverse_involution) |
 | Sesión 10 | 5 | FRI Protocol (Transcript + Properties) |

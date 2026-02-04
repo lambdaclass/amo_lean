@@ -31,7 +31,10 @@
 21. [Técnicas para Funciones Recursivas con `let rec` (Sesión 10)](#21-funciones-recursivas)
 22. [Indexed Inductive Types y Match Elaboration (Sesión 11)](#22-indexed-inductives)
 23. [Pattern Matching en Firma - BREAKTHROUGH (Sesión 12)](#23-signature-pattern-matching) ← BREAKTHROUGH
-24. [Limitaciones de Splitters y Técnicas Alternativas (Sesión 13)](#24-splitter-limitations) ← NUEVO
+24. [Limitaciones de Splitters y Técnicas Alternativas (Sesión 13)](#24-splitter-limitations)
+25. [Typeclass Inheritance y Operadores Estándar (Sesión 14)](#25-typeclass-inheritance) ← NUEVO
+26. [panic! vs sorry para Código Incompleto (Sesión 14)](#26-panic-vs-sorry) ← NUEVO
+27. [Integración Bottom-Up de Módulos (Sesión 14)](#27-integracion-modulos) ← NUEVO
 
 ---
 
@@ -1627,6 +1630,159 @@ Estos lemmas son reutilizables para cualquier trabajo con tensor products.
 2. Crear función auxiliar que compute lo mismo sin pattern match problemático
 3. Axiomatizar la igualdad (verificable via #eval)
 4. Usar el axioma para completar pruebas formales
+
+---
+
+---
+
+## 25. Typeclass Inheritance y Operadores Estándar (Sesión 14)
+
+### 25.1 L-048: El Problema con `inst.op`
+
+**Contexto**: `NTTFieldLawful` extiende `CommRing` de Mathlib.
+
+```lean
+-- MAL: Intentar usar métodos de la instancia directamente
+theorem butterfly_sum (a b twiddle : F) :
+    (butterfly a b twiddle).1 + (butterfly a b twiddle).2 = a + a := by
+  simp only [butterfly]
+  rw [NTTFieldLawful.add_assoc]  -- ERROR: unknown constant
+```
+
+**Problema**: `NTTFieldLawful.add_assoc` no existe porque las leyes algebraicas vienen de `CommRing`, no de `NTTFieldLawful`.
+
+### 25.2 L-049: La Solución - Operadores Estándar
+
+```lean
+-- BIEN: Usar operadores estándar y tácticas de Mathlib
+theorem butterfly_sum (a b twiddle : F) :
+    (butterfly a b twiddle).1 + (butterfly a b twiddle).2 = a + a := by
+  simp only [butterfly, AmoLean.NTT.butterfly]
+  ring  -- ✅ Funciona porque CommRing provee las leyes
+```
+
+### 25.3 Tabla de Conversión
+
+| Código Antiguo | Código Correcto |
+|----------------|-----------------|
+| `inst.pow ω k` | `ω ^ k` |
+| `inst.zero` | `0` |
+| `inst.one` | `1` |
+| `inst.mul a b` | `a * b` |
+| `inst.add a b` | `a + b` |
+
+### 25.4 Para Igualdades de Productos
+
+```lean
+-- Usar ext <;> ring para igualdades de pares
+theorem butterfly_twiddle_neg_one (a b : F) :
+    butterfly a b (-1) = (a - b, a + b) := by
+  simp only [butterfly, neg_one_mul, sub_neg_eq_add]
+  ext <;> ring  -- ✅ Prueba cada componente
+```
+
+---
+
+## 26. panic! vs sorry para Código Incompleto (Sesión 14)
+
+### 26.1 L-050: Cuándo Usar Cada Uno
+
+| Situación | Usar | Razón |
+|-----------|------|-------|
+| Función no implementada | `panic!` | Preserva soundness, falla ruidosamente |
+| Prueba en desarrollo | `sorry` | Temporal, permite explorar |
+| Código de producción | **NUNCA `sorry`** | Compromete toda la verificación |
+| Tests fallan | **NO axiomatizar** | Documentar y comentar |
+
+### 26.2 L-051: panic! Preserva Soundness
+
+```lean
+-- panic! tiene tipo: {α : Type u} → String → α
+-- Lean acepta cualquier tipo pero crashea en runtime
+
+-- BIEN: Función no implementada
+| @MatExpr.mdsApply _ _ _ _ _ =>
+    panic! "addMatExpr: mdsApply not yet implemented"
+
+-- MAL: sorry compromete el sistema de tipos
+| @MatExpr.mdsApply _ _ _ _ _ =>
+    sorry  -- Cualquier prueba que use esto es inválida
+```
+
+### 26.3 L-052: Detectabilidad
+
+```lean
+-- panic! es detectable en runtime:
+#eval addMatExpr g m n (MatExpr.mdsApply "test" 4 e)
+-- Output: panic! addMatExpr: mdsApply not yet implemented
+
+-- sorry NO es detectable hasta que alguien intenta ejecutar la prueba
+```
+
+### 26.4 Regla de Oro
+
+> "Si no puedes probarlo formalmente, pero sabes que es correcto computacionalmente: **axiomatiza** con documentación. Si no está implementado: usa **panic!**. Usa **sorry** solo durante desarrollo activo de pruebas."
+
+---
+
+## 27. Integración Bottom-Up de Módulos (Sesión 14)
+
+### 27.1 L-053: El Problema de Imports Circulares
+
+Al agregar imports a AmoLean.lean, errores de compilación en módulos transitivos pueden bloquear todo.
+
+```
+AmoLean.lean
+├── import Sigma.Basic
+│   └── import Matrix/Perm
+│       └── import Matrix/Core
+│           └── import EGraph/Vector  ← ERROR AQUÍ
+└── (todo AmoLean.lean falla)
+```
+
+### 27.2 L-054: Proceso de Integración
+
+1. **Identificar el error más profundo** (bottom)
+2. **Corregirlo** (generalmente exhaustividad de pattern match)
+3. **Verificar compilación** del módulo corregido
+4. **Subir** al siguiente nivel
+5. **Repetir** hasta que AmoLean.lean compile
+
+### 27.3 L-055: Exhaustividad con Tipos Extensibles
+
+Cuando un tipo inductivo tiene nuevos constructores (ej: Poseidon2 añadido a MatExpr):
+
+```lean
+-- ANTES: Solo DFT, NTT, etc.
+inductive MatExpr where
+  | dft : ...
+  | ntt : ...
+
+-- DESPUÉS: Se agregan constructores Poseidon2
+  | mdsApply : ...
+  | addRoundConst : ...
+  | partialElemwise : ...
+```
+
+**Todos los pattern matches sobre el tipo deben actualizarse**:
+
+```lean
+-- Archivo A: definición del tipo (ya actualizado)
+-- Archivo B: función que hace match (DEBE actualizarse)
+-- Archivo C: otra función que hace match (DEBE actualizarse)
+```
+
+### 27.4 L-056: Consultar Expertos Antes de Implementar
+
+Para correcciones no triviales:
+
+1. **Estudiar** el código que vas a modificar
+2. **Identificar** posibles complicaciones
+3. **Consultar** `/ask-lean` y `/collab-qa`
+4. **Producir** estrategia unificada
+5. **Obtener** aprobación antes de implementar
+
+**Beneficio**: Evita múltiples intentos fallidos y documenta el razonamiento.
 
 ---
 
