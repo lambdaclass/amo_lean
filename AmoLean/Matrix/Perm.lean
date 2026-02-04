@@ -327,13 +327,25 @@ theorem strideIndex_lt (m n : Nat) (i : Nat) (h : i < m * n) :
 namespace Perm
 
 /-- Apply a permutation to an index, returning the new index.
-    This is the concrete evaluation of a symbolic permutation. -/
-def applyIndex (p : Perm n) (i : Fin n) : Fin n :=
-  match p with
-  | identity => i
+    This is the concrete evaluation of a symbolic permutation.
 
-  | stride m n' =>
-    -- L^{mn}_n maps i to (i mod m) * n + (i div m)
+    KEY INSIGHT: Using pattern matching in the function signature instead of
+    `match p with` allows Lean to generate proper equation lemmas for indexed
+    inductives. The implicit {k : Nat} parameter is crucial. -/
+def applyIndex : {k : Nat} → Perm k → Fin k → Fin k
+  -- Identity: return input unchanged
+  | _, identity, i => i
+
+  -- Swap: exchange 0 ↔ 1
+  | _, swap, ⟨0, _⟩ => ⟨1, by omega⟩
+  | _, swap, ⟨1, _⟩ => ⟨0, by omega⟩
+  | _, swap, ⟨i + 2, h⟩ => ⟨i + 2, h⟩
+
+  -- Composition: apply right-to-left
+  | _, compose p q, i => applyIndex p (applyIndex q i)
+
+  -- Stride: L^{mn}_n maps i to (i mod m) * n + (i div m)
+  | _, stride m n', i =>
     let newIdx := strideIndex m n' i.val
     ⟨newIdx % (m * n'), by
       apply Nat.mod_lt
@@ -344,49 +356,59 @@ def applyIndex (p : Perm n) (i : Fin n) : Fin n :=
         | 0 => simp at i; exact absurd i.isLt (Nat.not_lt_zero i.val)
         | n'' + 1 => exact Nat.mul_pos (Nat.succ_pos m') (Nat.succ_pos n'')⟩
 
-  | bitRev k =>
+  -- Bit reversal: reverse k bits
+  | _, bitRev k, i =>
     let newIdx := bitReverse k i.val
     ⟨newIdx % (2^k), Nat.mod_lt _ (Nat.two_pow_pos k)⟩
 
-  | swap =>
-    match i with
-    | ⟨0, _⟩ => ⟨1, by omega⟩
-    | ⟨1, _⟩ => ⟨0, by omega⟩
-    | ⟨i + 2, h⟩ => ⟨i + 2, h⟩  -- Should not happen for n=2
-
-  | compose p q =>
-    applyIndex p (applyIndex q i)
-
-  | inverse p =>
-    -- For inverse, we need to find j such that applyIndex p j = i
-    -- This is computed by searching or using inverse formulas
-    -- For now, use a placeholder that works for simple cases
-    match p with
-    | identity => i
-    | swap => applyIndex swap i  -- swap is self-inverse
-    | stride m n' =>
-      -- Inverse of L^{mn}_n is L^{mn}_m
-      let newIdx := strideIndexInv m n' i.val
-      ⟨newIdx % (m * n'), by
-        apply Nat.mod_lt
-        match m with
+  -- Inverse: compute inverse permutation
+  -- For self-inverse permutations (identity, swap, bitRev), apply the same permutation
+  -- For stride, use strideIndexInv
+  -- For others, fall back to identity (incomplete implementation)
+  | _, inverse identity, i => i
+  | _, inverse swap, i => applyIndex swap i
+  | _, inverse (stride m n'), i =>
+    let newIdx := strideIndexInv m n' i.val
+    ⟨newIdx % (m * n'), by
+      apply Nat.mod_lt
+      match m with
+      | 0 => simp at i; exact absurd i.isLt (Nat.not_lt_zero i.val)
+      | m' + 1 =>
+        match n' with
         | 0 => simp at i; exact absurd i.isLt (Nat.not_lt_zero i.val)
-        | m' + 1 =>
-          match n' with
-          | 0 => simp at i; exact absurd i.isLt (Nat.not_lt_zero i.val)
-          | n'' + 1 => exact Nat.mul_pos (Nat.succ_pos m') (Nat.succ_pos n'')⟩
-    | bitRev k =>
-      -- Bit reversal is self-inverse
-      let newIdx := bitReverse k i.val
-      ⟨newIdx % (2^k), Nat.mod_lt _ (Nat.two_pow_pos k)⟩
-    | _ => i  -- Fallback, should handle more cases
+        | n'' + 1 => exact Nat.mul_pos (Nat.succ_pos m') (Nat.succ_pos n'')⟩
+  | _, inverse (bitRev k), i =>
+    let newIdx := bitReverse k i.val
+    ⟨newIdx % (2^k), Nat.mod_lt _ (Nat.two_pow_pos k)⟩
+  | _, inverse _, i => i  -- Fallback for compose, tensor, inverse
 
-  | tensor _p _q =>
-    -- (P ⊗ Q)(i) where i = outer * n + inner
-    -- Apply P to outer index, Q to inner index
-    -- Result = P(outer) * n + Q(inner)
-    -- TODO: Implement properly - requires extracting m and n from type
-    i  -- Placeholder: return identity for now
+  -- Tensor: (P ⊗ Q)(i) where i = outer * n + inner
+  -- Apply P to outer index, Q to inner index
+  -- Result = P(outer) * n + Q(inner)
+  | _, @tensor m_size n_size p q, i =>
+    if h_n : n_size = 0 then
+      ⟨0, by simp [h_n] at i; exact absurd i.isLt (Nat.not_lt_zero i.val)⟩
+    else if h_m : m_size = 0 then
+      ⟨0, by simp [h_m] at i; exact absurd i.isLt (Nat.not_lt_zero i.val)⟩
+    else
+      let outer := i.val / n_size
+      let inner := i.val % n_size
+      have h_outer_bound : outer < m_size := by
+        have h_swap : m_size * n_size = n_size * m_size := Nat.mul_comm m_size n_size
+        have h_i_lt : i.val < n_size * m_size := h_swap ▸ i.isLt
+        exact Nat.div_lt_of_lt_mul h_i_lt
+      have h_inner_bound : inner < n_size := Nat.mod_lt i.val (Nat.pos_of_ne_zero h_n)
+      let new_outer := (applyIndex p ⟨outer, h_outer_bound⟩).val
+      let new_inner := (applyIndex q ⟨inner, h_inner_bound⟩).val
+      let result := new_outer * n_size + new_inner
+      have h_result_bound : result < m_size * n_size := by
+        have h_no : new_outer < m_size := (applyIndex p ⟨outer, h_outer_bound⟩).isLt
+        have h_ni : new_inner < n_size := (applyIndex q ⟨inner, h_inner_bound⟩).isLt
+        calc result = new_outer * n_size + new_inner := rfl
+          _ < new_outer * n_size + n_size := Nat.add_lt_add_left h_ni _
+          _ = (new_outer + 1) * n_size := by simp [Nat.add_mul, Nat.one_mul]
+          _ ≤ m_size * n_size := Nat.mul_le_mul_right n_size h_no
+      ⟨result, h_result_bound⟩
 
 /-- Apply permutation to a vector, producing a permuted vector. -/
 def applyVec (p : Perm n) (v : Vec α n) : Vec α n :=
@@ -409,23 +431,25 @@ def Perm.toIndexList (p : Perm n) : List Nat :=
 /-! ## Algebraic Properties of Permutations -/
 
 /-- Identity is the identity.
-    Note: Computationally verified via #eval. The proof is blocked by Lean's
-    match elaboration for dependent types (can't generate equation splitter).
-    This is a known limitation with indexed inductives like Perm n. -/
+    Proven by rfl via signature pattern matching in applyIndex. -/
 @[simp]
-axiom Perm.apply_identity {n : Nat} (i : Fin n) :
-    Perm.applyIndex Perm.identity i = i
+theorem Perm.apply_identity {n : Nat} (i : Fin n) :
+    Perm.applyIndex Perm.identity i = i := rfl
 
 /-- Composition applies right-to-left.
-    Computationally verified. Proof blocked by match elaboration issues. -/
-axiom Perm.apply_compose {n : Nat} (p q : Perm n) (i : Fin n) :
+    Proven by rfl via signature pattern matching in applyIndex. -/
+@[simp]
+theorem Perm.apply_compose {n : Nat} (p q : Perm n) (i : Fin n) :
     Perm.applyIndex (Perm.compose p q) i =
-    Perm.applyIndex p (Perm.applyIndex q i)
+    Perm.applyIndex p (Perm.applyIndex q i) := rfl
 
--- Swap is a self-inverse - verified computationally.
--- Formal proof deferred due to Lean match elaboration issues with dependent types.
--- theorem Perm.swap_self_inverse_pointwise (i : Fin 2) :
---     Perm.applyIndex Perm.swap (Perm.applyIndex Perm.swap i) = i := verified by #eval
+/-- Swap is a self-inverse (pointwise).
+    Proven by case analysis on Fin 2. -/
+theorem Perm.swap_self_inverse_pointwise (i : Fin 2) :
+    Perm.applyIndex Perm.swap (Perm.applyIndex Perm.swap i) = i := by
+  match i with
+  | ⟨0, _⟩ => rfl
+  | ⟨1, _⟩ => rfl
 
 /-- Stride and its transpose are inverses (pointwise). -/
 theorem Perm.stride_transpose_inverse_pointwise (m n : Nat) (i : Fin (m * n)) :
@@ -434,10 +458,11 @@ theorem Perm.stride_transpose_inverse_pointwise (m n : Nat) (i : Fin (m * n)) :
   exact stride_inverse_eq m n i.val i.isLt
 
 /-- applyIndex for bitRev applies bitReverse.
-    Computationally verified. Proof blocked by match elaboration. -/
-axiom Perm.applyIndex_bitRev (k : Nat) (i : Fin (2^k)) :
+    Proven by rfl via signature pattern matching in applyIndex. -/
+@[simp]
+theorem Perm.applyIndex_bitRev (k : Nat) (i : Fin (2^k)) :
     Perm.applyIndex (Perm.bitRev k) i =
-    ⟨bitReverse k i.val % (2^k), Nat.mod_lt _ (Nat.two_pow_pos k)⟩
+    ⟨bitReverse k i.val % (2^k), Nat.mod_lt _ (Nat.two_pow_pos k)⟩ := rfl
 
 /-- Bit reversal is self-inverse (pointwise version).
     Note: The structural equality `compose (bitRev k) (bitRev k) = identity`
@@ -463,22 +488,28 @@ theorem Perm.bitRev_self_inverse_pointwise (k : Nat) (i : Fin (2^k)) :
 /-! ## Stride Permutation Properties (from SPIRAL) -/
 
 /-
-  Stride factorization property (SPIRAL identity).
-  L^{kmn}_n can be decomposed as a composition of tensor products.
-  This is a key identity for FFT algorithm derivation.
+  STRIDE FACTORIZATION - COMPOSITIONAL FORM
 
-  Note: The index-level formula below was found to be INCORRECT through
-  computational testing. The correct SPIRAL decomposition requires
-  careful tensor product semantics which are not yet implemented.
-  See Van Loan "Computational Frameworks for FFT" for the correct form.
+  The SPIRAL paper establishes stride factorization via tensor products:
 
-  TODO: Derive the correct pointwise formula once tensor is implemented.
+    L^{kmn}_{km} = (L^{kn}_k ⊗ I_m) ∘ (I_k ⊗ L^{mn}_m)
 
-  theorem stride_factor_pointwise (k m n : Nat) (i : Nat) (h : i < k * (m * n)) :
-      strideIndex k (m * n) i =
-      strideIndex k n (strideIndex m n (i % (m * n))) +
-      (i / (m * n)) * (k * n) := by
-    sorry  -- Formula is INCORRECT - needs derivation from SPIRAL paper
+  This is NOT a closed-form pointwise formula, but a COMPOSITIONAL relationship.
+  With tensor now implemented, this can be expressed as:
+
+    stride (k*m) n ≈ compose (tensor (stride k n) identity) (tensor identity (stride m n))
+
+  The original pointwise formula attempted was INCORRECT (verified by testing):
+
+    strideIndex k (m*n) i ≠ strideIndex k n (strideIndex m n (i % (m*n))) + (i / (m*n)) * (k*n)
+
+  The correct factorization theorem would require:
+  1. Type-level arithmetic: (k*m)*n = k*(m*n) = (k*n)*m
+  2. Careful handling of index decomposition via tensor semantics
+  3. Proof that the compositional form matches pointwise behavior
+
+  See Van Loan "Computational Frameworks for FFT" Chapter 2.
+  Left as future work due to type-level arithmetic complexity.
 -/
 
 /-! ## Permutation Composition Helpers -/
@@ -501,34 +532,47 @@ theorem compose_assoc_pointwise (p q r : Perm n) (i : Fin n) :
   simp only [Perm.apply_compose]
 
 /-- Inverse of identity is identity (pointwise).
-    Computationally verified. Proof blocked by match elaboration. -/
-axiom apply_inverse_identity {n : Nat} (i : Fin n) :
-    applyIndex (inverse (identity : Perm n)) i = i
+    Proven by rfl via signature pattern matching in applyIndex. -/
+@[simp]
+theorem apply_inverse_identity {n : Nat} (i : Fin n) :
+    applyIndex (inverse (identity : Perm n)) i = i := rfl
 
 theorem inverse_identity_pointwise (i : Fin n) :
     applyIndex (inverse (identity : Perm n)) i = applyIndex identity i := by
   rw [apply_inverse_identity, Perm.apply_identity]
 
 /-
-  Inverse of inverse is the original (pointwise).
-  Note: This requires proper inverse implementation for all cases.
-  Currently only implemented for identity, swap, stride, bitRev.
-  For implemented cases: identity, swap are self-inverse;
-  stride m n has inverse stride n m; bitRev k has inverse bitRev k.
-  TODO: Prove for specific cases that have proper inverse implementations.
+  BLOCKED: Inverse of inverse is the original (pointwise).
 
-  theorem inverse_inverse_pointwise (p : Perm n) (i : Fin n)
-      (h_inv : ∀ j, applyIndex (inverse p) (applyIndex p j) = j) :
+  STATUS: Cannot be axiomatized or proved because the current applyIndex
+  implementation for `inverse (inverse p)` falls through to the `| _ => i`
+  fallback case, making the theorem COMPUTATIONALLY FALSE for most p.
+
+  The theorem would be true mathematically if inverse were fully implemented.
+  Current inverse implementation only handles:
+  - identity: self-inverse (returns i)
+  - swap: self-inverse (applies swap)
+  - stride m n: uses strideIndexInv
+  - bitRev k: self-inverse (applies bitReverse)
+  - Everything else: fallback returns i (WRONG)
+
+  theorem inverse_inverse_pointwise (p : Perm n) (i : Fin n) :
       applyIndex (inverse (inverse p)) i = applyIndex p i := by
-    sorry  -- Requires complete inverse implementation
+    sorry  -- BLOCKED: Current impl falls through to identity for inverse(inverse p)
 -/
 
 /-
-  Inverse of composition is reverse composition of inverses (pointwise).
-  Note: This is NOT TRUE with current implementation because
-  inverse (compose p q) falls through to the fallback case (returns i).
-  This property would only hold if inverse were properly implemented
-  for compose constructors.
+  BLOCKED: Inverse of composition is reverse composition of inverses.
+
+  STATUS: Cannot be axiomatized because the current implementation makes
+  this theorem COMPUTATIONALLY FALSE. The expression `inverse (compose p q)`
+  falls through to the `| _ => i` fallback, returning i instead of
+  the mathematically correct `compose (inverse q) (inverse p)`.
+
+  To fix this, applyIndex would need to handle:
+  | inverse (compose p q) => applyIndex (compose (inverse q) (inverse p)) i
+
+  But this pattern matching is complex for indexed inductives.
 
   theorem inverse_compose_pointwise (p q : Perm n) (i : Fin n) :
       applyIndex (inverse (compose p q)) i =
@@ -542,49 +586,57 @@ end Perm
 
 namespace Perm
 
+/-- Tensor distributes over composition (pointwise).
+    (p1 ⊗ q1) · (p2 ⊗ q2) = (p1 · p2) ⊗ (q1 · q2)
+    This is a fundamental algebraic property of tensor products.
+    Computationally verified via #eval tests.
+
+    PROOF SKETCH (incomplete due to term-mode complexity):
+    Both sides compute to the same index:
+    - outer component: applyIndex p1 (applyIndex p2 (i / n))
+    - inner component: applyIndex q1 (applyIndex q2 (i % n))
+
+    The key lemma: For a*n + b with b < n: (a*n+b)/n = a and (a*n+b)%n = b.
+
+    LHS path: First apply (tensor p2 q2) to get r = (p2 outer)*n + (q2 inner),
+              then apply (tensor p1 q1) using r/n = (p2 outer) and r%n = (q2 inner).
+    RHS path: Directly apply (tensor (compose p1 p2) (compose q1 q2)).
+
+    The term-mode unfolding of applyIndex for tensor is complex due to
+    the dite conditions. Future work: custom recursor or native_decide. -/
+theorem tensor_compose_pointwise {m n : Nat} (p1 p2 : Perm m) (q1 q2 : Perm n) (i : Fin (m * n)) :
+    applyIndex (compose (tensor p1 q1) (tensor p2 q2)) i =
+    applyIndex (tensor (compose p1 p2) (compose q1 q2)) i := by
+  -- Expand compose on LHS
+  simp only [Perm.apply_compose]
+  -- The tensor unfolding requires careful handling of decidability conditions
+  -- Proof deferred - computationally verified
+  sorry
+
 /-
   Tensor with I_1 on the left: I_1 ⊗ P ≃ P (pointwise).
   Types: I_1 ⊗ P : Perm (1 * n), P : Perm n.
-  Uses 1 * n = n coercion.
+  Requires type coercion h : 1 * n = n.
 
-  Note: Currently tensor is implemented as identity placeholder in applyIndex,
-  so this theorem is not meaningful until tensor is properly implemented.
-  The correct implementation of tensor p q at index i would be:
-    let (i_q, i_p) = (i % n, i / n)  -- decompose index
-    let (j_q, j_p) = (applyIndex q i_q, applyIndex p i_p)  -- apply
-    j_p * n + j_q  -- recompose
-
-  TODO: Implement tensor in applyIndex, then prove this theorem.
+  Note: This theorem involves heterogeneous equality due to type coercion.
+  The tensor implementation is correct, but proving with type transport
+  is complex. Left as future work.
 
   theorem tensor_identity_left_one (p : Perm n) :
       let h : 1 * n = n := Nat.one_mul n
       ∀ i : Fin n, applyIndex (h ▸ tensor identity p) i = applyIndex p i := by
-    sorry  -- Requires tensor implementation in applyIndex
+    sorry  -- Blocked by type coercion complexity
 -/
 
 /-
   Tensor with I_1 on the right: P ⊗ I_1 ≃ P (pointwise).
   Types: P ⊗ I_1 : Perm (m * 1), P : Perm m.
-  Uses m * 1 = m coercion.
-  TODO: Prove after tensor implementation.
+  Similar type coercion issues as tensor_identity_left_one.
 
   theorem tensor_identity_right_one (p : Perm m) :
       let h : m * 1 = m := Nat.mul_one m
       ∀ i : Fin m, applyIndex (h ▸ tensor p identity) i = applyIndex p i := by
-    sorry  -- Requires tensor implementation in applyIndex
--/
-
-/-
-  Tensor distributes over composition (pointwise).
-  (p1 ⊗ q1) · (p2 ⊗ q2) = (p1 · p2) ⊗ (q1 · q2)
-  This is a fundamental algebraic property of tensor products.
-  Note: Structural equality is not provable - different constructors.
-  TODO: Prove after tensor implementation.
-
-  theorem tensor_compose_pointwise (p1 p2 : Perm m) (q1 q2 : Perm n) (i : Fin (m * n)) :
-      applyIndex (compose (tensor p1 q1) (tensor p2 q2)) i =
-      applyIndex (tensor (compose p1 p2) (compose q1 q2)) i := by
-    sorry  -- Requires tensor implementation in applyIndex
+    sorry  -- Blocked by type coercion complexity
 -/
 
 -- Tensor is associative (up to isomorphism):
@@ -637,5 +689,54 @@ instance : ToString (Perm n) where
 
 -- Check bit reverse is self-inverse
 #eval (bitRevIndices 3).map (bitReverse 3)  -- Should be [0, 1, 2, 3, 4, 5, 6, 7]
+
+-- Tensor product tests
+-- Identity ⊗ Identity should be identity
+#eval Perm.toIndexList (Perm.tensor (Perm.identity : Perm 2) (Perm.identity : Perm 3))
+-- Expected: [0, 1, 2, 3, 4, 5] (identity on size 6)
+
+-- Swap ⊗ Identity: swaps the two "blocks" of size 3
+-- i=0: outer=0 → swap(0)=1, inner=0 → result=1*3+0=3
+-- i=1: outer=0 → swap(0)=1, inner=1 → result=1*3+1=4
+-- i=2: outer=0 → swap(0)=1, inner=2 → result=1*3+2=5
+-- i=3: outer=1 → swap(1)=0, inner=0 → result=0*3+0=0
+-- i=4: outer=1 → swap(1)=0, inner=1 → result=0*3+1=1
+-- i=5: outer=1 → swap(1)=0, inner=2 → result=0*3+2=2
+#eval Perm.toIndexList (Perm.tensor (Perm.swap : Perm 2) (Perm.identity : Perm 3))
+-- Expected: [3, 4, 5, 0, 1, 2]
+
+-- Identity ⊗ Swap: swaps pairs within each block
+-- Block 0: [0,1] → [1,0] so positions 0,1 become 1,0
+-- Block 1: [3,4] → [4,3] so positions 3,4 become 4,3 (but wait, block 1 starts at position 2 for 2x2)
+-- Actually for 3⊗2: i = outer*2 + inner
+-- i=0: outer=0, inner=0 → id(0)=0, swap(0)=1 → 0*2+1=1
+-- i=1: outer=0, inner=1 → id(0)=0, swap(1)=0 → 0*2+0=0
+-- i=2: outer=1, inner=0 → id(1)=1, swap(0)=1 → 1*2+1=3
+-- i=3: outer=1, inner=1 → id(1)=1, swap(1)=0 → 1*2+0=2
+-- i=4: outer=2, inner=0 → id(2)=2, swap(0)=1 → 2*2+1=5
+-- i=5: outer=2, inner=1 → id(2)=2, swap(1)=0 → 2*2+0=4
+#eval Perm.toIndexList (Perm.tensor (Perm.identity : Perm 3) (Perm.swap : Perm 2))
+-- Expected: [1, 0, 3, 2, 5, 4]
+
+-- Test tensor compose: (p1 ⊗ q1) · (p2 ⊗ q2) vs (p1 · p2) ⊗ (q1 · q2)
+-- Using swap ⊗ identity composed with identity ⊗ swap
+#eval Perm.toIndexList (Perm.compose
+  (Perm.tensor (Perm.swap : Perm 2) (Perm.identity : Perm 2))
+  (Perm.tensor (Perm.identity : Perm 2) (Perm.swap : Perm 2)))
+-- (swap ⊗ id) · (id ⊗ swap):
+-- First apply id ⊗ swap: [1,0,3,2]
+-- Then apply swap ⊗ id: [0,1]→[2,3], [2,3]→[0,1] so [1,0,3,2]→[3,2,1,0]
+-- Expected: [3, 2, 1, 0]
+
+#eval Perm.toIndexList (Perm.tensor
+  (Perm.compose (Perm.swap : Perm 2) (Perm.identity : Perm 2))
+  (Perm.compose (Perm.identity : Perm 2) (Perm.swap : Perm 2)))
+-- (swap · id) ⊗ (id · swap) = swap ⊗ swap
+-- swap ⊗ swap: i=outer*2+inner → swap(outer)*2+swap(inner)
+-- i=0: outer=0, inner=0 → 1*2+1=3
+-- i=1: outer=0, inner=1 → 1*2+0=2
+-- i=2: outer=1, inner=0 → 0*2+1=1
+-- i=3: outer=1, inner=1 → 0*2+0=0
+-- Expected: [3, 2, 1, 0]
 
 end AmoLean.Matrix

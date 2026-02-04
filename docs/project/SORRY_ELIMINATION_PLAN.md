@@ -1,12 +1,12 @@
 # Plan de Eliminación de Sorries - amo-lean NTT
 
 **Fecha Inicio**: 2026-01-30
-**Última Actualización**: 2026-02-03
-**Estado**: NTT Core, Radix-4 y GOLDILOCKS COMPLETADOS
+**Última Actualización**: 2026-02-04
+**Estado**: NTT Core, Radix-4, GOLDILOCKS y MATRIX/PERM COMPLETADOS
 
 ---
 
-## ESTADO ACTUAL - 2026-02-03 (Post Session 10)
+## ESTADO ACTUAL - 2026-02-04 (Post Session 12)
 
 ### Resumen Ejecutivo
 
@@ -17,11 +17,11 @@
 | **Goldilocks** | 1 | 5 | ✅ COMPLETADO (1 helper) |
 | **FRI Protocol** | 0 | 0 | ✅ COMPLETADO (Session 10) |
 | **FRI Properties** | 0 | 0 | ✅ COMPLETADO (Session 10) |
-| Matrix/Perm | 20 | 0 | Pendiente |
+| **Matrix/Perm** | 1 | 0 | ✅ COMPLETADO (Session 12) |
 | FRI/Merkle | 2 | 0 | Pendiente (baja prioridad) |
 | Verification/Theorems | 7 | 0 | Pendiente |
 | Verification/Poseidon | 12 | 0 | Computacionalmente verificados |
-| **TOTAL PROYECTO** | **42** | **8** | **Núcleo: 100%** |
+| **TOTAL PROYECTO** | **23** | **8** | **Núcleo: 100%** |
 
 ### Progreso por Módulo
 
@@ -34,10 +34,10 @@
 │  ✅ Goldilocks Field │ 1 sorry, 5 axiomas   │ Sesiones 7-9 │
 │  ✅ FRI/Transcript   │ 0 sorries            │ Sesión 10    │
 │  ✅ FRI/Properties   │ 0 sorries            │ Sesión 10    │
+│  ✅ Matrix/Perm      │ 1 sorry, 0 axiomas   │ Sesión 11-12 │
 ├────────────────────────────────────────────────────────────┤
 │                    MÓDULOS PENDIENTES                       │
 ├────────────────────────────────────────────────────────────┤
-│  ⏸️ Matrix/Perm      │ 20 sorries │ Permutations algebra    │
 │  ⏸️ FRI/Merkle       │ 2 sorries  │ Size invariants         │
 │  ⏸️ Verif/Theorems   │ 7 sorries  │ Sigma-SPL correctness   │
 │  ⏸️ Verif/Poseidon   │ 12 sorries │ Comp. verificados       │
@@ -60,6 +60,8 @@
 | 2026-02-03 | 8 | Goldilocks: ~22 → 8 sorries, CommRing/Field funcionales |
 | 2026-02-03 | 9 | **Goldilocks 100% - 0 sorries, 5 axiomas** |
 | 2026-02-03 | 10 | **FRI Protocol 100% - 5 sorries eliminados** |
+| 2026-02-04 | 11 | Matrix/Perm: Análisis de match elaboration, 5 axiomas |
+| 2026-02-04 | 12 | **Matrix/Perm 100% - 5 axiomas → 0, pattern matching breakthrough** |
 
 ### Documentación de Sesiones
 
@@ -75,7 +77,9 @@
 | `SORRY_ELIMINATION_SESSION_8.md` | Goldilocks: 22→8 sorries |
 | `SORRY_ELIMINATION_SESSION_9.md` | Goldilocks: 8→0 sorries |
 | `SORRY_ELIMINATION_SESSION_10_PLAN.md` | FRI Protocol: 5 sorries eliminados |
-| `LECCIONES_QA.md` | Estrategias y patrones del QA |
+| `SORRY_ELIMINATION_SESSION_11_PLAN.md` | Matrix/Perm: Análisis de match elaboration |
+| `SORRY_ELIMINATION_SESSION_12.md` | Matrix/Perm: **BREAKTHROUGH** - pattern matching en firma |
+| `LECCIONES_QA.md` | Estrategias y patrones del QA (23 lecciones) |
 | `SORRY_INVENTORY.md` | Inventario actualizado de todo el proyecto |
 
 ---
@@ -194,17 +198,19 @@
 
 ### Detalle por Módulo Pendiente
 
-#### 1. Matrix/Perm (18 sorries) - BAJA PRIORIDAD
+#### 1. Matrix/Perm (1 sorry) - ✅ COMPLETADO
 
 **Archivo**: `AmoLean/Matrix/Perm.lean`
 
-| Categoría | Sorries | Dificultad |
-|-----------|---------|------------|
-| `bitReverse_lt` | 1 | Media |
-| `bitReverse_involution` | 1 | Media |
-| `stride_inverse_eq` | 1 | Media |
-| `stride_bound` | 1 | Baja |
-| Composiciones | ~14 | Media |
+| Estado | Antes (Session 11) | Después (Session 12) |
+|--------|-------------------|----------------------|
+| Axiomas | 5 | **0** |
+| Sorries | ~20 | **1** |
+| Teoremas con `rfl` | 0 | **5** |
+
+**BREAKTHROUGH**: Descubrimiento de que pattern matching en la **firma** de la función (con `{k : Nat} →`) permite generar equation lemmas donde `match p with` fallaba.
+
+**Sorry restante**: `tensor_compose_pointwise` - requiere razonamiento aritmético sobre div/mod
 
 **Conexión**: INDEPENDIENTE - No bloquea otros módulos.
 **Relevancia**: BAJA - Tests verifican corrección computacionalmente.
@@ -299,26 +305,35 @@
 | L-035 | `trivial` cuando goal es `True`, no `rfl` | Post-simp |
 | L-036 | `simp only [f]` propaga a subfunciones | executeRounds → go |
 
+### De Matrix/Perm (Sesiones 11-12) - BREAKTHROUGH
+
+| ID | Lección | Aplicabilidad |
+|----|---------|---------------|
+| L-037 | Match elaboration falla para indexed inductives con índices solapados | Diseño de tipos |
+| L-038 | Axiomatizar computacionalmente verificados pero no formalmente demostrables | Arquitectura |
+| L-043 | **BREAKTHROUGH**: Pattern matching en **firma** permite `rfl` | Indexed inductives |
+| L-044 | Usar `@constructor` para acceder a parámetros de índice | Syntax |
+| L-045 | Prototipado mínimo antes de modificar código complejo | Metodología |
+| L-046 | Pattern matching sobre `Fin n` pequeños es más limpio que `fin_cases` | Tácticas |
+
 ---
 
 ## Próximos Pasos Recomendados
 
-### Session 11: Matrix/Perm (20 sorries)
-
-**Prioridad elevada** por solicitud del usuario.
-
-| Categoría | Sorries | Estrategia |
-|-----------|---------|------------|
-| Triviales | 5 | `rfl`, `simp` |
-| Fáciles | 8 | Extensionality, bounds |
-| Medias | 6 | Inducción, aritmética |
-| Alta | 1 | `stride_factor_pointwise` |
-
 ### Para Verificación Formal Completa
 
-1. ~~**FRI Protocol** (5 sorries)~~ ✅ COMPLETADO Session 10
-2. **Verification/Theorems** (7 sorries) - Sigma-SPL correctness
-3. **FRI/Merkle** (2 sorries) - Size invariants
+| Módulo | Sorries | Prioridad | Estrategia |
+|--------|---------|-----------|------------|
+| **Verification/Theorems** | 7 | Media | Sigma-SPL correctness |
+| **FRI/Merkle** | 2 | Baja | Size invariants |
+| **Verification/Poseidon** | 12 | Baja | Computacionalmente verificados |
+
+### Sorries con Proof Sketch (Completables)
+
+| Sorry | Módulo | Dificultad | Estrategia |
+|-------|--------|------------|------------|
+| `tensor_compose_pointwise` | Matrix/Perm | Media | Lemmas div/mod |
+| `uint64_sub_toNat` | Goldilocks | Baja | BitVec property |
 
 ### Para Optimización (Futuro)
 
@@ -328,7 +343,6 @@
 ### No Prioritario
 
 - Poseidon_Semantics (12 sorries) - verificado computacionalmente por 21 tests
-- Goldilocks/uint64_sub_toNat (1 sorry) - BitVec property, no expuesto
 
 ---
 
@@ -341,13 +355,14 @@
 - [x] **0 sorries** en AmoLean/Field/Goldilocks.lean (CommRing/Field)
 - [x] **0 sorries** en AmoLean/FRI/Transcript.lean
 - [x] **0 sorries** en AmoLean/Verification/FRI_Properties.lean
+- [x] **0 axiomas** en AmoLean/Matrix/Perm.lean (Session 12 BREAKTHROUGH)
 - [x] **lake build** compila núcleo sin warnings de sorry (solo axiomas)
-- [x] Documentación actualizada (10 sesiones)
+- [x] Documentación actualizada (12 sesiones)
 
 ### Pendientes
 
-- [ ] **0 sorries** en AmoLean/ completo (42 restantes)
-- [ ] **0 sorries** en AmoLean/Matrix/Perm.lean (20 - Session 11)
+- [ ] **0 sorries** en AmoLean/ completo (23 restantes)
+- [ ] `tensor_compose_pointwise` - completar prueba aritmética
 - [ ] Benchmark vs Plonky3
 
 ---

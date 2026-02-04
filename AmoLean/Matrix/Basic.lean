@@ -77,6 +77,28 @@ inductive Perm : Nat → Type where
 
 namespace Perm
 
+/-- Get the size (domain) of a permutation.
+    For Perm n, this returns n by pattern matching on the structure. -/
+def size : Perm n → Nat
+  | identity => n  -- n is implicitly available in the identity case
+  | stride m k => m * k
+  | bitRev k => 2^k
+  | swap => 2
+  | compose p _ => p.size
+  | inverse p => p.size
+  | tensor p q => p.size * q.size
+
+/-- size returns the type index -/
+theorem size_eq_n (p : Perm n) : p.size = n := by
+  induction p with
+  | identity => rfl
+  | stride m k => rfl
+  | bitRev k => rfl
+  | swap => rfl
+  | compose p _ ih_p _ => exact ih_p
+  | inverse p ih => exact ih
+  | tensor p q ih_p ih_q => simp only [size, ih_p, ih_q]
+
 /-- Notation for composition -/
 instance : HMul (Perm n) (Perm n) (Perm n) where
   hMul := Perm.compose

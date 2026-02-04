@@ -29,7 +29,8 @@
 19. [Consulta Efectiva a Experto Lean](#19-consulta-experto)
 20. [Técnicas Avanzadas para Campos Finitos (Sesión 9)](#20-tecnicas-sesion9)
 21. [Técnicas para Funciones Recursivas con `let rec` (Sesión 10)](#21-funciones-recursivas)
-22. [Indexed Inductive Types y Match Elaboration (Sesión 12)](#22-indexed-inductives) ← NUEVO
+22. [Indexed Inductive Types y Match Elaboration (Sesión 11)](#22-indexed-inductives)
+23. [Pattern Matching en Firma - BREAKTHROUGH (Sesión 12)](#23-signature-pattern-matching) ← BREAKTHROUGH
 
 ---
 
@@ -1242,7 +1243,7 @@ omega  -- Ahora puede usar h
 
 ---
 
-## 22. Indexed Inductive Types y Match Elaboration (Sesión 12)
+## 22. Indexed Inductive Types y Match Elaboration (Sesión 11)
 
 ### 22.1 L-037: Problema de Match Elaboration para Indexed Inductives
 
@@ -1370,6 +1371,124 @@ theorem compose_assoc_pointwise (p q r : Perm n) (i : Fin n) :
 - [ ] Si verifica: axioma documentado con justificación
 - [ ] Si falla: teorema comentado con nota de que es incorrecto
 - [ ] Construir teoremas derivados usando los axiomas base
+
+---
+
+---
+
+## 23. Pattern Matching en Firma - BREAKTHROUGH (Sesión 12)
+
+### 23.1 L-043: El Descubrimiento que Eliminó 5 Axiomas
+
+**Problema Original**: Los axiomas de Sesión 11 fueron necesarios porque `match p with` en el cuerpo de la función no permitía generar equation lemmas para indexed inductives.
+
+**SOLUCIÓN**: Usar pattern matching directamente en la **firma** de la función con un parámetro implícito para el índice.
+
+```lean
+-- ❌ FALLA - Match en cuerpo:
+def applyIndex (p : Perm n) (i : Fin n) : Fin n :=
+  match p with
+  | identity => i        -- Error: cannot generate equation splitter
+  | compose p q => ...
+
+-- ✅ FUNCIONA - Pattern matching en firma:
+def applyIndex : {k : Nat} → Perm k → Fin k → Fin k
+  | _, identity, i => i                           -- ¡rfl funciona!
+  | _, compose p q, i => applyIndex p (applyIndex q i)  -- ¡rfl funciona!
+  | ...
+```
+
+### 23.2 L-044: Por Qué Funciona
+
+El equation compiler de Lean puede generar splitters cuando:
+
+1. El pattern matching es **parte de la firma**, no un `match` interno
+2. El parámetro `{k : Nat}` está **antes** del tipo indexado `Perm k`
+3. Cada caso usa `_` para el índice (Lean lo infiere del constructor)
+
+```lean
+-- El compiler ve esto como casos separados, no como un match condicional:
+| _, identity, i => ...      -- genera: applyIndex identity i = i
+| _, compose p q, i => ...   -- genera: applyIndex (compose p q) i = applyIndex p (applyIndex q i)
+```
+
+### 23.3 L-045: Sintaxis para Constructores con Parámetros de Índice
+
+Cuando un constructor tiene parámetros que determinan el índice del tipo, usar `@`:
+
+```lean
+-- tensor : Perm m → Perm n → Perm (m * n)
+-- El tipo resultante depende de m y n
+
+-- Para acceder a m y n en el pattern:
+| _, @tensor m_size n_size p q, i =>
+    let outer := i.val / n_size
+    let inner := i.val % n_size
+    ...
+```
+
+### 23.4 L-046: Prototipado para Validación
+
+Antes de modificar código complejo, crear un prototipo mínimo:
+
+```lean
+-- /tmp/perm_proto4.lean - Solo identity, swap, compose
+inductive Perm : Nat → Type where
+  | identity : Perm n
+  | swap : Perm 2
+  | compose : Perm n → Perm n → Perm n
+
+def applyIndex : {k : Nat} → Perm k → Fin k → Fin k
+  | _, identity, i => i
+  | _, swap, ⟨0, _⟩ => ⟨1, by omega⟩
+  | _, swap, ⟨1, _⟩ => ⟨0, by omega⟩
+  | _, swap, ⟨i + 2, h⟩ => ⟨i + 2, h⟩
+  | _, compose p q, i => applyIndex p (applyIndex q i)
+
+-- VALIDACIÓN:
+theorem apply_identity {n : Nat} (i : Fin n) : applyIndex identity i = i := rfl  -- ✅
+theorem apply_compose {n : Nat} (p q : Perm n) (i : Fin n) :
+    applyIndex (compose p q) i = applyIndex p (applyIndex q i) := rfl  -- ✅
+```
+
+### 23.5 L-047: Pattern Matching sobre Fin n Pequeños
+
+Para `Fin n` con n conocido y pequeño, usar pattern matching explícito:
+
+```lean
+-- Más limpio y directo que fin_cases + native_decide:
+theorem swap_self_inverse (i : Fin 2) :
+    applyIndex swap (applyIndex swap i) = i := by
+  match i with
+  | ⟨0, _⟩ => rfl
+  | ⟨1, _⟩ => rfl
+```
+
+### 23.6 Impacto del Descubrimiento
+
+| Métrica | Antes (Sesión 11) | Después (Sesión 12) |
+|---------|-------------------|---------------------|
+| Axiomas | 5 | **0** |
+| Teoremas con `rfl` | 0 | **5** |
+| TCB (Trusted Computing Base) | Alto | **Mínimo** |
+
+### 23.7 Cuándo Aplicar Este Patrón
+
+Usar pattern matching en firma cuando:
+
+- [ ] El tipo es un **indexed inductive** (`T : Index → Type`)
+- [ ] Diferentes constructores pueden tener el **mismo índice** (solapamiento)
+- [ ] `match t with` causa "cannot generate equation splitter"
+- [ ] Necesitas equation lemmas para `rfl` proofs
+
+### 23.8 Checklist de Implementación
+
+1. **Identificar** el parámetro de índice del tipo inductivo
+2. **Mover** el índice a un parámetro implícito en la firma: `{k : Nat} →`
+3. **Añadir** `_` como primer patrón en cada caso
+4. **Usar `@constructor`** cuando necesites acceso a parámetros del constructor
+5. **Validar** con prototipo mínimo antes de modificar código real
+6. **Reemplazar axiomas** por teoremas con `rfl`
 
 ---
 
