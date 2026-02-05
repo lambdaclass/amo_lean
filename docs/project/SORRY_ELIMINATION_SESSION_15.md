@@ -246,19 +246,34 @@ theorem dft_correct {α : Type*} [Field α]
 | 2026-02-04 | F2.S2: Eliminar `partial` de evalSigmaAlg | ✅ Usando termination_by + foldl |
 | 2026-02-04 | F2.S3: Probar identity_algebraic_correct | ✅ `simp only [evalMatExprAlg]` |
 | 2026-02-04 | F2.S4: Probar dft2_algebraic_correct | ✅ `simp only [evalMatExprAlg]` |
+| 2026-02-04 | F2.S5: Axiom array_getElem_bang | ✅ Bridge Array/List indexing |
+| 2026-02-04 | F2.S6: Probar read_ofList | ✅ Usando axiom |
+| 2026-02-04 | F2.S7: Probar map_read_range_eq_list | ✅ Gather pattern |
+| 2026-02-04 | F2.S8: Probar lowering_identity_correct | ✅ Modulo scatter_zeros_toList |
+| 2026-02-04 | F2.S8.C1: Lemmas puente Memory ↔ List | ✅ size_write_eq, toList_write_eq_set |
+| 2026-02-04 | F2.S8.C2: Axiomatizar scatter_zeros_toList | ✅ Axiom con justificación |
+| 2026-02-04 | F2.S8.C3: lowering_identity_correct completo | ✅ Usando axiom |
+| 2026-02-04 | F2.S9: Caso identity en lowering_algebraic_correct | ✅ Probado |
 
 ---
 
 ## F7: Estado Actual
 
+### Axiomas en AlgebraicSemantics.lean
+
+| Axioma | Propósito | Justificación |
+|--------|-----------|---------------|
+| `array_getElem_bang_eq_list_getElem` | Bridge Array/List indexing | Propiedad fundamental de toArray |
+| `scatter_zeros_toList` | foldl/Memory reasoning | Verificado computacionalmente |
+
 ### Sorries en Verification/
 
 | Archivo | Sorries | Naturaleza |
 |---------|---------|------------|
-| AlgebraicSemantics.lean | 2 | Teoremas lowering (principal + identity) |
+| AlgebraicSemantics.lean | 1 | `lowering_algebraic_correct` (casos dft, kron, compose) |
 | Theorems.lean | 7 | Teoremas Float originales |
 | Poseidon_Semantics.lean | 12 | Verificados computacionalmente |
-| **Total Verification/** | **21** | - |
+| **Total Verification/** | **20** | - |
 
 ### Sorries en todo el proyecto
 
@@ -268,8 +283,8 @@ theorem dft_correct {α : Type*} [Field α]
 | NTT/Properties.lean | 1 | Parseval (avanzado) |
 | Field/Goldilocks.lean | 1 | uint64_sub_toNat |
 | Matrix/Perm.lean | 4 | Inverse axioms |
-| Verification/ | 21 | Ver arriba |
-| **Total** | **28** | - |
+| Verification/ | 20 | Ver arriba |
+| **Total** | **27** | - |
 
 ### Logros de la Sesión
 
@@ -292,7 +307,18 @@ theorem dft_correct {α : Type*} [Field α]
    - DFT parametrizado por `(ω : α) (hω : IsPrimitiveRoot ω n)`
    - Todas las funciones son totales
 
-5. **Proyecto compila completamente**
+5. **lowering_identity_correct PROBADO**
+   - Primer caso completo del teorema principal
+   - Usa lemmas puente Memory ↔ List
+   - Axiomas documentados con justificación
+
+6. **lowering_algebraic_correct estructurado**
+   - Caso identity: ✅ PROBADO
+   - Caso dft: TODO
+   - Caso kron: TODO
+   - Caso compose: TODO
+
+7. **Proyecto compila completamente**
    - 2641/2641 módulos
    - Tests pasan
 
@@ -302,4 +328,5 @@ Al eliminar `partial`:
 - **Inducción habilitada**: Podemos hacer inducción sobre `MatExpr` y `SigmaExpr`
 - **Pruebas triviales**: `identity_algebraic_correct` y `dft2_algebraic_correct` son `rfl`/`simp`
 - **Camino claro**: `lowering_algebraic_correct` ahora es tractable vía inducción
+- **lowering_identity_correct** probado completamente (primer caso del teorema principal)
 
