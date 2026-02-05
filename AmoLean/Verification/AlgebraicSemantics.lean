@@ -63,6 +63,26 @@ def size (mem : Memory α) : Nat := mem.data.size
 /-- Create a zeroed memory of given size -/
 def zeros [Zero α] (size : Nat) : Memory α := { data := Array.mkArray size 0 }
 
+/-- Reading from ofList at valid index gives list element -/
+@[simp]
+theorem read_ofList (l : List α) (i : Nat) (hi : i < l.length) :
+    (ofList l).read i = l[i]'hi := by
+  simp only [ofList, read]
+  have h : i < l.toArray.size := by simp [hi]
+  simp only [h, ↓reduceIte]
+  -- Array getElem! equals List getElem
+  sorry  -- Requires Array/List indexing lemma
+
+/-- Size of ofList equals list length -/
+@[simp]
+theorem size_ofList (l : List α) : (ofList l).size = l.length := by
+  simp only [ofList, size, Array.size_toArray]
+
+/-- toList of ofList is identity -/
+@[simp]
+theorem toList_ofList (l : List α) : (ofList l).toList = l := by
+  simp only [ofList, toList, Array.toList_toArray]
+
 end Memory
 
 /-! ## Part 2: Evaluation State -/
@@ -157,29 +177,35 @@ def evalKernelAlg (ω : α) (k : Kernel) (input : List α) : List α :=
 
 /-! ## Part 7: Main Sigma Evaluator (Algebraic)
 
-This is partial due to the recursive nature of SigmaExpr.
-For full verification, we'd need to prove termination.
+Total evaluator with termination proof via nodeCount.
 -/
 
-/-- Evaluate a SigmaExpr algebraically -/
-partial def evalSigmaAlg (ω : α) (env : LoopEnv) (state : EvalState α) :
-    SigmaExpr → EvalState α
+/-- Helper: iterate evalSigmaAlg for loop body -/
+def iterateSigmaEval (ω : α) (loopVar : Nat) (body : SigmaExpr)
+    (evalBody : LoopEnv → EvalState α → EvalState α)
+    (n : Nat) (env : LoopEnv) (state : EvalState α) : EvalState α :=
+  (List.range n).foldl (fun st i =>
+    let env' := env.bind loopVar i
+    let st' := evalBody env' st
+    { readMem := st'.writeMem, writeMem := st'.writeMem }
+  ) state
+
+/-- Evaluate a SigmaExpr algebraically.
+    Now total with termination proof via nodeCount. -/
+def evalSigmaAlg (ω : α) (env : LoopEnv) (state : EvalState α) (sigma : SigmaExpr) : EvalState α :=
+  match sigma with
   | .compute k g s =>
     let inputs := evalGather env g state.readMem
     let outputs := evalKernelAlg ω k inputs
     { state with writeMem := evalScatter env s state.writeMem outputs }
 
   | .loop n loopVar body =>
-    -- Execute body for each iteration
-    let rec execLoop (i : Nat) (st : EvalState α) : EvalState α :=
-      if i >= n then st
-      else
-        let env' := env.bind loopVar i
-        let st' := evalSigmaAlg ω env' st body
-        -- Next iteration reads from previous write
-        let st'' := { readMem := st'.writeMem, writeMem := st'.writeMem }
-        execLoop (i + 1) st''
-    execLoop 0 state
+    -- Execute body for each iteration using foldl
+    (List.range n).foldl (fun st i =>
+      let env' := env.bind loopVar i
+      let st' := evalSigmaAlg ω env' st body
+      { readMem := st'.writeMem, writeMem := st'.writeMem }
+    ) state
 
   | .seq s1 s2 =>
     let state1 := evalSigmaAlg ω env state s1
@@ -199,6 +225,11 @@ partial def evalSigmaAlg (ω : α) (env : LoopEnv) (state : EvalState α) :
     { readMem := state.readMem, writeMem := stateAfterBody.writeMem }
 
   | .nop => state
+termination_by sigma.nodeCount
+decreasing_by
+  all_goals simp_wf
+  all_goals simp only [SigmaExpr.nodeCount]
+  all_goals omega
 
 /-- Run SigmaExpr on input list, returning output list -/
 def runSigmaAlg (ω : α) (sigma : SigmaExpr) (input : List α) (outputSize : Nat) : List α :=
@@ -243,12 +274,30 @@ def isIdentity : MatExpr α m n → Bool
   | .identity _ => true
   | _ => false
 
+/-- Apply kernel B to blocks inline (for termination proof): (I_m ⊗ B) · v -/
+def applyBlockwiseInline (m : Nat) (blockSize : Nat) (evalBlock : List α → List α) (input : List α) : List α :=
+  (List.range m).flatMap fun i =>
+    let block := input.drop (i * blockSize) |>.take blockSize
+    evalBlock block
+
+/-- Apply kernel A strided inline (for termination proof): (A ⊗ I_n) · v -/
+def applyStridedInline (n : Nat) (laneLen : Nat) (evalLane : List α → List α) (input : List α) : List α :=
+  let lanes := List.range n |>.map fun lane =>
+    List.range laneLen |>.map fun j =>
+      let idx := lane + j * n
+      input.getD idx default
+  let processedLanes := lanes.map evalLane
+  List.range (laneLen * n) |>.map fun idx =>
+    let lane := idx % n
+    let i := idx / n
+    match processedLanes[lane]? with
+    | some laneData => laneData.getD i default
+    | none => default
+
 /-- Main matrix expression evaluator (algebraic).
     Parametrized by primitive root ω for DFT operations.
-
-    Note: Marked partial due to complex recursion pattern with kron.
-    For full termination proof, would need well-founded recursion on nodeCount. -/
-partial def evalMatExprAlg (ω : α) (m n : Nat) (mExpr : MatExpr α m n) (input : List α) : List α :=
+    Now total with termination proof via nodeCount. -/
+def evalMatExprAlg (ω : α) (m n : Nat) (mExpr : MatExpr α m n) (input : List α) : List α :=
   match mExpr with
   | .identity _ => input
   | .zero _ _ => List.replicate m 0
@@ -259,12 +308,39 @@ partial def evalMatExprAlg (ω : α) (m n : Nat) (mExpr : MatExpr α m n) (input
   | .perm p => applyPerm p input
   | @MatExpr.kron _ m₁ n₁ m₂ n₂ a b =>
     if isIdentity a then
-      applyBlockwise m₁ (evalMatExprAlg ω m₂ n₂ b) input
+      -- (I_{m₁} ⊗ B) · v : apply B to m₁ blocks of size n₂
+      (List.range m₁).flatMap fun i =>
+        let block := input.drop (i * n₂) |>.take n₂
+        evalMatExprAlg ω m₂ n₂ b block
     else if isIdentity b then
-      applyStrided m₂ (evalMatExprAlg ω m₁ n₁ a) input
+      -- (A ⊗ I_{m₂}) · v : apply A strided
+      let laneLen := input.length / m₂
+      let lanes := List.range m₂ |>.map fun lane =>
+        List.range laneLen |>.map fun j =>
+          input.getD (lane + j * m₂) default
+      let processedLanes := lanes.map (evalMatExprAlg ω m₁ n₁ a)
+      List.range (laneLen * m₂) |>.map fun idx =>
+        let lane := idx % m₂
+        let i := idx / m₂
+        match processedLanes[lane]? with
+        | some laneData => laneData.getD i default
+        | none => default
     else
-      let afterB := applyBlockwise m₁ (evalMatExprAlg ω m₂ n₂ b) input
-      applyStrided m₂ (evalMatExprAlg ω m₁ n₁ a) afterB
+      -- General (A ⊗ B) · v : B blockwise, then A strided
+      let afterB := (List.range m₁).flatMap fun i =>
+        let block := input.drop (i * n₂) |>.take n₂
+        evalMatExprAlg ω m₂ n₂ b block
+      let laneLen := afterB.length / m₂
+      let lanes := List.range m₂ |>.map fun lane =>
+        List.range laneLen |>.map fun j =>
+          afterB.getD (lane + j * m₂) default
+      let processedLanes := lanes.map (evalMatExprAlg ω m₁ n₁ a)
+      List.range (laneLen * m₂) |>.map fun idx =>
+        let lane := idx % m₂
+        let i := idx / m₂
+        match processedLanes[lane]? with
+        | some laneData => laneData.getD i default
+        | none => default
   | @MatExpr.compose _ _ k _ a b =>
     let intermediate := evalMatExprAlg ω k n b input
     evalMatExprAlg ω m k a intermediate
@@ -281,6 +357,11 @@ partial def evalMatExprAlg (ω : α) (m n : Nat) (mExpr : MatExpr α m n) (input
   | .partialElemwise _ _ a => evalMatExprAlg ω m n a input
   | @MatExpr.mdsApply _ t _ _ a => evalMatExprAlg ω t 1 a input
   | @MatExpr.addRoundConst _ t _ _ a => evalMatExprAlg ω t 1 a input
+termination_by mExpr.nodeCount
+decreasing_by
+  all_goals simp_wf
+  all_goals simp only [MatExpr.nodeCount]
+  all_goals omega
 
 /-! ## Part 9: Correctness Theorems -/
 
@@ -305,11 +386,27 @@ theorem lowering_algebraic_correct
 /-- Identity preserves input -/
 theorem identity_algebraic_correct (n : Nat) (v : List α) (hv : v.length = n) :
     evalMatExprAlg ω n n (.identity n) v = v := by
-  sorry  -- Requires unfolding partial def
+  simp only [evalMatExprAlg]
 
 /-- DFT_2 correctness -/
 theorem dft2_algebraic_correct (v : List α) (hv : v.length = 2) :
     evalMatExprAlg ω 2 2 (.dft 2) v = evalDFT2 v := by
-  sorry  -- Requires unfolding partial def
+  simp only [evalMatExprAlg]
+
+/-- Lowering correctness for identity matrix.
+
+    Proof sketch:
+    1. lowerFresh n n (.identity n) = .compute (.identity n) (contiguous gather) (contiguous scatter)
+    2. runSigmaAlg evaluates this by:
+       - Gathering n elements from input at positions 0, 1, ..., n-1
+       - Applying identity kernel (returns input unchanged)
+       - Scattering n elements to output at positions 0, 1, ..., n-1
+    3. Result equals the original input v
+
+    The proof requires detailed reasoning about Memory operations and List folds.
+-/
+theorem lowering_identity_correct (n : Nat) (v : List α) (hv : v.length = n) :
+    runSigmaAlg ω (lowerFresh n n (.identity n : MatExpr α n n)) v n = v := by
+  sorry  -- Requires fold/scatter reasoning
 
 end AmoLean.Verification.Algebraic

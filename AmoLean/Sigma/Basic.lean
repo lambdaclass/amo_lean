@@ -195,6 +195,15 @@ def kernelCount : SigmaExpr → Nat
   | temp _ body => kernelCount body
   | nop => 0
 
+/-- Node count for termination proofs in semantic evaluation -/
+def nodeCount : SigmaExpr → Nat
+  | compute _ _ _ => 1
+  | loop _ _ body => 1 + nodeCount body
+  | seq s1 s2 => 1 + nodeCount s1 + nodeCount s2
+  | par s1 s2 => 1 + nodeCount s1 + nodeCount s2
+  | temp _ body => 1 + nodeCount body
+  | nop => 1
+
 partial def toStringIndent (indent : Nat) : SigmaExpr → String
   | compute k g s =>
     let pad := String.mk (List.replicate indent ' ')

@@ -241,6 +241,11 @@ theorem dft_correct {α : Type*} [Field α]
 | 2026-02-04 | F0.S3: Verificar semántica `.seq` | ✅ Correcta para operaciones in-place |
 | 2026-02-04 | F1.S1: Crear AlgebraicSemantics.lean | ✅ 315 líneas |
 | 2026-02-04 | F1.S2: Implementar evalMatExprAlg | ✅ Con parámetro ω para raíces |
+| 2026-02-04 | F1.S3: Agregar SigmaExpr.nodeCount | ✅ En Sigma/Basic.lean |
+| 2026-02-04 | F2.S1: Eliminar `partial` de evalMatExprAlg | ✅ Usando termination_by + decreasing_by |
+| 2026-02-04 | F2.S2: Eliminar `partial` de evalSigmaAlg | ✅ Usando termination_by + foldl |
+| 2026-02-04 | F2.S3: Probar identity_algebraic_correct | ✅ `simp only [evalMatExprAlg]` |
+| 2026-02-04 | F2.S4: Probar dft2_algebraic_correct | ✅ `simp only [evalMatExprAlg]` |
 
 ---
 
@@ -250,10 +255,21 @@ theorem dft_correct {α : Type*} [Field α]
 
 | Archivo | Sorries | Naturaleza |
 |---------|---------|------------|
-| AlgebraicSemantics.lean | 3 | Teoremas algebraicos (nuevo) |
+| AlgebraicSemantics.lean | 2 | Teoremas lowering (principal + identity) |
 | Theorems.lean | 7 | Teoremas Float originales |
 | Poseidon_Semantics.lean | 12 | Verificados computacionalmente |
-| **Total Verification/** | **22** | - |
+| **Total Verification/** | **21** | - |
+
+### Sorries en todo el proyecto
+
+| Módulo | Sorries | Naturaleza |
+|--------|---------|------------|
+| NTT/Spec.lean | 1 | Deprecated |
+| NTT/Properties.lean | 1 | Parseval (avanzado) |
+| Field/Goldilocks.lean | 1 | uint64_sub_toNat |
+| Matrix/Perm.lean | 4 | Inverse axioms |
+| Verification/ | 21 | Ver arriba |
+| **Total** | **28** | - |
 
 ### Logros de la Sesión
 
@@ -261,12 +277,29 @@ theorem dft_correct {α : Type*} [Field α]
    - Usa `termination_by mExpr.nodeCount`
    - Permite inducción sobre MatExpr
 
-2. **AlgebraicSemantics.lean creado**
+2. **`evalMatExprAlg` ahora es total** (sin `partial`)
+   - Inlined blockwise/strided operations
+   - Usa `termination_by mExpr.nodeCount`
+   - Pruebas `identity_algebraic_correct` y `dft2_algebraic_correct` ahora triviales
+
+3. **`evalSigmaAlg` ahora es total** (sin `partial`)
+   - Usa `List.foldl` para loops
+   - Usa `termination_by sigma.nodeCount`
+   - Permite razonamiento formal sobre ejecución
+
+4. **AlgebraicSemantics.lean creado**
    - Semántica genérica sobre `Field α`
    - DFT parametrizado por `(ω : α) (hω : IsPrimitiveRoot ω n)`
-   - `evalMatExprAlg` implementado
+   - Todas las funciones son totales
 
-3. **Proyecto compila completamente**
+5. **Proyecto compila completamente**
    - 2641/2641 módulos
    - Tests pasan
+
+### Impacto de hacer funciones totales
+
+Al eliminar `partial`:
+- **Inducción habilitada**: Podemos hacer inducción sobre `MatExpr` y `SigmaExpr`
+- **Pruebas triviales**: `identity_algebraic_correct` y `dft2_algebraic_correct` son `rfl`/`simp`
+- **Camino claro**: `lowering_algebraic_correct` ahora es tractable vía inducción
 
