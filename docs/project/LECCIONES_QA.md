@@ -35,6 +35,10 @@
 25. [Typeclass Inheritance y Operadores Estándar (Sesión 14)](#25-typeclass-inheritance) ← NUEVO
 26. [panic! vs sorry para Código Incompleto (Sesión 14)](#26-panic-vs-sorry) ← NUEVO
 27. [Integración Bottom-Up de Módulos (Sesión 14)](#27-integracion-modulos) ← NUEVO
+28. [Semántica de Compilador SPIRAL: Lowering Correctness (Sesión 15)](#28-lowering-correctness) ← NUEVO
+29. [Mathlib Lemmas para foldl y List (Sesión 15)](#29-mathlib-foldl-list) ← NUEVO
+30. [WF-Recursive Unfolding y Compose Proof (Sesión 16)](#30-wf-recursive-compose) ← NUEVO
+31. [Axiomas Fundacionales vs Monolíticos (Sesión 16)](#31-axiomas-fundacionales) ← NUEVO
 
 ---
 
@@ -1783,6 +1787,397 @@ Para correcciones no triviales:
 5. **Obtener** aprobación antes de implementar
 
 **Beneficio**: Evita múltiples intentos fallidos y documenta el razonamiento.
+
+---
+
+## 28. Semántica de Compilador SPIRAL: Lowering Correctness (Sesión 15)
+
+### 28.1 L-060: Meta-lemma para Casos Compute Contiguos
+
+**Descubrimiento**: Todos los casos base del lowering (identity, dft, ntt, twiddle, perm) producen la **misma estructura** de SigmaExpr:
+
+```lean
+.compute kernel (Gather.contiguous n (.const 0)) (Scatter.contiguous n (.const 0))
+```
+
+La diferencia está solo en el kernel. Un **meta-lemma** puede cubrir todos estos casos de una vez:
+
+```lean
+theorem lowering_compute_contiguous_correct (n : Nat) (k : Kernel)
+    (evalK : List α → List α) (v : List α) (hv : v.length = n)
+    (hkernel : evalKernelAlg ω k v = evalK v) :
+    runSigmaAlg ω (.compute k (Gather.contiguous n (.const 0))
+                               (Scatter.contiguous n (.const 0))) v n = evalK v
+```
+
+**Beneficio**: Reduce N pruebas casi idénticas a N aplicaciones de un solo lemma + una prueba trivial de `hkernel` por caso.
+
+### 28.2 L-061: IsPrimitiveRoot NO se Necesita para Lowering
+
+**Insight del experto Lean (DeepSeek)**: El teorema `lowering_algebraic_correct` dice que el código compilado produce el mismo resultado que la semántica de referencia. La corrección del lowering es **independiente** de qué ω sea:
+
+- `evalMatExprAlg ω (.dft n) v` computa DFT con ω
+- `runSigmaAlg ω (lower (.dft n)) v` computa lo **mismo** con ω
+- `IsPrimitiveRoot ω n` solo garantiza que el resultado **es la DFT**, pero eso es un teorema separado
+
+**Consecuencia**: Los parámetros `(hω : IsPrimitiveRoot ω n)` y `(hn : n > 0)` podrían relajarse en `lowering_algebraic_correct`.
+
+### 28.3 L-062: Semántica de `.seq` y State Threading
+
+**QA (Gemini) identificó** el patrón de state threading en `.seq`:
+
+```lean
+| .seq s1 s2 =>
+  let state1 := evalSigmaAlg ω env state s1
+  let state2 := { readMem := state1.writeMem, writeMem := state1.writeMem }
+  evalSigmaAlg ω env state2 s2
+```
+
+**Clave para Compose**: `lower (.compose a b)` produce `.temp k (.seq exprB exprA)`. Esto ejecuta B primero, luego A lee la salida de B como entrada. Coincide con `evalMatExprAlg` que computa `a(b(input))`.
+
+**Para la prueba**: Es definitional unfolding — `evalSigmaAlg` para `.temp` y `.seq` se despliega directamente.
+
+### 28.4 L-063: adjustBlock/adjustStride Son Transformaciones de Direccionamiento
+
+**Anatomía de adjustBlock** (para `I ⊗ B`):
+```lean
+adjustBlock loopVar blockIn blockOut (.compute k _ _) =
+  .compute k (Gather.block blockIn loopVar) (Scatter.block blockOut loopVar)
+```
+
+Donde `Gather.block blockIn loopVar` lee:
+- `baseAddr = .affine 0 blockSize loopVar` → dirección base = `loopVar * blockSize`
+- `stride = 1` → elementos contiguos dentro del bloque
+
+**Para la prueba**: Necesitamos un lemma semántico:
+```lean
+theorem evalGather_block (env : LoopEnv) (blockSize : Nat) (loopVar : LoopVar)
+    (mem : Memory α) (i : Nat) (henv : env loopVar = i) :
+    evalGather env (Gather.block blockSize loopVar) mem =
+    List.range blockSize |>.map (fun j => mem.read (i * blockSize + j))
+```
+
+### 28.5 L-064: Invariantes de Loop para foldl sobre List.range
+
+**DeepSeek propuso** usar invariantes explícitos para razonar sobre `(List.range n).foldl`:
+
+```lean
+-- Patrón general:
+-- Probar: después de i iteraciones, el estado satisface P(i)
+-- Base: P(0) (estado inicial)
+-- Paso: P(i) → P(i+1) (cada iteración preserva/avanza invariante)
+-- Conclusión: P(n) (estado final)
+```
+
+**Tácticas clave**:
+- `induction l generalizing init` — para inducción sobre la lista del foldl
+- `List.foldl_map` — `foldl g init (map f l) = foldl (g ∘ f) init l`
+- `List.foldl_ext` — extensionalidad para folds iguales
+
+**Non-interference (QA)**: Para Kronecker, la iteración `i` del loop solo escribe en posiciones `[i*blockSize .. (i+1)*blockSize - 1]`. Las iteraciones anteriores no se sobrescriben.
+
+### 28.6 L-065: Priorizar por Dificultad Creciente
+
+**Ambos expertos coincidieron** en este orden:
+
+| Caso | Dificultad | Razón |
+|------|-----------|-------|
+| DFT | BAJA | Idéntico a identity, solo cambia kernel |
+| Compose | MEDIA | Definitional unfolding + IH |
+| Kron I⊗B | ALTA | Loop invariant + adjustBlock semantics |
+| Kron A⊗I | ALTA | Strided access + adjustStride semantics |
+| Kron general | MUY ALTA | Combinación de blockwise + strided |
+
+### 28.7 L-066: Bridge Lemmas Memory ↔ List
+
+**Descubiertos durante Sesión 15** (provienen de Mathlib/Batteries):
+
+| Lemma Lean 4 | Tipo | Uso |
+|---------------|------|-----|
+| `Array.toList_setIfInBounds` | `(a.setIfInBounds i x).toList = a.toList.set i x` | Puente write → List.set |
+| `Array.size_setIfInBounds` | `(a.setIfInBounds i x).size = a.size` | Preservación de tamaño |
+| `Array.toList_mkArray` | `(mkArray n v).toList = List.replicate n v` | Inicialización |
+| `Array.size_mkArray` | `(mkArray n v).size = n` | Tamaño de zeros |
+
+**Patrón**: `Memory.write` usa `Array.set!` internamente, que es `Array.setIfInBounds`. Por tanto:
+```lean
+theorem toList_write_eq_set (mem : Memory α) (i : Nat) (v : α) (hi : i < mem.size) :
+    (mem.write i v).toList = mem.toList.set i v := by
+  unfold write; split_ifs with h
+  · simp only [toList, Array.set!, Array.toList_setIfInBounds]
+  · exact absurd hi h
+```
+
+### 28.8 L-067: Axiomatización Condicional
+
+**Estrategia acordada con el usuario**: Axiomatizar primero, reemplazar después.
+
+**Criterios para axiomatizar en el contexto de lowering**:
+
+| Candidato | Axiomatizar? | Razón |
+|-----------|-------------|-------|
+| `scatter_zeros_toList` | Sí (temporal) | Foldl + enum reasoning complejo, verificado |
+| `array_getElem_bang_eq_list_getElem` | Sí (temporal) | getElem! no simplifica bien |
+| `adjustBlock_semantics` | Condicional | Solo si prueba formal excede complejidad razonable |
+| Compose state threading | No | Debería ser definitional |
+| DFT kernel match | No | Trivial con meta-lemma |
+
+**Regla**: Un axioma temporal es aceptable si:
+1. Es computacionalmente verificable
+2. Tiene documentación completa
+3. Tiene un TODO explícito para reemplazo
+4. No oculta un error conceptual (verificar con tests)
+
+### 28.9 L-068: Consulta Multi-Experto Produce Estrategias Superiores
+
+**Patrón observado**: QA (Gemini) y experto Lean (DeepSeek) identifican problemas complementarios:
+
+| Aspecto | QA (Gemini) | Lean Expert (DeepSeek) |
+|---------|-------------|----------------------|
+| Foco | Riesgos, edge cases, completitud | Tácticas, patterns, código |
+| Fortaleza | Non-interference, state management | Structural similarity, foldl induction |
+| Debilidad | Menos específico en Lean 4 | Menos atención a edge cases |
+
+**La síntesis** identifica:
+- El meta-lemma compute (DeepSeek) + documentación rigurosa (QA)
+- Loop invariant (DeepSeek) + non-interference (QA)
+- Axiomatización condicional (DeepSeek) + criterios estrictos (QA)
+
+**Lección**: Siempre consultar ambos para tareas complejas. El costo (3 rondas × 2 expertos) se amortiza con la calidad de la estrategia resultante.
+
+---
+
+## 29. Mathlib Lemmas para Razonamiento sobre foldl y List (Sesión 15)
+
+### 29.1 Lemmas Encontrados via /lean-search
+
+| Lemma | Firma | Aplicación |
+|-------|-------|------------|
+| `List.foldl_map` | `foldl g init (map f l) = foldl (fun x y => g x (f y)) init l` | Simplificar gather → write patterns |
+| `List.foldl_ext` | Extensionalidad para folds | Probar equivalencia de loops |
+| `List.enum_cons` | `enum (a :: l) = (0, a) :: enumFrom 1 l` | Inducción sobre enum |
+| `List.foldlIdxM_eq_foldlM_enum` | indexed fold = plain fold over enum | Bridge indexed → plain fold |
+| `List.range'_eq_map_range` | `range' s n = map (+ s) (range n)` | Reindexación de rangos |
+| `List.foldl_cons` | `foldl f init (a :: l) = foldl f (f init a) l` | Paso inductivo para foldl |
+
+### 29.2 Lemmas para Array/Memory Bridge
+
+| Lemma | Origen | Uso |
+|-------|--------|-----|
+| `Array.toList_setIfInBounds` | Batteries | Memory.write → List.set |
+| `Array.size_setIfInBounds` | Batteries | Preservar tamaño tras write |
+| `Array.toList_mkArray` | Lean core | Memory.zeros → List.replicate |
+| `List.set_length` | Mathlib | Preservar longitud tras set |
+| `List.getElem_set_self` | Mathlib | Leer posición recién escrita |
+| `List.getElem_set_of_ne` | Mathlib | Leer posición no afectada |
+
+### 29.3 Patrón para Probar scatter_zeros_toList (formal)
+
+```lean
+-- Estrategia de inducción sobre v:
+-- Base: v = [] → foldl ... [].enum = foldl ... [] = zeros(0) = []
+-- Paso: v = x :: xs →
+--   foldl write zeros(n+1) ((x :: xs).enum)
+--   = foldl write (zeros(n+1).write 0 x) (xs.enumFrom 1)  -- por enum_cons + foldl_cons
+--   → usar IH sobre xs con offset ajustado
+--
+-- La dificultad está en el offset: enumFrom k produce índices k, k+1, ...
+-- Necesita: forall k, foldl write (mem) (xs.enumFrom k) = ... List.set ...
+```
+
+---
+
+## 30. WF-Recursive Unfolding y Compose Proof (Sesión 16)
+
+### 30.1 L-069: simp only [f] para Well-Founded Recursive Functions
+
+**Descubrimiento**: Para funciones definidas con `termination_by`, `rfl` y `unfold` fallan porque el kernel no puede reducir la definición para argumentos abstractos.
+
+```lean
+-- FALLA:
+theorem lower_compose_unfold :
+    (lower k n state (.compose a b)).1 = ... := rfl
+-- Error: "failed to generate unfold theorem for 'AmoLean.Sigma.lower'"
+
+-- TAMBIÉN FALLA:
+unfold lower  -- Same error
+
+-- FUNCIONA:
+simp only [lower]  -- Usa equation lemmas generados por el equation compiler
+```
+
+**Por qué**: `rfl` requiere reducción por el kernel, que no funciona para WF-recursive. `simp only` usa los equation lemmas (`lower.eq_1`, etc.) que son equivalentes pero trabajan como rewrite rules.
+
+**Aplicabilidad**: Cualquier función con `termination_by` o `decreasing_by`.
+
+### 30.2 L-070: dsimp only [] para Eliminar let Bindings
+
+**Problema**: Después de `rw [evalSigmaAlg.eq_5, evalSigmaAlg.eq_3]`, el goal contiene `let` bindings de Lean que impiden a `set` encontrar subexpresiones.
+
+```lean
+rw [evalSigmaAlg.eq_5, evalSigmaAlg.eq_3]
+-- Goal: let stateB := evalSigmaAlg ... in (evalSigmaAlg ... stateB.writeMem ...).writeMem.toList.take k
+
+set stateB := evalSigmaAlg ...  -- FALLA: pattern not found
+```
+
+**Solución**: `dsimp only []` elimina `let` bindings sin hacer otras simplificaciones:
+
+```lean
+dsimp only []  -- Solo elimina let bindings
+set stateB := evalSigmaAlg ...  -- FUNCIONA
+```
+
+**Alternativa**: `simp only []` también funciona pero es más agresivo.
+
+### 30.3 L-071: Memory Roundtrip Pattern
+
+**Patrón recurrente**: Convertir entre `Memory α` y `List α` usando `Memory.ofList_toList`:
+
+```lean
+-- Lemma base:
+theorem Memory.ofList_toList (m : Memory α) : Memory.ofList m.toList = m := by
+  cases m; simp only [Memory.ofList, Memory.toList]
+
+-- Uso en pruebas:
+-- Si sabemos: m.toList = l
+-- Entonces: m = Memory.ofList l
+have h_mem_eq : m = Memory.ofList l := by
+  rw [← Memory.ofList_toList m, h_toList_eq]
+```
+
+**Cadena completa para compose**:
+
+```
+IH_B → stateB.writeMem.toList.take k_mid = intermediate
+size_preserved → stateB.writeMem.size = k_mid
+→ stateB.writeMem.toList.length = k_mid  (via Array.length_toList)
+→ take k_mid = identity  (via List.take_of_length_le)
+→ stateB.writeMem.toList = intermediate
+→ stateB.writeMem = Memory.ofList intermediate  (via roundtrip)
+```
+
+### 30.4 L-072: Equation Lemmas Numerados
+
+`evalSigmaAlg` genera equation lemmas accesibles por número:
+
+| Lemma | Constructor | Uso |
+|-------|-------------|-----|
+| `evalSigmaAlg.eq_1` | `.compute` | Base cases |
+| `evalSigmaAlg.eq_2` | `.loop` | Loop semantics |
+| `evalSigmaAlg.eq_3` | `.seq` | Sequential composition |
+| `evalSigmaAlg.eq_4` | `.par` | Parallel composition |
+| `evalSigmaAlg.eq_5` | `.temp` | Temporary allocation |
+| `evalSigmaAlg.eq_6` | `.nop` | No-op |
+
+**Uso**: `rw [evalSigmaAlg.eq_5, evalSigmaAlg.eq_3]` para desplegar `.temp (.seq ...)`.
+
+**Descubrimiento**: Usar `#check @evalSigmaAlg.eq_1` para verificar existencia.
+
+### 30.5 L-073: Compose Proof Architecture
+
+**Patrón general** para probar lowering correctness de combinadores secuenciales:
+
+```
+1. Unfold both sides (simp only [evalMatExprAlg], simp only [lower])
+2. Set intermediate := evalMatExprAlg ω k_mid n b v
+3. Unfold runSigmaAlg + equation lemmas
+4. dsimp only [] (remove let bindings)
+5. set stateB := evalSigmaAlg ... exprB
+6. IH_B → stateB.writeMem content = intermediate
+7. Size preservation axiom → stateB.writeMem.size = k_mid
+8. take_of_length_le → take = identity
+9. Memory roundtrip → stateB.writeMem = Memory.ofList intermediate
+10. WriteMem irrelevance → normalize writeMem to zeros
+11. Alpha-equivalence → normalize LowerState to {}
+12. IH_A → close
+```
+
+**Reutilizable** para cualquier caso que use `.temp (.seq ...)`.
+
+### 30.6 L-074: IsPrimitiveRoot NO se Necesita para Lowering
+
+**Insight (DeepSeek, Sesión 15)**: El lowering correctness es una propiedad del compilador, no de la matemática subyacente.
+
+```lean
+-- ANTES (restricción innecesaria):
+theorem lowering_algebraic_correct
+    (ω : α) (hω : IsPrimitiveRoot ω n) (hn : n > 0) ...
+
+-- DESPUÉS (más general):
+theorem lowering_algebraic_correct
+    (ω : α) (mat : MatExpr α k n) (v : List α) (hv : v.length = n) ...
+```
+
+**Consecuencia**: Sin `hω`/`hn`, el teorema se puede hacer recursivo con `termination_by mat.nodeCount`, lo que habilita la llamada recursiva para compose donde k_mid puede ser diferente de n.
+
+### 30.7 L-075: Doc Comments vs Section Comments con set_option
+
+**Problema**: `/-- ... -/` (doc comment) seguido de `set_option` causa error de parsing.
+
+```lean
+-- FALLA:
+/-- The compose step. -/
+set_option maxHeartbeats 800000 in
+theorem lowering_compose_step ...
+-- Error: "unexpected token 'set_option'; expected 'lemma'"
+
+-- FUNCIONA:
+/-! The compose step. -/
+set_option maxHeartbeats 800000 in
+theorem lowering_compose_step ...
+```
+
+**Razón**: Doc comments (`/-- -/`) deben preceder inmediatamente una declaración. Section comments (`/-! -/`) son independientes.
+
+---
+
+## 31. Axiomas Fundacionales vs Monolíticos (Sesión 16)
+
+### 31.1 L-076: Descomponer Axiomas Grandes en Fundacionales
+
+**Antes (Sesión 15)**: Un axioma monolítico para compose:
+
+```lean
+axiom lowering_compose_axiom (ω : α) ... :
+    runSigmaAlg ω (lowerFresh k n (.compose a b)) v k =
+    evalMatExprAlg ω k n (.compose a b) v
+```
+
+**Después (Sesión 16)**: 4 axiomas fundacionales + prueba:
+
+```lean
+axiom evalSigmaAlg_writeMem_size_preserved ...  -- Size preservation
+axiom evalSigmaAlg_writeMem_irrelevant ...      -- Non-interference
+axiom lower_state_irrelevant ...                 -- Alpha-equivalence
+axiom evalMatExprAlg_length ...                  -- Output length
+
+theorem lowering_compose_step ... := by          -- PROVEN (no axiom)
+```
+
+### 31.2 Ventajas de Axiomas Fundacionales
+
+| Aspecto | Monolítico | Fundacional |
+|---------|------------|-------------|
+| **Auditabilidad** | Difícil (axioma complejo) | Fácil (4 propiedades simples) |
+| **Reutilización** | Solo para compose | Para compose, kron, y futuros casos |
+| **TCB** | Grande | Más pequeño por axioma |
+| **Eliminabilidad** | Todo o nada | Incremental |
+| **Confianza** | Media | Alta (propiedades evidentes) |
+
+### 31.3 Clasificación de Axiomas por Eliminabilidad
+
+| Axioma | Dificultad | Técnica |
+|--------|-----------|---------|
+| `evalMatExprAlg_length` | MEDIA | Inducción sobre MatExpr |
+| `lower_state_irrelevant` | MEDIA | Inducción sobre MatExpr (LowerState solo genera IDs) |
+| `evalSigmaAlg_writeMem_size_preserved` | MEDIA | Inducción sobre SigmaExpr |
+| `evalSigmaAlg_writeMem_irrelevant` | ALTA | Non-interference: cada write sobreescribe posiciones [0,m) |
+
+### 31.4 Regla General
+
+> Preferir N axiomas pequeños y evidentes sobre 1 axioma grande y opaco.
+> Cada axioma debería ser auditable en 30 segundos por un matemático.
 
 ---
 

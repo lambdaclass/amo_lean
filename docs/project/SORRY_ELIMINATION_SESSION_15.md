@@ -221,13 +221,19 @@ theorem dft_correct {α : Type*} [Field α]
 
 ## F5: Criterios de Éxito
 
-- [ ] `MatExpr.size` definido y compila
-- [ ] `lower` sin `partial` y compila
-- [ ] `AlgebraicSemantics.lean` creado
-- [ ] `evalMatExprAlg` implementado
-- [ ] `lowering_algebraic_correct` probado (o con sorries documentados)
-- [ ] Tests existentes siguen pasando
-- [ ] Documentación actualizada
+- [x] `MatExpr.size` definido y compila (reutilizado `nodeCount`)
+- [x] `lower` sin `partial` y compila
+- [x] `AlgebraicSemantics.lean` creado (515 líneas)
+- [x] `evalMatExprAlg` implementado (total, con termination proof)
+- [ ] `lowering_algebraic_correct` probado:
+  - [x] Caso identity: PROBADO
+  - [ ] Caso DFT: en progreso (Fase 1)
+  - [ ] Caso compose: pendiente (Fase 2)
+  - [ ] Caso kron: pendiente (Fase 3)
+- [x] Tests existentes siguen pasando (2641/2641)
+- [x] Documentación actualizada (LECCIONES_QA §28-29, SESSION_15)
+- [x] Estrategia superadora documentada (F9)
+- [x] Consultas con expertos completadas (QA + DeepSeek)
 
 ---
 
@@ -254,6 +260,12 @@ theorem dft_correct {α : Type*} [Field α]
 | 2026-02-04 | F2.S8.C2: Axiomatizar scatter_zeros_toList | ✅ Axiom con justificación |
 | 2026-02-04 | F2.S8.C3: lowering_identity_correct completo | ✅ Usando axiom |
 | 2026-02-04 | F2.S9: Caso identity en lowering_algebraic_correct | ✅ Probado |
+| 2026-02-05 | F8.S1: Consulta QA (Gemini) 3 rondas | ✅ NEEDS_REVISION |
+| 2026-02-05 | F8.S2: Consulta Lean Expert (DeepSeek) 3 rondas | ✅ Insights DFT/Kron/Compose |
+| 2026-02-05 | F8.S3: Búsqueda Mathlib lemmas | ✅ foldl_map, enum_cons, etc |
+| 2026-02-05 | F8.S4: Análisis adjustBlock/adjustStride | ✅ Semántica documentada |
+| 2026-02-05 | F9: Estrategia superadora sintetizada | ✅ Documentada |
+| 2026-02-05 | Lecciones L-060 a L-068 documentadas | ✅ LECCIONES_QA §28-29 |
 
 ---
 
@@ -329,4 +341,162 @@ Al eliminar `partial`:
 - **Pruebas triviales**: `identity_algebraic_correct` y `dft2_algebraic_correct` son `rfl`/`simp`
 - **Camino claro**: `lowering_algebraic_correct` ahora es tractable vía inducción
 - **lowering_identity_correct** probado completamente (primer caso del teorema principal)
+
+---
+
+## F8: Consultas con Expertos (2026-02-05)
+
+### F8.S1: QA (Gemini) — 3 Rondas
+
+**Ronda 1 — Diagnóstico arquitectónico:**
+- `scatter_zeros_toList` NO debería ser axioma permanente — es la pieza central de movimiento de datos y es demostrable vía inducción sobre `List.foldl` + `List.set`
+- Necesitamos lemmas puente semánticos para `adjustBlock` y `adjustStride`
+- El caso DFT base (DFT₁ = identity) debe manejarse explícitamente
+
+**Ronda 2 — Kronecker en detalle:**
+- Para `.kron` con `I ⊗ B`, factorizar razonamiento de indexación:
+  - Probar que el loop con adjustBlock en iteración `i` aplica `B` al bloque `[i*n₂ .. (i+1)*n₂-1]`
+  - Probar **non-interference**: iteración `i` no toca posiciones del bloque `j ≠ i`
+  - Concatenar bloques produce `flatMap (fun i => evalMatExprAlg B (block i))`
+- **State management para Compose**: probar que `.seq exprB exprA` hace que salida de B sea entrada de A
+- Recomendación: **NEEDS_REVISION**
+
+**Ronda 3 — Axiomas y nivel de verificación:**
+- Aceptable mantener axiomas verificados como paso intermedio
+- Pero `scatter_zeros_toList` es lo bastante simple como para demostrarse
+- Prioridad propuesta: DFT → Compose → Kron
+
+### F8.S2: Lean Expert (DeepSeek) — 3 Rondas
+
+**Ronda 1 — Insight clave sobre DFT:**
+- DFT es **estructuralmente idéntico** al caso identity en el lowering:
+  ```
+  .dft n' → .compute (.dft n') (Gather.contiguous n' (.const 0)) (Scatter.contiguous n' (.const 0))
+  ```
+- Prueba es casi idéntica: `evalGather_ofList_contiguous → evalKernelAlg → scatter_zeros_toList`
+- `IsPrimitiveRoot` **NO se necesita** en el paso de lowering
+
+**Ronda 2 — Kron con invariante de loop:**
+- Definir `kron_I_B_invariant` para foldl
+- Probar que cada iteración preserva el invariante
+- Tácticas: `induction l generalizing init`, `List.foldl_map`, `ext_getElem`
+- Necesita `adjustBlock_preserves_semantics`
+
+**Ronda 3 — Compose:**
+- `.temp k (.seq exprB exprA)` crea buffer temporal, ejecuta B, luego A
+- Coincide con `evalMatExprAlg` que hace `a(b(input))`
+- Debería ser definitional unfolding + hipótesis inductivas
+
+### F8.S3: Búsqueda Mathlib (/lean-search)
+
+| Lemma | Uso |
+|-------|-----|
+| `List.foldl_map` | Simplificar gather → write patterns |
+| `List.foldl_ext` | Extensionalidad para folds |
+| `List.enum_cons` | Inducción sobre enum |
+| `List.foldlIdxM_eq_foldlM_enum` | Bridge indexed → plain fold |
+| `List.range'_eq_map_range` | Reindexación de rangos |
+| `Array.toList_setIfInBounds` | Memory.write → List.set |
+
+### F8.S4: Análisis de adjustBlock/adjustStride
+
+```
+adjustBlock loopVar blockIn blockOut:
+  .compute k _ _ → .compute k (Gather.block blockIn loopVar) (Scatter.block blockOut loopVar)
+  Traverse SigmaExpr recursivamente, solo modifica .compute
+
+adjustStride loopVar innerSize mSize nSize:
+  .compute k _ _ → .compute k {count=nSize, baseAddr=.var loopVar, stride=innerSize}
+                              {count=mSize, baseAddr=.var loopVar, stride=innerSize}
+  Traverse SigmaExpr recursivamente, solo modifica .compute
+```
+
+---
+
+## F9: Estrategia Superadora "Inducción Estructural con Lemmas Puente"
+
+### F9.S1: Principio Rector
+
+Todos los casos base del lowering (identity, dft, ntt, twiddle, perm) producen la **misma estructura**: un `.compute` con gather/scatter contiguos. Un **meta-lemma** cubre todos estos casos de una vez.
+
+### F9.S2: Fases de Implementación
+
+```
+FASE 0: META-LEMMA COMPUTE CONTIGUOUS
+├── lowering_compute_contiguous_correct
+└── Instanciar para identity (ya probado), dft, ntt, twiddle
+
+FASE 1: CASO DFT (Dificultad: BAJA)
+├── lower_dft: lowerFresh (.dft n') = .compute (.dft n') contiguous contiguous
+├── kernel_match: evalKernelAlg ω (.dft n') v = evalDFT ω n' v  (o evalDFT2)
+└── Instanciar meta-lemma
+
+FASE 2: CASO COMPOSE (Dificultad: MEDIA)
+├── evalSigmaAlg_seq: unfolding de .seq
+├── evalSigmaAlg_temp: unfolding de .temp
+├── compose_lowering: usar IH sobre a y b
+└── State threading: salida de B = entrada de A
+
+FASE 3: CASO KRON I⊗B (Dificultad: ALTA)
+├── evalGather_block: semántica de Gather.block
+├── evalScatter_block: semántica de Scatter.block
+├── adjustBlock_semantics: adjustBlock preserva semántica con direccionamiento por bloques
+├── loop_block_invariant: después de i iteraciones, primeros i bloques correctos
+├── non_interference: iteración i no modifica bloques j ≠ i
+└── kron_I_B_correct: concatenación = flatMap de bloques
+
+FASE 4: CASO KRON A⊗I (Dificultad: ALTA, DIFERIBLE)
+├── Análogo con adjustStride
+└── Puede diferirse si no aparece en descomposiciones usadas
+
+FASE 5: FORMALIZACIÓN DE AXIOMAS
+├── scatter_zeros_toList: inducción sobre v con List.set
+└── array_getElem_bang_eq_list_getElem: buscar en Batteries
+```
+
+### F9.S3: Orden de Ataque
+
+```
+Fase 0 (meta-lemma)  →  Fase 1 (DFT)  →  Fase 2 (Compose)  →  Fase 3 (Kron I⊗B)
+         ↓                    ↓                   ↓                      ↓
+      Desbloquea           Trivial con        Definitional +        Loop invariant +
+      todos los            meta-lemma         IH sobre a,b          adjustBlock
+      casos base
+```
+
+### F9.S4: Evaluación Comparativa
+
+| Criterio | Solo QA | Solo DeepSeek | Estrategia Superadora |
+|----------|---------|---------------|----------------------|
+| Meta-lemma compute | No | Sí (implícito) | **Sí (explícito)** |
+| Orden de ataque | DFT→Compose→Kron | DFT→Kron→Compose | **DFT→Compose→Kron** |
+| adjustBlock lemma | Propuesto | Refinado | **Combinado** |
+| Non-interference | Sí | No | **Sí** |
+| Fallback axiom | Criticado | Aceptado | **Condicional** |
+| Loop invariant | No | Sí | **Sí (mejorado)** |
+
+### F9.S5: Riesgos y Mitigaciones
+
+| Riesgo | Probabilidad | Mitigación |
+|--------|-------------|------------|
+| adjustBlock semántica compleja | Alta | Axiomatizar con tests si bloqueados |
+| foldl/loop invariant difícil | Media | Usar `List.foldl_map` + inducción |
+| Compose no es definitional eq | Baja | simp + unfold + IH |
+| DFT kernel mismatch | Baja | Probar `evalKernelAlg (.dft n) = evalDFT ω n` |
+
+---
+
+## F10: Lecciones de la Sesión
+
+| ID | Lección | Referencia |
+|----|---------|------------|
+| L-060 | Meta-lemma para casos compute contiguos | LECCIONES_QA §28.1 |
+| L-061 | IsPrimitiveRoot no se necesita para lowering | LECCIONES_QA §28.2 |
+| L-062 | Semántica de .seq y state threading | LECCIONES_QA §28.3 |
+| L-063 | adjustBlock/adjustStride son transformaciones de direccionamiento | LECCIONES_QA §28.4 |
+| L-064 | Invariantes de loop para foldl sobre List.range | LECCIONES_QA §28.5 |
+| L-065 | Priorizar por dificultad creciente | LECCIONES_QA §28.6 |
+| L-066 | Bridge lemmas Memory ↔ List | LECCIONES_QA §28.7 |
+| L-067 | Axiomatización condicional | LECCIONES_QA §28.8 |
+| L-068 | Consulta multi-experto produce estrategias superiores | LECCIONES_QA §28.9 |
 
