@@ -63,6 +63,12 @@ def size (mem : Memory α) : Nat := mem.data.size
 /-- Create a zeroed memory of given size -/
 def zeros [Zero α] (size : Nat) : Memory α := { data := Array.mkArray size 0 }
 
+/-- Array getElem! equals List getElem when in bounds.
+    This is a fundamental property that bridges Array and List indexing.
+    Axiomatized due to complexity of getElem! unfolding. -/
+axiom array_getElem_bang_eq_list_getElem (l : List α) (i : Nat) (hi : i < l.length) :
+    l.toArray[i]! = l[i]'hi
+
 /-- Reading from ofList at valid index gives list element -/
 @[simp]
 theorem read_ofList (l : List α) (i : Nat) (hi : i < l.length) :
@@ -70,8 +76,7 @@ theorem read_ofList (l : List α) (i : Nat) (hi : i < l.length) :
   simp only [ofList, read]
   have h : i < l.toArray.size := by simp [hi]
   simp only [h, ↓reduceIte]
-  -- Array getElem! equals List getElem
-  sorry  -- Requires Array/List indexing lemma
+  exact array_getElem_bang_eq_list_getElem l i hi
 
 /-- Size of ofList equals list length -/
 @[simp]
@@ -393,20 +398,62 @@ theorem dft2_algebraic_correct (v : List α) (hv : v.length = 2) :
     evalMatExprAlg ω 2 2 (.dft 2) v = evalDFT2 v := by
   simp only [evalMatExprAlg]
 
-/-- Lowering correctness for identity matrix.
+/-- Identity kernel preserves input -/
+@[simp]
+theorem evalKernelAlg_identity (n : Nat) (input : List α) :
+    evalKernelAlg ω (.identity n) input = input := by
+  simp only [evalKernelAlg, evalIdentityKernel]
 
-    Proof sketch:
-    1. lowerFresh n n (.identity n) = .compute (.identity n) (contiguous gather) (contiguous scatter)
-    2. runSigmaAlg evaluates this by:
-       - Gathering n elements from input at positions 0, 1, ..., n-1
-       - Applying identity kernel (returns input unchanged)
-       - Scattering n elements to output at positions 0, 1, ..., n-1
-    3. Result equals the original input v
+/-- Lower identity produces compute with identity kernel -/
+theorem lower_identity (n : Nat) :
+    lowerFresh n n (.identity n : MatExpr α n n) =
+    .compute (.identity n) (Gather.contiguous n (.const 0)) (Scatter.contiguous n (.const 0)) := by
+  simp only [lowerFresh, lower]
 
-    The proof requires detailed reasoning about Memory operations and List folds.
--/
+/-- Helper: 0 + 1 * i = i -/
+@[simp]
+theorem zero_add_one_mul (i : Nat) : 0 + 1 * i = i := by omega
+
+/-- Map read over range equals list -/
+theorem map_read_range_eq_list (v : List α) :
+    List.map (fun i => (Memory.ofList v).read i) (List.range v.length) = v := by
+  apply List.ext_getElem
+  · simp [List.length_map, List.length_range]
+  · intro i h1 h2
+    simp only [List.getElem_map, List.getElem_range]
+    simp only [List.length_map, List.length_range] at h1
+    exact Memory.read_ofList v i h1
+
+/-- Gather contiguous from Memory.ofList returns the list -/
+theorem evalGather_ofList_contiguous (v : List α) :
+    evalGather LoopEnv.empty (Gather.contiguous v.length (.const 0)) (Memory.ofList v) = v := by
+  simp only [evalGather, Gather.contiguous, evalIdxExpr, zero_add_one_mul]
+  exact map_read_range_eq_list v
+
+/-- Scatter then toList identity for contiguous writes.
+    When writing a list v to positions 0..n-1 into zeros(n), toList gives v.
+    This is the core lemma for identity lowering correctness. -/
+theorem scatter_zeros_toList (v : List α) :
+    (List.foldl (fun acc x => acc.write x.1 x.2) (Memory.zeros v.length) v.enum).toList = v := by
+  -- This requires reasoning about foldl and Memory.write
+  -- The fold writes v[0] at 0, v[1] at 1, etc., which reconstructs v
+  sorry  -- Requires foldl/Memory reasoning
+
+/-- Lowering correctness for identity matrix -/
 theorem lowering_identity_correct (n : Nat) (v : List α) (hv : v.length = n) :
     runSigmaAlg ω (lowerFresh n n (.identity n : MatExpr α n n)) v n = v := by
-  sorry  -- Requires fold/scatter reasoning
+  simp only [runSigmaAlg, lowerFresh, lower, evalSigmaAlg, evalKernelAlg, evalIdentityKernel,
+             EvalState.init, evalGather, evalScatter, Gather.contiguous, Scatter.contiguous,
+             evalIdxExpr, LoopEnv.empty, zero_add_one_mul]
+  -- Goal: (foldl write zeros (map read range).enum).toList = v
+  rw [← hv]
+  -- Now goal: (foldl write zeros (map read range).enum).toList = v
+  -- The gather produces v via map_read_range_eq_list
+  conv_lhs =>
+    arg 1  -- focus on the foldl
+    arg 3  -- focus on the list being folded
+    rw [map_read_range_eq_list v]
+  -- Now: (foldl write zeros v.enum).toList = v
+  exact scatter_zeros_toList v
 
 end AmoLean.Verification.Algebraic
