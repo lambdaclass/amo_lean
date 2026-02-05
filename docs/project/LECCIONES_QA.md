@@ -39,6 +39,13 @@
 29. [Mathlib Lemmas para foldl y List (Sesión 15)](#29-mathlib-foldl-list) ← NUEVO
 30. [WF-Recursive Unfolding y Compose Proof (Sesión 16)](#30-wf-recursive-compose) ← NUEVO
 31. [Axiomas Fundacionales vs Monolíticos (Sesión 16)](#31-axiomas-fundacionales) ← NUEVO
+32. [Statement Más Fuerte = IH Más Fuerte (Sesión 18)](#32-statement-fuerte) ← NUEVO
+33. [List.enum vs List.enumFrom 0 (Sesión 18)](#33-enum-enumfrom) ← NUEVO
+34. [congr 1 y congrArg para Structs (Sesión 18)](#34-congr-structs) ← NUEVO
+35. [Axiomas Falsos y Auditoría via Prueba (Sesión 18)](#35-axiomas-falsos) ← NUEVO
+36. [set_option ANTES de docstring (Sesión 18)](#36-set-option-docstring) ← NUEVO
+37. [Memory.write Branches: In-bounds vs Extension (Sesión 18)](#37-memory-write-branches) ← NUEVO
+38. [Axiomas vs Sorry: Transparencia (Sesión 18)](#38-axiomas-vs-sorry) ← NUEVO
 
 ---
 
@@ -2223,6 +2230,150 @@ No todos los sorry son "falta de prueba". Los 3 sorry restantes en `lowering_alg
 - `.transpose`/`.conjTranspose`: Mismatch dimensional cuando k != n.
 
 > Es mejor documentar un sorry honesto que introducir un axioma falso.
+
+---
+
+## 32. Statement Más Fuerte = IH Más Fuerte (Sesión 18) {#32-statement-fuerte}
+
+### L-078: Statement más fuerte = IH más fuerte
+
+En pruebas por inducción, probar un statement más general/fuerte frecuentemente facilita los casos inductivos.
+
+**Ejemplo**: Para `lower_state_irrelevant`, la versión original usaba `runSigmaAlg` (que aplica `toList.take m`), dando IH con igualdad parcial de listas. La versión fuerte usa igualdad de `EvalState` completo:
+
+```lean
+-- Débil (IH insuficiente para compose):
+runSigmaAlg ω (lower m n state1 mat).1 v m = runSigmaAlg ω (lower m n state2 mat).1 v m
+
+-- Fuerte (IH permite rw directo):
+evalSigmaAlg ω env st (lower m n state1 mat).1 = evalSigmaAlg ω env st (lower m n state2 mat).1
+```
+
+La versión fuerte cerró 19/20 casos incluyendo compose y add. El teorema original se deriva trivialmente.
+
+> Regla: Si la prueba por inducción se atasca en los casos inductivos, intentar generalizar el statement del teorema.
+
+---
+
+## 33. List.enum vs List.enumFrom 0 (Sesión 18) {#33-enum-enumfrom}
+
+### L-079: `List.enum` vs `List.enumFrom 0`
+
+`List.enum` se define como `List.enumFrom 0`, pero Lean NO los unifica automáticamente para `apply`.
+
+```lean
+-- Falla:
+apply foldl_write_enumFrom_preserves_size vals wm 0  -- goal has vals.enum.foldl, not vals.enumFrom 0
+
+-- Solución:
+show ((vals.enumFrom 0).foldl _ wm).size = wm.size  -- convierte explícitamente
+exact foldl_write_enumFrom_preserves_size vals wm 0 (by omega)
+```
+
+> Regla: Si `apply` falla por desajuste entre `enum` y `enumFrom 0`, usar `show` para hacer la conversión explícita.
+
+---
+
+## 34. congr 1 y congrArg para Structs (Sesión 18) {#34-congr-structs}
+
+### L-080: `congr 1` descompone igualdad de structs
+
+`congr 1` descompone igualdad de estructuras en igualdad campo-por-campo. Para `EvalState` (con `readMem` y `writeMem`), permite probar cada campo independientemente.
+
+### L-081: `congrArg` eleva igualdad a través de funciones
+
+```lean
+-- Si tenemos h : state1 = state2
+-- congrArg EvalState.writeMem h  produce  state1.writeMem = state2.writeMem
+-- congrArg EvalState.readMem h   produce  state1.readMem = state2.readMem
+```
+
+Patrón para compose en state_irrelevant:
+```lean
+rw [ih_b state1 state2 env _]        -- iguala evaluación de b
+congr 1                               -- descompone struct
+exact congrArg EvalState.writeMem (ih_a _ _ env _)  -- readMem proviene de writeMem de a
+```
+
+---
+
+## 35. Axiomas Falsos y Auditoría via Prueba (Sesión 18) {#35-axiomas-falsos}
+
+### L-082: Intentar probar axiomas es la mejor auditoría
+
+`evalSigmaAlg_writeMem_irrelevant` fue axioma durante 3 sesiones (15-17). Su falsedad se descubrió al intentar probar el caso `.zero` por inducción:
+
+- `lower(.zero) = .nop`
+- `.nop` no modifica writeMem
+- Si wm1 ≠ wm2, los writeMem son diferentes → el statement es FALSO
+
+> Un axioma falso es peligroso: permite derivar `False` y probar cualquier cosa.
+> Un sorry es inocuo: solo marca "no probado".
+> Lección: Convertir axiomas a theorems+sorry lo antes posible para auditar su veracidad.
+
+### L-083: `.par` y `.seq` son semánticamente idénticos
+
+`evalSigmaAlg` evalúa tanto `.par` como `.seq` de la misma forma (secuencial). Esto simplificó el caso `add` en state_irrelevant: después de `rw [ih_a ...]` el estado intermedio es idéntico y `exact ih_b _ _ env _` cierra directamente, sin necesidad de `congr 1`.
+
+---
+
+## 36. set_option ANTES de docstring (Sesión 18) {#36-set-option-docstring}
+
+### L-084: Orden obligatorio en Lean 4
+
+```lean
+-- CORRECTO:
+set_option maxHeartbeats 3200000 in
+/-- Docstring -/
+theorem myTheorem ...
+
+-- INCORRECTO (error: unexpected token 'set_option'):
+/-- Docstring -/
+set_option maxHeartbeats 3200000 in
+theorem myTheorem ...
+```
+
+> Este error se repitió 3 veces en la sesión. `set_option ... in` debe preceder todo el bloque incluyendo el docstring.
+
+---
+
+## 37. Memory.write Branches: In-bounds vs Extension (Sesión 18) {#37-memory-write-branches}
+
+### L-085: `Memory.write` tiene DOS ramas
+
+```lean
+def write (mem : Memory α) (idx : Nat) (val : α) : Memory α :=
+  if idx < mem.data.size then
+    { data := mem.data.set! idx val }     -- In-bounds: preserva size
+  else
+    { data := mem.data ++ ... }            -- Out-of-bounds: EXTIENDE array
+```
+
+`Memory.size_write_eq` **solo** aplica para la rama in-bounds (requiere `i < mem.size`).
+
+Para scatter con contiguous(n), cada write en posición `i < n` está in-bounds si `n ≤ wm.size`. El helper `foldl_write_enumFrom_size` encapsula esta invariante:
+
+```lean
+theorem foldl_write_enumFrom_size (vals : List α) (wm : Memory α) (k : Nat)
+    (hk : k + vals.length ≤ wm.size) :
+    ((vals.enumFrom k).foldl (fun acc x => acc.write x.1 x.2) wm).size = wm.size
+```
+
+---
+
+## 38. Axiomas vs Sorry: Transparencia (Sesión 18) {#38-axiomas-vs-sorry}
+
+### DD-018: Convertir axiomas a theorems+sorry
+
+| Aspecto | `axiom` | `theorem ... sorry` |
+|---------|---------|---------------------|
+| Visibilidad | Silencioso (no aparece en warnings) | Sorry warning visible |
+| Auditable | No (statement opaco) | Sí (se puede intentar probar subcasos) |
+| Prueba incremental | Imposible (todo-o-nada) | Sí (cerrar sorry uno a uno) |
+| Peligro si falso | **Alto** (permite `False`) | Bajo (solo marca "no probado") |
+| Inducción parcial | Imposible | Sí (probar N de M casos) |
+
+> Lección: Siempre preferir `theorem + sorry` sobre `axiom`. La transparencia y la capacidad de prueba incremental compensan ampliamente el ruido de los sorry warnings.
 
 ---
 

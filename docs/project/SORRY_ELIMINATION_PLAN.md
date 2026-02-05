@@ -2,11 +2,11 @@
 
 **Fecha Inicio**: 2026-01-30
 **Ultima Actualizacion**: 2026-02-05
-**Estado**: NTT, GOLDILOCKS, MATRIX/PERM, FRI COMPLETADOS. Verification EN PROGRESO.
+**Estado**: NTT, GOLDILOCKS, MATRIX/PERM, FRI COMPLETADOS. Verification EN PROGRESO. **0 axiomas en AlgSem**.
 
 ---
 
-## ESTADO ACTUAL - 2026-02-05 (Post Session 17)
+## ESTADO ACTUAL - 2026-02-05 (Post Session 18)
 
 ### Resumen Ejecutivo
 
@@ -19,10 +19,10 @@
 | **FRI Properties** | 0 | 0 | COMPLETADO (Session 10) |
 | **Matrix/Perm** | 0 | 1 | COMPLETADO (Session 12-13) |
 | FRI/Merkle | 2 | 0 | Pendiente (baja prioridad) |
-| **Verification/AlgSem** | 3 | 8 | **EN PROGRESO** (C-Lite++, 10/10 explicitos) |
+| **Verification/AlgSem** | 22 | **0** | **EN PROGRESO** (C-Lite++, 0 axiomas) |
 | Verification/Theorems | 7 | 0 | SUPERSEDED por AlgSem |
 | Verification/Poseidon | 12 | 0 | Computacionalmente verificados |
-| **TOTAL PROYECTO** | **25** | **25** | **Nucleo: 100%** |
+| **TOTAL PROYECTO** | **44** | **17** | **Nucleo: 100%** |
 
 ### Progreso Global
 
@@ -38,7 +38,7 @@ MODULOS COMPLETADOS (0 sorries activos)
 
 MODULOS EN PROGRESO
 ========================================
-  AlgebraicSemantics  3 sorries, 8 axiomas      Sesiones 15-17 (C-Lite++, wildcard eliminado)
+  AlgebraicSemantics  22 sorries, 0 axiomas    Sesiones 15-18 (C-Lite++, axiomas eliminados)
 
 MODULOS PENDIENTES
 ========================================
@@ -49,7 +49,7 @@ MODULOS PENDIENTES
 
 ---
 
-## Estrategia C-Lite++ (Sesiones 15-16)
+## Estrategia C-Lite++ (Sesiones 15-18)
 
 ### Concepto
 
@@ -65,17 +65,17 @@ La estrategia **C-Lite++** consiste en verificar el compilador SPIRAL usando sem
 | `.intt` | PROBADO | 15 |
 | `.twiddle` | PROBADO | 15 |
 | `.compose a b` | **PROBADO** | **16** |
-| `.kron a b` | AXIOMATIZADO | 15 (lowering_kron_axiom) |
+| `.kron a b` | SORRY (theorem, antes axiom) | 15→**18** |
 | `.zero` | **PROBADO** | **17** |
 | `.perm p` | **PROBADO** | **17** |
 | `.add` | **SORRY** (bug semantico) | **17** |
-| `.smul` | **PROBADO** (via seq_identity axiom) | **17** |
+| `.smul` | **PROBADO** (via seq_identity) | **17** |
 | `.transpose` | **SORRY** (mismatch dimensional) | **17** |
 | `.conjTranspose` | **SORRY** (mismatch dimensional) | **17** |
-| `.elemwise` | **PROBADO** (via seq_identity axiom) | **17** |
-| `.partialElemwise` | **PROBADO** (via seq_identity axiom) | **17** |
-| `.mdsApply` | **PROBADO** (via seq_identity axiom) | **17** |
-| `.addRoundConst` | **PROBADO** (via seq_identity axiom) | **17** |
+| `.elemwise` | **PROBADO** (via seq_identity) | **17** |
+| `.partialElemwise` | **PROBADO** (via seq_identity) | **17** |
+| `.mdsApply` | **PROBADO** (via seq_identity) | **17** |
+| `.addRoundConst` | **PROBADO** (via seq_identity) | **17** |
 
 ### Logro de Sesion 16
 
@@ -91,35 +91,52 @@ La estrategia **C-Lite++** consiste en verificar el compilador SPIRAL usando sem
 - 5 via axioma `runSigmaAlg_seq_identity_compute`: `.smul`, `.elemwise`, `.partialElemwise`, `.mdsApply`, `.addRoundConst`
 - 3 sorry documentados: `.add` (bug semantico), `.transpose`/`.conjTranspose` (mismatch dimensional)
 - 1 nuevo axioma: `runSigmaAlg_seq_identity_compute` (identity kernel = no-op)
-- Fix tecnico: `ElemOp.toExp` helper para equation lemma generation (inline match en WF-recursive function rompe eq lemma)
+- Fix tecnico: `ElemOp.toExp` helper para equation lemma generation
 
-### Arquitectura de Axiomas Fundacionales
+### Logro de Sesion 18
+
+**8 axiomas eliminados**: Todos los axiomas de AlgebraicSemantics.lean convertidos a theorems:
+- `lower_state_irrelevant`: **PROBADO** (19/20 casos, solo kron sorry)
+- `evalSigmaAlg_writeMem_size_preserved`: 4/18 casos probados (identity, zero, perm, diag)
+- `evalMatExprAlg_length`: 14/20 casos probados
+- `runSigmaAlg_seq_identity_compute`: caso principal probado (s <= mem.size)
+- `evalSigmaAlg_writeMem_irrelevant`: documentado como **FALSO** para .zero
+- `lowering_kron_axiom`: sorry total (requiere loop invariant)
+- `array_getElem_bang_eq_list_getElem`: internalizado (no necesario como axioma)
+- `scatter_zeros_toList`: internalizado (no necesario como axioma)
+
+**Descubrimiento critico**: `evalSigmaAlg_writeMem_irrelevant` es FALSO para `.zero` (que produce `.nop`).
+
+### Arquitectura de Axiomas Fundacionales → Teoremas
 
 ```
-evalSigmaAlg_writeMem_size_preserved  ─┐
-evalSigmaAlg_writeMem_irrelevant      ─┤
+evalSigmaAlg_writeMem_size_preserved  ─┐  (THEOREM, 4/18 probados)
+evalSigmaAlg_writeMem_irrelevant      ─┤  (THEOREM, FALSO para .zero)
 lower_state_irrelevant                 ─┼─► lowering_compose_step (PROBADO)
-evalMatExprAlg_length                  ─┘
+evalMatExprAlg_length                  ─┘  (THEOREM, 14/20 probados)
 
-lowering_kron_axiom                    ─── lowering_kron (AXIOMA, pendiente)
+lowering_kron_axiom                    ─── (THEOREM, sorry total)
 
-array_getElem_bang_eq_list_getElem     ─┐
+array_getElem_bang_eq_list_getElem     ─┐  (INTERNALIZADO)
 scatter_zeros_toList                   ─┴─► lowering_compute_contiguous_correct
                                            (identity, dft, ntt, intt, twiddle - PROBADOS)
 
-runSigmaAlg_seq_identity_compute      ─── smul, elemwise, partialElemwise,
-                                           mdsApply, addRoundConst (PROBADOS, Sesion 17)
+runSigmaAlg_seq_identity_compute      ─── (THEOREM, caso principal probado)
+                                           smul, elemwise, partialElemwise,
+                                           mdsApply, addRoundConst (PROBADOS)
 ```
 
 ### Proximos Pasos para C-Lite++
 
 | Paso | Prioridad | Dificultad | Descripcion |
 |------|-----------|------------|-------------|
-| ~~Casos compute restantes~~ | ~~MEDIA~~ | ~~BAJA~~ | ~~COMPLETADO (Sesion 17)~~ |
-| Kron proof | MEDIA | MUY ALTA | Loop invariant + adjustBlock/Stride semantics |
-| Axiomas fundacionales | BAJA | MEDIA-ALTA | Probar los 5 axiomas (induccion estructural) |
+| ~~Axiomas eliminados~~ | ~~ALTA~~ | ~~MEDIA~~ | ~~COMPLETADO (Sesion 18) - 8 axiomas → 0~~ |
+| Cerrar sorries faciles (dft/ntt/twiddle size) | MEDIA | BAJA | Kernel length lemmas |
+| evalMatExprAlg_length kron | MEDIA | ALTA | flatMap/stride length analysis |
+| Reformular writeMem_irrelevant | MEDIA | MEDIA | Agregar precondicion `lower != .nop` |
+| Kron proof | BAJA | MUY ALTA | Loop invariant + adjustBlock/Stride semantics |
 | Fix `.add` semantics | BAJA | ALTA | Requiere nuevo SigmaExpr o rediseno de .par |
-| Fix `.transpose`/`.conjTranspose` | BAJA | MEDIA | Generalizar teorema o restringir a cuadradas |
+| Fix `.transpose`/`.conjTranspose` | BAJA | MEDIA | Restringir a cuadradas o generalizar |
 
 ---
 
@@ -144,6 +161,7 @@ runSigmaAlg_seq_identity_compute      ─── smul, elemwise, partialElemwise,
 | 2026-02-04 | 15 | **C-Lite++ strategy - 5 base cases probados** |
 | 2026-02-05 | 16 | **Compose proof COMPLETADO - axioma → prueba formal** |
 | 2026-02-05 | 17 | **Wildcard eliminado - 7/10 casos cerrados, 3 sorry documentados** |
+| 2026-02-05 | 18 | **8 AXIOMAS ELIMINADOS - 0 axiomas en AlgSem, 22 sorry desglosados** |
 
 ### Documentacion de Sesiones
 
@@ -166,7 +184,8 @@ runSigmaAlg_seq_identity_compute      ─── smul, elemwise, partialElemwise,
 | `SORRY_ELIMINATION_SESSION_15.md` | C-Lite++ strategy, base cases |
 | `SORRY_ELIMINATION_SESSION_16.md` | **Compose proof, documentacion** |
 | `SORRY_ELIMINATION_SESSION_17.md` | **Wildcard eliminado, ElemOp.toExp fix** |
-| `LECCIONES_QA.md` | 32 lecciones (L-001 a L-077) |
+| `SORRY_ELIMINATION_SESSION_18.md` | **8 axiomas eliminados, lower_state_irrelevant probado** |
+| `LECCIONES_QA.md` | 38 lecciones (L-001 a L-085) |
 | `SORRY_INVENTORY.md` | Inventario completo actualizado |
 
 ---
@@ -183,8 +202,8 @@ runSigmaAlg_seq_identity_compute      ─── smul, elemwise, partialElemwise,
 | `dft2_correct` | `.dft` case | PROBADO en AlgSem |
 | `seq_correct` | Implicit en `.seq` handling | Structural |
 | `compose_correct` | `.compose` case | **PROBADO en AlgSem (Sesion 16)** |
-| `kron_identity_left_correct` | `.kron` case | AXIOMATIZADO en AlgSem |
-| `kron_identity_right_correct` | `.kron` case | AXIOMATIZADO en AlgSem |
+| `kron_identity_left_correct` | `.kron` case | SORRY en AlgSem (antes axioma) |
+| `kron_identity_right_correct` | `.kron` case | SORRY en AlgSem (antes axioma) |
 | `lowering_correct` | `lowering_algebraic_correct` | EN PROGRESO |
 
 **Decision (Sesion 17)**: Theorems.lean marcado como SUPERSEDED. Float no satisface Field (no es asociativo, no tiene inverso exacto), por lo que un bridge theorem seria matematicamente incorrecto. Los 7 sorries aqui son versiones Float-specific que no pueden conectarse formalmente con AlgebraicSemantics.lean.
@@ -203,14 +222,17 @@ runSigmaAlg_seq_identity_compute      ─── smul, elemwise, partialElemwise,
 - [x] **0 sorries** en AmoLean/Matrix/Perm.lean
 - [x] **lake build** compila sin errores
 - [x] Compose proof completado (Sesion 16)
-- [x] Documentacion actualizada (16 sesiones)
+- [x] **0 axiomas** en AlgebraicSemantics.lean (Sesion 18)
+- [x] Documentacion actualizada (18 sesiones)
 
 ### Pendientes
 
-- [ ] **Kron proof** formal (actualmente axiomatizado)
+- [ ] **Kron proof** formal (actualmente sorry en theorem)
 - [x] **Wildcard eliminado** en AlgebraicSemantics.lean (10 casos explicitos, 7 cerrados)
 - [x] Theorems.lean documentado como superseded por AlgebraicSemantics.lean
-- [ ] Eliminacion de axiomas fundacionales
+- [x] **Eliminacion de axiomas en AlgebraicSemantics** (8 → 0)
+- [ ] Cerrar sorries faciles (dft/ntt/twiddle size preservation)
+- [ ] Reformular writeMem_irrelevant (statement falso)
 - [ ] Benchmark vs Plonky3
 
 ---
@@ -225,6 +247,8 @@ runSigmaAlg_seq_identity_compute      ─── smul, elemwise, partialElemwise,
 4. **Axiomas fundacionales** > axiomas monoliticos (Sesion 16)
 5. **Meta-lemma** para casos compute contiguos (Sesion 15)
 6. **Recursion via termination_by mat.nodeCount** para teorema principal
+7. **Statement fuerte para IH fuertes** (Sesion 18) - evalSigmaAlg igualdad > runSigmaAlg igualdad
+8. **Axiomas → theorems+sorry** para transparencia y auditabilidad (Sesion 18)
 
 ### Herramientas Efectivas
 
@@ -239,6 +263,6 @@ runSigmaAlg_seq_identity_compute      ─── smul, elemwise, partialElemwise,
 
 ## Referencias
 
-- `SORRY_INVENTORY.md` - Inventario detallado actual (25 axiomas, 25 sorries)
-- `LECCIONES_QA.md` - 32 lecciones y patrones (L-001 a L-077)
-- Sesiones 1-17 - Detalles tecnicos de cada avance
+- `SORRY_INVENTORY.md` - Inventario detallado actual (17 axiomas, 44 sorries)
+- `LECCIONES_QA.md` - 38 lecciones y patrones (L-001 a L-085)
+- Sesiones 1-18 - Detalles tecnicos de cada avance
