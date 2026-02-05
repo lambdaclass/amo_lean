@@ -2181,4 +2181,49 @@ theorem lowering_compose_step ... := by          -- PROVEN (no axiom)
 
 ---
 
+## L-077: Inline match en WF-recursive rompe equation lemmas (Sesion 17)
+
+**Problema**: La funcion `lower` (WF-recursive con `termination_by`) tenia un inline match:
+```lean
+| .elemwise op a =>
+    (.compute (.sbox (m * n) (match op with | .pow e => e | .custom _ => 1)) ...)
+```
+
+Esto provocaba que Lean no pudiera generar el equation lemma para `lower`, haciendo que `simp only [lower]` fallara para TODOS los casos (no solo `.elemwise`).
+
+**Diagnostico**: `#check @lower.eq_def` mostraba "failed to generate unfold theorem" con un sub-goal `h_15.h_1` no resuelto para el caso `ElemOp.pow`.
+
+**Solucion**: Extraer el inline match a una funcion auxiliar:
+```lean
+-- En Matrix/Basic.lean
+def ElemOp.toExp : ElemOp → Nat
+  | .pow e => e
+  | .custom _ => 1
+
+-- En Sigma/Basic.lean
+| .elemwise op a =>
+    (.compute (.sbox (m * n) op.toExp) ...)
+```
+
+### 32.1 Regla General
+
+> En funciones WF-recursive, NUNCA usar inline `match` dentro del cuerpo de un caso. Siempre extraer a funcion auxiliar. El generador de equation lemmas de Lean 4 no maneja case splits dentro de case arms.
+
+### 32.2 Impacto
+
+Este patron de "inline match rompe eq lemma" es insidioso porque:
+1. La funcion compila sin error
+2. Solo falla cuando intentas usar `simp [f]` o `unfold f`
+3. El fallo NO es local al caso con inline match - afecta a TODOS los equation lemmas de la funcion
+
+### 32.3 Leccion sobre sorry documentados
+
+No todos los sorry son "falta de prueba". Los 3 sorry restantes en `lowering_algebraic_correct` documentan bugs semanticos/dimensionales reales:
+- `.add`: `lower(.add) = .par` ejecuta secuencialmente (override), no suma pointwise. Axiomatizar seria **unsound**.
+- `.transpose`/`.conjTranspose`: Mismatch dimensional cuando k != n.
+
+> Es mejor documentar un sorry honesto que introducir un axioma falso.
+
+---
+
 *Este documento es un recurso vivo. Agregar nuevas lecciones aprendidas en cada sesion de trabajo.*

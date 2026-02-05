@@ -333,49 +333,33 @@ def lower (m n : Nat) (state : LowerState) (mExpr : MatExpr α m n) : (SigmaExpr
   | .scalar _ =>
     (.compute .scale (Gather.contiguous 1 (.const 0)) (Scatter.contiguous 1 (.const 0)), state)
 
-  | @MatExpr.elemwise _ m' n' op a =>
+  | .elemwise op a =>
     -- Lower the inner matrix first, then apply S-box
-    let (innerExpr, state1) := lower m' n' state a
-    -- Get the exponent from ElemOp
-    let exp := match op with
-      | ElemOp.pow α => α
-      | ElemOp.custom _ => 1  -- Default to identity for custom ops
-    -- Apply S-box to ALL elements (full round)
-    let sboxExpr : SigmaExpr := .compute (.sbox (m' * n') exp)
-      (Gather.contiguous (m' * n') (.const 0))
-      (Scatter.contiguous (m' * n') (.const 0))
-    (.seq innerExpr sboxExpr, state1)
+    let (innerExpr, state1) := lower m n state a
+    (.seq innerExpr (.compute (.sbox (m * n) op.toExp)
+      (Gather.contiguous (m * n) (.const 0))
+      (Scatter.contiguous (m * n) (.const 0))), state1)
 
-  | @MatExpr.partialElemwise _ m' n' idx op a =>
+  | .partialElemwise idx op a =>
     -- Lower the inner matrix first, then apply partial S-box
-    let (innerExpr, state1) := lower m' n' state a
-    -- Get the exponent from ElemOp
-    let exp := match op with
-      | ElemOp.pow α => α
-      | ElemOp.custom _ => 1  -- Default to identity for custom ops
-    -- Apply S-box to ONLY the specified index (partial round)
-    let partialSboxExpr : SigmaExpr := .compute (.partialSbox (m' * n') exp idx)
-      (Gather.contiguous (m' * n') (.const 0))
-      (Scatter.contiguous (m' * n') (.const 0))
-    (.seq innerExpr partialSboxExpr, state1)
+    let (innerExpr, state1) := lower m n state a
+    (.seq innerExpr (.compute (.partialSbox (m * n) op.toExp idx)
+      (Gather.contiguous (m * n) (.const 0))
+      (Scatter.contiguous (m * n) (.const 0))), state1)
 
-  | @MatExpr.mdsApply _ t mdsName stateSize a =>
-    -- Lower the inner matrix first, then apply MDS
-    let (innerExpr, state1) := lower t 1 state a
-    -- Apply MDS multiplication (symbolic - not expanded)
-    let mdsExpr : SigmaExpr := .compute (.mdsApply mdsName stateSize)
+  | .mdsApply mdsName stateSize a =>
+    -- Lower the inner matrix first, then apply MDS (n = 1 in this branch)
+    let (innerExpr, state1) := lower m 1 state a
+    (.seq innerExpr (.compute (.mdsApply mdsName stateSize)
       (Gather.contiguous stateSize (.const 0))
-      (Scatter.contiguous stateSize (.const 0))
-    (.seq innerExpr mdsExpr, state1)
+      (Scatter.contiguous stateSize (.const 0))), state1)
 
-  | @MatExpr.addRoundConst _ t round stateSize a =>
-    -- Lower the inner matrix first, then add round constants
-    let (innerExpr, state1) := lower t 1 state a
-    -- Add round constants
-    let rcExpr : SigmaExpr := .compute (.addRoundConst round stateSize)
+  | .addRoundConst round stateSize a =>
+    -- Lower the inner matrix first, then add round constants (n = 1 in this branch)
+    let (innerExpr, state1) := lower m 1 state a
+    (.seq innerExpr (.compute (.addRoundConst round stateSize)
       (Gather.contiguous stateSize (.const 0))
-      (Scatter.contiguous stateSize (.const 0))
-    (.seq innerExpr rcExpr, state1)
+      (Scatter.contiguous stateSize (.const 0))), state1)
 termination_by mExpr.nodeCount
 decreasing_by
   all_goals simp_wf

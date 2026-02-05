@@ -153,6 +153,12 @@ def sbox5 : ElemOp := pow 5
 /-- S-box for Goldilocks Poseidon2: x^7 -/
 def sbox7 : ElemOp := pow 7
 
+/-- Extract exponent from ElemOp (pow e → e, custom → 1).
+    Used by lower to avoid inline match that breaks equation lemma generation. -/
+def toExp : ElemOp → Nat
+  | .pow e => e
+  | .custom _ => 1
+
 end ElemOp
 
 /-! ## MatExpr α m n: Matrix Expression AST

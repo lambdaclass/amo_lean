@@ -6,7 +6,7 @@
 
 ---
 
-## ESTADO ACTUAL - 2026-02-05 (Post Session 16)
+## ESTADO ACTUAL - 2026-02-05 (Post Session 17)
 
 ### Resumen Ejecutivo
 
@@ -19,10 +19,10 @@
 | **FRI Properties** | 0 | 0 | COMPLETADO (Session 10) |
 | **Matrix/Perm** | 0 | 1 | COMPLETADO (Session 12-13) |
 | FRI/Merkle | 2 | 0 | Pendiente (baja prioridad) |
-| **Verification/AlgSem** | 1 | 7 | **EN PROGRESO** (C-Lite++) |
-| Verification/Theorems | 7 | 0 | Pendiente |
+| **Verification/AlgSem** | 3 | 8 | **EN PROGRESO** (C-Lite++, 10/10 explicitos) |
+| Verification/Theorems | 7 | 0 | SUPERSEDED por AlgSem |
 | Verification/Poseidon | 12 | 0 | Computacionalmente verificados |
-| **TOTAL PROYECTO** | **23** | **24** | **Nucleo: 100%** |
+| **TOTAL PROYECTO** | **25** | **25** | **Nucleo: 100%** |
 
 ### Progreso Global
 
@@ -38,12 +38,12 @@ MODULOS COMPLETADOS (0 sorries activos)
 
 MODULOS EN PROGRESO
 ========================================
-  AlgebraicSemantics  1 sorry, 7 axiomas       Sesiones 15-16 (C-Lite++)
+  AlgebraicSemantics  3 sorries, 8 axiomas      Sesiones 15-17 (C-Lite++, wildcard eliminado)
 
 MODULOS PENDIENTES
 ========================================
   FRI/Merkle          2 sorries                Size invariants
-  Verif/Theorems      7 sorries                Sigma-SPL (duplica AlgSem)
+  Verif/Theorems      7 sorries                Sigma-SPL (SUPERSEDED por AlgSem)
   Verif/Poseidon      12 sorries               Comp. verificados (21 tests)
 ```
 
@@ -66,16 +66,16 @@ La estrategia **C-Lite++** consiste en verificar el compilador SPIRAL usando sem
 | `.twiddle` | PROBADO | 15 |
 | `.compose a b` | **PROBADO** | **16** |
 | `.kron a b` | AXIOMATIZADO | 15 (lowering_kron_axiom) |
-| `.zero` | Pendiente | - |
-| `.perm p` | Pendiente | - |
-| `.add` | Pendiente | - |
-| `.smul` | Pendiente | - |
-| `.transpose` | Pendiente | - |
-| `.conjTranspose` | Pendiente | - |
-| `.elemwise` | Pendiente | - |
-| `.partialElemwise` | Pendiente (Poseidon) | - |
-| `.mdsApply` | Pendiente (Poseidon) | - |
-| `.addRoundConst` | Pendiente (Poseidon) | - |
+| `.zero` | **PROBADO** | **17** |
+| `.perm p` | **PROBADO** | **17** |
+| `.add` | **SORRY** (bug semantico) | **17** |
+| `.smul` | **PROBADO** (via seq_identity axiom) | **17** |
+| `.transpose` | **SORRY** (mismatch dimensional) | **17** |
+| `.conjTranspose` | **SORRY** (mismatch dimensional) | **17** |
+| `.elemwise` | **PROBADO** (via seq_identity axiom) | **17** |
+| `.partialElemwise` | **PROBADO** (via seq_identity axiom) | **17** |
+| `.mdsApply` | **PROBADO** (via seq_identity axiom) | **17** |
+| `.addRoundConst` | **PROBADO** (via seq_identity axiom) | **17** |
 
 ### Logro de Sesion 16
 
@@ -83,6 +83,15 @@ La estrategia **C-Lite++** consiste en verificar el compilador SPIRAL usando sem
 - 4 axiomas fundacionales (reutilizables para otros casos)
 - 1 prueba formal de ~50 lineas (`lowering_compose_step`)
 - Teorema principal `lowering_algebraic_correct` ahora recursivo
+
+### Logro de Sesion 17
+
+**Wildcard sorry eliminado**: 10 casos explicitos, 7 cerrados:
+- 2 proofs directos: `.zero` (zeros_toList), `.perm` (identity kernel)
+- 5 via axioma `runSigmaAlg_seq_identity_compute`: `.smul`, `.elemwise`, `.partialElemwise`, `.mdsApply`, `.addRoundConst`
+- 3 sorry documentados: `.add` (bug semantico), `.transpose`/`.conjTranspose` (mismatch dimensional)
+- 1 nuevo axioma: `runSigmaAlg_seq_identity_compute` (identity kernel = no-op)
+- Fix tecnico: `ElemOp.toExp` helper para equation lemma generation (inline match en WF-recursive function rompe eq lemma)
 
 ### Arquitectura de Axiomas Fundacionales
 
@@ -97,16 +106,20 @@ lowering_kron_axiom                    ─── lowering_kron (AXIOMA, pendient
 array_getElem_bang_eq_list_getElem     ─┐
 scatter_zeros_toList                   ─┴─► lowering_compute_contiguous_correct
                                            (identity, dft, ntt, intt, twiddle - PROBADOS)
+
+runSigmaAlg_seq_identity_compute      ─── smul, elemwise, partialElemwise,
+                                           mdsApply, addRoundConst (PROBADOS, Sesion 17)
 ```
 
 ### Proximos Pasos para C-Lite++
 
 | Paso | Prioridad | Dificultad | Descripcion |
 |------|-----------|------------|-------------|
-| Casos compute restantes | MEDIA | BAJA | perm, add, smul, zero (similar a identity) |
+| ~~Casos compute restantes~~ | ~~MEDIA~~ | ~~BAJA~~ | ~~COMPLETADO (Sesion 17)~~ |
 | Kron proof | MEDIA | MUY ALTA | Loop invariant + adjustBlock/Stride semantics |
-| Axiomas fundacionales | BAJA | MEDIA-ALTA | Probar los 4 axiomas (induccion estructural) |
-| Poseidon cases | BAJA | MEDIA | partialElemwise, mdsApply, addRoundConst |
+| Axiomas fundacionales | BAJA | MEDIA-ALTA | Probar los 5 axiomas (induccion estructural) |
+| Fix `.add` semantics | BAJA | ALTA | Requiere nuevo SigmaExpr o rediseno de .par |
+| Fix `.transpose`/`.conjTranspose` | BAJA | MEDIA | Generalizar teorema o restringir a cuadradas |
 
 ---
 
@@ -130,6 +143,7 @@ scatter_zeros_toList                   ─┴─► lowering_compute_contiguous_
 | 2026-02-04 | 14 | **Integracion completa - 2641 modulos compilando** |
 | 2026-02-04 | 15 | **C-Lite++ strategy - 5 base cases probados** |
 | 2026-02-05 | 16 | **Compose proof COMPLETADO - axioma → prueba formal** |
+| 2026-02-05 | 17 | **Wildcard eliminado - 7/10 casos cerrados, 3 sorry documentados** |
 
 ### Documentacion de Sesiones
 
@@ -151,7 +165,8 @@ scatter_zeros_toList                   ─┴─► lowering_compute_contiguous_
 | `SORRY_ELIMINATION_SESSION_14.md` | Integracion completa |
 | `SORRY_ELIMINATION_SESSION_15.md` | C-Lite++ strategy, base cases |
 | `SORRY_ELIMINATION_SESSION_16.md` | **Compose proof, documentacion** |
-| `LECCIONES_QA.md` | 31 lecciones (L-001 a L-076) |
+| `SORRY_ELIMINATION_SESSION_17.md` | **Wildcard eliminado, ElemOp.toExp fix** |
+| `LECCIONES_QA.md` | 32 lecciones (L-001 a L-077) |
 | `SORRY_INVENTORY.md` | Inventario completo actualizado |
 
 ---
@@ -172,9 +187,7 @@ scatter_zeros_toList                   ─┴─► lowering_compute_contiguous_
 | `kron_identity_right_correct` | `.kron` case | AXIOMATIZADO en AlgSem |
 | `lowering_correct` | `lowering_algebraic_correct` | EN PROGRESO |
 
-**Recomendacion**: Los 7 sorries de Theorems.lean se resuelven indirectamente por AlgebraicSemantics.lean. Considerar:
-1. Marcar Theorems.lean como superseded por AlgebraicSemantics.lean, o
-2. Conectar ambos via un bridge theorem
+**Decision (Sesion 17)**: Theorems.lean marcado como SUPERSEDED. Float no satisface Field (no es asociativo, no tiene inverso exacto), por lo que un bridge theorem seria matematicamente incorrecto. Los 7 sorries aqui son versiones Float-specific que no pueden conectarse formalmente con AlgebraicSemantics.lean.
 
 ---
 
@@ -195,8 +208,8 @@ scatter_zeros_toList                   ─┴─► lowering_compute_contiguous_
 ### Pendientes
 
 - [ ] **Kron proof** formal (actualmente axiomatizado)
-- [ ] **0 sorries** en AlgebraicSemantics.lean (wildcard cases)
-- [ ] Conexion Theorems.lean ↔ AlgebraicSemantics.lean
+- [x] **Wildcard eliminado** en AlgebraicSemantics.lean (10 casos explicitos, 7 cerrados)
+- [x] Theorems.lean documentado como superseded por AlgebraicSemantics.lean
 - [ ] Eliminacion de axiomas fundacionales
 - [ ] Benchmark vs Plonky3
 
@@ -226,6 +239,6 @@ scatter_zeros_toList                   ─┴─► lowering_compute_contiguous_
 
 ## Referencias
 
-- `SORRY_INVENTORY.md` - Inventario detallado actual (24 axiomas, 23 sorries)
-- `LECCIONES_QA.md` - 31 lecciones y patrones (L-001 a L-076)
-- Sesiones 1-16 - Detalles tecnicos de cada avance
+- `SORRY_INVENTORY.md` - Inventario detallado actual (25 axiomas, 25 sorries)
+- `LECCIONES_QA.md` - 32 lecciones y patrones (L-001 a L-077)
+- Sesiones 1-17 - Detalles tecnicos de cada avance

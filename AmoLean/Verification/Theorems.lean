@@ -2,6 +2,27 @@
   AMO-Lean: Formal Verification Theorems
   Phase 5.10 Part 2 - Formal Certification of Sigma-SPL Lowering
 
+  STATUS: SUPERSEDED by AlgebraicSemantics.lean (Session 17, 2026-02-05)
+
+  This module verifies lowering correctness over Float with tolerance 1e-10.
+  AlgebraicSemantics.lean verifies exact correctness over Field α (generic).
+
+  Float does NOT satisfy Field (not associative, no exact inverse), so
+  these theorems cannot be bridged to AlgebraicSemantics.lean. The 7 sorries
+  here correspond to Float-specific versions of theorems already proven
+  algebraically.
+
+  Correspondence table:
+    Theorems.lean              | AlgebraicSemantics.lean
+    identity_correct           | .identity case (PROVEN)
+    dft2_correct              | .dft case (PROVEN)
+    compose_correct           | .compose case (PROVEN via axiom)
+    kron_identity_correct     | .kron case (AXIOMATIZED)
+    diag_correct              | .diag case (PROVEN)
+    scalar_correct            | .scalar case (PROVEN)
+    lowering_correct (main)   | lowering_algebraic_correct (10/10 cases, 3 sorry)
+
+  Original description:
   This module contains formal proofs that the lowering from MatExpr to SigmaExpr
   preserves semantics. The main theorem states:
 

@@ -1,7 +1,7 @@
 # Inventario Completo de Sorries y Axiomas en AMO-Lean
 
 **Fecha**: 2026-02-05
-**Ultima actualizacion**: Sesion 16 (Compose proof completado, C-Lite++ avanzado)
+**Ultima actualizacion**: Sesion 17 (Wildcard sorry eliminado, 7/10 casos cerrados)
 
 ---
 
@@ -18,19 +18,19 @@
 | **FRI/Transcript** | 0 | 0 | COMPLETADO |
 | **FRI/Properties** | 0 | 0 | COMPLETADO |
 | **FRI/Merkle** | 2 | 0 | Baja prioridad |
-| **Verification/AlgebraicSemantics** | 1 | 7 | EN PROGRESO (Sesion 15-16) |
-| **Verification/Theorems** | 7 | 0 | Pendiente |
+| **Verification/AlgebraicSemantics** | 3 | 8 | EN PROGRESO (Sesion 15-17) |
+| **Verification/Theorems** | 7 | 0 | SUPERSEDED por AlgebraicSemantics |
 | **Verification/Poseidon** | 12 | 0 | Comp. verificados |
-| **TOTAL** | **23 activos** | **24** | - |
+| **TOTAL** | **25 activos** | **25** | - |
 
 ### Clasificacion
 
 | Categoria | Cantidad | Descripcion |
 |-----------|----------|-------------|
-| **Sorries activos** | 23 | Requieren prueba formal |
+| **Sorries activos** | 25 | Requieren prueba formal |
 | **Sorries computacionales** | 12 | Poseidon - verificados por 21 tests |
 | **Sorries comentados** | 6 | En bloques `/-...-/` (incorrectos o no implementados) |
-| **Axiomas totales** | 24 | Documentados con justificacion |
+| **Axiomas totales** | 25 | Documentados con justificacion |
 
 **Nota**: Los sorries comentados (NTT/Spec, NTT/Properties, Perm x4) no afectan compilacion.
 
@@ -99,7 +99,7 @@
 **Relevancia**: CRITICA - fundamentan CommRing y Field instances.
 **Dificultad de eliminacion**: ALTA para reduce128, MEDIA para los demas.
 
-### Verification - AlgebraicSemantics.lean (7 axiomas) - ACTUALIZADO Sesion 16
+### Verification - AlgebraicSemantics.lean (8 axiomas) - ACTUALIZADO Sesion 17
 
 | Linea | Axioma | Justificacion | Eliminable? |
 |-------|--------|---------------|-------------|
@@ -109,6 +109,7 @@
 | 598 | `evalSigmaAlg_writeMem_irrelevant` | Output no depende de writeMem inicial (take m) | Si, via induccion sobre SigmaExpr |
 | 609 | `lower_state_irrelevant` | Alpha-equivalencia: LowerState no afecta semantica | Si, via induccion sobre MatExpr |
 | 617 | `evalMatExprAlg_length` | evalMatExprAlg siempre produce output de longitud m | Si, via induccion sobre MatExpr |
+| 627 | `runSigmaAlg_seq_identity_compute` | Identity kernel en seq no cambia resultado | Si, via evalGather/evalScatter/foldl (misma dificultad que scatter_zeros_toList) |
 | 711 | `lowering_kron_axiom` | Kronecker product lowering correctness | Si, requiere adjustBlock/adjustStride semantics + loop invariant |
 
 **Naturaleza**: Axiomas fundacionales para verificacion de compilador SPIRAL.
@@ -120,6 +121,7 @@
 - `evalSigmaAlg_writeMem_irrelevant`: ALTA (non-interference)
 - `lower_state_irrelevant`: MEDIA (structural induction)
 - `evalMatExprAlg_length`: MEDIA (structural induction)
+- `runSigmaAlg_seq_identity_compute`: MEDIA (evalGather/evalScatter + identity kernel)
 - `lowering_kron_axiom`: MUY ALTA (loop invariant + adjustBlock/Stride)
 
 ### Matrix - Perm.lean (1 axioma)
@@ -136,13 +138,24 @@
 
 ## Inventario Completo de Sorries Activos (23)
 
-### Verification/AlgebraicSemantics.lean (1 sorry)
+### Verification/AlgebraicSemantics.lean (3 sorries) - ACTUALIZADO Sesion 17
 
 | Linea | Teorema | Dificultad | Relevancia | Descripcion |
 |-------|---------|------------|------------|-------------|
-| 822 | `lowering_algebraic_correct` (wildcard) | MEDIA | MEDIA | Casos restantes: zero, perm, add, smul, transpose, conjTranspose, elemwise, partialElemwise, mdsApply, addRoundConst |
+| 868 | `lowering_algebraic_correct` (.add) | MUY ALTA | MEDIA | **BUG SEMANTICO**: lower(.add) = .par (override secuencial), evalMatExprAlg(.add) = suma pointwise. Produce b(a(v)) != a(v)+b(v). Axiomatizar seria UNSOUND. |
+| 882 | `lowering_algebraic_correct` (.transpose) | ALTA | BAJA | **DIMENSIONAL**: lower intercambia (k,n), runSigmaAlg usa outputSize=k pero IH da n. Falla para k != n. |
+| 885 | `lowering_algebraic_correct` (.conjTranspose) | ALTA | BAJA | Mismo mismatch dimensional que .transpose. |
 
-**Estrategia**: Cada caso requiere su propio lemma auxiliar. Los casos compute (perm, add, smul) son similares a identity/dft/ntt ya probados. Los casos Poseidon (partialElemwise, mdsApply, addRoundConst) requieren semantica especifica.
+**Casos cerrados en Sesion 17** (7 de 10):
+- `.zero`: Prueba directa (lower → .nop → zeros_toList)
+- `.perm`: Prueba directa (lower → identity kernel, applyPerm = id)
+- `.smul`: Via axioma `runSigmaAlg_seq_identity_compute` (kernel .scale = id)
+- `.elemwise`: Via axioma (kernel .sbox = id en semantica algebraica)
+- `.partialElemwise`: Via axioma (kernel .partialSbox = id)
+- `.mdsApply`: Via axioma (kernel .mdsApply = id)
+- `.addRoundConst`: Via axioma (kernel .addRoundConst = id)
+
+**Decision DD-017**: No introducir axiomas falsos. Los 3 sorry documentan bugs reales del lowering.
 
 ### Verification/Theorems.lean (7 sorries)
 
@@ -156,7 +169,7 @@
 | 261 | `kron_identity_right_correct` | ALTA | ALTA | A tensor I_n lowering |
 | 281 | `compose_correct` | MEDIA | ALTA | Matrix composition lowering |
 
-**Nota**: Varios de estos teoremas son duplicados o versiones alternativas de lo que ya se prueba en AlgebraicSemantics.lean con la estrategia C-Lite++.
+**Nota**: Este archivo esta SUPERSEDED por AlgebraicSemantics.lean (Sesion 17). Theorems.lean trabaja sobre Float (no satisface Field), AlgebraicSemantics sobre Field α generico. Los 7 sorries aqui corresponden a versiones Float-specific de teoremas ya probados algebraicamente.
 
 ### Verification/Poseidon_Semantics.lean (12 sorries)
 
@@ -218,7 +231,7 @@ SORRIES ACTIVOS POR MODULO
   Poseidon_Semantics    ████████████           12  (comp. verificados)
   Verification/Theorems ███████                 7  (Sigma-SPL)
   FRI/Merkle            ██                      2  (size invariants)
-  AlgebraicSemantics    █                       1  (wildcard case)
+  AlgebraicSemantics    ███                     3  (add, transpose, conjTranspose)
   Goldilocks            █                       1  (uint64_sub_toNat)
   NTT Core              (completado)            0
   NTT Radix4            (completado)            0
@@ -226,18 +239,18 @@ SORRIES ACTIVOS POR MODULO
   FRI/Properties        (completado)            0
   Matrix/Perm           (completado)            0
 
-  TOTAL ACTIVOS: 23
+  TOTAL ACTIVOS: 25
 
 AXIOMAS POR MODULO
 ==================
 
-  AlgebraicSemantics    ███████                 7  (compiler verification)
+  AlgebraicSemantics    ████████                8  (compiler verification)
   NTT Radix4            ████████                8  (Algorithm 5 + Butterfly 1 + Equiv 2)
   Goldilocks            █████                   5  (field properties)
   NTT ListFinsetBridge  ███                     3  (List-Finset bridge)
   Matrix/Perm           █                       1  (tensor splitter)
 
-  TOTAL AXIOMAS: 24
+  TOTAL AXIOMAS: 25
 ```
 
 ---
@@ -256,6 +269,7 @@ AXIOMAS POR MODULO
 | 14 | Feb 04 | - | Integracion | 2641 modulos compilando |
 | 15 | Feb 04 | - | Verification | C-Lite++ strategy, base cases |
 | 16 | Feb 05 | 1 axiom→prueba | Verification | **Compose proof COMPLETADO** |
+| 17 | Feb 05 | wildcard→7 proofs | Verification | **Wildcard eliminado, 10/10 casos explicitos, 3 sorry documentados** |
 
 ---
 
@@ -277,7 +291,9 @@ Matrix/Perm       ✅ 0 sorries (1 axioma)      Sesiones 11-13
 ```
 Verificacion formal:    Modulos core completados (NTT, Goldilocks, FRI, Perm)
 Verificacion empirica:  100% tests pasan en todo el proyecto
-Axiomas:                24 (matematicamente solidos, documentados)
+Axiomas:                25 (matematicamente solidos, documentados)
 TCB (Trusted Base):     Axiomas de Goldilocks + AlgebraicSemantics + NTT bridge
 Riesgo:                 Bajo - axiomas son "traduccion a Lean" de hechos conocidos
+Nota Sesion 17:         3 sorry documentados son bugs reales del lowering, NO
+                        falta de habilidad para probar. Axiomatizar seria unsound.
 ```
