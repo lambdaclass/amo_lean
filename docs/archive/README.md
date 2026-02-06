@@ -1,46 +1,74 @@
-# Archivo de Documentación Obsoleta
+# Archivo de Documentación Histórica
 
-Este directorio contiene documentación histórica que ha sido supersedida.
+Este directorio contiene documentación histórica que ha sido supersedida o consolidada.
 
 **NO usar estos archivos como referencia actual.**
 
 ---
 
-## Archivos Archivados
+## Estructura del Archivo
 
-| Archivo | Fecha | Razón | Reemplazado por |
-|---------|-------|-------|-----------------|
-| `ORIGINAL_ROADMAP.md` | 2026-01-30 | Roadmap técnico inicial | `../project/ROADMAP.md` |
-| `poseidon-phase/` | 2026-01-30 | Fase Poseidon completa (Ene 26-28) | Integrado en NTT |
-| `OPTION_A_ROADMAP.md` | 2026-01-28 | Causó confusión por duplicación | `../project/ROADMAP.md` |
-| `PHASE0_LOG.md` | 2026-01-28 | Log detallado de Phase 0 | `../project/PROGRESS.md` |
-| `PHASE1_PLAN.md` | 2026-01-28 | Plan original de Phase 1 | `../project/ROADMAP.md` |
-| `BENCHMARK_RESULTS.md` | 2026-01-28 | Resultados parciales | `../project/BENCHMARKS.md` |
-| `BENCHMARK_PHASE1.md` | 2026-01-28 | Benchmark específico de Phase 1 | `../project/BENCHMARKS.md` |
-| `ZKVM_ROADMAP.md` | 2026-01-28 | Plan zkVM original | `../project/UNIFIED_PLAN.md` |
-| `LEGACY_STATUS.md` | 2026-01-28 | Estado de proyecto anterior | `../project/PROGRESS.md` |
+```
+archive/
+├── README.md              # Este archivo
+├── sessions/              # Sesiones de trabajo individuales (consolidadas)
+│   ├── SORRY_ELIMINATION_SESSION_*.md (18 archivos)
+│   ├── QA_CONSULT_SESSION_1.md
+│   ├── QA_RESPONSE_SESSION_1.md
+│   ├── QA_CONSULTATION_S12_S13.md
+│   ├── QA_TEST_BATTERY_REQUEST.md
+│   └── QA_REVIEW_PHASE_IMPLEMENTATION.md
+├── phases/                # Planes de fases completadas
+│   ├── PHASE3_COOLEY_TUKEY_STRATEGY.md
+│   ├── PHASE5_NTT_PLAN.md
+│   ├── PHASE5_ISSUES.md
+│   ├── PHASE5_BIBLIOGRAPHY.md
+│   ├── PHASE6A_PLAN.md
+│   └── PHASE6B_PLAN.md
+├── poseidon-phase/        # Fase Poseidon completa (Ene 26-28)
+├── UNIFIED_PLAN.md        # Plan arquitectónico (consolidado en ROADMAP.md)
+└── [otros archivos históricos]
+```
 
 ---
 
-## Estructura de poseidon-phase/
+## Documentos Consolidados
 
-La carpeta `poseidon-phase/` contiene el trabajo de la fase Poseidon (completada Enero 26-28, 2026):
-- 9 ADRs (Architecture Decision Records)
-- PROGRESS.md con 72KB de historia detallada
-- Documentación de migración
+| Archivos Originales | Consolidado En | Fecha |
+|---------------------|----------------|-------|
+| 18 x `SORRY_ELIMINATION_SESSION_*.md` | `../project/SORRY_ELIMINATION_SESSIONS_UNIFIED.md` | 2026-02-06 |
+| `ROADMAP.md` + `UNIFIED_PLAN.md` | `../project/ROADMAP.md` | 2026-02-06 |
+| `LECCIONES_QA.md` | `../project/LEAN4_VERIFICATION_LESSONS.md` | 2026-02-06 |
+| 6 x `PHASE*.md` plans | `../project/PROGRESS.md` + archivados | 2026-02-06 |
 
-Este trabajo está **integrado** en el proyecto actual pero se archiva para evitar confusión
-con la documentación actual que se enfoca en NTT (Phase 5-6).
+---
+
+## Razones de Archivo
+
+### sessions/
+Las sesiones individuales (SORRY_ELIMINATION_SESSION_1 a 18) fueron consolidadas en un único archivo `SORRY_ELIMINATION_SESSIONS_UNIFIED.md` (5400+ líneas) para facilitar navegación y búsqueda.
+
+### phases/
+Los planes de fases completadas (3, 5, 6A, 6B) fueron archivados porque:
+- El trabajo está completado
+- Los resultados están documentados en `PROGRESS.md`
+- Mantenerlos en `project/` causaba confusión sobre qué es actual
+
+### UNIFIED_PLAN.md
+Tenía ~90% de overlap con `ROADMAP.md`. Se mantuvo `ROADMAP.md` como documento oficial.
 
 ---
 
 ## Documentación Actual
 
 Ver `docs/project/` para toda la documentación vigente:
-- `PROGRESS.md` - Log completo de desarrollo (Phases 0-6B)
-- `ROADMAP.md` - Roadmap oficial
-- `PHASE6B_PLAN.md` - Plan de la fase actual
+- `ROADMAP.md` - Roadmap oficial del proyecto
+- `PROGRESS.md` - Log completo de desarrollo (Phases 0-7B)
+- `SORRY_ELIMINATION_SESSIONS_UNIFIED.md` - Historial completo de 18 sesiones
+- `SORRY_ELIMINATION_PLAN.md` - Estado actual de sorries
+- `SORRY_INVENTORY.md` - Inventario detallado
+- `LEAN4_VERIFICATION_LESSONS.md` - 38 lecciones para entrenamiento
 
 ---
 
-*Última actualización: 2026-01-30*
+*Última actualización: 2026-02-06*
