@@ -8,17 +8,17 @@
 
 ## Propósito de Entrenamiento
 
-Este documento contiene **38 lecciones críticas** para verificación formal en Lean 4, extraídas de 18 sesiones de trabajo real en el proyecto AMO-Lean. Cada lección representa un patrón probado que resolvió problemas concretos.
+Este documento contiene **51 lecciones críticas** para verificación formal en Lean 4, extraídas de 18 sesiones de trabajo real en el proyecto AMO-Lean. Cada lección representa un patrón probado que resolvió problemas concretos.
 
 ### Categorías Principales
 
 | Categoría | Lecciones | Aplicación |
 |-----------|-----------|------------|
-| **Tácticas Lean 4** | 1-7, 14, 32-34, 36 | Uso efectivo de `simp`, `omega`, `rfl`, `congr` |
-| **Campos Finitos** | 8-9, 15, 18, 20 | Trabajo con ZMod, characteristic, homomorfismos |
-| **Inducción y Recursión** | 2-3, 21-22, 30 | Terminación, WF-recursion, pattern matching |
-| **Arquitectura de Pruebas** | 4, 10-13, 16-17, 27-29, 31 | Bridge lemmas, axiomatización, modularidad |
-| **Anti-patrones** | 7, 24, 35, 37-38 | Errores comunes y cómo evitarlos |
+| **Tácticas Lean 4** | 1-7, 14, 32-34, 36, 47-48 | Uso efectivo de `simp`, `omega`, `rfl`, `congr`, `split_ifs` |
+| **Campos Finitos** | 8-9, 15, 18, 20, 39-44 | Trabajo con ZMod, characteristic, homomorfismos, GoldilocksField |
+| **Inducción y Recursión** | 2-3, 21-22, 30, 46, 49 | Terminación, WF-recursion, pattern matching, eliminar `partial` |
+| **Arquitectura de Pruebas** | 4, 10-13, 16-17, 27-29, 31, 41-43 | Bridge lemmas, axiomatización, modularidad, canonicidad |
+| **Anti-patrones** | 7, 24, 35, 37-38, 45, 50-51 | Errores comunes: notación, tipos inadecuados, constraints faltantes |
 | **Integración QA** | 16, 19, 23, 26 | Colaboración efectiva con revisores |
 
 ### Cómo Usar Este Documento
@@ -70,6 +70,19 @@ Este documento contiene **38 lecciones críticas** para verificación formal en 
 36. [set_option ANTES de docstring (Sesión 18)](#36-set-option-docstring) ← NUEVO
 37. [Memory.write Branches: In-bounds vs Extension (Sesión 18)](#37-memory-write-branches) ← NUEVO
 38. [Axiomas vs Sorry: Transparencia (Sesión 18)](#38-axiomas-vs-sorry) ← NUEVO
+39. [ZMod.val_injective es la Clave (Sesión 7)](#39-zmod-val-injective) ← RECUPERADO
+40. [Patrón add_val_eq - Ecuación a Nivel Nat (Sesión 7)](#40-add-val-eq) ← RECUPERADO
+41. [Canonicidad Explícita vs Implícita (Sesión 7)](#41-canonicidad) ← RECUPERADO
+42. [Descomposición de reduce128 (Sesión 7)](#42-reduce128) ← RECUPERADO
+43. [Transferencia de Instancias via Inyectividad (Sesión 7)](#43-transferencia) ← RECUPERADO
+44. [Evitar ring con ZMod grande (Sesión 8)](#44-ring-zmod) ← RECUPERADO
+45. [UInt64 Notación vs Método (Sesión 8)](#45-uint64-notation) ← RECUPERADO
+46. [Inducción vs Recursión de Función (Sesión 8)](#46-induccion-recursion) ← RECUPERADO
+47. [Construir Lemas Intermedios Explícitos (Sesión 8)](#47-lemas-intermedios) ← RECUPERADO
+48. [split_ifs Puede Ejecutarse Automáticamente (Sesión 8)](#48-split-ifs) ← RECUPERADO
+49. [Eliminar partial de Funciones Recursivas (Sesión 15)](#49-eliminar-partial) ← RECUPERADO
+50. [Rat NO es Válido para DFT (Sesión 15)](#50-rat-dft) ← RECUPERADO
+51. [DecidableEq Junto con Field (Sesión 15)](#51-decidableeq) ← RECUPERADO
 
 ---
 
@@ -2398,6 +2411,328 @@ theorem foldl_write_enumFrom_size (vals : List α) (wm : Memory α) (k : Nat)
 | Inducción parcial | Imposible | Sí (probar N de M casos) |
 
 > Lección: Siempre preferir `theorem + sorry` sobre `axiom`. La transparencia y la capacidad de prueba incremental compensan ampliamente el ruido de los sorry warnings.
+
+---
+
+## 39. ZMod.val_injective es la Clave (Sesión 7) {#39-zmod-val-injective}
+
+### L-015: Evitar trabajo directo con ZMod grande
+
+**Fuente**: /lean-search (Sesión 7)
+
+**Problema**: ZMod usa `Nat.rec` internamente, causando:
+- `ring` timeout (5+ minutos)
+- `norm_cast` maximum recursion depth
+- Simplificación incompleta
+
+**Solución**: No trabajar con ZMod directamente. Usar:
+```lean
+apply ZMod.val_injective
+-- Ahora el goal es sobre Nat, no ZMod
+```
+
+**Teoremas clave de Mathlib**:
+- `ZMod.val_injective`: inyectividad de `.val`
+- `ZMod.val_add`: `(a + b).val = (a.val + b.val) % n`
+- `ZMod.val_mul`: `(a * b).val = (a.val * b.val) % n`
+- `ZMod.val_cast_of_lt h`: si `x < n`, entonces `(x : ZMod n).val = x`
+
+---
+
+## 40. Patrón add_val_eq - Ecuación a Nivel Nat (Sesión 7) {#40-add-val-eq}
+
+### L-016: Separar prueba en nivel Nat y nivel ZMod
+
+**Fuente**: /ask-lean (DeepSeek, Sesión 7)
+
+**Insight**: Separar la prueba en dos niveles:
+1. **Nivel Nat**: `(a + b).value.toNat = (a.value.toNat + b.value.toNat) % ORDER.toNat`
+2. **Nivel ZMod**: Usar el resultado anterior + `ZMod.val_cast_of_lt`
+
+**Ventaja**: El nivel Nat es pura aritmética (omega, split_ifs), sin complejidad de ZMod.
+
+```lean
+-- Nivel Nat
+theorem add_val_eq (a b : GoldilocksField) :
+    (a + b).value.toNat = (a.value.toNat + b.value.toNat) % ORDER_NAT := by
+  simp only [HAdd.hAdd, Add.add, add]
+  split_ifs with h <;> omega
+
+-- Nivel ZMod (usa add_val_eq)
+theorem toZMod_add (a b : GoldilocksField) :
+    toZMod (a + b) = toZMod a + toZMod b := by
+  apply ZMod.val_injective
+  rw [ZMod.val_add, ZMod.val_cast_of_lt, ZMod.val_cast_of_lt, ZMod.val_cast_of_lt]
+  exact add_val_eq a b
+```
+
+---
+
+## 41. Canonicidad Explícita vs Implícita (Sesión 7) {#41-canonicidad}
+
+### L-017: Probar canonicidad por operación, no global
+
+**Fuente**: /collab-qa (Gemini QA, Sesión 7)
+
+**Problema**: Un axioma `goldilocks_canonical` que afirma canonicidad global es:
+1. Difícil de auditar (¿realmente todas las operaciones preservan canonicidad?)
+2. Potencialmente falso si alguna operación tiene bug
+
+**Solución**: Probar canonicidad para cada operación:
+```lean
+theorem add_canonical (a b : GoldilocksField) :
+    (a + b).value.toNat < ORDER.toNat := by ...
+
+theorem neg_canonical (a : GoldilocksField) :
+    (-a).value.toNat < ORDER.toNat := by ...
+
+theorem mul_canonical (a b : GoldilocksField) :
+    (a * b).value.toNat < ORDER.toNat := by ...
+```
+
+**Beneficio**: Cada lema de canonicidad es una mini-verificación de la implementación.
+
+---
+
+## 42. Descomposición de reduce128 (Sesión 7) {#42-reduce128}
+
+### L-018: Dividir pruebas complejas en lemas atómicos
+
+**Fuente**: /collab-qa (Gemini QA, Sesión 7)
+
+**Problema**: `reduce128` es complejo porque:
+- Usa la identidad de Goldilocks (2^64 ≡ 2^32 - 1)
+- Tiene múltiples pasos de reducción
+- Mezcla aritmética de 64 y 128 bits
+
+**Solución**: Descomponer en lemas atómicos:
+1. **Propiedad del módulo**: `2^64 % p = epsilon + 1`
+2. **Descomposición**: `lo + hi * 2^64 = ...`
+3. **Paso de reducción**: un paso de la cadena
+
+```lean
+-- 1. Base: la identidad de Goldilocks
+theorem goldilocks_modulus_property :
+    (2^64 : Nat) % ORDER.toNat = EPSILON.toNat + 1 := by native_decide
+
+-- 2. Un paso de reducción
+theorem reduce128_step (lo hi : UInt64) :
+    (lo.toNat + hi.toNat * 2^64) % ORDER.toNat =
+    (lo.toNat + hi.toNat * (EPSILON.toNat + 1)) % ORDER.toNat := by
+  conv_lhs => rw [show (2^64 : Nat) = ORDER.toNat + EPSILON.toNat + 1 by native_decide]
+  rw [Nat.add_mul_mod_self_left]
+
+-- 3. Teorema completo
+theorem reduce128_correct : ...
+```
+
+---
+
+## 43. Transferencia de Instancias via Inyectividad (Sesión 7) {#43-transferencia}
+
+### L-019: Usar Function.Injective.commRing/field
+
+**Fuente**: /lean-search + /ask-lean (Sesión 7)
+
+**Insight**: Mathlib tiene `Function.Injective.commRing` y `Function.Injective.field`:
+```lean
+def Function.Injective.commRing {α : Type*} [CommRing β] (f : α → β)
+    (hf : Injective f) (zero : f 0 = 0) (one : f 1 = 1)
+    (add : ∀ x y, f (x + y) = f x + f y) (mul : ∀ x y, f (x * y) = f x * f y)
+    (neg : ∀ x, f (-x) = -f x) ... : CommRing α
+```
+
+**Aplicación**: Una vez probados `toZMod_zero`, `toZMod_one`, `toZMod_add`, `toZMod_mul`, `toZMod_neg`:
+```lean
+instance : CommRing GoldilocksField :=
+  toZMod_injective.commRing toZMod
+    toZMod_zero toZMod_one toZMod_add toZMod_mul toZMod_neg ...
+```
+
+**Beneficio**: CommRing y Field se obtienen "gratis" una vez probados los homomorfismos.
+
+---
+
+## 44. Evitar ring con ZMod grande (Sesión 8) {#44-ring-zmod}
+
+### L-020: Alternativas a ring para campos finitos grandes
+
+**Contexto**: `ring` en `ZMod (2^64 - 2^32 + 1)` causa timeout (5+ minutos).
+
+**Causa**: ORDER = 2^64 - 2^32 + 1 es demasiado grande para computación simbólica eficiente.
+
+**Solución**: Para campos finitos grandes, usar manipulación manual de ecuaciones:
+- `simp` + `omega` + lemas específicos
+- `rw` explícito con lemas de Mathlib
+- Nunca depender de `ring` directamente
+
+```lean
+-- MAL:
+theorem foo : a + b = b + a := by ring  -- TIMEOUT
+
+-- BIEN:
+theorem foo : a + b = b + a := by
+  apply ZMod.val_injective
+  simp only [ZMod.val_add]
+  omega
+```
+
+---
+
+## 45. UInt64 Notación vs Método (Sesión 8) {#45-uint64-notation}
+
+### L-021: `a.sub b` vs `a - b` no unificables por rw
+
+**Contexto**: `a.sub b` (método) vs `a - b` (operador) no son unificables por `rw`.
+
+```lean
+-- FALLA:
+have hsub : a - b = c := ...
+rw [hsub]  -- Error: mismatch (goal tiene .sub)
+
+-- BIEN:
+simp only [hsub]  -- Funciona con notación y métodos
+```
+
+**Aprendizaje**: Usar `simp only` para reescrituras que involucran notación.
+
+---
+
+## 46. Inducción vs Recursión de Función (Sesión 8) {#46-induccion-recursion}
+
+### L-022: Strong induction para recursión no-estándar
+
+**Contexto**: `pow` usa recursión `n+2 → n/2` pero `induction n` da `n → n+1`.
+
+**Problema**: La estructura de la función no coincide con la inducción simple.
+
+**Solución**: Para funciones con recursión no-estándar:
+1. Usar strong induction (`Nat.strong_induction_on`)
+2. Usar well-founded recursion (`termination_by` + `decreasing_by`)
+3. Como último recurso, axiomatizar con justificación clara
+
+```lean
+-- Strong induction:
+theorem pow_correct (a : F) (n : Nat) : pow a n = a ^ n := by
+  induction n using Nat.strong_induction_on with
+  | ind n ih => ...
+```
+
+---
+
+## 47. Construir Lemas Intermedios Explícitos (Sesión 8) {#47-lemas-intermedios}
+
+### L-023: omega no encadena bounds automáticamente
+
+**Contexto**: `omega` no encadena `a < ORDER < 2^64` automáticamente.
+
+**Solución**: Crear lemas intermedios explícitos:
+```lean
+-- MAL:
+have h : a.value.toNat < 2^64 := by omega  -- Falla
+
+-- BIEN:
+have ha : a.value.toNat < ORDER.toNat := a_canonical
+have hord : ORDER.toNat < 2^64 := by native_decide
+have ha' : a.value.toNat < 2^64 := Nat.lt_trans ha hord
+```
+
+**Patrón**: Siempre construir la cadena de desigualdades paso a paso cuando `omega` falla.
+
+---
+
+## 48. split_ifs Puede Ejecutarse Automáticamente (Sesión 8) {#48-split-ifs}
+
+### L-024: Verificar goal después de simp antes de split_ifs
+
+**Contexto**: `simp` de función con `if` puede splitear automáticamente.
+
+```lean
+-- MAL:
+simp [reduce128]
+split_ifs  -- Error: no ifs to split (ya se splitearon)
+
+-- BIEN:
+simp [reduce128]
+-- Verificar goal: si ya hay múltiples goals, no usar split_ifs
+<;> omega  -- Manejar los goals que simp generó
+```
+
+**Aprendizaje**: Siempre verificar el estado del goal después de `simp` antes de usar `split_ifs`.
+
+---
+
+## 49. Eliminar partial de Funciones Recursivas (Sesión 15) {#49-eliminar-partial}
+
+### L-057: termination_by + decreasing_by para funciones totales
+
+**Fuente**: /ask-lean (DeepSeek, Sesión 15)
+
+**Problema**: Funciones con `partial` no permiten inducción ni razonamiento formal.
+
+**Solución**: Usar medida de tamaño explícita:
+```lean
+/-- Función de tamaño para terminación -/
+def MatExpr.size : MatExpr α m n → Nat
+  | .identity _ => 1
+  | .kron a b => 1 + a.size + b.size
+  | .compose a b => 1 + a.size + b.size
+  -- ... otros casos
+
+def lower (m n : Nat) (state : LowerState) (mExpr : MatExpr α m n) : ... :=
+  match mExpr with
+  | ... => ...
+termination_by mExpr.size
+
+decreasing_by
+  simp_wf
+  -- tácticas para probar que size decrece
+```
+
+**Impacto**: Sin `partial`, se habilita inducción sobre el tipo inductivo.
+
+---
+
+## 50. Rat NO es Válido para DFT (Sesión 15) {#50-rat-dft}
+
+### L-058: Verificar existencia de raíces primitivas
+
+**Fuente**: /collab-qa (Gemini QA, Sesión 15)
+
+**Problema**: `Rat` NO tiene raíces n-ésimas primitivas de la unidad (solo ±1).
+
+**Consecuencia**: No se puede verificar DFT sobre `Rat` porque requiere `ω^n = 1` con `ω^k ≠ 1` para `0 < k < n`.
+
+**Tipos válidos para DFT**:
+
+| Tipo | Raíces n-ésimas | Válido para DFT |
+|------|-----------------|-----------------|
+| `Rat` | Solo ±1 | ❌ NO |
+| `Complex` | ∀ n | ✅ SÍ |
+| `ZMod p` (p primo, p ≡ 1 mod n) | ✅ | ✅ SÍ |
+| `GoldilocksField` | Para n = 2^k | ✅ SÍ |
+
+**Solución**: Usar hipótesis explícita `(ω : α) (hω : IsPrimitiveRoot ω n)`.
+
+---
+
+## 51. DecidableEq Junto con Field (Sesión 15) {#51-decidableeq}
+
+### L-059: Agregar [DecidableEq α] cuando hay comparaciones
+
+**Fuente**: /collab-qa (Gemini QA, Sesión 15)
+
+**Problema**: Campo genérico con código que usa `if a == b then ...` requiere `[DecidableEq α]`.
+
+```lean
+-- INCOMPLETO:
+def evalMatExprAlg {α : Type*} [Field α] [Inhabited α] ...
+
+-- COMPLETO:
+def evalMatExprAlg {α : Type*} [Field α] [DecidableEq α] [Inhabited α] ...
+```
+
+**Regla**: Siempre agregar `[DecidableEq α]` junto con `[Field α]` cuando el código usa comparaciones de igualdad.
 
 ---
 
