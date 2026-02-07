@@ -284,17 +284,16 @@ def lower (m n : Nat) (state : LowerState) (mExpr : MatExpr α m n) : (SigmaExpr
     (.compute (.identity n) (Gather.contiguous n (.const 0)) (Scatter.contiguous n (.const 0)), state)
 
   | @MatExpr.kron _ m₁ n₁ m₂ n₂ a b =>
-    -- Check if a is identity
-    let aIsIdentity := match a with | .identity _ => true | _ => false
-    let bIsIdentity := match b with | .identity _ => true | _ => false
-
-    if aIsIdentity then
+    -- Use MatExpr.isIdentity to avoid kernel constant redefinition error
+    -- when doing case analysis after simp/unfold of lower.
+    -- See: docs/sorry_elimination_plan.md for details.
+    if a.isIdentity then
       -- I_{m₁} ⊗ B → Loop over m₁ blocks of size m₂
       let (loopVar, state1) := freshLoopVar state
       let (bodyExpr, state2) := lower m₂ n₂ state1 b
       let body := adjustBlock loopVar n₂ m₂ bodyExpr
       (.loop m₁ loopVar body, state2)
-    else if bIsIdentity then
+    else if b.isIdentity then
       -- A ⊗ I_{m₂} → Strided access
       let (loopVar, state1) := freshLoopVar state
       let (bodyExpr, state2) := lower m₁ n₁ state1 a

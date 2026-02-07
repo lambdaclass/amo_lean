@@ -459,21 +459,54 @@ theorem lower_loopVars_bounded_and_state_monotonic {α : Type} {m n : Nat} (mat 
         exact Nat.le_trans hb_mono (ha_bounded l hl)
     · exact Nat.le_trans hb_mono ha_mono
   | kron a b ih_a ih_b =>
-    -- Key insight: freshLoopVar returns s.nextLoopVar and increments the state.
-    -- In all three kron cases (I⊗B, A⊗I, general A⊗B):
-    -- 1. The outer loop uses v = s.nextLoopVar
-    -- 2. Recursive calls use state with nextLoopVar >= s.nextLoopVar + 1
-    -- 3. By IH, inner loopVars are >= s.nextLoopVar + 1 > s.nextLoopVar
-    --
-    -- SORRY: Kernel constant redefinition error prevents case analysis after unfolding lower.
-    -- The proof structure is valid but Lean 4's equation lemma generation conflicts
-    -- when we try to split on the aIsIdentity/bIsIdentity conditions.
-    --
-    -- Potential fixes:
-    -- 1. Refactor lower to use explicit Decidable instances
-    -- 2. Create separate @[simp] lemmas for each kron subcase
-    -- 3. Use native_decide for the boolean conditions
-    sorry
+    -- With isIdentity refactoring, case analysis now works (no kernel error!)
+    simp only [lower]
+    split_ifs with ha hb
+    -- Case 1: a.isIdentity = true (I⊗B)
+    · -- lower produces (.loop m₁ loopVar (adjustBlock loopVar n₂ m₂ (lower b state')), state2)
+      -- loopVarsOf (.loop _ v body) = {v} ∪ loopVarsOf body
+      have ⟨hb_bounded, hb_mono⟩ := ih_b { nextLoopVar := s.nextLoopVar + 1 }
+      simp only [freshLoopVar]
+      constructor
+      · intro l hl
+        simp only [SigmaExpr.loopVarsOf, adjustBlock_loopVarsOf, Finset.mem_union,
+                   Finset.mem_singleton] at hl
+        cases hl with
+        | inl heq => exact heq ▸ Nat.le_refl _
+        | inr hmem => exact Nat.le_of_succ_le (hb_bounded l hmem)
+      · exact Nat.le_of_succ_le hb_mono
+    -- Case 2: a.isIdentity = false, b.isIdentity = true (A⊗I)
+    · have ⟨ha_bounded, ha_mono⟩ := ih_a { nextLoopVar := s.nextLoopVar + 1 }
+      simp only [freshLoopVar]
+      constructor
+      · intro l hl
+        simp only [SigmaExpr.loopVarsOf, adjustStride_loopVarsOf, Finset.mem_union,
+                   Finset.mem_singleton] at hl
+        cases hl with
+        | inl heq => exact heq ▸ Nat.le_refl _
+        | inr hmem => exact Nat.le_of_succ_le (ha_bounded l hmem)
+      · exact Nat.le_of_succ_le ha_mono
+    -- Case 3: General A⊗B (nested loops)
+    · -- Structure: .loop m₁ v (.seq exprA (.loop m₂ (v+1) exprB))
+      have ⟨ha_bounded, ha_mono⟩ := ih_a { nextLoopVar := s.nextLoopVar + 1 }
+      have ⟨hb_bounded, hb_mono⟩ := ih_b (lower _ _ { nextLoopVar := s.nextLoopVar + 1 } a).2
+      simp only [freshLoopVar]
+      constructor
+      · intro l hl
+        simp only [SigmaExpr.loopVarsOf, Finset.mem_union, Finset.mem_singleton] at hl
+        -- hl : l = s.nextLoopVar ∨ l ∈ loopVarsOf (.seq exprA (.loop (s.nextLoopVar+1) exprB))
+        cases hl with
+        | inl heq => exact heq ▸ Nat.le_refl _
+        | inr hmem =>
+          -- hmem : l ∈ loopVarsOf exprA ∪ loopVarsOf (.loop (s.nextLoopVar+1) exprB)
+          simp only [SigmaExpr.loopVarsOf, Finset.mem_union, Finset.mem_singleton] at hmem
+          cases hmem with
+          | inl hl_a => exact Nat.le_of_succ_le (ha_bounded l hl_a)
+          | inr hl_loop =>
+            cases hl_loop with
+            | inl heq2 => exact heq2 ▸ Nat.le_succ _
+            | inr hl_b => exact Nat.le_of_succ_le (Nat.le_trans ha_mono (hb_bounded l hl_b))
+      · exact Nat.le_of_succ_le (Nat.le_trans ha_mono hb_mono)
 
 /-- Freshness follows from boundedness when v1, v2 < nextLoopVar.
     This bridges lower_loopVars_bounded to the _alpha_fresh theorems. -/
@@ -2129,24 +2162,37 @@ theorem evalSigmaAlg_lower_state_irrelevant
     rw [ih_a state1 state2 env st]
     exact ih_b _ _ env _
   | kron a b ih_a ih_b =>
-    -- Kron lowering has three cases based on whether a or b is identity.
-    -- Due to kernel constant redefinition issues when unfolding lower for kron,
-    -- we keep this as sorry.
-    --
-    -- The proof infrastructure is in place:
-    -- - adjustBlock_alpha_fresh: proven (handles different loop variable names)
-    -- - adjustStride_alpha_fresh: proven (handles different loop variable names)
-    -- - loop_adjustBlock_alpha: proven (lifts to loop level)
-    -- - loop_adjustStride_alpha: proven (lifts to loop level)
-    --
-    -- Proof structure for each case:
-    -- Case I ⊗ B: apply loop_adjustBlock_alpha with ih_b
-    -- Case A ⊗ I: apply loop_adjustStride_alpha with ih_a
-    -- Case general A ⊗ B: nested loop equivalence (requires additional work)
-    --
-    -- The kernel constant error occurs because lower.kron has internal match
-    -- expressions, and unfolding + case analysis regenerates equation lemmas.
-    sorry
+    -- With isIdentity refactoring, we can now do case analysis
+    simp only [lower]
+    split_ifs with ha hb
+    -- Case 1: a.isIdentity = true (I⊗B)
+    · -- lower produces (.loop m₁ v (adjustBlock v n₂ m₂ (lower b state')), state')
+      simp only [freshLoopVar]
+      apply loop_adjustBlock_alpha
+      intro env' st'
+      exact ih_b _ _ env' st'
+    -- Case 2: a.isIdentity = false, b.isIdentity = true (A⊗I)
+    · simp only [freshLoopVar]
+      apply loop_adjustStride_alpha
+      intro env' st'
+      exact ih_a _ _ env' st'
+    -- Case 3: General A⊗B (nested loops)
+    · -- Structure: .loop m₁ v (.seq exprA (.loop m₂ (v+1) exprB))
+      -- This case has nested loops with v and v+1 as loop variables.
+      -- The proof requires showing equivalence between:
+      --   .loop m₁ state1.nextLoopVar (.seq exprA1 (.loop m₂ (state1.nextLoopVar+1) exprB1))
+      --   .loop m₁ state2.nextLoopVar (.seq exprA2 (.loop m₂ (state2.nextLoopVar+1) exprB2))
+      -- where exprA1 = lower a with state1+1, exprA2 = lower a with state2+1, etc.
+      --
+      -- The key insight is that the nested structure has two levels of alpha-equivalence:
+      -- 1. Outer loop variable: state1.nextLoopVar vs state2.nextLoopVar
+      -- 2. Inner loop variable: state1.nextLoopVar+1 vs state2.nextLoopVar+1
+      --
+      -- By freshness_from_bounded, both exprA and exprB have loopVars >= their respective
+      -- state.nextLoopVar values, so they don't conflict with the outer/inner variables.
+      --
+      -- This requires a specialized nested_loop_alpha theorem which is left as future work.
+      sorry
 
 set_option maxHeartbeats 800000 in
 /-- Alpha-equivalence for lowered expressions.

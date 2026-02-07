@@ -256,6 +256,72 @@ inductive MatExpr (α : Type) : Nat → Nat → Type where
 
 namespace MatExpr
 
+/-! ### Identity Predicate (for lowering case analysis)
+
+This predicate is extracted as a separate function to avoid kernel constant
+redefinition errors when doing case analysis after simp/unfold of lower.
+See: docs/sorry_elimination_plan.md for details. -/
+
+/-- Check if a MatExpr is the identity constructor -/
+@[simp]
+def isIdentity : MatExpr α m n → Bool
+  | .identity _ => true
+  | _ => false
+
+@[simp] theorem isIdentity_identity {n : Nat} :
+    isIdentity (identity n : MatExpr α n n) = true := rfl
+
+@[simp] theorem isIdentity_zero {m n : Nat} :
+    isIdentity (zero m n : MatExpr α m n) = false := rfl
+
+@[simp] theorem isIdentity_dft {n : Nat} :
+    isIdentity (dft n : MatExpr α n n) = false := rfl
+
+@[simp] theorem isIdentity_ntt {n p : Nat} :
+    isIdentity (ntt n p : MatExpr α n n) = false := rfl
+
+@[simp] theorem isIdentity_twiddle {n k : Nat} :
+    isIdentity (twiddle n k : MatExpr α n n) = false := rfl
+
+@[simp] theorem isIdentity_perm {p : Perm n} :
+    isIdentity (perm p : MatExpr α n n) = false := rfl
+
+@[simp] theorem isIdentity_kron {a : MatExpr α m₁ n₁} {b : MatExpr α m₂ n₂} :
+    isIdentity (kron a b) = false := rfl
+
+@[simp] theorem isIdentity_compose {a : MatExpr α m k} {b : MatExpr α k n} :
+    isIdentity (compose a b) = false := rfl
+
+@[simp] theorem isIdentity_add {a b : MatExpr α m n} :
+    isIdentity (add a b) = false := rfl
+
+@[simp] theorem isIdentity_smul {c : Expr α} {a : MatExpr α m n} :
+    isIdentity (smul c a) = false := rfl
+
+@[simp] theorem isIdentity_transpose {a : MatExpr α m n} :
+    isIdentity (transpose a) = false := rfl
+
+@[simp] theorem isIdentity_conjTranspose {a : MatExpr α m n} :
+    isIdentity (conjTranspose a) = false := rfl
+
+@[simp] theorem isIdentity_diag {v : VecExpr α n} :
+    isIdentity (diag v : MatExpr α n n) = false := rfl
+
+@[simp] theorem isIdentity_scalar {e : Expr α} :
+    isIdentity (scalar e : MatExpr α 1 1) = false := rfl
+
+@[simp] theorem isIdentity_elemwise {op : ElemOp} {a : MatExpr α m n} :
+    isIdentity (elemwise op a) = false := rfl
+
+@[simp] theorem isIdentity_partialElemwise {idx : Nat} {op : ElemOp} {a : MatExpr α m n} :
+    isIdentity (partialElemwise idx op a) = false := rfl
+
+@[simp] theorem isIdentity_mdsApply {name : String} {size : Nat} {a : MatExpr α t 1} :
+    isIdentity (mdsApply name size a) = false := rfl
+
+@[simp] theorem isIdentity_addRoundConst {round size : Nat} {a : MatExpr α t 1} :
+    isIdentity (addRoundConst round size a) = false := rfl
+
 /-! ### Smart Constructors -/
 
 /-- Identity that returns existing matrix if it's already identity -/
