@@ -4,7 +4,7 @@
 **Archivo**: `AmoLean/Verification/AlgebraicSemantics.lean`
 **Fecha de creacion**: 2026-02-07
 **Ultima actualizacion**: 2026-02-07
-**Estado**: Fase 2 Correccion 3 - Teoremas _fresh implementados
+**Estado**: Fase 2 Correccion 3 - Infraestructura de freshness completada
 
 ---
 
@@ -12,308 +12,216 @@
 
 | Metrica | Valor |
 |---------|-------|
-| Sorries en declaraciones | 13 |
+| Sorries en declaraciones | 17 |
 | Teoremas _fresh completados | 2 (adjustBlock_alpha_fresh, adjustStride_alpha_fresh) |
-| Sorries path kron | 1 (evalSigmaAlg_lower_state_irrelevant.kron - pendiente lower_loopVars_bounded) |
-| Sorries otros paths | 12 (transpose, compose, length analysis, writeMem irrelevance) |
+| Teoremas boundedness | 2 (lower_loopVars_bounded_and_state_monotonic, freshness_from_bounded) |
+| Sorries path kron | 3 (lower_loopVars_bounded kron, evalSigmaAlg_lower_state_irrelevant kron, nested loop) |
+| Sorries otros paths | 14 (transpose, compose, length analysis, writeMem, correctness) |
 | Build status | Compila sin errores |
 | @[simp] lemmas en Basic.lean | 4 (lower_identity, lower_zero, lower_dft, lower_ntt) |
 
 ---
 
-## Trabajo Completado: Fase 2 Correccion 2
+## Trabajo Completado: Fase 2 Correccion 3
 
-### Subfase 1: Infraestructura adjustStride ✓
+### Subfase 1: lower_loopVars_bounded_and_state_monotonic - IMPLEMENTADO
 
-Implementados teoremas analogos a adjustBlock para patrones stride (A ⊗ I):
-
-```lean
--- Linea 276
-theorem adjustStride_fv_subset (v : LoopVar) (innerSize mSize nSize : Nat) (expr : SigmaExpr) :
-    SigmaExpr.fv (adjustStride v innerSize mSize nSize expr) ⊆ {v}
-
--- Linea 299
-theorem adjustStride_fresh (v w : LoopVar) (innerSize mSize nSize : Nat) (expr : SigmaExpr)
-    (hw : w ≠ v) : w ∉ SigmaExpr.fv (adjustStride v innerSize mSize nSize expr)
-
--- Linea 336
-theorem adjustStride_loopVarsOf (v : LoopVar) (innerSize mSize nSize : Nat) (expr : SigmaExpr) :
-    SigmaExpr.loopVarsOf (adjustStride v innerSize mSize nSize expr) = SigmaExpr.loopVarsOf expr
-```
-
-### Subfase 2: adjustBlock_alpha_fresh - COMPLETADO ✓
-
-Implementado teorema con precondicion de freshness explicita:
+Teorema que prueba que todos los loopVars generados por `lower` son >= state.nextLoopVar:
 
 ```lean
--- Linea 698 (AlgebraicSemantics.lean)
-theorem adjustBlock_alpha_fresh (ω : α) (v1 v2 : LoopVar) (n_in n_out : Nat) (expr : SigmaExpr)
-    (env : LoopEnv) (st : EvalState α) (i : Nat)
-    (hfresh : ∀ w ∈ SigmaExpr.loopVarsOf expr, w ≠ v1 ∧ w ≠ v2) :
-    evalSigmaAlg ω (env.bind v1 i) st (adjustBlock v1 n_in n_out expr) =
-    evalSigmaAlg ω (env.bind v2 i) st (adjustBlock v2 n_in n_out expr)
--- CERRADO: Todos los casos incluyendo loop
+-- Linea 362 (AlgebraicSemantics.lean)
+theorem lower_loopVars_bounded_and_state_monotonic {α : Type} {m n : Nat}
+    (mat : MatExpr α m n) (s : LowerState) :
+    (∀ l ∈ SigmaExpr.loopVarsOf (lower m n s mat).1, l ≥ s.nextLoopVar) ∧
+    (lower m n s mat).2.nextLoopVar ≥ s.nextLoopVar
+-- COMPLETADO: Todos los casos excepto kron (kernel constant error)
 ```
 
-Caso loop cerrado usando:
-1. `Finset.mem_union_left` para mostrar `loopVar ∈ loopVarsOf (.loop n loopVar body)`
-2. `LoopEnv.bind_comm` para reordenar bindings una vez que tenemos `loopVar ≠ v1/v2`
-3. IH aplicado con freshness derivada del body
+**Casos probados**:
+- identity, zero, dft, ntt, twiddle, perm, diag, scalar: triviales (loopVarsOf = ∅)
+- transpose, conjTranspose: delegado al IH
+- smul, elemwise, partialElemwise, mdsApply, addRoundConst: IH + union membership
+- add: cadena de estados, union de loopVars
+- compose: cadena de estados, union de loopVars
 
-### Subfase 2b: adjustStride_alpha_fresh - COMPLETADO ✓
+**Caso kron**: SORRY debido a kernel constant redefinition error al hacer case analysis.
+
+### Subfase 2: freshness_from_bounded - IMPLEMENTADO
+
+Corolario que conecta boundedness con los teoremas _alpha_fresh:
 
 ```lean
--- Linea 864 (AlgebraicSemantics.lean)
-theorem adjustStride_alpha_fresh (ω : α) (v1 v2 : LoopVar) (innerSize mSize nSize : Nat)
-    (expr : SigmaExpr) (env : LoopEnv) (st : EvalState α) (i : Nat)
-    (hfresh : ∀ w ∈ SigmaExpr.loopVarsOf expr, w ≠ v1 ∧ w ≠ v2) :
-    evalSigmaAlg ω (env.bind v1 i) st (adjustStride v1 innerSize mSize nSize expr) =
-    evalSigmaAlg ω (env.bind v2 i) st (adjustStride v2 innerSize mSize nSize expr)
--- CERRADO: Misma estructura que adjustBlock_alpha_fresh
+-- Linea 477 (AlgebraicSemantics.lean)
+theorem freshness_from_bounded {α : Type} {m n : Nat} (mat : MatExpr α m n) (s : LowerState)
+    (v1 v2 : LoopVar) (hv1 : v1 < s.nextLoopVar) (hv2 : v2 < s.nextLoopVar) :
+    ∀ w ∈ SigmaExpr.loopVarsOf (lower m n s mat).1, w ≠ v1 ∧ w ≠ v2
+-- COMPLETADO: Derivado directamente de lower_loopVars_bounded_and_state_monotonic
 ```
 
-**Insight clave**: Los teoremas _fresh estan completamente probados. Para usarlos en el caso kron, se necesita `lower_loopVars_bounded` que demuestra que todos los loopVars generados por lower son >= nextLoopVar.
+### Infraestructura Existente (De Fase 2 Correccion 2)
 
-### Subfase 3: adjustBlock_preserves_eval ✓
+- `adjustBlock_alpha_fresh`: COMPLETADO (loop case cerrado)
+- `adjustStride_alpha_fresh`: COMPLETADO (loop case cerrado)
+- `loop_adjustBlock_alpha`: COMPLETADO
+- `loop_adjustStride_alpha`: COMPLETADO
+- `@[simp]` lemmas: `lower_identity`, `lower_zero`, `lower_dft`, `lower_ntt`
 
-Documentado que requiere `SameStructure` para prueba completa:
+---
 
-```lean
-theorem adjustBlock_preserves_eval (ω : α) (v : LoopVar) (n_in n_out : Nat)
-    (expr1 expr2 : SigmaExpr) (env : LoopEnv) (st : EvalState α)
-    (h : ∀ env' st', evalSigmaAlg ω env' st' expr1 = evalSigmaAlg ω env' st' expr2) :
-    evalSigmaAlg ω env st (adjustBlock v n_in n_out expr1) =
-    evalSigmaAlg ω env st (adjustBlock v n_in n_out expr2)
--- SORRY: Requiere SameStructure para case split estructural
-```
+## Bloqueante Principal: Kernel Constant Redefinition
 
-### Subfase 4: adjustStride_alpha ✓
+### Descripcion del Problema
 
-Implementada infraestructura completa para stride:
-
-```lean
--- Linea 471: evalGather_stride_alpha
--- Linea 479: evalScatter_stride_alpha
--- Linea 823: adjustStride_alpha
--- Linea 861: adjustStride_preserves_eval
--- Linea 869: adjustStride_with_ih
--- Linea 882: loop_adjustStride_alpha
-```
-
-### Subfase 5: Caso kron en evalSigmaAlg_lower_state_irrelevant ✓
-
-Estructura de prueba documentada:
+Cuando intentamos hacer case analysis despues de unfold/simp de `lower` para kron:
 
 ```lean
 | kron a b ih_a ih_b =>
-  -- Caso 1 (I ⊗ B): usar loop_adjustBlock_alpha + ih_b
-  -- Caso 2 (A ⊗ I): usar loop_adjustStride_alpha + ih_a
-  -- Caso 3 (general): loops anidados, requiere mas trabajo
-  -- SORRY: Case analysis causa kernel constant redefinition error
+  simp only [lower]  -- o unfold lower
+  split  -- o split_ifs, o cases a with
+  -- ERROR: (kernel) constant has already been declared 'AmoLean.Sigma.lower.match_3.eq_1'
 ```
+
+### Causa Raiz
+
+La funcion `lower` tiene match expressions anidados para determinar si `a` o `b` es identity:
+
+```lean
+| @MatExpr.kron _ m₁ n₁ m₂ n₂ a b =>
+  let aIsIdentity := match a with | .identity _ => true | _ => false
+  let bIsIdentity := match b with | .identity _ => true | _ => false
+  if aIsIdentity then ...
+  else if bIsIdentity then ...
+  else ...
+```
+
+Cuando Lean simplifica esto y luego intenta generar equation lemmas para el case split, los mismos equation lemmas ya fueron generados, causando el conflicto.
+
+### Soluciones Intentadas
+
+1. **`simp only [lower]` + `split`**: Kernel error
+2. **`unfold lower` + `split`**: Kernel error
+3. **`simp only [lower]` + `split_ifs`**: Kernel error
+4. **`cases a with` + `simp only [lower]`**: Kernel error en branches anidados
+
+### Solucion Propuesta (Pendiente)
+
+Refactorizar `lower` para que kron use funciones auxiliares decidibles:
+
+```lean
+def MatExpr.isIdentity : MatExpr α m n → Bool
+  | .identity _ => true
+  | _ => false
+
+-- En lower.kron:
+if a.isIdentity then ...
+else if b.isIdentity then ...
+else ...
+```
+
+Con `isIdentity` como funcion separada, las equation lemmas se generan una sola vez y el case analysis funciona.
 
 ---
 
-## Estado Actual de Sorries
+## Estado Actual de Sorries por Categoria
 
-### Path Kron (6 sorries)
+### Teoremas de Freshness/Boundedness (1 sorry)
 
-| # | Teorema | Linea | Estado | Bloqueante |
-|---|---------|-------|--------|------------|
-| 1 | adjustBlock_alpha (loop) | 735 | Requiere freshness | Probar lower genera IDs unicos |
-| 2 | adjustBlock_preserves_eval | 785 | Requiere SameStructure | lower_produces_sameStructure |
-| 3 | adjustStride_alpha (loop) | 846 | Igual que #1 | Probar lower genera IDs unicos |
-| 4 | adjustStride_preserves_eval | 871 | Igual que #2 | lower_produces_sameStructure |
-| 5 | lower_produces_sameStructure (kron) | 1240 | Case analysis | Workaround kernel error |
-| 6 | evalSigmaAlg_lower_state_irrelevant (kron) | 1922 | Case analysis | Workaround kernel error |
+| Teorema | Linea | Estado |
+|---------|-------|--------|
+| lower_loopVars_bounded_and_state_monotonic (kron) | ~475 | Kernel error |
 
-### Otros Paths (7+ sorries)
+### Teoremas de Alpha-Equivalencia (3 sorries)
 
-| # | Teorema | Lineas | Descripcion |
-|---|---------|--------|-------------|
-| 7 | exactStructure_eval_eq | 1143, 1170 | Casos compute y loop |
-| 8 | evalSigmaAlg_writeMem_size | 1734-1767 | transpose, conjTranspose, elemwise |
-| 9 | evalSigmaAlg_writeMem_size (compose) | 1822 | Analisis de temp |
-| 10 | evalSigmaAlg_writeMem_size (kron) | 1844 | Loop invariant |
-| 11 | evalSigmaAlg_writeMem_irrelevant | 1859 | Depende de size |
-| 12 | evalMatExprAlg_length | 1976-1985 | transpose, kron cases |
-| 13+ | Correctness proofs | 2070+ | Casos especiales |
+| Teorema | Linea | Estado |
+|---------|-------|--------|
+| adjustBlock_alpha (loop) | ~902 | Requiere freshness |
+| adjustStride_alpha (loop) | ~938 | Requiere freshness |
+| evalSigmaAlg_lower_state_irrelevant (kron) | ~2145 | Kernel error |
 
----
+### Teoremas de Estructura (2 sorries)
 
-## Estrategia para Cerrar Sorries Restantes (Post-QA Review)
+| Teorema | Linea | Estado |
+|---------|-------|--------|
+| adjustBlock_preserves_eval | ~1060 | Requiere SameStructure |
+| adjustStride_preserves_eval | ~1092 | Requiere SameStructure |
 
-**Consultado con**: Gemini QA (3 rondas) + DeepSeek Lean Expert (3 rondas)
-**Veredicto QA**: NEEDS_REVISION - Estrategia original conceptualmente correcta pero incompleta
+### Teoremas de Tamano/Longitud (8+ sorries)
 
-### Prioridad 1: Lemas @[simp] para lower (En lugar de kernel workaround)
-
-**Problema original**: `simp only [lower]` + `match` causa kernel error.
-
-**Solucion QA-aprobada** (mas robusta que `split`):
-```lean
-@[simp] theorem lower_identity (s : LowerState) :
-  lower n n s (.identity n) = (.compute (.identity n) ..., s)
-
-@[simp] theorem lower_kron_identity_left (s : LowerState) (b : MatExpr) :
-  lower ... s (.kron (.identity m₁) b) = ...
-
-@[simp] theorem lower_kron_identity_right (s : LowerState) (a : MatExpr) :
-  lower ... s (.kron a (.identity m₂)) = ...
-
--- Usar: simp only [lower_identity, lower_kron_identity_left, ...]
--- En lugar de: simp only [lower]
-```
-
-### Prioridad 2: Freshness con Precondicion Explicita
-
-**Issue QA**: El teorema original `loopVar >= nextLoopVar` NO garantiza `loopVar ≠ v1`.
-
-**Teorema corregido** (incluye precondicion):
-```lean
-theorem lower_preserves_fv_and_generates_fresh_loopVars
-    (mat : MatExpr α m n) (s : LowerState)
-    (h_fv : ∀ v ∈ freeVars mat, v < s.nextLoopVar) :
-  let (expr, s') := lower m n s mat
-  (∀ l ∈ SigmaExpr.loopVarsOf expr, l ≥ s.nextLoopVar) ∧
-  (fv expr ⊆ freeVars mat ∪ {i | s.nextLoopVar ≤ i < s'.nextLoopVar})
-```
-
-**Implicacion**: Para que `loopVar ≠ v1`, necesitamos `v1 < s.nextLoopVar` como precondicion al usar adjustBlock_alpha.
-
-### Prioridad 3: Agregar Precondicion a adjustBlock_alpha
-
-**Recomendacion DeepSeek**: Agregar `hfresh` como parametro explicito:
-```lean
-theorem adjustBlock_alpha (ω : α) (v1 v2 : LoopVar) (n_in n_out : Nat)
-    (expr : SigmaExpr) (env : LoopEnv) (st : EvalState α) (i : Nat)
-    (hfresh : ∀ w ∈ SigmaExpr.loopVarsOf expr, w ≠ v1 ∧ w ≠ v2) :  -- NUEVO
-    evalSigmaAlg ω (env.bind v1 i) st (adjustBlock v1 n_in n_out expr) =
-    evalSigmaAlg ω (env.bind v2 i) st (adjustBlock v2 n_in n_out expr) := by
-  induction expr generalizing n_in n_out i with  -- IMPORTANTE: incluir i
-  | loop n loopVar body ih =>
-    have ⟨hne1, hne2⟩ := hfresh loopVar (by simp [loopVarsOf])
-    -- Ahora bind_comm aplica porque loopVar ≠ v1 y loopVar ≠ v2
-    ...
-```
-
-### Prioridad 4: Probar SameStructure Formalmente
-
-**Issue QA**: "Se cumple por definicion" es simplificacion excesiva.
-
-**Teoremas necesarios**:
-```lean
-theorem adjustBlock_preserves_SameStructure (e : SigmaExpr) (v : LoopVar) (n_in n_out : Nat) :
-    SameStructure e (adjustBlock v n_in n_out e)
-
-theorem adjustStride_preserves_SameStructure (e : SigmaExpr) (v : LoopVar) (innerSize mSize nSize : Nat) :
-    SameStructure e (adjustStride v innerSize mSize nSize e)
-```
-
-Probar por induccion sobre SigmaExpr, no asumir.
+| Teorema | Linea | Descripcion |
+|---------|-------|-------------|
+| evalSigmaAlg_writeMem_size_preserved | ~1908, ~2079 | Varios casos |
+| evalMatExprAlg_length | ~2173, ~2272 | transpose, kron |
+| Otros | Varias | writeMem irrelevance, correctness |
 
 ---
 
-## Diagrama de Dependencias Actualizado
+## Dependencias de Teoremas
 
 ```
-                    adjustStride_fv_subset
+lower_loopVars_bounded_and_state_monotonic
+                    |
+                    v
+            freshness_from_bounded
+                    |
+                    v
+    adjustBlock_alpha_fresh  +  adjustStride_alpha_fresh
+                    |                     |
+                    v                     v
+         loop_adjustBlock_alpha    loop_adjustStride_alpha
+                    \                    /
+                     \                  /
+                      v                v
+      evalSigmaAlg_lower_state_irrelevant (kron)
                            |
                            v
-                    adjustStride_fresh
-                           |
-                           v
-evalGather_stride_alpha    evalScatter_stride_alpha
-           \                    /
-            \                  /
-             v                v
-            adjustStride_alpha
-                    |
-                    v
-            adjustStride_preserves_eval
-                    |
-                    v
-            adjustStride_with_ih
-                    |
-                    v
-            loop_adjustStride_alpha  <------+
-                    |                       |
-                    v                       |
-    evalSigmaAlg_lower_state_irrelevant.kron (caso A⊗I)
-                    |
-                    v
-            lower_state_irrelevant (derivado)
+                lower_state_irrelevant
 ```
 
 ---
 
-## Lecciones Aprendidas (Esta Sesion + QA Review)
+## Lecciones Aprendidas (Fase 2 Correccion 3)
 
-### L-099: Kernel constant redefinition en match anidados
+### L-106: Kernel constant error es bloqueante duro
 
-**Problema**: Hacer `simp only [f]` seguido de `match x with ...` puede causar error de kernel cuando `f` tiene match expressions internos.
+**Problema**: El error de kernel constant no tiene workaround simple dentro del proof term.
 
-**Solucion Original**: Usar `split` con predicados booleanos.
+**Solucion**: Requiere cambio de codigo en la definicion de la funcion (separar predicados en funciones auxiliares).
 
-**Solucion QA-Aprobada** (mas robusta): Crear lemas `@[simp]` para cada caso base de la funcion y usar `simp only [f_case1, f_case2, ...]` en lugar de `simp only [f]`.
+### L-107: La infraestructura de freshness esta completa
 
-### L-100: Freshness requiere precondicion explicita (CORREGIDO por QA)
+Los teoremas `_alpha_fresh` funcionan perfectamente cuando se les proporciona la precondicion de freshness. El problema esta en obtener esa precondicion para expresiones generadas por `lower`.
 
-**Problema Original**: Propusimos `loopVar >= nextLoopVar` como suficiente para freshness.
+### L-108: Los casos I⊗B y A⊗I son closeable en principio
 
-**Correccion QA**: Esto NO garantiza `loopVar ≠ v1` a menos que tengamos `v1 < nextLoopVar`.
+Una vez resuelto el kernel error:
+- I⊗B: `apply loop_adjustBlock_alpha; intro env' st'; exact ih_b ...`
+- A⊗I: `apply loop_adjustStride_alpha; intro env' st'; exact ih_a ...`
 
-**Solucion Correcta**:
-1. Agregar precondicion al teorema de freshness: `∀ v ∈ freeVars(mat), v < nextLoopVar`
-2. O agregar precondicion a adjustBlock_alpha: `(hfresh : ∀ w ∈ loopVarsOf expr, w ≠ v1 ∧ w ≠ v2)`
-
-> Leccion: Las propiedades "por construccion" deben formalizarse con precondiciones explicitas.
-
-### L-101: Estructura de prueba para kron (Validado)
-
-Los tres casos de kron en `lower`:
-1. I ⊗ B: `.loop m₁ v (adjustBlock v n₂ m₂ (lower b))`
-2. A ⊗ I: `.loop m₂ v (adjustStride v m₂ m₁ n₁ (lower a))`
-3. General: `.loop m₁ v (.seq (lower a) (.loop m₂ (v+1) (lower b)))`
-
-Cada caso tiene un lemma correspondiente:
-1. `loop_adjustBlock_alpha` + `ih_b`
-2. `loop_adjustStride_alpha` + `ih_a`
-3. Requiere `loop_seq_alpha` (compuesto)
-
-### L-102: Generalizar con `i` en loops anidados (DeepSeek)
-
-**Problema**: En induccion sobre expresiones con loops, el scope de variables puede ser incorrecto.
-
-**Solucion**: Incluir la variable de iteracion en la generalizacion:
-```lean
-induction expr generalizing n_in n_out i  -- INCLUIR i
-```
-
-### L-103: No asumir SameStructure (QA)
-
-**Problema**: Decir "SameStructure se cumple por definicion" sin prueba formal.
-
-**Solucion**: Siempre probar formalmente por induccion:
-```lean
-theorem adjustBlock_preserves_SameStructure (e : SigmaExpr) ... :
-    SameStructure e (adjustBlock v n_in n_out e) := by
-  induction e with
-  | compute => exact SameStructure.compute ...
-  | loop => exact SameStructure.loop ...
-  -- etc.
-```
+El caso general A⊗B requiere trabajo adicional para loops anidados.
 
 ---
 
 ## Proximos Pasos Recomendados
 
-1. **Implementar kernel workaround** - Crear `MatExpr.isIdentity` y usar `split`
-2. **Probar lower_loopVars_bounded** - Induccion sobre MatExpr, trackear LowerState
-3. **Cerrar kron cases** - Con workaround y freshness
-4. **Evaluar otros sorries** - Muchos son sobre dimensiones no cuadradas (no usadas en FFT/NTT)
+1. **Refactorizar `lower.kron`** - Extraer `MatExpr.isIdentity` como funcion separada
+2. **Cerrar `lower_loopVars_bounded` kron** - Con el predicado separado, el case analysis funcionara
+3. **Cerrar `evalSigmaAlg_lower_state_irrelevant` kron** - Usando la misma tecnica
+4. **Evaluar caso general A⊗B** - Puede requerir `loop_seq_alpha` para loops anidados
+5. **Documentar sorries restantes** - Muchos son sobre casos edge (no-cuadrados, correctness parcial)
+
+---
+
+## Metricas de Progreso
+
+| Fase | Sorries Inicio | Sorries Fin | Cambio |
+|------|----------------|-------------|--------|
+| Inicio (Fase 2) | ~20 | - | - |
+| Correccion 2 | ~18 | 13 | -5 |
+| Correccion 3 | 13 | 17 | +4 (nuevos teoremas con sorry en kron) |
+
+**Nota**: El aumento de sorries es porque agregamos teoremas nuevos (lower_loopVars_bounded, etc.) que tienen sorry en el caso kron debido al kernel error. La infraestructura esta mas completa y lista para cerrar una vez resuelto el bloqueante.
 
 ---
 
 *Documentacion creada: 2026-02-07*
-*Ultima actualizacion: 2026-02-07 (Fase 2 Correccion 2)*
+*Ultima actualizacion: 2026-02-07 (Fase 2 Correccion 3)*
