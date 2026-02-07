@@ -273,6 +273,41 @@ theorem adjustBlock_fresh (v w : LoopVar) (n_in n_out : Nat) (expr : SigmaExpr)
   simp only [Finset.mem_singleton] at this
   exact hw this
 
+/-- After adjustStride, the only free variables are {v}.
+    This is because adjustStride replaces all Gather/Scatter with patterns
+    that use baseAddr := .var v, so fv = {v}. -/
+theorem adjustStride_fv_subset (v : LoopVar) (innerSize mSize nSize : Nat) (expr : SigmaExpr) :
+    SigmaExpr.fv (adjustStride v innerSize mSize nSize expr) ⊆ {v} := by
+  induction expr with
+  | compute k g s =>
+    simp only [adjustStride, SigmaExpr.fv, Gather.fv, Scatter.fv, IdxExpr.fv]
+    simp only [Finset.union_self, Finset.Subset.refl]
+  | loop n w body ih =>
+    simp only [adjustStride, SigmaExpr.fv]
+    calc SigmaExpr.fv (adjustStride v innerSize mSize nSize body) \ {w}
+        ⊆ SigmaExpr.fv (adjustStride v innerSize mSize nSize body) := Finset.sdiff_subset
+      _ ⊆ {v} := ih
+  | seq s1 s2 ih1 ih2 =>
+    simp only [adjustStride, SigmaExpr.fv]
+    exact Finset.union_subset ih1 ih2
+  | par s1 s2 ih1 ih2 =>
+    simp only [adjustStride, SigmaExpr.fv]
+    exact Finset.union_subset ih1 ih2
+  | temp sz body ih =>
+    simp only [adjustStride, SigmaExpr.fv]
+    exact ih
+  | nop =>
+    simp only [adjustStride, SigmaExpr.fv, Finset.empty_subset]
+
+/-- If w ≠ v, then w is not free in adjustStride v ... expr -/
+theorem adjustStride_fresh (v w : LoopVar) (innerSize mSize nSize : Nat) (expr : SigmaExpr)
+    (hw : w ≠ v) : w ∉ SigmaExpr.fv (adjustStride v innerSize mSize nSize expr) := by
+  intro hmem
+  have hsub := adjustStride_fv_subset v innerSize mSize nSize expr
+  have : w ∈ ({v} : Finset LoopVar) := hsub hmem
+  simp only [Finset.mem_singleton] at this
+  exact hw this
+
 /-- Variables used as loop indices in an expression -/
 def SigmaExpr.loopVarsOf : SigmaExpr → Finset LoopVar
   | .compute _ _ _ => ∅
@@ -297,6 +332,22 @@ theorem adjustBlock_loopVarsOf (v : LoopVar) (n_in n_out : Nat) (expr : SigmaExp
     simp only [adjustBlock, SigmaExpr.loopVarsOf, ih]
   | nop =>
     simp only [adjustBlock, SigmaExpr.loopVarsOf]
+
+/-- adjustStride doesn't change which loop variables are used -/
+theorem adjustStride_loopVarsOf (v : LoopVar) (innerSize mSize nSize : Nat) (expr : SigmaExpr) :
+    SigmaExpr.loopVarsOf (adjustStride v innerSize mSize nSize expr) = SigmaExpr.loopVarsOf expr := by
+  induction expr with
+  | compute k g s => simp only [adjustStride, SigmaExpr.loopVarsOf]
+  | loop n w body ih =>
+    simp only [adjustStride, SigmaExpr.loopVarsOf, ih]
+  | seq s1 s2 ih1 ih2 =>
+    simp only [adjustStride, SigmaExpr.loopVarsOf, ih1, ih2]
+  | par s1 s2 ih1 ih2 =>
+    simp only [adjustStride, SigmaExpr.loopVarsOf, ih1, ih2]
+  | temp sz body ih =>
+    simp only [adjustStride, SigmaExpr.loopVarsOf, ih]
+  | nop =>
+    simp only [adjustStride, SigmaExpr.loopVarsOf]
 
 end AmoLean.Sigma
 
@@ -416,6 +467,21 @@ theorem evalScatter_block_alpha (env : LoopEnv) (v1 v2 : LoopVar) (blockSize i :
     evalScatter (env.bind v1 i) (Scatter.block blockSize v1) mem vals =
     evalScatter (env.bind v2 i) (Scatter.block blockSize v2) mem vals := by
   simp only [evalScatter, Scatter.block, evalIdxExpr_affine_bind]
+
+/-- Stride-pattern Gather with .var baseAddr: evaluation depends on bound value, not variable ID.
+    For adjustStride which uses baseAddr = .var v -/
+theorem evalGather_stride_alpha (env : LoopEnv) (v1 v2 : LoopVar) (count stride i : Nat)
+    (mem : Memory α) :
+    evalGather (env.bind v1 i) { count := count, baseAddr := .var v1, stride := stride } mem =
+    evalGather (env.bind v2 i) { count := count, baseAddr := .var v2, stride := stride } mem := by
+  simp only [evalGather, evalIdxExpr_var_bind]
+
+/-- Stride-pattern Scatter with .var baseAddr: evaluation depends on bound value, not variable ID -/
+theorem evalScatter_stride_alpha (env : LoopEnv) (v1 v2 : LoopVar) (count stride i : Nat)
+    (mem : Memory α) (vals : List α) :
+    evalScatter (env.bind v1 i) { count := count, baseAddr := .var v1, stride := stride } mem vals =
+    evalScatter (env.bind v2 i) { count := count, baseAddr := .var v2, stride := stride } mem vals := by
+  simp only [evalScatter, evalIdxExpr_var_bind]
 
 /-! ## Part 5: Algebraic DFT with Primitive Root
 
@@ -629,42 +695,92 @@ adjustBlock with different loop variable IDs evaluates identically when those
 variables are bound to the same values. This is essential for proving
 lower_state_irrelevant for kron. -/
 
-/-- adjustBlock with different loop variables evaluates equally when bound to same value.
-    For the SAME base expression expr, adjustBlock v1 ... expr and adjustBlock v2 ... expr
-    produce identical results when v1 and v2 are bound to the same iteration value i.
-    This is because Gather.block and Scatter.block patterns evaluate based on env v,
-    and (env.bind v i) v = i regardless of which specific v is used. -/
+/-- adjustBlock_alpha with explicit freshness precondition.
+    The loop case requires that all inner loopVars are distinct from v1 and v2.
+    For expressions from lower, this holds by construction (freshLoopVar generates
+    strictly increasing IDs). -/
+theorem adjustBlock_alpha_fresh (ω : α) (v1 v2 : LoopVar) (n_in n_out : Nat) (expr : SigmaExpr)
+    (env : LoopEnv) (st : EvalState α) (i : Nat)
+    (hfresh : ∀ w ∈ SigmaExpr.loopVarsOf expr, w ≠ v1 ∧ w ≠ v2) :
+    evalSigmaAlg ω (env.bind v1 i) st (adjustBlock v1 n_in n_out expr) =
+    evalSigmaAlg ω (env.bind v2 i) st (adjustBlock v2 n_in n_out expr) := by
+  induction expr generalizing env st i with
+  | compute k g s =>
+    simp only [adjustBlock, evalSigmaAlg]
+    rw [evalGather_block_alpha env v1 v2 n_in i st.readMem]
+    congr 1
+    rw [evalScatter_block_alpha env v1 v2 n_out i st.writeMem]
+  | loop n loopVar body ih =>
+    simp only [adjustBlock, evalSigmaAlg]
+    -- loopVar ∈ loopVarsOf (loop n loopVar body) by definition
+    have hlv : loopVar ∈ SigmaExpr.loopVarsOf (.loop n loopVar body) := by
+      simp only [SigmaExpr.loopVarsOf]
+      exact Finset.mem_union_left _ (Finset.mem_singleton_self loopVar)
+    have ⟨hne1, hne2⟩ := hfresh loopVar hlv
+    -- Now we can use bind_comm because loopVar ≠ v1 and loopVar ≠ v2
+    congr 1
+    funext st' j
+    -- Reorder the bindings: (env.bind v* i).bind loopVar j = (env.bind loopVar j).bind v* i
+    have hcomm1 : (env.bind v1 i).bind loopVar j = (env.bind loopVar j).bind v1 i :=
+      LoopEnv.bind_comm env v1 loopVar i j hne1.symm
+    have hcomm2 : (env.bind v2 i).bind loopVar j = (env.bind loopVar j).bind v2 i :=
+      LoopEnv.bind_comm env v2 loopVar i j hne2.symm
+    rw [hcomm1, hcomm2]
+    -- The goal is about constructing EvalState records from evalSigmaAlg results
+    -- Apply IH to show the inner evalSigmaAlg are equal
+    have hfresh_body : ∀ w ∈ SigmaExpr.loopVarsOf body, w ≠ v1 ∧ w ≠ v2 := fun w hw => hfresh w (by
+      simp only [SigmaExpr.loopVarsOf]; exact Finset.mem_union_right _ hw)
+    have heq := ih (env.bind loopVar j) st' i hfresh_body
+    -- The step function constructs { readMem := result.writeMem, writeMem := result.writeMem }
+    -- If result1 = result2, then the constructed states are equal
+    simp only [heq]
+  | seq s1 s2 ih1 ih2 =>
+    simp only [adjustBlock, evalSigmaAlg]
+    have hfresh1 : ∀ w ∈ SigmaExpr.loopVarsOf s1, w ≠ v1 ∧ w ≠ v2 := fun w hw => hfresh w (by
+      simp only [SigmaExpr.loopVarsOf]; exact Finset.mem_union_left _ hw)
+    have hfresh2 : ∀ w ∈ SigmaExpr.loopVarsOf s2, w ≠ v1 ∧ w ≠ v2 := fun w hw => hfresh w (by
+      simp only [SigmaExpr.loopVarsOf]; exact Finset.mem_union_right _ hw)
+    have h1 := ih1 env st i hfresh1
+    rw [h1]
+    exact ih2 env _ i hfresh2
+  | par s1 s2 ih1 ih2 =>
+    simp only [adjustBlock, evalSigmaAlg]
+    have hfresh1 : ∀ w ∈ SigmaExpr.loopVarsOf s1, w ≠ v1 ∧ w ≠ v2 := fun w hw => hfresh w (by
+      simp only [SigmaExpr.loopVarsOf]; exact Finset.mem_union_left _ hw)
+    have hfresh2 : ∀ w ∈ SigmaExpr.loopVarsOf s2, w ≠ v1 ∧ w ≠ v2 := fun w hw => hfresh w (by
+      simp only [SigmaExpr.loopVarsOf]; exact Finset.mem_union_right _ hw)
+    have h1 := ih1 env st i hfresh1
+    rw [h1]
+    exact ih2 env _ i hfresh2
+  | temp size body ih =>
+    simp only [adjustBlock, evalSigmaAlg]
+    have h := ih env { readMem := st.readMem, writeMem := Memory.zeros size } i hfresh
+    simp only [h]
+  | nop =>
+    simp only [adjustBlock, evalSigmaAlg]
+
+/-- Original adjustBlock_alpha without freshness precondition.
+    This version has a sorry in the loop case. For proving lower_state_irrelevant,
+    use adjustBlock_alpha_fresh with a freshness proof from lower. -/
 theorem adjustBlock_alpha (ω : α) (v1 v2 : LoopVar) (n_in n_out : Nat) (expr : SigmaExpr)
     (env : LoopEnv) (st : EvalState α) (i : Nat) :
     evalSigmaAlg ω (env.bind v1 i) st (adjustBlock v1 n_in n_out expr) =
     evalSigmaAlg ω (env.bind v2 i) st (adjustBlock v2 n_in n_out expr) := by
   induction expr generalizing env st with
   | compute k g s =>
-    -- adjustBlock replaces gather/scatter with block patterns using the loopVar
     simp only [adjustBlock, evalSigmaAlg]
-    -- Gather.block evaluates the same for v1 and v2 by evalGather_block_alpha
     rw [evalGather_block_alpha env v1 v2 n_in i st.readMem]
-    -- evalKernelAlg doesn't depend on the loop variable
     congr 1
-    -- Scatter.block evaluates the same for v1 and v2 by evalScatter_block_alpha
     rw [evalScatter_block_alpha env v1 v2 n_out i st.writeMem]
   | loop n loopVar body ih =>
     simp only [adjustBlock, evalSigmaAlg]
-    -- The foldl iterates over the inner loop, binding loopVar at each step
-    -- For well-formed expressions from lower, loopVar ≠ v1 and loopVar ≠ v2
-    -- This allows reordering bindings via LoopEnv.bind_comm
-    -- The proof requires showing (env.bind v1 i).bind loopVar j = (env.bind loopVar j).bind v1 i
-    -- which needs loopVar ≠ v1 (and similarly for v2)
-    -- TODO: Add precondition or prove from structure of lower-generated expressions
+    -- SORRY: Requires freshness precondition. Use adjustBlock_alpha_fresh instead.
     sorry
   | seq s1 s2 ih1 ih2 =>
     simp only [adjustBlock, evalSigmaAlg]
-    -- Evaluate s1 first, then s2 with the result
     have h1 := ih1 env st
-    -- After s1 evaluation, the states are equal, so the intermediate state for s2 is equal
     set st1_v1 := evalSigmaAlg ω (env.bind v1 i) st (adjustBlock v1 n_in n_out s1)
     set st1_v2 := evalSigmaAlg ω (env.bind v2 i) st (adjustBlock v2 n_in n_out s2)
-    -- Note: the intermediate state uses st1.writeMem for both readMem and writeMem
     rw [h1]
     exact ih2 env _
   | par s1 s2 ih1 ih2 =>
@@ -674,7 +790,6 @@ theorem adjustBlock_alpha (ω : α) (v1 v2 : LoopVar) (n_in n_out : Nat) (expr :
     exact ih2 env _
   | temp size body ih =>
     simp only [adjustBlock, evalSigmaAlg]
-    -- temp creates a new memory, but the body evaluation follows the same pattern
     have h := ih env { readMem := st.readMem, writeMem := Memory.zeros size }
     simp only [h]
   | nop =>
@@ -693,9 +808,19 @@ theorem adjustBlock_preserves_eval (ω : α) (v : LoopVar) (n_in n_out : Nat)
   -- If expr1 and expr2 evaluate equally for all env/st, then after adjustBlock
   -- with the SAME v, they still evaluate equally.
   --
-  -- Proof by induction on expr1 would need to case-split on expr2's structure.
-  -- For expressions from lower with same MatExpr, they have matching structure.
-  -- For now, use transitivity via adjustBlock_alpha:
+  -- The proof proceeds by induction on expr1, using h to derive the necessary
+  -- equalities. However, this requires expr1 and expr2 to have the same structure
+  -- (which holds for expressions from lower with the same MatExpr source).
+  --
+  -- For expressions with matching structure from lower:
+  -- - compute: same kernel, adjustBlock produces same Gather.block/Scatter.block
+  -- - loop: by IH on the body
+  -- - seq/par: by IH on subexpressions
+  -- - temp: by IH on body
+  -- - nop: trivial
+  --
+  -- SORRY: Full proof requires SameStructure relation to match expr1/expr2.
+  -- For lower-generated expressions, this always holds.
   sorry
 
 /-- Combined alpha-equivalence: if two expressions evaluate equally (by IH from lower),
@@ -731,6 +856,133 @@ theorem loop_adjustBlock_alpha (ω : α) (v1 v2 : LoopVar) (n n_in n_out : Nat)
   funext st' i
   -- Show the step function produces equal results
   have h := adjustBlock_with_ih ω v1 v2 n_in n_out expr1 expr2 env st' i h_ih
+  simp only [h]
+
+/-! ### Part 7.5.2: Alpha-equivalence for adjustStride
+
+Analogous to adjustBlock_alpha, but for strided access patterns (A ⊗ I_n).
+The Gather/Scatter patterns use .var v as baseAddr. -/
+
+/-- adjustStride_alpha with explicit freshness precondition.
+    Analogous to adjustBlock_alpha_fresh. -/
+theorem adjustStride_alpha_fresh (ω : α) (v1 v2 : LoopVar) (innerSize mSize nSize : Nat)
+    (expr : SigmaExpr) (env : LoopEnv) (st : EvalState α) (i : Nat)
+    (hfresh : ∀ w ∈ SigmaExpr.loopVarsOf expr, w ≠ v1 ∧ w ≠ v2) :
+    evalSigmaAlg ω (env.bind v1 i) st (adjustStride v1 innerSize mSize nSize expr) =
+    evalSigmaAlg ω (env.bind v2 i) st (adjustStride v2 innerSize mSize nSize expr) := by
+  induction expr generalizing env st i with
+  | compute k g s =>
+    simp only [adjustStride, evalSigmaAlg]
+    rw [evalGather_stride_alpha env v1 v2 nSize innerSize i st.readMem]
+    congr 1
+    rw [evalScatter_stride_alpha env v1 v2 mSize innerSize i st.writeMem]
+  | loop n loopVar body ih =>
+    simp only [adjustStride, evalSigmaAlg]
+    have hlv : loopVar ∈ SigmaExpr.loopVarsOf (.loop n loopVar body) := by
+      simp only [SigmaExpr.loopVarsOf]
+      exact Finset.mem_union_left _ (Finset.mem_singleton_self loopVar)
+    have ⟨hne1, hne2⟩ := hfresh loopVar hlv
+    congr 1
+    funext st' j
+    have hcomm1 : (env.bind v1 i).bind loopVar j = (env.bind loopVar j).bind v1 i :=
+      LoopEnv.bind_comm env v1 loopVar i j hne1.symm
+    have hcomm2 : (env.bind v2 i).bind loopVar j = (env.bind loopVar j).bind v2 i :=
+      LoopEnv.bind_comm env v2 loopVar i j hne2.symm
+    rw [hcomm1, hcomm2]
+    -- The goal is about constructing EvalState records from evalSigmaAlg results
+    have hfresh_body : ∀ w ∈ SigmaExpr.loopVarsOf body, w ≠ v1 ∧ w ≠ v2 := fun w hw => hfresh w (by
+      simp only [SigmaExpr.loopVarsOf]; exact Finset.mem_union_right _ hw)
+    have heq := ih (env.bind loopVar j) st' i hfresh_body
+    simp only [heq]
+  | seq s1 s2 ih1 ih2 =>
+    simp only [adjustStride, evalSigmaAlg]
+    have hfresh1 : ∀ w ∈ SigmaExpr.loopVarsOf s1, w ≠ v1 ∧ w ≠ v2 := fun w hw => hfresh w (by
+      simp only [SigmaExpr.loopVarsOf]; exact Finset.mem_union_left _ hw)
+    have hfresh2 : ∀ w ∈ SigmaExpr.loopVarsOf s2, w ≠ v1 ∧ w ≠ v2 := fun w hw => hfresh w (by
+      simp only [SigmaExpr.loopVarsOf]; exact Finset.mem_union_right _ hw)
+    have h1 := ih1 env st i hfresh1
+    rw [h1]
+    exact ih2 env _ i hfresh2
+  | par s1 s2 ih1 ih2 =>
+    simp only [adjustStride, evalSigmaAlg]
+    have hfresh1 : ∀ w ∈ SigmaExpr.loopVarsOf s1, w ≠ v1 ∧ w ≠ v2 := fun w hw => hfresh w (by
+      simp only [SigmaExpr.loopVarsOf]; exact Finset.mem_union_left _ hw)
+    have hfresh2 : ∀ w ∈ SigmaExpr.loopVarsOf s2, w ≠ v1 ∧ w ≠ v2 := fun w hw => hfresh w (by
+      simp only [SigmaExpr.loopVarsOf]; exact Finset.mem_union_right _ hw)
+    have h1 := ih1 env st i hfresh1
+    rw [h1]
+    exact ih2 env _ i hfresh2
+  | temp size body ih =>
+    simp only [adjustStride, evalSigmaAlg]
+    have h := ih env { readMem := st.readMem, writeMem := Memory.zeros size } i hfresh
+    simp only [h]
+  | nop =>
+    simp only [adjustStride, evalSigmaAlg]
+
+/-- Original adjustStride_alpha without freshness precondition (has sorry in loop case). -/
+theorem adjustStride_alpha (ω : α) (v1 v2 : LoopVar) (innerSize mSize nSize : Nat)
+    (expr : SigmaExpr) (env : LoopEnv) (st : EvalState α) (i : Nat) :
+    evalSigmaAlg ω (env.bind v1 i) st (adjustStride v1 innerSize mSize nSize expr) =
+    evalSigmaAlg ω (env.bind v2 i) st (adjustStride v2 innerSize mSize nSize expr) := by
+  induction expr generalizing env st with
+  | compute k g s =>
+    simp only [adjustStride, evalSigmaAlg]
+    rw [evalGather_stride_alpha env v1 v2 nSize innerSize i st.readMem]
+    congr 1
+    rw [evalScatter_stride_alpha env v1 v2 mSize innerSize i st.writeMem]
+  | loop n loopVar body ih =>
+    simp only [adjustStride, evalSigmaAlg]
+    -- SORRY: Requires freshness precondition. Use adjustStride_alpha_fresh instead.
+    sorry
+  | seq s1 s2 ih1 ih2 =>
+    simp only [adjustStride, evalSigmaAlg]
+    have h1 := ih1 env st
+    rw [h1]
+    exact ih2 env _
+  | par s1 s2 ih1 ih2 =>
+    simp only [adjustStride, evalSigmaAlg]
+    have h1 := ih1 env st
+    rw [h1]
+    exact ih2 env _
+  | temp size body ih =>
+    simp only [adjustStride, evalSigmaAlg]
+    have h := ih env { readMem := st.readMem, writeMem := Memory.zeros size }
+    simp only [h]
+  | nop =>
+    simp only [adjustStride, evalSigmaAlg]
+
+/-- adjustStride preserves evaluation equality (analogous to adjustBlock_preserves_eval) -/
+theorem adjustStride_preserves_eval (ω : α) (v : LoopVar) (innerSize mSize nSize : Nat)
+    (expr1 expr2 : SigmaExpr) (env : LoopEnv) (st : EvalState α)
+    (h : ∀ env' st', evalSigmaAlg ω env' st' expr1 = evalSigmaAlg ω env' st' expr2) :
+    evalSigmaAlg ω env st (adjustStride v innerSize mSize nSize expr1) =
+    evalSigmaAlg ω env st (adjustStride v innerSize mSize nSize expr2) := by
+  -- Same reasoning as adjustBlock_preserves_eval
+  sorry
+
+/-- Combined alpha-equivalence for adjustStride with IH -/
+theorem adjustStride_with_ih (ω : α) (v1 v2 : LoopVar) (innerSize mSize nSize : Nat)
+    (expr1 expr2 : SigmaExpr) (env : LoopEnv) (st : EvalState α) (i : Nat)
+    (h_ih : ∀ env' st', evalSigmaAlg ω env' st' expr1 = evalSigmaAlg ω env' st' expr2) :
+    evalSigmaAlg ω (env.bind v1 i) st (adjustStride v1 innerSize mSize nSize expr1) =
+    evalSigmaAlg ω (env.bind v2 i) st (adjustStride v2 innerSize mSize nSize expr2) := by
+  have h1 := adjustStride_alpha ω v1 v2 innerSize mSize nSize expr1 env st i
+  have h2 := adjustStride_preserves_eval ω v2 innerSize mSize nSize expr1 expr2 (env.bind v2 i) st h_ih
+  calc evalSigmaAlg ω (env.bind v1 i) st (adjustStride v1 innerSize mSize nSize expr1)
+      = evalSigmaAlg ω (env.bind v2 i) st (adjustStride v2 innerSize mSize nSize expr1) := h1
+    _ = evalSigmaAlg ω (env.bind v2 i) st (adjustStride v2 innerSize mSize nSize expr2) := h2
+
+/-- Loop with adjustStride preserves alpha-equivalence when bodies are IH-equivalent.
+    For kron lowering A ⊗ I case. -/
+theorem loop_adjustStride_alpha (ω : α) (v1 v2 : LoopVar) (n innerSize mSize nSize : Nat)
+    (expr1 expr2 : SigmaExpr) (env : LoopEnv) (st : EvalState α)
+    (h_ih : ∀ env' st', evalSigmaAlg ω env' st' expr1 = evalSigmaAlg ω env' st' expr2) :
+    evalSigmaAlg ω env st (.loop n v1 (adjustStride v1 innerSize mSize nSize expr1)) =
+    evalSigmaAlg ω env st (.loop n v2 (adjustStride v2 innerSize mSize nSize expr2)) := by
+  simp only [evalSigmaAlg]
+  congr 1
+  funext st' i
+  have h := adjustStride_with_ih ω v1 v2 innerSize mSize nSize expr1 expr2 env st' i h_ih
   simp only [h]
 
 /-! ## Part 7.6: SameStructure relation for expressions from lower
@@ -1740,23 +1992,24 @@ theorem evalSigmaAlg_lower_state_irrelevant
     rw [ih_a state1 state2 env st]
     exact ih_b _ _ env _
   | kron a b ih_a ih_b =>
-    -- Kron uses freshLoopVar → different loop variable IDs → needs alpha-renaming
-    -- The loop body uses adjustBlock/adjustStride with the loop variable
-    -- Different states produce different loopVar values
+    -- Kron lowering has three cases based on whether a or b is identity.
     --
-    -- The lower function for kron has three cases:
-    -- 1. I ⊗ B (aIsIdentity): .loop m₁ v (adjustBlock v n₂ m₂ (lower b))
-    -- 2. A ⊗ I (bIsIdentity): .loop m₂ v (adjustStride v m₂ m₁ n₁ (lower a))
-    -- 3. General: .loop m₁ v (.seq exprA (.loop m₂ v+1 exprB))
+    -- The infrastructure is now in place:
+    -- - adjustBlock_alpha_fresh: proven (no sorry in loop case)
+    -- - adjustStride_alpha_fresh: proven (no sorry in loop case)
+    -- - loop_adjustBlock_alpha: uses adjustBlock_with_ih
+    -- - loop_adjustStride_alpha: uses adjustStride_with_ih
     --
-    -- The proof uses loop_adjustBlock_alpha (for I⊗B case) which relies on:
-    -- - adjustBlock_alpha: same expr with different loopVars evaluates equally when bound same
-    -- - adjustBlock_preserves_eval: IH-equal exprs with adjustBlock still evaluate equally
-    -- - ih_b: lower of b is state-irrelevant
+    -- To close this sorry, we need:
+    -- 1. lower_loopVars_bounded: ∀ l ∈ loopVarsOf(lower mat s).1, l ≥ s.nextLoopVar
+    --    This proves freshness: loop vars generated by lower are all >= nextLoopVar
+    -- 2. Use this to satisfy the hfresh precondition in _alpha_fresh theorems
     --
-    -- SORRY: Full proof requires case analysis on isIdentity(a) and isIdentity(b)
-    -- plus adjustStride_alpha lemma (similar to adjustBlock_alpha)
-    -- and handling of the general nested loop case
+    -- Technical issue: `simp only [lower]` followed by case analysis on the result
+    -- causes kernel constant redefinition error. The workaround is to create @[simp]
+    -- lemmas for each case of lower and use those instead.
+    --
+    -- SORRY: Pending lower_loopVars_bounded and kernel workaround
     sorry
 
 set_option maxHeartbeats 800000 in

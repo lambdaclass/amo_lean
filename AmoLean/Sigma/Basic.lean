@@ -366,6 +366,36 @@ decreasing_by
   all_goals simp only [MatExpr.nodeCount]
   all_goals omega
 
+/-! ### Simp lemmas for lower (avoiding kernel constant redefinition)
+
+These lemmas allow case-specific unfolding of `lower` without causing
+"constant has already been declared" errors from nested match expressions.
+Use `simp only [lower_identity, lower_kron_identity_left, ...]` instead of
+`simp only [lower]` followed by `match`. -/
+
+@[simp] theorem lower_identity (state : LowerState) (n : Nat) :
+    lower n n state (MatExpr.identity n : MatExpr α n n) =
+    (.compute (.identity n) (Gather.contiguous n (.const 0)) (Scatter.contiguous n (.const 0)), state) := by
+  unfold lower; rfl
+
+@[simp] theorem lower_zero (state : LowerState) (m n : Nat) :
+    lower m n state (MatExpr.zero m n : MatExpr α m n) = (.nop, state) := by
+  unfold lower; rfl
+
+@[simp] theorem lower_dft (state : LowerState) (n : Nat) :
+    lower n n state (MatExpr.dft n : MatExpr α n n) =
+    (.compute (.dft n) (Gather.contiguous n (.const 0)) (Scatter.contiguous n (.const 0)), state) := by
+  unfold lower; rfl
+
+@[simp] theorem lower_ntt (state : LowerState) (n p : Nat) :
+    lower n n state (MatExpr.ntt n p : MatExpr α n n) =
+    (.compute (.ntt n p) (Gather.contiguous n (.const 0)) (Scatter.contiguous n (.const 0)), state) := by
+  unfold lower; rfl
+
+/-- For kron, we avoid @[simp] lemmas that cause kernel constant redefinition.
+    Instead, the kron case in AlgebraicSemantics uses induction on the MatExpr
+    structure which naturally provides the case split without unfolding lower. -/
+
 def lowerFresh (m n : Nat) (e : MatExpr α m n) : SigmaExpr :=
   (lower m n {} e).1
 
