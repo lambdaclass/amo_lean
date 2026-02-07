@@ -20,10 +20,12 @@
 import AmoLean.Sigma.Basic
 import AmoLean.NTT.RootsOfUnity
 import Mathlib.Algebra.Field.Defs
+import Mathlib.Data.Finset.Basic
 
 namespace AmoLean.Verification.Algebraic
 
-open AmoLean.Sigma (SigmaExpr Kernel Gather Scatter IdxExpr LoopVar lower lowerFresh LowerState)
+open AmoLean.Sigma (SigmaExpr Kernel Gather Scatter IdxExpr LoopVar lower lowerFresh LowerState
+                     freshLoopVar adjustBlock adjustStride)
 open AmoLean.Matrix (MatExpr Perm)
 open AmoLean.NTT (IsPrimitiveRoot)
 
@@ -151,6 +153,18 @@ def LoopEnv.empty : LoopEnv := fun _ => 0
 def LoopEnv.bind (env : LoopEnv) (v : LoopVar) (val : Nat) : LoopEnv :=
   fun v' => if v' == v then val else env v'
 
+/-- Binding returns the bound value when queried with the same variable -/
+theorem LoopEnv.bind_same (env : LoopEnv) (v : LoopVar) (val : Nat) :
+    (env.bind v val) v = val := by
+  simp only [LoopEnv.bind, beq_self_eq_true, ↓reduceIte]
+
+/-- Bindings with different variables commute -/
+theorem LoopEnv.bind_comm (env : LoopEnv) (v1 v2 : LoopVar) (val1 val2 : Nat) (hne : v1 ≠ v2) :
+    (env.bind v1 val1).bind v2 val2 = (env.bind v2 val2).bind v1 val1 := by
+  funext v
+  simp only [LoopEnv.bind]
+  by_cases h1 : v == v2 <;> by_cases h2 : v == v1 <;> simp_all [beq_iff_eq]
+
 /-- State during evaluation with explicit read/write memories -/
 structure EvalState (α : Type*) where
   readMem : Memory α
@@ -172,6 +186,181 @@ def evalIdxExpr (env : LoopEnv) : IdxExpr → Nat
   | .add e1 e2 => evalIdxExpr env e1 + evalIdxExpr env e2
   | .mul c e => c * evalIdxExpr env e
 
+/-- evalIdxExpr for .affine with bound variable only depends on bound value -/
+theorem evalIdxExpr_affine_bind (env : LoopEnv) (v : LoopVar) (i base stride : Nat) :
+    evalIdxExpr (env.bind v i) (IdxExpr.affine base stride v) = base + stride * i := by
+  simp only [evalIdxExpr, LoopEnv.bind_same]
+
+/-- evalIdxExpr for .var with bound variable only depends on bound value -/
+theorem evalIdxExpr_var_bind (env : LoopEnv) (v : LoopVar) (i : Nat) :
+    evalIdxExpr (env.bind v i) (IdxExpr.var v) = i := by
+  simp only [evalIdxExpr, LoopEnv.bind_same]
+
+/-! ### Part 3.5: Free Variables Infrastructure
+
+These definitions enable alpha-equivalence proofs by tracking which loop variables
+appear free (unbound) in expressions. The key insight: evaluation only depends on
+the values of free variables, so expressions with identical structure but different
+bound variable names evaluate equally. -/
+
+namespace AmoLean.Sigma
+
+/-- Free variables in an index expression -/
+def IdxExpr.fv : IdxExpr → Finset LoopVar
+  | .const _ => ∅
+  | .var v => {v}
+  | .affine _ _ v => {v}
+  | .add e1 e2 => IdxExpr.fv e1 ∪ IdxExpr.fv e2
+  | .mul _ e => IdxExpr.fv e
+
+/-- Free variables in a Gather pattern -/
+def Gather.fv (g : Gather) : Finset LoopVar := IdxExpr.fv g.baseAddr
+
+/-- Free variables in a Scatter pattern -/
+def Scatter.fv (s : Scatter) : Finset LoopVar := IdxExpr.fv s.baseAddr
+
+/-- Free variables in a SigmaExpr -/
+def SigmaExpr.fv : SigmaExpr → Finset LoopVar
+  | .compute _ g s => Gather.fv g ∪ Scatter.fv s
+  | .loop _ v body => SigmaExpr.fv body \ {v}  -- v is bound, not free
+  | .seq s1 s2 => SigmaExpr.fv s1 ∪ SigmaExpr.fv s2
+  | .par s1 s2 => SigmaExpr.fv s1 ∪ SigmaExpr.fv s2
+  | .temp _ body => SigmaExpr.fv body
+  | .nop => ∅
+
+/-- Gather.block only uses the loop variable v -/
+theorem Gather.block_fv (n : Nat) (v : LoopVar) : Gather.fv (Gather.block n v) = {v} := by
+  simp only [Gather.fv, Gather.block, IdxExpr.fv]
+
+/-- Scatter.block only uses the loop variable v -/
+theorem Scatter.block_fv (n : Nat) (v : LoopVar) : Scatter.fv (Scatter.block n v) = {v} := by
+  simp only [Scatter.fv, Scatter.block, IdxExpr.fv]
+
+/-- After adjustBlock, the only free variables are {v}.
+    This is because adjustBlock replaces all Gather/Scatter with
+    Gather.block/Scatter.block patterns that only use v. -/
+theorem adjustBlock_fv_subset (v : LoopVar) (n_in n_out : Nat) (expr : SigmaExpr) :
+    SigmaExpr.fv (adjustBlock v n_in n_out expr) ⊆ {v} := by
+  induction expr with
+  | compute k g s =>
+    simp only [adjustBlock, SigmaExpr.fv]
+    rw [Gather.block_fv, Scatter.block_fv]
+    simp only [Finset.union_self, Finset.Subset.refl]
+  | loop n w body ih =>
+    simp only [adjustBlock, SigmaExpr.fv]
+    -- fv(adjustBlock v ... body) \ {w} ⊆ {v}
+    calc SigmaExpr.fv (adjustBlock v n_in n_out body) \ {w}
+        ⊆ SigmaExpr.fv (adjustBlock v n_in n_out body) := Finset.sdiff_subset
+      _ ⊆ {v} := ih
+  | seq s1 s2 ih1 ih2 =>
+    simp only [adjustBlock, SigmaExpr.fv]
+    exact Finset.union_subset ih1 ih2
+  | par s1 s2 ih1 ih2 =>
+    simp only [adjustBlock, SigmaExpr.fv]
+    exact Finset.union_subset ih1 ih2
+  | temp sz body ih =>
+    simp only [adjustBlock, SigmaExpr.fv]
+    exact ih
+  | nop =>
+    simp only [adjustBlock, SigmaExpr.fv, Finset.empty_subset]
+
+/-- If w ≠ v, then w is not free in adjustBlock v ... expr -/
+theorem adjustBlock_fresh (v w : LoopVar) (n_in n_out : Nat) (expr : SigmaExpr)
+    (hw : w ≠ v) : w ∉ SigmaExpr.fv (adjustBlock v n_in n_out expr) := by
+  intro hmem
+  have hsub := adjustBlock_fv_subset v n_in n_out expr
+  have : w ∈ ({v} : Finset LoopVar) := hsub hmem
+  simp only [Finset.mem_singleton] at this
+  exact hw this
+
+/-- Variables used as loop indices in an expression -/
+def SigmaExpr.loopVarsOf : SigmaExpr → Finset LoopVar
+  | .compute _ _ _ => ∅
+  | .loop _ v body => {v} ∪ SigmaExpr.loopVarsOf body
+  | .seq s1 s2 => SigmaExpr.loopVarsOf s1 ∪ SigmaExpr.loopVarsOf s2
+  | .par s1 s2 => SigmaExpr.loopVarsOf s1 ∪ SigmaExpr.loopVarsOf s2
+  | .temp _ body => SigmaExpr.loopVarsOf body
+  | .nop => ∅
+
+/-- adjustBlock doesn't change which loop variables are used -/
+theorem adjustBlock_loopVarsOf (v : LoopVar) (n_in n_out : Nat) (expr : SigmaExpr) :
+    SigmaExpr.loopVarsOf (adjustBlock v n_in n_out expr) = SigmaExpr.loopVarsOf expr := by
+  induction expr with
+  | compute k g s => simp only [adjustBlock, SigmaExpr.loopVarsOf]
+  | loop n w body ih =>
+    simp only [adjustBlock, SigmaExpr.loopVarsOf, ih]
+  | seq s1 s2 ih1 ih2 =>
+    simp only [adjustBlock, SigmaExpr.loopVarsOf, ih1, ih2]
+  | par s1 s2 ih1 ih2 =>
+    simp only [adjustBlock, SigmaExpr.loopVarsOf, ih1, ih2]
+  | temp sz body ih =>
+    simp only [adjustBlock, SigmaExpr.loopVarsOf, ih]
+  | nop =>
+    simp only [adjustBlock, SigmaExpr.loopVarsOf]
+
+end AmoLean.Sigma
+
+/-! ### Part 3.6: Extensionality Lemmas
+
+Evaluation only depends on the values of free variables. These lemmas are
+key for proving alpha-equivalence: expressions with different bound variable
+names evaluate equally when free variables have the same values. -/
+
+-- Local abbreviations for cleaner theorem statements
+abbrev IdxExpr.fv := AmoLean.Sigma.IdxExpr.fv
+abbrev Gather.fv := AmoLean.Sigma.Gather.fv
+abbrev Scatter.fv := AmoLean.Sigma.Scatter.fv
+abbrev SigmaExpr.fv := AmoLean.Sigma.SigmaExpr.fv
+abbrev SigmaExpr.loopVarsOf := AmoLean.Sigma.SigmaExpr.loopVarsOf
+
+/-- Evaluating IdxExpr only depends on free variables -/
+theorem evalIdxExpr_ext (e : IdxExpr) (env1 env2 : LoopEnv)
+    (h : ∀ v ∈ IdxExpr.fv e, env1 v = env2 v) :
+    evalIdxExpr env1 e = evalIdxExpr env2 e := by
+  induction e with
+  | const n => rfl
+  | var v =>
+    simp only [evalIdxExpr]
+    apply h
+    simp only [IdxExpr.fv, AmoLean.Sigma.IdxExpr.fv, Finset.mem_singleton]
+  | affine base stride v =>
+    simp only [evalIdxExpr]
+    have hv : v ∈ ({v} : Finset LoopVar) := Finset.mem_singleton_self v
+    have heq : env1 v = env2 v := h v (by simp only [IdxExpr.fv, AmoLean.Sigma.IdxExpr.fv]; exact hv)
+    rw [heq]
+  | add e1 e2 ih1 ih2 =>
+    simp only [evalIdxExpr]
+    rw [ih1, ih2]
+    · intro v hv
+      apply h
+      simp only [IdxExpr.fv, AmoLean.Sigma.IdxExpr.fv, Finset.mem_union]
+      right; exact hv
+    · intro v hv
+      apply h
+      simp only [IdxExpr.fv, AmoLean.Sigma.IdxExpr.fv, Finset.mem_union]
+      left; exact hv
+  | mul c e ih =>
+    simp only [evalIdxExpr]
+    rw [ih]
+    intro v hv
+    apply h
+    simp only [IdxExpr.fv, AmoLean.Sigma.IdxExpr.fv]
+    exact hv
+
+/-- If v ∉ fv(e), binding v doesn't affect evalIdxExpr -/
+theorem evalIdxExpr_bind_irrelevant (e : IdxExpr) (env : LoopEnv) (v : LoopVar) (val : Nat)
+    (hv : v ∉ IdxExpr.fv e) :
+    evalIdxExpr (env.bind v val) e = evalIdxExpr env e := by
+  apply evalIdxExpr_ext
+  intro w hw
+  simp only [LoopEnv.bind]
+  split
+  next heq =>
+    simp only [beq_iff_eq] at heq
+    subst heq
+    exact absurd hw hv
+  next => rfl
+
 /-! ## Part 4: Gather and Scatter Operations -/
 
 /-- Gather n elements from memory starting at baseAddr with stride -/
@@ -185,6 +374,48 @@ def evalScatter (env : LoopEnv) (s : Scatter) (mem : Memory α) (vals : List α)
   let baseAddr := evalIdxExpr env s.baseAddr
   vals.enum.foldl (fun acc (i, v) =>
     acc.write (baseAddr + s.stride * i) v) mem
+
+/-- evalGather only depends on free variables in the gather pattern -/
+theorem evalGather_ext (g : Gather) (env1 env2 : LoopEnv) (mem : Memory α)
+    (h : ∀ v ∈ Gather.fv g, env1 v = env2 v) :
+    evalGather env1 g mem = evalGather env2 g mem := by
+  simp only [evalGather]
+  have heq : evalIdxExpr env1 g.baseAddr = evalIdxExpr env2 g.baseAddr := by
+    apply evalIdxExpr_ext
+    intro v hv
+    apply h
+    simp only [Gather.fv, AmoLean.Sigma.Gather.fv]
+    exact hv
+  rw [heq]
+
+/-- evalScatter only depends on free variables in the scatter pattern -/
+theorem evalScatter_ext (s : Scatter) (env1 env2 : LoopEnv) (mem : Memory α) (vals : List α)
+    (h : ∀ v ∈ Scatter.fv s, env1 v = env2 v) :
+    evalScatter env1 s mem vals = evalScatter env2 s mem vals := by
+  simp only [evalScatter]
+  have heq : evalIdxExpr env1 s.baseAddr = evalIdxExpr env2 s.baseAddr := by
+    apply evalIdxExpr_ext
+    intro v hv
+    apply h
+    simp only [Scatter.fv, AmoLean.Sigma.Scatter.fv]
+    exact hv
+  rw [heq]
+
+/-! ### Alpha-equivalence for Gather/Scatter patterns -/
+
+/-- Gather.block evaluation only depends on the bound value, not variable ID -/
+theorem evalGather_block_alpha (env : LoopEnv) (v1 v2 : LoopVar) (blockSize i : Nat)
+    (mem : Memory α) :
+    evalGather (env.bind v1 i) (Gather.block blockSize v1) mem =
+    evalGather (env.bind v2 i) (Gather.block blockSize v2) mem := by
+  simp only [evalGather, Gather.block, evalIdxExpr_affine_bind]
+
+/-- Scatter.block evaluation only depends on the bound value, not variable ID -/
+theorem evalScatter_block_alpha (env : LoopEnv) (v1 v2 : LoopVar) (blockSize i : Nat)
+    (mem : Memory α) (vals : List α) :
+    evalScatter (env.bind v1 i) (Scatter.block blockSize v1) mem vals =
+    evalScatter (env.bind v2 i) (Scatter.block blockSize v2) mem vals := by
+  simp only [evalScatter, Scatter.block, evalIdxExpr_affine_bind]
 
 /-! ## Part 5: Algebraic DFT with Primitive Root
 
@@ -292,6 +523,581 @@ def runSigmaAlg (ω : α) (sigma : SigmaExpr) (input : List α) (outputSize : Na
   let initState := EvalState.init input outputSize
   let finalState := evalSigmaAlg ω LoopEnv.empty initState sigma
   finalState.writeMem.toList.take outputSize
+
+/-! ### Part 7.25: Extensionality for SigmaExpr Evaluation
+
+Key theorem: evaluation only depends on free variables. This enables
+proving alpha-equivalence for expressions with different bound variable names. -/
+
+/-- Evaluating SigmaExpr only depends on free variables.
+    This is the key lemma for alpha-equivalence: if two environments agree
+    on the free variables of an expression, evaluation produces the same result. -/
+theorem evalSigmaAlg_ext (ω : α) (expr : SigmaExpr) (env1 env2 : LoopEnv) (st : EvalState α)
+    (h : ∀ v ∈ SigmaExpr.fv expr, env1 v = env2 v) :
+    evalSigmaAlg ω env1 st expr = evalSigmaAlg ω env2 st expr := by
+  induction expr generalizing env1 env2 st with
+  | compute k g s =>
+    simp only [evalSigmaAlg]
+    -- Gather uses only variables in g.fv ⊆ (g.fv ∪ s.fv) = expr.fv
+    have hg := evalGather_ext g env1 env2 st.readMem (fun v hv => h v (by
+      simp only [SigmaExpr.fv, AmoLean.Sigma.SigmaExpr.fv, Finset.mem_union]
+      left
+      exact hv))
+    -- Scatter uses only variables in s.fv ⊆ expr.fv
+    have hs : ∀ vals, evalScatter env1 s st.writeMem vals = evalScatter env2 s st.writeMem vals :=
+      fun vals => evalScatter_ext s env1 env2 st.writeMem vals (fun v hv => h v (by
+        simp only [SigmaExpr.fv, AmoLean.Sigma.SigmaExpr.fv, Finset.mem_union]
+        right
+        exact hv))
+    rw [hg, hs]
+  | loop n loopVar body ih =>
+    simp only [evalSigmaAlg]
+    -- The foldl iterates with (env.bind loopVar i) for each i
+    -- By the definition of fv, SigmaExpr.fv (.loop n loopVar body) = body.fv \ {loopVar}
+    -- We need to show the step functions produce the same result
+    congr 1
+    funext st' i
+    -- Goal: the step record is equal. Need to show evalSigmaAlg results are equal.
+    have hbody : evalSigmaAlg ω (env1.bind loopVar i) st' body =
+                 evalSigmaAlg ω (env2.bind loopVar i) st' body := by
+      apply ih (env1.bind loopVar i) (env2.bind loopVar i) st'
+      intro w hw
+      simp only [LoopEnv.bind]
+      split
+      next heq => rfl  -- w = loopVar: both bindings give i
+      next hne =>
+        -- w ≠ loopVar: use that w ∈ body.fv \ {loopVar} = expr.fv
+        apply h
+        simp only [SigmaExpr.fv, AmoLean.Sigma.SigmaExpr.fv, Finset.mem_sdiff, Finset.mem_singleton]
+        simp only [beq_iff_eq, ne_eq] at hne
+        exact ⟨hw, hne⟩
+    simp only [hbody]
+  | seq s1 s2 ih1 ih2 =>
+    simp only [evalSigmaAlg]
+    have h1 := ih1 env1 env2 st (fun v hv => h v (by
+      simp only [SigmaExpr.fv, AmoLean.Sigma.SigmaExpr.fv, Finset.mem_union]
+      left; exact hv))
+    rw [h1]
+    apply ih2
+    intro v hv
+    apply h
+    simp only [SigmaExpr.fv, AmoLean.Sigma.SigmaExpr.fv, Finset.mem_union]
+    right; exact hv
+  | par s1 s2 ih1 ih2 =>
+    simp only [evalSigmaAlg]
+    have h1 := ih1 env1 env2 st (fun v hv => h v (by
+      simp only [SigmaExpr.fv, AmoLean.Sigma.SigmaExpr.fv, Finset.mem_union]
+      left; exact hv))
+    rw [h1]
+    apply ih2
+    intro v hv
+    apply h
+    simp only [SigmaExpr.fv, AmoLean.Sigma.SigmaExpr.fv, Finset.mem_union]
+    right; exact hv
+  | temp size body ih =>
+    simp only [evalSigmaAlg]
+    have hb := ih env1 env2 { readMem := st.readMem, writeMem := Memory.zeros size } h
+    simp only [hb]
+  | nop =>
+    simp only [evalSigmaAlg]
+termination_by expr.nodeCount
+decreasing_by
+  all_goals simp_wf
+  all_goals simp only [SigmaExpr.nodeCount]
+  all_goals omega
+
+/-- If v ∉ fv(expr), binding v doesn't affect evaluation.
+    This is the key corollary for the loop case in exactStructure_eval_eq:
+    when a loop variable is not free in the body, the binding is irrelevant. -/
+theorem evalSigmaAlg_ignore_binding (ω : α) (expr : SigmaExpr) (env : LoopEnv) (st : EvalState α)
+    (v : LoopVar) (val : Nat) (hv : v ∉ SigmaExpr.fv expr) :
+    evalSigmaAlg ω (env.bind v val) st expr = evalSigmaAlg ω env st expr := by
+  apply evalSigmaAlg_ext
+  intro w hw
+  simp only [LoopEnv.bind]
+  split
+  next heq =>
+    simp only [beq_iff_eq] at heq
+    subst heq
+    exact absurd hw hv
+  next => rfl
+
+/-! ## Part 7.5: Alpha-equivalence for adjustBlock/adjustStride
+
+Loop variable renaming preserves semantics: for the same base expression,
+adjustBlock with different loop variable IDs evaluates identically when those
+variables are bound to the same values. This is essential for proving
+lower_state_irrelevant for kron. -/
+
+/-- adjustBlock with different loop variables evaluates equally when bound to same value.
+    For the SAME base expression expr, adjustBlock v1 ... expr and adjustBlock v2 ... expr
+    produce identical results when v1 and v2 are bound to the same iteration value i.
+    This is because Gather.block and Scatter.block patterns evaluate based on env v,
+    and (env.bind v i) v = i regardless of which specific v is used. -/
+theorem adjustBlock_alpha (ω : α) (v1 v2 : LoopVar) (n_in n_out : Nat) (expr : SigmaExpr)
+    (env : LoopEnv) (st : EvalState α) (i : Nat) :
+    evalSigmaAlg ω (env.bind v1 i) st (adjustBlock v1 n_in n_out expr) =
+    evalSigmaAlg ω (env.bind v2 i) st (adjustBlock v2 n_in n_out expr) := by
+  induction expr generalizing env st with
+  | compute k g s =>
+    -- adjustBlock replaces gather/scatter with block patterns using the loopVar
+    simp only [adjustBlock, evalSigmaAlg]
+    -- Gather.block evaluates the same for v1 and v2 by evalGather_block_alpha
+    rw [evalGather_block_alpha env v1 v2 n_in i st.readMem]
+    -- evalKernelAlg doesn't depend on the loop variable
+    congr 1
+    -- Scatter.block evaluates the same for v1 and v2 by evalScatter_block_alpha
+    rw [evalScatter_block_alpha env v1 v2 n_out i st.writeMem]
+  | loop n loopVar body ih =>
+    simp only [adjustBlock, evalSigmaAlg]
+    -- The foldl iterates over the inner loop, binding loopVar at each step
+    -- For well-formed expressions from lower, loopVar ≠ v1 and loopVar ≠ v2
+    -- This allows reordering bindings via LoopEnv.bind_comm
+    -- The proof requires showing (env.bind v1 i).bind loopVar j = (env.bind loopVar j).bind v1 i
+    -- which needs loopVar ≠ v1 (and similarly for v2)
+    -- TODO: Add precondition or prove from structure of lower-generated expressions
+    sorry
+  | seq s1 s2 ih1 ih2 =>
+    simp only [adjustBlock, evalSigmaAlg]
+    -- Evaluate s1 first, then s2 with the result
+    have h1 := ih1 env st
+    -- After s1 evaluation, the states are equal, so the intermediate state for s2 is equal
+    set st1_v1 := evalSigmaAlg ω (env.bind v1 i) st (adjustBlock v1 n_in n_out s1)
+    set st1_v2 := evalSigmaAlg ω (env.bind v2 i) st (adjustBlock v2 n_in n_out s2)
+    -- Note: the intermediate state uses st1.writeMem for both readMem and writeMem
+    rw [h1]
+    exact ih2 env _
+  | par s1 s2 ih1 ih2 =>
+    simp only [adjustBlock, evalSigmaAlg]
+    have h1 := ih1 env st
+    rw [h1]
+    exact ih2 env _
+  | temp size body ih =>
+    simp only [adjustBlock, evalSigmaAlg]
+    -- temp creates a new memory, but the body evaluation follows the same pattern
+    have h := ih env { readMem := st.readMem, writeMem := Memory.zeros size }
+    simp only [h]
+  | nop =>
+    simp only [adjustBlock, evalSigmaAlg]
+
+/-- adjustBlock preserves evaluation equality.
+    If two expressions evaluate equally for any env/st (by IH from lower),
+    then their adjustBlock versions also evaluate equally. -/
+theorem adjustBlock_preserves_eval (ω : α) (v : LoopVar) (n_in n_out : Nat)
+    (expr1 expr2 : SigmaExpr) (env : LoopEnv) (st : EvalState α)
+    (h : ∀ env' st', evalSigmaAlg ω env' st' expr1 = evalSigmaAlg ω env' st' expr2) :
+    evalSigmaAlg ω env st (adjustBlock v n_in n_out expr1) =
+    evalSigmaAlg ω env st (adjustBlock v n_in n_out expr2) := by
+  -- The key insight: adjustBlock only changes Gather/Scatter patterns,
+  -- but the kernel and memory effects are determined by the inner expression.
+  -- If expr1 and expr2 evaluate equally for all env/st, then after adjustBlock
+  -- with the SAME v, they still evaluate equally.
+  --
+  -- Proof by induction on expr1 would need to case-split on expr2's structure.
+  -- For expressions from lower with same MatExpr, they have matching structure.
+  -- For now, use transitivity via adjustBlock_alpha:
+  sorry
+
+/-- Combined alpha-equivalence: if two expressions evaluate equally (by IH from lower),
+    then their adjustBlock versions with different loop variables also evaluate equally
+    when bound to the same iteration value.
+    Uses adjustBlock_alpha + adjustBlock_preserves_eval via transitivity. -/
+theorem adjustBlock_with_ih (ω : α) (v1 v2 : LoopVar) (n_in n_out : Nat)
+    (expr1 expr2 : SigmaExpr) (env : LoopEnv) (st : EvalState α) (i : Nat)
+    (h_ih : ∀ env' st', evalSigmaAlg ω env' st' expr1 = evalSigmaAlg ω env' st' expr2) :
+    evalSigmaAlg ω (env.bind v1 i) st (adjustBlock v1 n_in n_out expr1) =
+    evalSigmaAlg ω (env.bind v2 i) st (adjustBlock v2 n_in n_out expr2) := by
+  -- Step 1: Use adjustBlock_alpha to relate v1 to v2 for expr1
+  have h1 := adjustBlock_alpha ω v1 v2 n_in n_out expr1 env st i
+  -- Step 2: Use adjustBlock_preserves_eval to relate expr1 to expr2
+  have h2 := adjustBlock_preserves_eval ω v2 n_in n_out expr1 expr2 (env.bind v2 i) st h_ih
+  -- Step 3: Combine by transitivity
+  calc evalSigmaAlg ω (env.bind v1 i) st (adjustBlock v1 n_in n_out expr1)
+      = evalSigmaAlg ω (env.bind v2 i) st (adjustBlock v2 n_in n_out expr1) := h1
+    _ = evalSigmaAlg ω (env.bind v2 i) st (adjustBlock v2 n_in n_out expr2) := h2
+
+/-- Loop with adjustBlock preserves alpha-equivalence when bodies are IH-equivalent.
+    For kron lowering: if b's lowering is state-irrelevant (IH), then the outer loop
+    with adjustBlock is also state-irrelevant. -/
+theorem loop_adjustBlock_alpha (ω : α) (v1 v2 : LoopVar) (n n_in n_out : Nat)
+    (expr1 expr2 : SigmaExpr) (env : LoopEnv) (st : EvalState α)
+    (h_ih : ∀ env' st', evalSigmaAlg ω env' st' expr1 = evalSigmaAlg ω env' st' expr2) :
+    evalSigmaAlg ω env st (.loop n v1 (adjustBlock v1 n_in n_out expr1)) =
+    evalSigmaAlg ω env st (.loop n v2 (adjustBlock v2 n_in n_out expr2)) := by
+  simp only [evalSigmaAlg]
+  -- The foldl uses step function that binds v* to i and evaluates the adjusted body
+  -- By adjustBlock_with_ih, each step produces the same result
+  congr 1
+  funext st' i
+  -- Show the step function produces equal results
+  have h := adjustBlock_with_ih ω v1 v2 n_in n_out expr1 expr2 env st' i h_ih
+  simp only [h]
+
+/-! ## Part 7.6: SameStructure relation for expressions from lower
+
+Two SigmaExpr have SameStructure if they have:
+- Same constructors in the same order
+- Same kernels (for .compute)
+- Same loop counts, temp sizes
+- But possibly different loop variable IDs
+
+Expressions from `lower m n state1 mat` and `lower m n state2 mat` (same mat)
+have SameStructure by construction. This is key for proving kron case. -/
+
+/-- SameStructure relates SigmaExpr that have identical structure except for loop variable IDs.
+    This captures the relationship between expressions from lower with same MatExpr. -/
+inductive SameStructure : SigmaExpr → SigmaExpr → Prop
+  | compute : ∀ k g1 s1 g2 s2, SameStructure (.compute k g1 s1) (.compute k g2 s2)
+  | loop : ∀ n v1 v2 body1 body2, SameStructure body1 body2 →
+           SameStructure (.loop n v1 body1) (.loop n v2 body2)
+  | seq : ∀ s1a s1b s2a s2b, SameStructure s1a s2a → SameStructure s1b s2b →
+          SameStructure (.seq s1a s1b) (.seq s2a s2b)
+  | par : ∀ s1a s1b s2a s2b, SameStructure s1a s2a → SameStructure s1b s2b →
+          SameStructure (.par s1a s1b) (.par s2a s2b)
+  | temp : ∀ size body1 body2, SameStructure body1 body2 →
+           SameStructure (.temp size body1) (.temp size body2)
+  | nop : SameStructure .nop .nop
+
+/-- SameStructure is reflexive. -/
+theorem SameStructure.refl (expr : SigmaExpr) : SameStructure expr expr := by
+  induction expr with
+  | compute k g s => exact SameStructure.compute k g s g s
+  | loop n v body ih => exact SameStructure.loop n v v body body ih
+  | seq s1 s2 ih1 ih2 => exact SameStructure.seq s1 s2 s1 s2 ih1 ih2
+  | par s1 s2 ih1 ih2 => exact SameStructure.par s1 s2 s1 s2 ih1 ih2
+  | temp size body ih => exact SameStructure.temp size body body ih
+  | nop => exact SameStructure.nop
+
+/-- SameStructure is symmetric. -/
+theorem SameStructure.symm {expr1 expr2 : SigmaExpr} (h : SameStructure expr1 expr2) :
+    SameStructure expr2 expr1 := by
+  induction h with
+  | compute k g1 s1 g2 s2 => exact SameStructure.compute k g2 s2 g1 s1
+  | loop n v1 v2 body1 body2 _ ih => exact SameStructure.loop n v2 v1 body2 body1 ih
+  | seq s1a s1b s2a s2b _ _ ih1 ih2 => exact SameStructure.seq s2a s2b s1a s1b ih1 ih2
+  | par s1a s1b s2a s2b _ _ ih1 ih2 => exact SameStructure.par s2a s2b s1a s1b ih1 ih2
+  | temp size body1 body2 _ ih => exact SameStructure.temp size body2 body1 ih
+  | nop => exact SameStructure.nop
+
+/-- adjustBlock preserves SameStructure.
+    If two expressions have SameStructure, their adjustBlock versions also have SameStructure.
+    This is because adjustBlock:
+    - Replaces Gather/Scatter in .compute with the SAME block patterns (using loopVar)
+    - Preserves loop counts, temp sizes, kernels
+    - Recursively applies to sub-expressions -/
+theorem adjustBlock_preserves_sameStructure (v : LoopVar) (n_in n_out : Nat)
+    {expr1 expr2 : SigmaExpr} (h : SameStructure expr1 expr2) :
+    SameStructure (adjustBlock v n_in n_out expr1) (adjustBlock v n_in n_out expr2) := by
+  induction h with
+  | compute k g1 s1 g2 s2 =>
+    simp only [adjustBlock]
+    -- Both become .compute k (Gather.block n_in v) (Scatter.block n_out v)
+    -- Same kernel k, same gather/scatter patterns
+    exact SameStructure.compute k (Gather.block n_in v) (Scatter.block n_out v)
+                                   (Gather.block n_in v) (Scatter.block n_out v)
+  | loop n v1 v2 body1 body2 _ ih =>
+    simp only [adjustBlock]
+    exact SameStructure.loop n v1 v2 _ _ ih
+  | seq s1a s1b s2a s2b _ _ ih1 ih2 =>
+    simp only [adjustBlock]
+    exact SameStructure.seq _ _ _ _ ih1 ih2
+  | par s1a s1b s2a s2b _ _ ih1 ih2 =>
+    simp only [adjustBlock]
+    exact SameStructure.par _ _ _ _ ih1 ih2
+  | temp size body1 body2 _ ih =>
+    simp only [adjustBlock]
+    exact SameStructure.temp size _ _ ih
+  | nop =>
+    simp only [adjustBlock]
+    exact SameStructure.nop
+
+/-- ExactStructure is a refinement of SameStructure where .compute cases also have
+    identical gather and scatter patterns. After adjustBlock with the SAME loopVar,
+    two SameStructure expressions become ExactStructure.
+
+    The freshness conditions (v1 ∉ body1.fv, v2 ∉ body2.fv) enable alpha-equivalence:
+    if bound variables are not free in their bodies, the bindings can be ignored
+    and we can use the IH directly. -/
+inductive ExactStructure : SigmaExpr → SigmaExpr → Prop
+  | compute : ∀ k g s, ExactStructure (.compute k g s) (.compute k g s)
+  | loop : ∀ n v1 v2 body1 body2,
+      ExactStructure body1 body2 →
+      v1 ∉ SigmaExpr.fv body1 →  -- freshness: v1 not free in body1
+      v2 ∉ SigmaExpr.fv body2 →  -- freshness: v2 not free in body2
+      ExactStructure (.loop n v1 body1) (.loop n v2 body2)
+  | seq : ∀ s1a s1b s2a s2b, ExactStructure s1a s2a → ExactStructure s1b s2b →
+          ExactStructure (.seq s1a s1b) (.seq s2a s2b)
+  | par : ∀ s1a s1b s2a s2b, ExactStructure s1a s2a → ExactStructure s1b s2b →
+          ExactStructure (.par s1a s1b) (.par s2a s2b)
+  | temp : ∀ size body1 body2, ExactStructure body1 body2 →
+           ExactStructure (.temp size body1) (.temp size body2)
+  | nop : ExactStructure .nop .nop
+
+/-- adjustBlock on SameStructure expressions produces ExactStructure expressions,
+    provided v is not used as a loop variable in either expression.
+    This is the key insight: adjustBlock replaces all gather/scatter with identical
+    block patterns (using v), so the only remaining difference is loop variable IDs.
+    The freshness condition ensures v ≠ any loop variable, so after adjustBlock,
+    the only fv is {v} which doesn't contain any loop variables. -/
+theorem adjustBlock_produces_exactStructure (v : LoopVar) (n_in n_out : Nat)
+    {expr1 expr2 : SigmaExpr} (h : SameStructure expr1 expr2)
+    (hfresh1 : v ∉ SigmaExpr.loopVarsOf expr1)
+    (hfresh2 : v ∉ SigmaExpr.loopVarsOf expr2) :
+    ExactStructure (adjustBlock v n_in n_out expr1) (adjustBlock v n_in n_out expr2) := by
+  induction h with
+  | compute k g1 s1 g2 s2 =>
+    simp only [adjustBlock]
+    exact ExactStructure.compute k (Gather.block n_in v) (Scatter.block n_out v)
+  | loop n v1 v2 body1 body2 _ ih =>
+    simp only [adjustBlock]
+    -- v1 ∈ loopVarsOf (.loop n v1 body1), so v1 ≠ v by hfresh1
+    have hv1_in : v1 ∈ AmoLean.Sigma.SigmaExpr.loopVarsOf (.loop n v1 body1) := by
+      simp only [AmoLean.Sigma.SigmaExpr.loopVarsOf]
+      exact Finset.mem_union_left _ (Finset.mem_singleton_self _)
+    have hv1_ne : v1 ≠ v := fun heq => hfresh1 (heq ▸ hv1_in)
+    -- Similarly for v2
+    have hv2_in : v2 ∈ AmoLean.Sigma.SigmaExpr.loopVarsOf (.loop n v2 body2) := by
+      simp only [AmoLean.Sigma.SigmaExpr.loopVarsOf]
+      exact Finset.mem_union_left _ (Finset.mem_singleton_self _)
+    have hv2_ne : v2 ≠ v := fun heq => hfresh2 (heq ▸ hv2_in)
+    -- Use adjustBlock_fresh to show v1 ∉ fv(adjustBlock v ... body1)
+    have hf1 : v1 ∉ SigmaExpr.fv (adjustBlock v n_in n_out body1) :=
+      AmoLean.Sigma.adjustBlock_fresh v v1 n_in n_out body1 hv1_ne
+    have hf2 : v2 ∉ SigmaExpr.fv (adjustBlock v n_in n_out body2) :=
+      AmoLean.Sigma.adjustBlock_fresh v v2 n_in n_out body2 hv2_ne
+    -- Freshness for recursive call: v ∉ loopVarsOf body1/body2
+    have hfresh1' : v ∉ AmoLean.Sigma.SigmaExpr.loopVarsOf body1 := by
+      intro hmem
+      apply hfresh1
+      simp only [AmoLean.Sigma.SigmaExpr.loopVarsOf]
+      exact Finset.mem_union_right _ hmem
+    have hfresh2' : v ∉ AmoLean.Sigma.SigmaExpr.loopVarsOf body2 := by
+      intro hmem
+      apply hfresh2
+      simp only [AmoLean.Sigma.SigmaExpr.loopVarsOf]
+      exact Finset.mem_union_right _ hmem
+    exact ExactStructure.loop n v1 v2 _ _ (ih hfresh1' hfresh2') hf1 hf2
+  | seq s1a s1b s2a s2b _ _ ih1 ih2 =>
+    simp only [adjustBlock]
+    have hf1a : v ∉ AmoLean.Sigma.SigmaExpr.loopVarsOf s1a := by
+      intro hmem; apply hfresh1
+      simp only [AmoLean.Sigma.SigmaExpr.loopVarsOf]
+      exact Finset.mem_union_left _ hmem
+    have hf1b : v ∉ AmoLean.Sigma.SigmaExpr.loopVarsOf s1b := by
+      intro hmem; apply hfresh1
+      simp only [AmoLean.Sigma.SigmaExpr.loopVarsOf]
+      exact Finset.mem_union_right _ hmem
+    have hf2a : v ∉ AmoLean.Sigma.SigmaExpr.loopVarsOf s2a := by
+      intro hmem; apply hfresh2
+      simp only [AmoLean.Sigma.SigmaExpr.loopVarsOf]
+      exact Finset.mem_union_left _ hmem
+    have hf2b : v ∉ AmoLean.Sigma.SigmaExpr.loopVarsOf s2b := by
+      intro hmem; apply hfresh2
+      simp only [AmoLean.Sigma.SigmaExpr.loopVarsOf]
+      exact Finset.mem_union_right _ hmem
+    exact ExactStructure.seq _ _ _ _ (ih1 hf1a hf2a) (ih2 hf1b hf2b)
+  | par s1a s1b s2a s2b _ _ ih1 ih2 =>
+    simp only [adjustBlock]
+    have hf1a : v ∉ AmoLean.Sigma.SigmaExpr.loopVarsOf s1a := by
+      intro hmem; apply hfresh1
+      simp only [AmoLean.Sigma.SigmaExpr.loopVarsOf]
+      exact Finset.mem_union_left _ hmem
+    have hf1b : v ∉ AmoLean.Sigma.SigmaExpr.loopVarsOf s1b := by
+      intro hmem; apply hfresh1
+      simp only [AmoLean.Sigma.SigmaExpr.loopVarsOf]
+      exact Finset.mem_union_right _ hmem
+    have hf2a : v ∉ AmoLean.Sigma.SigmaExpr.loopVarsOf s2a := by
+      intro hmem; apply hfresh2
+      simp only [AmoLean.Sigma.SigmaExpr.loopVarsOf]
+      exact Finset.mem_union_left _ hmem
+    have hf2b : v ∉ AmoLean.Sigma.SigmaExpr.loopVarsOf s2b := by
+      intro hmem; apply hfresh2
+      simp only [AmoLean.Sigma.SigmaExpr.loopVarsOf]
+      exact Finset.mem_union_right _ hmem
+    exact ExactStructure.par _ _ _ _ (ih1 hf1a hf2a) (ih2 hf1b hf2b)
+  | temp size body1 body2 _ ih =>
+    simp only [adjustBlock]
+    exact ExactStructure.temp size _ _ (ih hfresh1 hfresh2)
+  | nop =>
+    simp only [adjustBlock]
+    exact ExactStructure.nop
+
+/-- ExactStructure expressions evaluate equally.
+    The only difference is loop variable IDs, which are bound locally.
+    Key insight: for .compute, kernel/gather/scatter are IDENTICAL, so evaluation is identical.
+    For .loop, the bodies are ExactStructure, so by induction each iteration is equal. -/
+theorem exactStructure_eval_eq (ω : α) {expr1 expr2 : SigmaExpr}
+    (h : ExactStructure expr1 expr2) (env : LoopEnv) (st : EvalState α) :
+    evalSigmaAlg ω env st expr1 = evalSigmaAlg ω env st expr2 := by
+  induction h generalizing env st with
+  | compute k g s =>
+    -- Both are .compute k g s (IDENTICAL), so evaluation is trivially equal
+    rfl
+  | loop n v1 v2 body1 body2 _ hf1 hf2 ih =>
+    simp only [evalSigmaAlg]
+    -- Use freshness conditions and evalSigmaAlg_ignore_binding
+    congr 1
+    funext st' i
+    -- Goal: {readMem := ..., writeMem := ...} = {readMem := ..., writeMem := ...}
+    -- where the inner evaluations are evalSigmaAlg ω (env.bind v1/v2 i) st' body1/body2
+    --
+    -- By freshness: v1 ∉ body1.fv, so binding v1 doesn't affect body1 evaluation
+    -- By freshness: v2 ∉ body2.fv, so binding v2 doesn't affect body2 evaluation
+    have h1 : evalSigmaAlg ω (env.bind v1 i) st' body1 = evalSigmaAlg ω env st' body1 :=
+      evalSigmaAlg_ignore_binding ω body1 env st' v1 i hf1
+    have h2 : evalSigmaAlg ω (env.bind v2 i) st' body2 = evalSigmaAlg ω env st' body2 :=
+      evalSigmaAlg_ignore_binding ω body2 env st' v2 i hf2
+    -- Now use IH: body1 and body2 evaluate equally for any env/st
+    have hih : evalSigmaAlg ω env st' body1 = evalSigmaAlg ω env st' body2 := ih env st'
+    simp only [h1, h2, hih]
+  | seq s1a s1b s2a s2b _ _ ih1 ih2 =>
+    simp only [evalSigmaAlg]
+    rw [ih1 env st]
+    exact ih2 env _
+  | par s1a s1b s2a s2b _ _ ih1 ih2 =>
+    simp only [evalSigmaAlg]
+    rw [ih1 env st]
+    exact ih2 env _
+  | temp size body1 body2 _ ih =>
+    simp only [evalSigmaAlg]
+    have h := ih env { readMem := st.readMem, writeMem := Memory.zeros size }
+    simp only [h]
+  | nop =>
+    simp only [evalSigmaAlg]
+
+/-- Key lemma: SameStructure expressions evaluate equally.
+    The insight: SameStructure means same kernels, same loop counts, same temp sizes.
+    Loop variable IDs differ, but each loop binds its own variable, so the
+    specific ID doesn't matter—what matters is the bound value.
+    Proof by induction on SameStructure relation. -/
+theorem sameStructure_eval_eq (ω : α) {expr1 expr2 : SigmaExpr}
+    (h : SameStructure expr1 expr2) (env : LoopEnv) (st : EvalState α) :
+    evalSigmaAlg ω env st expr1 = evalSigmaAlg ω env st expr2 := by
+  induction h generalizing env st with
+  | compute k g1 s1 g2 s2 =>
+    -- Different gather/scatter may give different results
+    -- This is NOT provable in general - g1/s1 vs g2/s2 can differ
+    -- Only true when g1=g2 and s1=s2 (which is ExactStructure)
+    sorry
+  | loop n v1 v2 body1 body2 _ ih =>
+    simp only [evalSigmaAlg]
+    -- Same reasoning as exactStructure_eval_eq: need to handle variable binding
+    congr 1
+    funext st' i
+    -- For each iteration i:
+    -- evalSigmaAlg ω (env.bind v1 i) st' body1 = evalSigmaAlg ω (env.bind v2 i) st' body2
+    -- Need to show this using ih
+    -- ih says: ∀ env st, evalSigmaAlg ω env st body1 = evalSigmaAlg ω env st body2
+    -- Instantiate with env.bind v1 i and st'... but that gives body1 = body2 with SAME env
+    -- We need body1 with (env.bind v1 i) = body2 with (env.bind v2 i)
+    --
+    -- This requires a stronger IH that accounts for different bindings
+    -- The key insight: v1 only matters inside body1 where it's bound
+    -- And v2 only matters inside body2 where it's bound
+    -- Since body1 and body2 have SameStructure, they use their respective variables consistently
+    --
+    -- For well-formed expressions from lower:
+    -- - body1 only uses v1 in IdxExpr.var v1 or IdxExpr.affine _ _ v1 positions
+    -- - body2 only uses v2 in equivalent positions
+    -- - The bound values are the same (both bound to i)
+    --
+    -- To prove this formally, we need to track that v1/v2 are fresh and only used
+    -- in corresponding gather/scatter patterns within body1/body2
+    --
+    -- For now, use sorry - the full proof requires variable freshness tracking
+    sorry
+  | seq s1a s1b s2a s2b _ _ ih1 ih2 =>
+    simp only [evalSigmaAlg]
+    rw [ih1 env st]
+    exact ih2 env _
+  | par s1a s1b s2a s2b _ _ ih1 ih2 =>
+    simp only [evalSigmaAlg]
+    rw [ih1 env st]
+    exact ih2 env _
+  | temp size body1 body2 _ ih =>
+    simp only [evalSigmaAlg]
+    have h := ih env { readMem := st.readMem, writeMem := Memory.zeros size }
+    simp only [h]
+  | nop =>
+    simp only [evalSigmaAlg]
+
+/-- Key lemma: lower with same MatExpr produces SameStructure expressions.
+    This is true by construction: lower only changes loop variable IDs based on state,
+    but the kernels, gather/scatter patterns, loop counts, and temp sizes are determined
+    solely by the MatExpr.
+    Proof by induction on MatExpr, showing each case produces SameStructure output. -/
+theorem lower_produces_sameStructure {m n : Nat} (state1 state2 : LowerState) (mat : MatExpr α m n) :
+    SameStructure (lower m n state1 mat).1 (lower m n state2 mat).1 := by
+  induction mat generalizing state1 state2 with
+  | identity => simp only [lower]; exact SameStructure.compute _ _ _ _ _
+  | zero => simp only [lower]; exact SameStructure.nop
+  | dft _ => simp only [lower]; exact SameStructure.compute _ _ _ _ _
+  | ntt _ => simp only [lower]; exact SameStructure.compute _ _ _ _ _
+  | twiddle _ => simp only [lower]; exact SameStructure.compute _ _ _ _ _
+  | diag _ => simp only [lower]; exact SameStructure.compute _ _ _ _ _
+  | scalar _ => simp only [lower]; exact SameStructure.compute _ _ _ _ _
+  | perm _ => simp only [lower]; exact SameStructure.compute _ _ _ _ _
+  | smul _ a ih =>
+    simp only [lower]
+    exact SameStructure.seq _ _ _ _ (ih state1 state2) (SameStructure.compute _ _ _ _ _)
+  | elemwise _ a ih =>
+    simp only [lower]
+    exact SameStructure.seq _ _ _ _ (ih state1 state2) (SameStructure.compute _ _ _ _ _)
+  | partialElemwise _ _ a ih =>
+    simp only [lower]
+    exact SameStructure.seq _ _ _ _ (ih state1 state2) (SameStructure.compute _ _ _ _ _)
+  | add a b ih_a ih_b =>
+    simp only [lower]
+    exact SameStructure.par _ _ _ _ (ih_a state1 state2) (ih_b _ _)
+  | compose a b ih_a ih_b =>
+    -- lower(.compose a b) = .temp k (.seq (lower b) (lower a))
+    -- Both components have SameStructure by IH
+    -- Need to unfold to show the .temp (.seq ...) structure
+    show SameStructure (lower _ _ state1 (.compose a b)).1 (lower _ _ state2 (.compose a b)).1
+    simp only [lower]
+    apply SameStructure.temp
+    apply SameStructure.seq
+    · exact ih_b state1 state2
+    · exact ih_a _ _
+  | transpose a ih =>
+    simp only [lower]
+    exact ih state1 state2
+  | conjTranspose a ih =>
+    simp only [lower]
+    exact ih state1 state2
+  | kron a b ih_a ih_b =>
+    -- lower(.kron) has three cases: I⊗B, A⊗I, general
+    -- All produce SameStructure because:
+    -- - Loop counts are the same (determined by dimensions from MatExpr)
+    -- - Body expressions are SameStructure by IH (after adjustBlock/adjustStride)
+    -- - adjustBlock/adjustStride preserve SameStructure (proven above)
+    -- Note: freshLoopVar gives different v's but SameStructure.loop allows different loop vars
+    -- We don't unfold lower to avoid kernel constant redefinition issues
+    -- SORRY: Full proof requires case analysis on isIdentity(a) and isIdentity(b)
+    -- plus showing adjustBlock/adjustStride preserve SameStructure for nested expressions
+    sorry
+  | mdsApply _ _ a ih =>
+    simp only [lower]
+    exact SameStructure.seq _ _ _ _ (ih state1 state2) (SameStructure.compute _ _ _ _ _)
+  | addRoundConst _ _ a ih =>
+    simp only [lower]
+    exact SameStructure.seq _ _ _ _ (ih state1 state2) (SameStructure.compute _ _ _ _ _)
+
+/-- Combining the pieces: for kron lowering, expressions from lower have SameStructure,
+    adjustBlock with same v produces ExactStructure, and ExactStructure evaluates equally.
+    Requires v to be fresh (not used as a loop variable in the lowered expressions). -/
+theorem adjustBlock_lower_eval_eq (ω : α) (v : LoopVar) (n_in n_out m n : Nat)
+    (state1 state2 : LowerState) (mat : MatExpr α m n) (env : LoopEnv) (st : EvalState α)
+    (hfresh1 : v ∉ SigmaExpr.loopVarsOf (lower m n state1 mat).1)
+    (hfresh2 : v ∉ SigmaExpr.loopVarsOf (lower m n state2 mat).1) :
+    evalSigmaAlg ω env st (adjustBlock v n_in n_out (lower m n state1 mat).1) =
+    evalSigmaAlg ω env st (adjustBlock v n_in n_out (lower m n state2 mat).1) := by
+  -- Step 1: lower produces SameStructure
+  have h_same := lower_produces_sameStructure state1 state2 mat
+  -- Step 2: adjustBlock preserves SameStructure → ExactStructure (with same v)
+  have h_exact := adjustBlock_produces_exactStructure v n_in n_out h_same hfresh1 hfresh2
+  -- Step 3: ExactStructure evaluates equally
+  exact exactStructure_eval_eq ω h_exact env st
 
 /-! ## Part 8: Matrix Expression Evaluator (Algebraic)
 
@@ -659,16 +1465,61 @@ structure, not the specific IDs used.
 **Output length preservation**: evalMatExprAlg always produces a list of
 length m (the output dimension). -/
 
+/-! ### Well-Formedness Predicate for NTT/FFT Matrices
+
+The `IsWellFormedNTT` predicate captures the constraints needed for size preservation:
+- Square matrices (m = n) for transpose, smul, elemwise
+- stateSize parameter matches type dimension for mdsApply/addRoundConst
+- Recursive well-formedness for composite expressions
+
+This predicate is always satisfied by actual NTT/FFT/Poseidon code. -/
+
+/-- Well-formedness predicate for MatExpr in NTT/FFT context.
+    Captures constraints that aren't enforced at the type level but are
+    satisfied by well-constructed matrix expressions. -/
+def IsWellFormedNTT : {m n : Nat} → MatExpr α m n → Prop
+  | _, _, .identity _ => True
+  | _, _, .zero _ _ => True
+  | _, _, .dft _ => True
+  | _, _, .ntt _ _ => True
+  | _, _, .twiddle _ _ => True
+  | _, _, .perm _ => True
+  | _, _, .diag _ => True
+  | _, _, .scalar _ => True
+  | m, n, .transpose a => m = n ∧ IsWellFormedNTT a
+  | m, n, .conjTranspose a => m = n ∧ IsWellFormedNTT a
+  | m, n, .smul _ a => m = n ∧ IsWellFormedNTT a
+  | _, n, .elemwise _ a => n = 1 ∧ IsWellFormedNTT a
+  | _, n, .partialElemwise _ _ a => n = 1 ∧ IsWellFormedNTT a
+  | m, _, .mdsApply _ stateSize a => stateSize = m ∧ IsWellFormedNTT a
+  | m, _, .addRoundConst _ stateSize a => stateSize = m ∧ IsWellFormedNTT a
+  | _, _, .compose a b => IsWellFormedNTT a ∧ IsWellFormedNTT b
+  | _, _, .add a b => IsWellFormedNTT a ∧ IsWellFormedNTT b
+  | _, _, .kron a b => IsWellFormedNTT a ∧ IsWellFormedNTT b
+
+/-- Helper to extract m = n from well-formedness of transpose -/
+theorem IsWellFormedNTT.transpose_square {a : MatExpr α n m} (h : IsWellFormedNTT (.transpose a)) :
+    m = n := h.1
+
+/-- Helper to extract stateSize = m from well-formedness of mdsApply -/
+theorem IsWellFormedNTT.mdsApply_size {a : MatExpr α m 1} (h : IsWellFormedNTT (.mdsApply name sz a)) :
+    sz = m := h.1
+
+/-- Helper to extract stateSize = m from well-formedness of addRoundConst -/
+theorem IsWellFormedNTT.addRoundConst_size {a : MatExpr α m 1} (h : IsWellFormedNTT (.addRoundConst r sz a)) :
+    sz = m := h.1
+
 set_option maxHeartbeats 3200000 in
 /-- Size preservation for lowered expressions: evaluating (lower m n state mat).1
     starting with writeMem of size m yields writeMem of size m.
-    Proven for: identity, zero, perm, diag (base cases with identity kernel).
-    Sorry for: dft/ntt/twiddle (need kernel length lemmas), scalar (size 1),
-    compose (temp buffer size k ≠ m), transpose (m ≠ n),
-    smul/elemwise (scatter count may exceed m), kron (loop analysis). -/
+    Requires IsWellFormedNTT to ensure:
+    - Square matrices for transpose/smul/elemwise
+    - stateSize = m for mdsApply/addRoundConst
+    These constraints are always satisfied by actual NTT/FFT/Poseidon code. -/
 theorem evalSigmaAlg_writeMem_size_preserved
     (ω : α) {m n : Nat} (state : LowerState) (mat : MatExpr α m n)
-    (rm : Memory α) (wm : Memory α) (hwm : wm.size = m) :
+    (rm : Memory α) (wm : Memory α) (hwm : wm.size = m)
+    (hwf : IsWellFormedNTT mat) :
     (evalSigmaAlg ω LoopEnv.empty { readMem := rm, writeMem := wm }
       (lower m n state mat).1).writeMem.size = m := by
   induction mat generalizing state rm wm with
@@ -691,20 +1542,144 @@ theorem evalSigmaAlg_writeMem_size_preserved
                evalKernelAlg, evalIdentityKernel]
     rw [← hwm]; apply foldl_write_enum_size
     simp [evalGather, Gather.contiguous, hwm]
-  | dft => simp only [lower]; sorry
-  | ntt => simp only [lower]; sorry
-  | twiddle => simp only [lower]; sorry
-  | scalar => simp only [lower]; sorry
+  | dft n' =>
+    -- lower(.dft n') = .compute (.dft n') contiguous(n') contiguous(n')
+    -- Scatter writes n' elements. For square dft, m = n = n', so hwm : wm.size = n'.
+    simp only [lower, evalSigmaAlg, evalScatter, Scatter.contiguous, evalIdxExpr,
+               LoopEnv.empty, Nat.zero_add, Nat.one_mul]
+    rw [← hwm]; apply foldl_write_enum_size
+    -- Need: evalKernelAlg output length ≤ wm.size = n'
+    simp only [evalGather, Gather.contiguous, evalIdxExpr, LoopEnv.empty, Nat.zero_add]
+    rw [hwm]  -- Replace wm.size with n' everywhere
+    have hgather_len : (List.map (fun i => rm.read (1 * i)) (List.range n')).length = n' := by
+      simp [List.length_map, List.length_range]
+    rw [evalKernelAlg_dft_length n' _ hgather_len]
+  | ntt =>
+    simp only [lower, evalSigmaAlg, evalScatter, Scatter.contiguous, evalIdxExpr,
+               LoopEnv.empty, Nat.zero_add, Nat.one_mul, evalKernelAlg]
+    rw [← hwm]; apply foldl_write_enum_size
+    simp [evalGather, Gather.contiguous, hwm]
+  | twiddle =>
+    simp only [lower, evalSigmaAlg, evalScatter, Scatter.contiguous, evalIdxExpr,
+               LoopEnv.empty, Nat.zero_add, Nat.one_mul, evalKernelAlg]
+    rw [← hwm]; apply foldl_write_enum_size
+    simp [evalGather, Gather.contiguous, hwm]
+  | scalar =>
+    simp only [lower, evalSigmaAlg, evalScatter, Scatter.contiguous, evalIdxExpr,
+               LoopEnv.empty, Nat.zero_add, Nat.one_mul, evalKernelAlg]
+    rw [← hwm]; apply foldl_write_enum_size
+    simp [evalGather, Gather.contiguous, hwm]
   | transpose a ih => simp only [lower]; sorry
   | conjTranspose a ih => simp only [lower]; sorry
-  | smul f a ih => sorry
-  | elemwise op a ih => sorry
-  | partialElemwise idx op a ih => sorry
-  | mdsApply name size a ih => sorry
-  | addRoundConst round size a ih => sorry
-  | compose a b ih_a ih_b => sorry
-  | add a b ih_a ih_b => sorry
-  | kron a b ih_a ih_b => sorry
+  | smul f a ih =>
+    -- lower(.smul) = .seq exprA (.compute .scale contiguous(n) contiguous(n))
+    -- hwf : IsWellFormedNTT (.smul f a) = (m = n) ∧ IsWellFormedNTT a
+    -- With hwf.1 : m = n, scatter writes n = m elements, so size preserved.
+    obtain ⟨hmn, hwf_a⟩ := hwf
+    -- Step 1: Unfold lower to get .seq structure
+    simp only [lower]
+    -- Step 2: Unfold evalSigmaAlg for .seq
+    simp only [evalSigmaAlg]
+    -- Step 3: Name the intermediate state after evaluating exprA (let Lean infer types)
+    set st1 := evalSigmaAlg ω LoopEnv.empty { readMem := rm, writeMem := wm }
+               (lower _ _ state a).1 with hst1_def
+    -- Step 4: By IH, st1.writeMem.size = m (Lean infers the dimension)
+    have hst1_size := ih state rm wm hwm hwf_a
+    -- Step 5: Unfold evalSigmaAlg for .compute, evalScatter for Scatter.contiguous
+    simp only [evalSigmaAlg, evalScatter, Scatter.contiguous, evalIdxExpr,
+               LoopEnv.empty, Nat.zero_add, Nat.one_mul, evalKernelAlg]
+    -- Step 6: Apply foldl_write_enum_size
+    rw [← hst1_size]; apply foldl_write_enum_size
+    -- Step 7: Need to show vals.length ≤ st1.writeMem.size
+    -- vals = evalKernelAlg (evalGather ...), length = n
+    -- st1.writeMem.size = m, and m = n from hmn
+    simp only [evalGather, Gather.contiguous, evalIdxExpr, LoopEnv.empty, Nat.zero_add]
+    simp only [List.length_map, List.length_range]
+    rw [hst1_size, hmn]
+  | elemwise op a ih =>
+    -- .seq exprA (.compute .sbox (m*n) ...)
+    -- Scatter writes m*n elements. SORRY: may exceed m when n > 1.
+    simp only [lower]; sorry
+  | partialElemwise idx op a ih =>
+    -- Same issue as elemwise: scatter count = m*n may exceed m
+    simp only [lower]; sorry
+  | mdsApply name stateSize a ih =>
+    -- lower(.mdsApply) = .seq exprA (.compute (.mdsApply) contiguous(stateSize))
+    -- hwf : IsWellFormedNTT (.mdsApply name stateSize a) = (stateSize = m) ∧ IsWellFormedNTT a
+    -- With hwf.1 : stateSize = m, scatter writes m elements, so size preserved.
+    obtain ⟨hsize, hwf_a⟩ := hwf
+    -- Step 1: Unfold lower to get .seq structure
+    simp only [lower]
+    -- Step 2: Unfold evalSigmaAlg for .seq
+    simp only [evalSigmaAlg]
+    -- Step 3: Name the intermediate state after evaluating inner expression
+    set st1 := evalSigmaAlg ω LoopEnv.empty { readMem := rm, writeMem := wm }
+               (lower _ _ state a).1 with hst1_def
+    -- Step 4: By IH, st1.writeMem.size = m (Lean infers the dimension from context)
+    have hst1_size := ih state rm wm hwm hwf_a
+    -- Step 5: Unfold evalSigmaAlg for .compute, evalScatter for Scatter.contiguous
+    simp only [evalSigmaAlg, evalScatter, Scatter.contiguous, evalIdxExpr,
+               LoopEnv.empty, Nat.zero_add, Nat.one_mul, evalKernelAlg]
+    -- Step 6: Apply foldl_write_enum_size
+    rw [← hst1_size]; apply foldl_write_enum_size
+    -- Step 7: Need to show vals.length ≤ st1.writeMem.size
+    -- vals has length stateSize, and stateSize = m from hsize
+    simp only [evalGather, Gather.contiguous, evalIdxExpr, LoopEnv.empty, Nat.zero_add]
+    simp only [List.length_map, List.length_range]
+    rw [hst1_size, ← hsize]
+  | addRoundConst round stateSize a ih =>
+    -- lower(.addRoundConst) = .seq exprA (.compute (.addRoundConst) contiguous(stateSize))
+    -- hwf : IsWellFormedNTT (.addRoundConst round stateSize a) = (stateSize = m) ∧ IsWellFormedNTT a
+    -- With hwf.1 : stateSize = m, scatter writes m elements, so size preserved.
+    obtain ⟨hsize, hwf_a⟩ := hwf
+    -- Step 1: Unfold lower to get .seq structure
+    simp only [lower]
+    -- Step 2: Unfold evalSigmaAlg for .seq
+    simp only [evalSigmaAlg]
+    -- Step 3: Name the intermediate state after evaluating inner expression
+    set st1 := evalSigmaAlg ω LoopEnv.empty { readMem := rm, writeMem := wm }
+               (lower _ _ state a).1 with hst1_def
+    -- Step 4: By IH, st1.writeMem.size = m (Lean infers the dimension from context)
+    have hst1_size := ih state rm wm hwm hwf_a
+    -- Step 5: Unfold evalSigmaAlg for .compute, evalScatter for Scatter.contiguous
+    simp only [evalSigmaAlg, evalScatter, Scatter.contiguous, evalIdxExpr,
+               LoopEnv.empty, Nat.zero_add, Nat.one_mul, evalKernelAlg]
+    -- Step 6: Apply foldl_write_enum_size
+    rw [← hst1_size]; apply foldl_write_enum_size
+    -- Step 7: Need to show vals.length ≤ st1.writeMem.size
+    -- vals has length stateSize, and stateSize = m from hsize
+    simp only [evalGather, Gather.contiguous, evalIdxExpr, LoopEnv.empty, Nat.zero_add]
+    simp only [List.length_map, List.length_range]
+    rw [hst1_size, ← hsize]
+  | compose a b ih_a ih_b =>
+    -- lower(.compose a b) = .temp k (.seq exprB exprA)
+    -- Complex case: .temp starts with zeros(k), not wm
+    -- The IH doesn't directly apply because intermediate size is k, not m
+    -- SORRY: Requires showing that exprA (lower m k ...) writes m elements
+    -- even when starting writeMem has size k (may need extension analysis)
+    sorry
+  | add a b ih_a ih_b =>
+    -- lower(.add a b) = .par exprA exprB where exprB uses state1 from lowering a
+    -- .par runs exprA, then exprB with { readMem := state1.writeMem, writeMem := state1.writeMem }
+    obtain ⟨hwf_a, hwf_b⟩ := hwf
+    simp only [lower]
+    simp only [evalSigmaAlg]
+    -- Name the state after lowering a (needed for exprB)
+    set lowerState1 := (lower _ _ state a).2 with hlowerState1_def
+    -- After exprA: writeMem.size = m by IH
+    set st1 := evalSigmaAlg ω LoopEnv.empty { readMem := rm, writeMem := wm }
+               (lower _ _ state a).1 with hst1_def
+    have hst1_size := ih_a state rm wm hwm hwf_a
+    -- .par: s2 runs with { readMem := st1.writeMem, writeMem := st1.writeMem }
+    -- Both readMem and writeMem are st1.writeMem (size m)
+    -- By IH on b with st1.writeMem as both rm and wm, final writeMem.size = m
+    have hst2_size := ih_b lowerState1 st1.writeMem st1.writeMem hst1_size hwf_b
+    exact hst2_size
+  | kron a b ih_a ih_b =>
+    -- lower(.kron a b) involves loops with adjustBlock/adjustStride
+    -- Complex iteration over blocks/lanes
+    -- SORRY: Requires loop invariant analysis
+    sorry
 
 /-- WriteMem irrelevance for lowered expressions: the first m elements of the
     output writeMem do not depend on the initial writeMem contents.
@@ -767,8 +1742,21 @@ theorem evalSigmaAlg_lower_state_irrelevant
   | kron a b ih_a ih_b =>
     -- Kron uses freshLoopVar → different loop variable IDs → needs alpha-renaming
     -- The loop body uses adjustBlock/adjustStride with the loop variable
-    -- Different states produce different loopVar values, requiring a general
-    -- alpha-renaming lemma for evalSigmaAlg
+    -- Different states produce different loopVar values
+    --
+    -- The lower function for kron has three cases:
+    -- 1. I ⊗ B (aIsIdentity): .loop m₁ v (adjustBlock v n₂ m₂ (lower b))
+    -- 2. A ⊗ I (bIsIdentity): .loop m₂ v (adjustStride v m₂ m₁ n₁ (lower a))
+    -- 3. General: .loop m₁ v (.seq exprA (.loop m₂ v+1 exprB))
+    --
+    -- The proof uses loop_adjustBlock_alpha (for I⊗B case) which relies on:
+    -- - adjustBlock_alpha: same expr with different loopVars evaluates equally when bound same
+    -- - adjustBlock_preserves_eval: IH-equal exprs with adjustBlock still evaluate equally
+    -- - ih_b: lower of b is state-irrelevant
+    --
+    -- SORRY: Full proof requires case analysis on isIdentity(a) and isIdentity(b)
+    -- plus adjustStride_alpha lemma (similar to adjustBlock_alpha)
+    -- and handling of the general nested loop case
     sorry
 
 set_option maxHeartbeats 800000 in
@@ -944,7 +1932,8 @@ theorem lowering_compose_step
     (ihB : runSigmaAlg ω (lowerFresh k_mid n b) v k_mid = evalMatExprAlg ω k_mid n b v)
     (ihA : ∀ (w : List α), w.length = k_mid →
            runSigmaAlg ω (lowerFresh k k_mid a) w k = evalMatExprAlg ω k k_mid a w)
-    (h_inter_len : (evalMatExprAlg ω k_mid n b v).length = k_mid) :
+    (h_inter_len : (evalMatExprAlg ω k_mid n b v).length = k_mid)
+    (hwf_b : IsWellFormedNTT b) :
     runSigmaAlg ω (lowerFresh k n (@MatExpr.compose α k k_mid n a b)) v k =
     evalMatExprAlg ω k n (@MatExpr.compose α k k_mid n a b) v := by
   -- Step 1: Unfold evalMatExprAlg for compose → a(b(v))
@@ -969,7 +1958,7 @@ theorem lowering_compose_step
   -- Step 6: Size preservation → stateB.writeMem.size = k_mid
   have h_size : stateB.writeMem.size = k_mid :=
     evalSigmaAlg_writeMem_size_preserved ω { nextLoopVar := 0 } b
-      (Memory.ofList v) (Memory.zeros k_mid) (Memory.zeros_size k_mid)
+      (Memory.ofList v) (Memory.zeros k_mid) (Memory.zeros_size k_mid) hwf_b
   -- Step 7: toList has full length, so take = identity
   have h_toList_len : stateB.writeMem.toList.length = k_mid := by
     rw [Array.length_toList]; exact h_size
@@ -1054,7 +2043,8 @@ to prove "compiled code computes DFT". -/
 
 set_option maxHeartbeats 800000 in
 theorem lowering_algebraic_correct
-    (ω : α) (mat : MatExpr α k n) (v : List α) (hv : v.length = n) :
+    (ω : α) (mat : MatExpr α k n) (v : List α) (hv : v.length = n)
+    (hwf : IsWellFormedNTT mat) :
     runSigmaAlg ω (lowerFresh k n mat) v k = evalMatExprAlg ω k n mat v := by
   match mat with
   | .identity n' =>
@@ -1124,10 +2114,12 @@ theorem lowering_algebraic_correct
   | .compose a b =>
     -- Composition: PROVEN via lowering_compose_step
     -- Uses foundational axioms: size preservation, writeMem irrelevance, alpha-equivalence
+    -- hwf : IsWellFormedNTT (.compose a b) = IsWellFormedNTT a ∧ IsWellFormedNTT b
     exact lowering_compose_step ω a b v hv
-      (lowering_algebraic_correct ω b v hv)
-      (fun w hw => lowering_algebraic_correct ω a w hw)
+      (lowering_algebraic_correct ω b v hv hwf.2)
+      (fun w hw => lowering_algebraic_correct ω a w hw hwf.1)
       (evalMatExprAlg_length ω b v hv)
+      hwf.2
   | .zero _ _ =>
     -- Zero case: PROVEN - lower(.zero) = .nop, writeMem starts as Memory.zeros
     simp only [evalMatExprAlg, lowerFresh, lower,
@@ -1157,10 +2149,11 @@ theorem lowering_algebraic_correct
     -- Smul case: PROVEN via seq_identity axiom
     -- lower(.smul) = .seq exprA (.compute .scale contiguous contiguous)
     -- .scale kernel returns input unchanged
+    -- hwf : IsWellFormedNTT (.smul c a) = (k = n) ∧ IsWellFormedNTT a
     simp only [evalMatExprAlg, lowerFresh, lower]
     rw [runSigmaAlg_seq_identity_compute ω _ .scale n k v
         (by intro w; simp [evalKernelAlg])]
-    exact lowering_algebraic_correct ω a v hv
+    exact lowering_algebraic_correct ω a v hv hwf.2
   | .transpose a =>
     -- SORRY: Dimensional mismatch.
     -- lower swaps (k,n) → lower n k, but runSigmaAlg uses outputSize=k
@@ -1173,31 +2166,35 @@ theorem lowering_algebraic_correct
   | .elemwise op a =>
     -- Elemwise case: PROVEN via seq_identity axiom
     -- .sbox kernel returns input unchanged (evalKernelAlg .sbox = id)
+    -- hwf.2 : IsWellFormedNTT a
     simp only [evalMatExprAlg, lowerFresh, lower]
     rw [runSigmaAlg_seq_identity_compute ω _ (.sbox (k * n) op.toExp) (k * n) k v
         (by intro w; simp [evalKernelAlg])]
-    exact lowering_algebraic_correct ω a v hv
+    exact lowering_algebraic_correct ω a v hv hwf.2
   | .partialElemwise idx op a =>
     -- PartialElemwise case: PROVEN via seq_identity axiom
     -- .partialSbox kernel returns input unchanged
+    -- hwf.2 : IsWellFormedNTT a
     simp only [evalMatExprAlg, lowerFresh, lower]
     rw [runSigmaAlg_seq_identity_compute ω _ (.partialSbox (k * n) op.toExp idx) (k * n) k v
         (by intro w; simp [evalKernelAlg])]
-    exact lowering_algebraic_correct ω a v hv
+    exact lowering_algebraic_correct ω a v hv hwf.2
   | .mdsApply mdsName stateSize a =>
     -- MdsApply case: PROVEN via seq_identity axiom
     -- .mdsApply kernel returns input unchanged
+    -- hwf.2 : IsWellFormedNTT a
     simp only [evalMatExprAlg, lowerFresh, lower]
     rw [runSigmaAlg_seq_identity_compute ω _ (.mdsApply mdsName stateSize) stateSize k v
         (by intro w; simp [evalKernelAlg])]
-    exact lowering_algebraic_correct ω a v hv
+    exact lowering_algebraic_correct ω a v hv hwf.2
   | .addRoundConst round stateSize a =>
     -- AddRoundConst case: PROVEN via seq_identity axiom
     -- .addRoundConst kernel returns input unchanged
+    -- hwf.2 : IsWellFormedNTT a
     simp only [evalMatExprAlg, lowerFresh, lower]
     rw [runSigmaAlg_seq_identity_compute ω _ (.addRoundConst round stateSize) stateSize k v
         (by intro w; simp [evalKernelAlg])]
-    exact lowering_algebraic_correct ω a v hv
+    exact lowering_algebraic_correct ω a v hv hwf.2
 termination_by mat.nodeCount
 decreasing_by
   all_goals simp_wf

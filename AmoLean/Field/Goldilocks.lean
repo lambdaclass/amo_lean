@@ -86,11 +86,8 @@ theorem val_lt_size (a : GoldilocksField) : a.value.toNat < UInt64.size := a.val
     This is a fundamental property of UInt64 arithmetic that Lean 4.16 doesn't
     expose directly. We prove it holds for all cases where y ≤ x. -/
 theorem uint64_sub_toNat (x y : UInt64) (h : y.toNat ≤ x.toNat) :
-    (x - y).toNat = x.toNat - y.toNat := by
-  -- UInt64 subtraction uses BitVec subtraction internally
-  -- When y ≤ x, the result doesn't wrap around
-  -- Proof deferred - this is a low-level BitVec property
-  sorry
+    (x - y).toNat = x.toNat - y.toNat :=
+  UInt64.toNat_sub_of_le x y h
 
 /-- Extensionality theorem: two GoldilocksField elements are equal iff their values are equal -/
 @[ext]
