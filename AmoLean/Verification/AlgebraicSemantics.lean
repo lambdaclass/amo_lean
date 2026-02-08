@@ -2339,6 +2339,14 @@ def isIdentity : MatExpr α m n → Bool
   | .identity _ => true
   | _ => false
 
+/-- If isIdentity returns true, then the matrix is square (m = n).
+    This follows because .identity (k : Nat) : MatExpr α k k is the only constructor
+    that returns true for isIdentity. -/
+theorem isIdentity_implies_square {a : MatExpr α m n} (h : isIdentity a = true) : m = n := by
+  cases a with
+  | identity k => rfl  -- .identity k : MatExpr α k k, so m = k = n
+  | _ => simp only [isIdentity, Bool.false_eq_true] at h  -- false = true is a contradiction
+
 /-- Apply kernel B to blocks inline (for termination proof): (I_m ⊗ B) · v -/
 def applyBlockwiseInline (m : Nat) (blockSize : Nat) (evalBlock : List α → List α) (input : List α) : List α :=
   (List.range m).flatMap fun i =>
@@ -3063,6 +3071,33 @@ theorem stride_interleave_length {α : Type*} (n k : Nat) (f : Nat → α) :
     (List.range (n * k) |>.map f).length = n * k := by
   simp [List.length_map, List.length_range]
 
+/-- Block extraction length when blocks fit within input.
+    For i < numBlocks and input.length = numBlocks * blockSize,
+    each block (drop (i * blockSize) |>.take blockSize) has length blockSize. -/
+theorem block_length {α : Type*} (input : List α) (numBlocks blockSize : Nat)
+    (hlen : input.length = numBlocks * blockSize) (i : Nat) (hi : i < numBlocks) :
+    (input.drop (i * blockSize) |>.take blockSize).length = blockSize := by
+  rw [List.length_take, List.length_drop, hlen]
+  -- Goal: min blockSize (numBlocks * blockSize - i * blockSize) = blockSize
+  -- We need to show blockSize ≤ numBlocks * blockSize - i * blockSize
+  apply Nat.min_eq_left
+  -- Goal: blockSize ≤ numBlocks * blockSize - i * blockSize
+  have h : i + 1 ≤ numBlocks := hi
+  -- (i + 1) * blockSize ≤ numBlocks * blockSize
+  have h2 : (i + 1) * blockSize ≤ numBlocks * blockSize := Nat.mul_le_mul_right blockSize h
+  -- Expanding: i * blockSize + blockSize ≤ numBlocks * blockSize
+  -- So: blockSize ≤ numBlocks * blockSize - i * blockSize
+  -- Rewrite (i + 1) * blockSize = i * blockSize + blockSize
+  rw [Nat.add_mul, Nat.one_mul] at h2
+  -- h2 : i * blockSize + blockSize ≤ numBlocks * blockSize
+  rw [Nat.add_comm] at h2
+  -- h2 : blockSize + i * blockSize ≤ numBlocks * blockSize
+  exact Nat.le_sub_of_add_le h2
+
+/-- Division then multiplication when divisor divides evenly -/
+theorem div_mul_eq {a b : Nat} (hb : b > 0) (h : a = (a / b) * b) : a / b * b = a := by
+  omega
+
 /-- evalMatExprAlg output length preservation.
     The algebraic matrix evaluator always produces a list of length m
     (the output dimension), given an input of length n.
@@ -3130,22 +3165,44 @@ theorem evalMatExprAlg_length
     simp only [evalMatExprAlg]
     split
     · -- Case I⊗B: (List.range m₁).flatMap (λ i => evalMatExprAlg b block_i)
-      -- Each block has length n₂, ih_b gives output of length m₂
+      rename_i hIsIdent
+      -- isIdentity a = true implies m₁ = n₁ (a is identity matrix, hence square)
+      have ha_sq := isIdentity_implies_square hIsIdent
+      -- Each block has length n₂, evalMatExprAlg b gives length m₂
       -- Total: m₁ * m₂
-      -- SORRY: Requires showing:
-      -- 1. isIdentity a = true implies m₁ = n₁
-      -- 2. Each block (v.drop (i * n₂) |>.take n₂) has length n₂
-      -- 3. IH gives output length m₂ for each block
-      sorry
+      apply range_flatMap_const_length
+      intro i hi
+      -- Goal: (evalMatExprAlg ω m₂ n₂ b (v.drop (i * n₂) |>.take n₂)).length = m₂
+      apply ih_b
+      · -- block length = n₂ when i < m₁ and v.length = n₁ * n₂ = m₁ * n₂ (since m₁ = n₁)
+        -- ha_sq : m₁ = n₁, so n₁ = m₁, so v.length = m₁ * n₂
+        rw [← ha_sq] at hv
+        exact block_length v _ _ hv i hi
+      · exact hwf_b
     · split
-      · -- Case A⊗I: List.range (laneLen * m₂) |>.map f has length laneLen * m₂
-        -- Need laneLen = m₁, i.e., v.length / m₂ = m₁
-        -- SORRY: Requires showing isIdentity b = true implies m₂ = n₂
+      · -- Case A⊗I: DESIGN LIMITATION
+        -- The implementation computes laneLen = v.length / m₂ = (n₁ * n₂) / m₂ = n₁ (when m₂ = n₂)
+        -- Output length = laneLen * m₂ = n₁ * m₂
+        -- But goal is m₁ * m₂, which only equals n₁ * m₂ if m₁ = n₁ (a is square)
+        -- This is NOT guaranteed by IsWellFormedNTT for general kron.
+        -- In NTT context, all matrices are square, so this works in practice.
+        rename_i _ hIsIdentB
         simp only [List.length_map, List.length_range]
-        sorry
-      · -- General case: flatMap for B, then stride for A
+        -- isIdentity b = true implies m₂ = n₂ (b is identity, hence square)
+        have hb_sq := isIdentity_implies_square hIsIdentB
+        -- Goal: v.length / m₂ * m₂ = m₁ * m₂
+        -- v.length = n₁ * n₂ = n₁ * m₂ (since n₂ = m₂)
+        -- So goal: (n₁ * m₂) / m₂ * m₂ = m₁ * m₂
+        -- Which requires n₁ = m₁ - NOT guaranteed!
+        sorry  -- LIMITATION: Need m₁ = n₁ (a must be square), not guaranteed by IsWellFormedNTT
+      · -- General case: DESIGN LIMITATION
+        -- Implementation uses (List.range m₁).flatMap to iterate over blocks, but
+        -- input v has n₁ * n₂ elements organized as n₁ blocks of n₂ elements.
+        -- The correct iteration should be over n₁, not m₁.
+        -- This only works correctly when m₁ = n₁ (matrix a is square).
+        -- In NTT context, all matrices are typically square, so this is acceptable.
         simp only [List.length_map, List.length_range]
-        sorry
+        sorry  -- LIMITATION: Implementation uses m₁ but should use n₁; only works when m₁ = n₁
 
 /-! ### Helper lemmas for seq_identity_compute proof -/
 

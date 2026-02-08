@@ -1,7 +1,7 @@
 # Inventario Completo de Sorries y Axiomas en AMO-Lean
 
 **Fecha**: 2026-02-08
-**Ultima actualizacion**: Fase 2 Correccion 3 (4 sorries cerrados: transpose/conjTranspose en size/length)
+**Ultima actualizacion**: Fase 2 Correccion 3b (5 sorries cerrados: transpose/conjTranspose + kron I⊗B)
 
 ---
 
@@ -18,18 +18,18 @@
 | **FRI/Transcript** | 0 | 0 | COMPLETADO |
 | **FRI/Properties** | 0 | 0 | COMPLETADO |
 | **FRI/Merkle** | 2 | 0 | Baja prioridad |
-| **Verification/AlgebraicSemantics** | 18 | **0** | EN PROGRESO (Fase 2 Correccion 3) |
+| **Verification/AlgebraicSemantics** | 17 | **0** | EN PROGRESO (Fase 2 Correccion 3b) |
 | **Verification/Theorems** | 7 | 0 | SUPERSEDED por AlgebraicSemantics |
 | **Verification/Poseidon** | 12 | 0 | Comp. verificados |
-| **TOTAL** | **40 activos** | **17** | - |
+| **TOTAL** | **39 activos** | **17** | - |
 
 ### Clasificacion
 
 | Categoria | Cantidad | Descripcion |
 |-----------|----------|-------------|
-| **Sorries activos** | 40 | Distribuidos en tablas detalladas abajo |
+| **Sorries activos** | 39 | Distribuidos en tablas detalladas abajo |
 | **Sorries computacionales** | 12 | Poseidon - verificados por 21 tests |
-| **Sorries cerrable** | 6 | Prueba formal factible (kron subcases) |
+| **Sorries cerrable** | 3 | Prueba formal factible (compose, runSigmaAlg) |
 | **Sorries con statement falso** | 1 | writeMem_irrelevant (falso para .zero) |
 | **Sorries insalvables (bug)** | 1 | add en lowering_algebraic_correct |
 | **Sorries de infraestructura** | 6 | Requieren loop invariant o alpha-renaming |
@@ -39,7 +39,7 @@
 
 **Nota**: Los sorries comentados (NTT/Spec, NTT/Properties, Perm x4) no afectan compilacion.
 
-**HITO Fase 2 Correccion 3**: 4 sorries cerrados (transpose/conjTranspose en evalMatExprAlg_length y evalSigmaAlg_writeMem_size_preserved). Agregado parametro `hwf : IsWellFormedNTT` a `evalMatExprAlg_length` para habilitar pruebas con precondicion m=n.
+**HITO Fase 2 Correccion 3b**: 5 sorries cerrados (transpose/conjTranspose en size/length + kron I⊗B en evalMatExprAlg_length). Creado lemma `isIdentity_implies_square` para probar que matrices identity son cuadradas. Casos A⊗I y general documentados como limitaciones de diseño (requieren matriz A cuadrada).
 
 **HITO Sesion 18**: AlgebraicSemantics.lean paso de 8 axiomas + 3 sorries a **0 axiomas + 22 sorries desglosados**. Los 22 sorries son mas transparentes y auditables que los 8 axiomas que reemplazaron.
 
@@ -193,7 +193,7 @@ Probar que evaluar una expresion lowered preserva el tamano de writeMem.
 
 **19/20 casos probados**. Solo kron pendiente.
 
-### 4. evalMatExprAlg_length (3 sorries)
+### 4. evalMatExprAlg_length (2 sorries)
 
 Agregado parametro `hwf : IsWellFormedNTT mat` en Fase 2 Correccion 3.
 
@@ -207,13 +207,15 @@ Agregado parametro `hwf : IsWellFormedNTT mat` en Fase 2 Correccion 3.
 | add | ✓ CERRADO | Via IH_a + IH_b + zip |
 | transpose | ✓ CERRADO (F2C3) | Via `subst hmn` con `hwf.1 : m = n` |
 | conjTranspose | ✓ CERRADO (F2C3) | Mismo patron que transpose |
-| kron I⊗B | CERRABLE | `flatMap length = m₁ * m₂` via IH_b |
-| kron A⊗I | CERRABLE | `laneLen * m₂ = m₁ * m₂` via IH_a |
-| kron general | CERRABLE | Combina flatMap + stride interleaving |
+| kron I⊗B | ✓ CERRADO (F2C3b) | `isIdentity a → m₁ = n₁`, luego `range_flatMap_const_length` |
+| kron A⊗I | DISEÑO | Output = n₁ * m₂ pero goal = m₁ * m₂ (requiere a cuadrada) |
+| kron general | DISEÑO | Implementacion usa m₁ pero deberia usar n₁ (requiere a cuadrada) |
 
-**17/20 casos probados**. Solo 3 subcases de kron pendientes.
+**18/20 casos probados**. 2 subcases de kron son limitaciones de diseño.
 
-**Lemmas auxiliares creados** (Fase 2 Correccion 3):
+**Lemmas auxiliares creados** (Fase 2 Correccion 3/3b):
+- `isIdentity_implies_square`: `isIdentity a = true → m = n`
+- `block_length`: Longitud de bloques extraidos con drop/take
 - `flatMap_const_length`: FlatMap con outputs de longitud constante
 - `range_flatMap_const_length`: Variante para List.range
 - `stride_interleave_length`: Para stride interleaving
