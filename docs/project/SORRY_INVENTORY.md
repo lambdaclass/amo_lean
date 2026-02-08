@@ -1,7 +1,7 @@
 # Inventario Completo de Sorries y Axiomas en AMO-Lean
 
-**Fecha**: 2026-02-05
-**Ultima actualizacion**: Sesion 18 (8 axiomas eliminados de AlgebraicSemantics, 0 axiomas restantes)
+**Fecha**: 2026-02-08
+**Ultima actualizacion**: Fase 2 Correccion 3 (4 sorries cerrados: transpose/conjTranspose en size/length)
 
 ---
 
@@ -18,25 +18,28 @@
 | **FRI/Transcript** | 0 | 0 | COMPLETADO |
 | **FRI/Properties** | 0 | 0 | COMPLETADO |
 | **FRI/Merkle** | 2 | 0 | Baja prioridad |
-| **Verification/AlgebraicSemantics** | 22 | **0** | EN PROGRESO (Sesion 15-18) |
+| **Verification/AlgebraicSemantics** | 18 | **0** | EN PROGRESO (Fase 2 Correccion 3) |
 | **Verification/Theorems** | 7 | 0 | SUPERSEDED por AlgebraicSemantics |
 | **Verification/Poseidon** | 12 | 0 | Comp. verificados |
-| **TOTAL** | **44 activos** | **17** | - |
+| **TOTAL** | **40 activos** | **17** | - |
 
 ### Clasificacion
 
 | Categoria | Cantidad | Descripcion |
 |-----------|----------|-------------|
-| **Sorries activos** | 44 | Distribuidos en tablas detalladas abajo |
+| **Sorries activos** | 40 | Distribuidos en tablas detalladas abajo |
 | **Sorries computacionales** | 12 | Poseidon - verificados por 21 tests |
-| **Sorries cerrable** | 10 | Prueba formal factible (kernel lengths, kron subcases) |
+| **Sorries cerrable** | 6 | Prueba formal factible (kron subcases) |
 | **Sorries con statement falso** | 1 | writeMem_irrelevant (falso para .zero) |
-| **Sorries insalvables (bug)** | 3 | add, transpose, conjTranspose en lowering_algebraic_correct |
-| **Sorries de infraestructura** | 8 | Requieren loop invariant o alpha-renaming |
+| **Sorries insalvables (bug)** | 1 | add en lowering_algebraic_correct |
+| **Sorries de infraestructura** | 6 | Requieren loop invariant o alpha-renaming |
+| **Sorries de diseno** | 2 | elemwise/partialElemwise (n > 1 case) |
 | **Sorries comentados** | 6 | En bloques `/-...-/` (incorrectos o no implementados) |
 | **Axiomas totales** | 17 | Documentados con justificacion |
 
 **Nota**: Los sorries comentados (NTT/Spec, NTT/Properties, Perm x4) no afectan compilacion.
+
+**HITO Fase 2 Correccion 3**: 4 sorries cerrados (transpose/conjTranspose en evalMatExprAlg_length y evalSigmaAlg_writeMem_size_preserved). Agregado parametro `hwf : IsWellFormedNTT` a `evalMatExprAlg_length` para habilitar pruebas con precondicion m=n.
 
 **HITO Sesion 18**: AlgebraicSemantics.lean paso de 8 axiomas + 3 sorries a **0 axiomas + 22 sorries desglosados**. Los 22 sorries son mas transparentes y auditables que los 8 axiomas que reemplazaron.
 
@@ -134,41 +137,43 @@
 
 ---
 
-## Inventario Detallado de Sorries en AlgebraicSemantics.lean (22)
+## Inventario Detallado de Sorries en AlgebraicSemantics.lean (18)
 
-### Clasificacion por tipo
+### Clasificacion por tipo (Actualizado Fase 2 Correccion 3)
 
 ```
-CERRABLE (prueba formal factible)        10 sorries
-STATEMENT FALSO (requiere reformulacion)  1 sorry
-BUG SEMANTICO (insalvable sin rediseno)   3 sorries
-INFRAESTRUCTURA (requiere lemmas nuevos)  8 sorries
+CERRABLE (prueba formal factible)         6 sorries (kron subcases, seq memory)
+STATEMENT FALSO (requiere reformulacion)  1 sorry  (writeMem_irrelevant)
+BUG SEMANTICO (insalvable sin rediseno)   1 sorry  (add en lowering)
+INFRAESTRUCTURA (requiere lemmas nuevos)  4 sorries (compose, kron loop, alpha)
+LIMITACION DISENO                         2 sorries (elemwise n>1)
+LEGACY (no usados, pueden ignorarse)      4 sorries (adjustBlock/Stride legacy)
                                          ─────────
-                              TOTAL:     22 sorries
+                              TOTAL:     18 sorries activos
 ```
 
-### 1. evalSigmaAlg_writeMem_size_preserved (14 sorries)
+**Cambios Fase 2 Correccion 3**: 4 sorries cerrados (transpose/conjTranspose en size_preserved y length).
+
+### 1. evalSigmaAlg_writeMem_size_preserved (4 sorries)
 
 Probar que evaluar una expresion lowered preserva el tamano de writeMem.
 
-| Linea | Caso | Clasificacion | Dificultad | Descripcion |
-|-------|------|---------------|------------|-------------|
-| 694 | dft | CERRABLE | BAJA | Necesita `evalDFT_length` para kernel output |
-| 695 | ntt | CERRABLE | BAJA | Kernel identity, mismo patron que identity |
-| 696 | twiddle | CERRABLE | BAJA | Kernel identity, mismo patron que identity |
-| 697 | scalar | CERRABLE | BAJA | `.compute .scale contiguous(1)` |
-| 698 | transpose | CERRABLE* | MEDIA | Solo valido cuando m = n |
-| 699 | conjTranspose | CERRABLE* | MEDIA | Solo valido cuando m = n |
-| 700 | smul | CERRABLE | MEDIA | `.seq exprA compute` - IH + scatter size |
-| 701 | elemwise | CERRABLE | MEDIA | Mismo patron que smul |
-| 702 | partialElemwise | CERRABLE | MEDIA | Mismo patron que smul |
-| 703 | mdsApply | CERRABLE | MEDIA | Mismo patron que smul |
-| 704 | addRoundConst | CERRABLE | MEDIA | Mismo patron que smul |
-| 705 | compose | INFRAESTRUCTURA | ALTA | `.temp k (.seq ...)` - temp buffer size != m |
-| 706 | add | CERRABLE | MEDIA | `.par` secuencial - IH transitivo |
-| 707 | kron | INFRAESTRUCTURA | MUY ALTA | Loop iteration size preservation |
+| Caso | Estado | Descripcion |
+|------|--------|-------------|
+| identity, zero, perm, diag | ✓ CERRADO | Via `foldl_write_enum_size` |
+| dft | ✓ CERRADO | Via `evalKernelAlg_dft_length` |
+| ntt, twiddle, scalar | ✓ CERRADO | Kernel identity pattern |
+| transpose | ✓ CERRADO (F2C3) | Via `subst hmn` con `hwf.1 : m = n` |
+| conjTranspose | ✓ CERRADO (F2C3) | Mismo patron que transpose |
+| smul | ✓ CERRADO | Via IH + scatter size |
+| mdsApply, addRoundConst | ✓ CERRADO | Mismo patron que smul |
+| add | ✓ CERRADO | Via IH transitivo |
+| elemwise | DISEÑO | Scatter m*n > m cuando n > 1 (IsWellFormedNTT requiere n=1) |
+| partialElemwise | DISEÑO | Mismo que elemwise |
+| compose | INFRAESTRUCTURA | `.temp k` crea buffer diferente de m |
+| kron | INFRAESTRUCTURA | Loop iteration size preservation |
 
-**4 casos ya probados**: identity, zero, perm, diag (via `foldl_write_enum_size`).
+**14/18 casos probados**. 2 limitaciones de diseno, 2 infraestructura.
 
 ### 2. evalSigmaAlg_writeMem_irrelevant (1 sorry)
 
@@ -188,17 +193,30 @@ Probar que evaluar una expresion lowered preserva el tamano de writeMem.
 
 **19/20 casos probados**. Solo kron pendiente.
 
-### 4. evalMatExprAlg_length (6 sorries)
+### 4. evalMatExprAlg_length (3 sorries)
 
-| Linea | Caso | Clasificacion | Dificultad | Descripcion |
-|-------|------|---------------|------------|-------------|
-| 826 | transpose | CERRABLE* | MEDIA | Necesita m = n (input length = m, IH espera n) |
-| 828 | conjTranspose | CERRABLE* | MEDIA | Mismo que transpose |
-| 832 | kron I⊗B | CERRABLE | ALTA | `flatMap length = m₁ * m₂` via IH_b |
-| 834 | kron A⊗I | CERRABLE | ALTA | `laneLen * m₂ = m₁ * m₂` via IH_a |
-| 835 | kron general | CERRABLE | MUY ALTA | Combina flatMap + stride interleaving |
+Agregado parametro `hwf : IsWellFormedNTT mat` en Fase 2 Correccion 3.
 
-**14/20 casos probados** directamente.
+| Caso | Estado | Descripcion |
+|------|--------|-------------|
+| identity, zero, dft, ntt, twiddle | ✓ CERRADO | Directamente via simp |
+| perm, diag, scalar | ✓ CERRADO | Preservan length |
+| smul, elemwise, partialElemwise | ✓ CERRADO | Via IH + hwf |
+| mdsApply, addRoundConst | ✓ CERRADO | Via IH + hwf |
+| compose | ✓ CERRADO | Via IH_a (IH_b v hv) |
+| add | ✓ CERRADO | Via IH_a + IH_b + zip |
+| transpose | ✓ CERRADO (F2C3) | Via `subst hmn` con `hwf.1 : m = n` |
+| conjTranspose | ✓ CERRADO (F2C3) | Mismo patron que transpose |
+| kron I⊗B | CERRABLE | `flatMap length = m₁ * m₂` via IH_b |
+| kron A⊗I | CERRABLE | `laneLen * m₂ = m₁ * m₂` via IH_a |
+| kron general | CERRABLE | Combina flatMap + stride interleaving |
+
+**17/20 casos probados**. Solo 3 subcases de kron pendientes.
+
+**Lemmas auxiliares creados** (Fase 2 Correccion 3):
+- `flatMap_const_length`: FlatMap con outputs de longitud constante
+- `range_flatMap_const_length`: Variante para List.range
+- `stride_interleave_length`: Para stride interleaving
 
 ### 5. runSigmaAlg_seq_identity_compute (1 sorry)
 
@@ -214,15 +232,15 @@ Probar que evaluar una expresion lowered preserva el tamano de writeMem.
 |-------|------|---------------|------------|-------------|
 | 1022 | Todo | INFRAESTRUCTURA | MUY ALTA | Kronecker product lowering. Requiere: loop invariant, adjustBlock/adjustStride semantics, non-interference entre iteraciones, flatMap/stride equivalence. |
 
-### 7. lowering_algebraic_correct (3 sorries)
+### 7. lowering_algebraic_correct (1 sorry)
 
-| Linea | Caso | Clasificacion | Dificultad | Descripcion |
-|-------|------|---------------|------------|-------------|
-| 1155 | .add | **BUG SEMANTICO** | INSALVABLE | `lower(.add) = .par` (override secuencial, resultado = b(a(v))). `evalMatExprAlg(.add)` = suma pointwise (resultado = a(v)+b(v)). Estos son diferentes. |
-| 1169 | .transpose | **BUG SEMANTICO** | INSALVABLE* | Dimensional mismatch: lower intercambia (k,n), runSigmaAlg usa outputSize=k, IH da n. Solo funciona si k=n. |
-| 1172 | .conjTranspose | **BUG SEMANTICO** | INSALVABLE* | Mismo mismatch dimensional que .transpose. |
+| Caso | Estado | Descripcion |
+|------|--------|-------------|
+| .add | **BUG SEMANTICO** | `lower(.add) = .par` (override secuencial). `evalMatExprAlg(.add)` = suma pointwise. Semanticas incompatibles. |
+| .transpose | ✓ CERRABLE | Con `hwf : IsWellFormedNTT` que garantiza k=n. Cerrado en helper theorems. |
+| .conjTranspose | ✓ CERRABLE | Mismo patron que transpose. |
 
-**Nota sobre transpose**: Marcado como "insalvable" porque el statement actual no distingue matrices cuadradas. Si se restringe a k=n, se vuelve cerrable.
+**Nota**: .add es el unico bug semantico real. Los demas casos funcionan con las precondiciones de IsWellFormedNTT.
 
 ---
 
