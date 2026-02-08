@@ -3,8 +3,8 @@
 **Proyecto**: amo-lean
 **Archivo**: `AmoLean/Verification/AlgebraicSemantics.lean`
 **Fecha de creacion**: 2026-02-07
-**Ultima actualizacion**: 2026-02-07
-**Estado**: Fase 2 Correccion 5 - evalSigmaAlg_lower_state_irrelevant COMPLETO
+**Ultima actualizacion**: 2026-02-08
+**Estado**: Fase 2 Correccion 6 - Saneamiento masivo: 16 → 6 sorries
 
 ---
 
@@ -12,14 +12,11 @@
 
 | Metrica | Valor |
 |---------|-------|
-| Sorries en declaraciones | 32 total (contando todas las lineas con sorry) |
-| Teoremas _fresh completados | 2 (adjustBlock_alpha_fresh, adjustStride_alpha_fresh) |
-| Teoremas boundedness | 2 (lower_loopVars_bounded_and_state_monotonic, freshness_from_bounded) |
-| Teoremas fv | 1 (lower_fv_empty - fv de lower es siempre vacio) |
-| **evalSigmaAlg_lower_state_irrelevant** | **COMPLETO (todos los casos incluyendo kron)** |
-| nested_loop_alpha | Usa lower_fv_empty como precondicion |
-| Build status | Compila sin errores |
-| @[simp] lemmas MatExpr.isIdentity | 16 (uno por constructor) |
+| **Sorries actuales** | **6** (de 16 pre-Corrección 6, de 104 originales) |
+| Sorries eliminados (Corrección 6) | 10 (4 legacy + 2 transpose/conjTranspose + 2 elemwise/partialElemwise + 2 kron length) |
+| evalSigmaAlg_lower_state_irrelevant | COMPLETO (todos los casos) |
+| IsWellFormedNTT kron | Extendido con squareness (m₁=n₁ ∧ m₂=n₂) |
+| Build status | Compila sin errores (2641 modulos) |
 
 ## Logro Principal
 
@@ -123,37 +120,37 @@ El teorema requiere probar que `lower` produce expresiones con `fv` bounded (low
 
 ---
 
-## Estado Actual de Sorries (16 total)
+## Estado Actual de Sorries (6 total)
 
-### Sorries del Path Kron (1)
+### Infraestructura / Invariantes de Loop (2)
 
-| Teorema | Linea | Estado |
-|---------|-------|--------|
-| nested_loop_alpha | ~1190 | Requiere lower_fv_bounded |
+| Teorema | Linea | Descripcion | Dificultad |
+|---------|-------|-------------|------------|
+| evalSigmaAlg_writeMem_size_preserved (compose) | ~2690 | .temp crea buffer k, IH da size k, pero necesita mostrar que exprA escribe m elementos | ALTA |
+| evalSigmaAlg_writeMem_size_preserved (kron) | ~2712 | Loop con adjustBlock/adjustStride: invariante de tamano de memoria | ALTA |
 
-### Sorries de Alpha-Equivalencia (4)
+### Diseño / Semántica (2)
 
-| Teorema | Linea | Estado |
-|---------|-------|--------|
-| adjustBlock_alpha (loop) | ~935 | Requiere freshness |
-| adjustStride_alpha (loop) | ~971 | Requiere freshness |
-| adjustBlock_preserves_eval | ~1093 | Requiere SameStructure |
-| adjustStride_preserves_eval | ~1125 | Requiere SameStructure |
+| Teorema | Linea | Descripcion | Dificultad |
+|---------|-------|-------------|------------|
+| evalSigmaAlg_writeMem_irrelevant | ~2727 | STATEMENT FALSO para .zero (.nop no sobreescribe). Compose proof lo usa | DISEÑO |
+| lowering_algebraic_correct (.add) | ~3322 | .par != suma puntual. lower(.add) da b(a(v)), no a(v)+b(v) | DISEÑO |
 
-### Sorries de Estructura (2)
+### Edge Cases / Teóricos (2)
 
-| Teorema | Linea | Estado |
-|---------|-------|--------|
-| ExactStructure.adjustBlock_same | ~1395 | Requiere freshness |
-| ExactStructure.adjustStride_same | ~1451 | Requiere freshness |
+| Teorema | Linea | Descripcion | Dificultad |
+|---------|-------|-------------|------------|
+| runSigmaAlg_seq_identity_compute (s > mem.size) | ~3083 | Branch s > mem.size del by_cases. Nunca se ejecuta en practica | BAJA |
+| lowering_kron_axiom | ~3186 | Axioma central de kron. Requiere infraestructura completa de loop | MUY ALTA |
 
-### Sorries de Tamano/Longitud (6)
+### Eliminados en Corrección 6 (10 sorries)
 
-| Teorema | Linea | Descripcion |
-|---------|-------|-------------|
-| evalSigmaAlg_writeMem_size_preserved | ~1941, ~2112 | Varios casos |
-| evalMatExprAlg_length | ~2219, ~2318 | transpose, kron |
-| Otros | ~2440, ~2480 | writeMem irrelevance, correctness |
+| Metodo | Sorries | Detalle |
+|--------|---------|---------|
+| Legacy deletion | 4 | adjustBlock/Stride_alpha, adjustBlock/Stride_preserves_eval (superseded by SameStructure) |
+| subst (dimensional) | 2 | .transpose, .conjTranspose en lowering_algebraic_correct (hwf.1 : k = n) |
+| subst + IH pattern | 2 | .elemwise, .partialElemwise en writeMem_size_preserved (hwf.1 : n = 1) |
+| IsWellFormedNTT extension | 2 | evalMatExprAlg_length kron A⊗I y general (m₁=n₁ squareness) |
 
 ---
 
@@ -212,21 +209,51 @@ Esto se sigue de lower_loopVars_bounded + un lema que diga fv ⊆ loopVarsOf par
 | Correccion 3 (fin) | - | 13 | **-4** |
 | Correccion 4 (inicio) | 13 | - | - |
 | Correccion 4 (fin) | - | 16 | +3 (reorganizados) |
+| Correccion 5 | 16 | 16 | 0 (structural) |
+| **Correccion 6** | **16** | **6** | **-10** |
 
-**Nota**: El aumento de 13 a 16 se debe a la reorganizacion del codigo.
-El sorry del caso kron se movio a nested_loop_alpha, y algunos sorries internos
-se hicieron mas explicitos. El trabajo pendiente es lower_fv_bounded.
+**Nota Corrección 6**: Reducción masiva gracias a:
+1. Detección de legacy code superseded por SameStructure theorems → delete (-4)
+2. Uso sistemático de `subst` con IsWellFormedNTT constraints → close (-4)
+3. Extensión de IsWellFormedNTT.kron con squareness (m₁=n₁ ∧ m₂=n₂) → close (-2)
 
 ---
 
 ## Proximos Pasos Recomendados
 
-1. **Implementar `lower_fv_bounded`** - Probar que fv(lower ...) solo contiene vars >= state.nextLoopVar
-2. **Cerrar nested_loop_alpha** - Usando lower_fv_bounded
-3. **Cerrar sorries de SameStructure** - adjustBlock_preserves_eval, adjustStride_preserves_eval
-4. **Documentar sorries restantes** - Categorizar por prioridad
+### Prioridad 1: Quick wins
+1. **runSigmaAlg_seq_identity (s > mem.size)** — Edge case que nunca se ejecuta. Podría cerrarse con precondición `s ≤ outputSize` o con lema de monotonía de memoria.
+
+### Prioridad 2: Infraestructura
+2. **writeMem_size_preserved (compose)** — Requiere análisis de `.temp k` buffer. Mostrar que exprA escribe m elementos empezando de buffer size k.
+3. **writeMem_size_preserved (kron)** — Requiere invariante de loop: cada iteración preserva el tamaño de writeMem.
+
+### Prioridad 3: Diseño
+4. **writeMem_irrelevant** — Reformular con precondición `¬mat.isZero` o manejar .zero en compose proof por separado.
+5. **lowering_algebraic_correct (.add)** — Requiere nuevo constructor en SigmaExpr o rediseño de .par semántica. Baja urgencia: .add no se usa en NTT/Poseidon pipelines.
+
+### Prioridad 4: Kron completo
+6. **lowering_kron_axiom** — Depende de infraestructura de loop (adjustBlock/adjustStride semántica, non-interference). Candidato a convertirse en axiom permanente si la infraestructura es demasiado costosa.
+
+---
+
+## Cambios Estructurales (Corrección 6)
+
+### IsWellFormedNTT: kron con squareness
+```lean
+-- Antes:
+| _, _, .kron a b => IsWellFormedNTT a ∧ IsWellFormedNTT b
+
+-- Después:
+| _, _, @MatExpr.kron _ m₁ n₁ m₂ n₂ a b => m₁ = n₁ ∧ m₂ = n₂ ∧ IsWellFormedNTT a ∧ IsWellFormedNTT b
+```
+
+Justificación: En NTT/FFT/Poseidon, todas las matrices en kron products son cuadradas. La extensión con squareness es necesaria para probar evalMatExprAlg_length en los casos A⊗I y general.
+
+### Legacy deletion: adjustBlock/Stride alpha + preserves_eval
+Los teoremas `adjustBlock_alpha`, `adjustStride_alpha`, `adjustBlock_preserves_eval`, `adjustStride_preserves_eval` y sus variantes `_with_ih`, `_with_ih_fresh`, y `loop_*_alpha` fueron eliminados. Estaban completamente superseded por los teoremas basados en SameStructure (`loop_adjustBlock_sameStructure`, `loop_adjustStride_sameStructure`). El teorema central `evalSigmaAlg_lower_state_irrelevant` usa exclusivamente el path SameStructure.
 
 ---
 
 *Documentacion creada: 2026-02-07*
-*Ultima actualizacion: 2026-02-07 (Fase 2 Correccion 4 - nested_loop_alpha implementado)*
+*Ultima actualizacion: 2026-02-08 (Fase 2 Correccion 6 - Saneamiento: 16 → 6 sorries)*
