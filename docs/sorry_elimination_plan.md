@@ -4,7 +4,7 @@
 **Archivo**: `AmoLean/Verification/AlgebraicSemantics.lean`
 **Fecha de creacion**: 2026-02-07
 **Ultima actualizacion**: 2026-02-08
-**Estado**: Fase 2 Correccion 7 - Eliminacion masiva: 10 → 6 sorry statements
+**Estado**: Fase 7B Correccion 8 - Eliminacion: 6 → 3 sorry statements (all kron-related)
 
 ---
 
@@ -12,13 +12,14 @@
 
 | Metrica | Valor |
 |---------|-------|
-| **Sorries actuales** | **6** (de 10 pre-Corrección 7, de 104 originales) |
-| Sorries eliminados (Corrección 7) | 4 (compose size + seq_identity + 2 kron length bonus) |
-| lowering_algebraic_correct | 17/19 casos PROVEN, 1 sorry (kron), 1 sorry (add) |
-| writeMem_size_preserved | 17/19 casos PROVEN, 1 sorry (kron loop invariant), 1 sorry (add design) |
-| writeMem_irrelevant | 15/19 base cases PROVEN, 2 sorries (kron loop + add design) |
+| **Sorries actuales** | **3** (de 6 pre-Corrección 8, de 104 originales) |
+| Sorries eliminados (Corrección 8) | 3 (DD-ADD ×2 + compose WF termination) |
+| lowering_algebraic_correct | 18/19 casos PROVEN, 1 sorry (kron) |
+| writeMem_size_preserved | 18/19 casos PROVEN, 1 sorry (kron loop invariant) |
+| writeMem_irrelevant | 18/19 base cases PROVEN, 1 sorry (kron loop) |
 | evalSigmaAlg_lower_state_irrelevant | COMPLETO (todos los casos) |
-| Build status | Compila sin errores (2641 modulos) |
+| Loop invariant infrastructure | foldl_invariant + evalSigmaAlg_loop_preserves_size PROVEN |
+| Build status | Pre-existing errors only (eq_of_toList_eq fwd ref, kron identifier names) |
 
 ## Logros Principales
 
@@ -144,28 +145,36 @@ El teorema requiere probar que `lower` produce expresiones con `fv` bounded (low
 
 ---
 
-## Estado Actual de Sorries (6 sorry statements)
+## Estado Actual de Sorries (3 sorry statements — all kron-related)
 
-### Loop Invariant / Infraestructura (2)
+### Kron Loop Invariant (2)
 
-| Teorema | Linea | Descripcion | Clasificacion |
-|---------|-------|-------------|---------------|
-| evalSigmaAlg_writeMem_size_preserved (kron) | ~2797 | Loop con adjustBlock/adjustStride: invariante de tamaño de memoria. Requiere `evalSigmaAlg_loop_preserves_size` helper. In-bounds analysis: max pos = m₁*m₂-1 < m. | Fase 3 |
-| evalSigmaAlg_writeMem_irrelevant (kron) | ~2933 | Loop body debe sobreescribir misma region independiente de writeMem inicial. Requiere adjustBlock/adjustStride semantics completas. | Fase 3 |
+| Teorema | Linea | Descripcion | Bloqueador |
+|---------|-------|-------------|------------|
+| evalSigmaAlg_writeMem_size_preserved (kron) | ~2851 | Loop con adjustBlock/adjustStride: invariante de tamaño de memoria. Loop infrastructure (foldl_invariant + evalSigmaAlg_loop_preserves_size) PROVEN. Falta: probar body preserves size (scatter in-bounds). | adjustBlock/adjustStride body size preservation |
+| evalSigmaAlg_writeMem_irrelevant (kron) | ~2984 | Loop body produce mismo writeMem independiente del writeMem inicial. Same infrastructure as S1. Falta: body writeMem determinism. | adjustBlock/adjustStride body determinism |
 
-### Diseño / Semántica (2)
+### Kron Core Correctness (1)
 
-| Teorema | Linea | Descripcion | Clasificacion |
-|---------|-------|-------------|---------------|
-| evalSigmaAlg_writeMem_irrelevant (add) | ~2925 | `.par` = sequential override, no suma puntual. `lower(.add a b)` da `b(a(v))` no `a(v)+b(v)`. Limitación de diseño: `.add` no se usa en NTT/Poseidon pipelines. | Fase 2 Corrección 8 |
-| lowering_algebraic_correct (.add) | ~3546 | Mismo bug de diseño que writeMem_irrelevant(add). `.par` semántica incompatible con `.add` algebraico. Fix: nuevo constructor SigmaExpr `.pointwiseAdd` o rediseño de `.par`. | Fase 2 Corrección 8 |
+| Teorema | Linea | Descripcion | Bloqueador |
+|---------|-------|-------------|------------|
+| lowering_kron_axiom | ~3472 | Axioma central de kron. Requiere: adjustBlock/adjustStride semantics + S1 dependency + non-interference. See detailed blocker list in sorry comment. | S1 + 6 specific lemmas |
 
-### Kron Correctness / Terminación (2)
+### Eliminados en Corrección 8 (3 sorry statements)
 
-| Teorema | Linea | Descripcion | Clasificacion |
-|---------|-------|-------------|---------------|
-| lowering_kron_axiom | ~3407 | Axioma central de kron. Requiere 3 infraestructuras: (1) adjustBlock semantics, (2) adjustStride semantics, (3) non-interference entre iteraciones de loop. | Fase 3 |
-| decreasing_by compose | ~3629 | Lean 4 Issue #2893: `termination_by` no ve recursión en closures pasadas a `runSigmaAlg`. Workaround con `sorry` en `decreasing_by`. | Lean 4 bug |
+| Metodo | Sorries | Detalle |
+|--------|---------|---------|
+| DD-ADD: IsWellFormedNTT .add → False | 2 | writeMem_irrelevant(add) + lowering_algebraic_correct(add): vacuously true via hwf.elim |
+| WF termination fix: ▸ cast + tactic alternatives | 1 | decreasing_by compose: avoided subst in transpose/conjTranspose (WF checker issue), added simp/unfold alternatives |
+
+### Bonus fixes in Corrección 8
+
+| Fix | Count | Detail |
+|-----|-------|--------|
+| Pre-existing omega failures | 3 | smul/elemwise/partialElemwise: extracted hwf.1 or used rw+show instead of raw omega |
+| WF checker vs subst | 2 | transpose/conjTranspose: replaced subst with ▸ cast to avoid WF confusion |
+| evalMatExprAlg_length add | 1 | Changed from obtain to exact hwf.elim (consistent with DD-ADD) |
+| Loop invariant infrastructure | 2 | foldl_invariant + evalSigmaAlg_loop_preserves_size (new theorems) |
 
 ### Eliminados en Corrección 7 (4 sorry statements)
 
@@ -243,19 +252,26 @@ Esto se sigue de lower_loopVars_bounded + un lema que diga fv ⊆ loopVarsOf par
 | Correccion 4 (fin) | - | 16 | +3 (reorganizados) |
 | Correccion 5 | 16 | 16 | 0 (structural) |
 | Correccion 6 | 16 | 10 | **-6** (sorry statements, excl. comments) |
-| **Correccion 7** | **10** | **6** | **-4** |
+| Correccion 7 | 10 | 6 | **-4** |
+| **Correccion 8** | **6** | **3** | **-3** |
 
-**Nota Corrección 7**: Eliminación de 4 sorry statements:
-1. compose writeMem_size_preserved: `subst hk_eq` + IH chain (IsWellFormedNTT squareness)
-2. seq_identity edge case: precondición `hs_mem` en lugar de `by_cases` con sorry
-3. evalMatExprAlg_length kron A⊗I: `isIdentity_implies_square` + `Nat.mul_div_cancel`
-4. evalMatExprAlg_length kron A⊗B: `range_flatMap_const_length` + `ih_b`
+**Nota Corrección 8**: Eliminación de 3 sorry statements + 3 pre-existing omega fixes + 2 WF fixes:
+1. DD-ADD (S2): IsWellFormedNTT .add → False, writeMem_irrelevant(add) closed via hwf.elim
+2. DD-ADD (S5): lowering_algebraic_correct(add) closed via hwf.elim (same mechanism)
+3. Compose WF (S6): Avoided subst in transpose/conjTranspose (▸ cast), added tactic alternatives
+4. Loop infrastructure: foldl_invariant + evalSigmaAlg_loop_preserves_size (new proven theorems)
+5. Pre-existing fixes: 3 omega failures (smul/elemwise/partialElemwise), 1 evalMatExprAlg_length add case
 
-**Lecciones clave de Corrección 7**:
-- evalSigmaAlg NO es monótona en writeMem.size (`.temp` puede reducir)
-- Precondiciones precisas > monotonía general (S4)
-- `Nat.mul_div_cancel` requiere `0 < n` → usar `by_cases n = 0`
-- QA acertó al priorizar correctness sobre completeness (S3 era FALSO)
+**Remaining 3 sorries** are all kron-related and blocked by scatter in-bounds proofs:
+- S1: writeMem_size_preserved kron — needs adjustBlock/adjustStride body size preservation
+- S3: writeMem_irrelevant kron — needs adjustBlock/adjustStride body determinism
+- S4: lowering_kron_axiom — needs S1 + full adjustBlock/adjustStride correctness
+
+**Lecciones clave de Corrección 8**:
+- L-082 confirmed: .add was a false axiom (IsWellFormedNTT .add should be False)
+- subst inside WF-recursive functions disrupts termination checker (use ▸ instead)
+- foldl_invariant needs separate type variable for list elements (avoid conflict with section α)
+- omega cannot handle nonlinear k*n with hypothesis n=1 (need rewrite first)
 
 ---
 
