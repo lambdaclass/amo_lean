@@ -2608,6 +2608,22 @@ theorem foldl_invariant {γ β : Type*} (l : List γ) (f : β → γ → β) (in
     simp only [List.foldl]
     exact ih (f init x) (h_step init x h_init)
 
+/-- Variant of foldl_invariant where the step function receives a proof that
+    the element belongs to the list. This is needed when the preservation proof
+    requires information about which element is being processed (e.g., index bounds
+    from enum membership). -/
+theorem foldl_invariant_mem {γ β : Type*} (l : List γ) (f : β → γ → β) (init : β)
+    (P : β → Prop) (h_init : P init)
+    (h_step : ∀ b a, a ∈ l → P b → P (f b a)) :
+    P (l.foldl f init) := by
+  induction l generalizing init with
+  | nil => exact h_init
+  | cons x xs ih =>
+    simp only [List.foldl]
+    exact ih (f init x)
+      (h_step init x (List.mem_cons_self x xs) h_init)
+      (fun b a ha hb => h_step b a (List.mem_cons_of_mem x ha) hb)
+
 /-- Loop size preservation: if the body of a loop preserves writeMem.size
     (given that readMem.size = writeMem.size = target), then the loop preserves it.
     The loop sets readMem := writeMem after each iteration, so the precondition
@@ -2660,21 +2676,15 @@ theorem evalScatter_preserves_size
       evalIdxExpr env s.baseAddr + s.stride * j < wm.size) :
     (evalScatter env s wm vals).size = wm.size := by
   simp only [evalScatter]
-  -- The scatter is vals.enum.foldl (fun acc (i, v) => acc.write (base + stride * i) v) wm
-  -- We use foldl_invariant with P := fun mem => mem.size = wm.size
-  apply foldl_invariant vals.enum
+  apply foldl_invariant_mem vals.enum
     (fun acc (x : Nat × α) => acc.write (evalIdxExpr env s.baseAddr + s.stride * x.1) x.2)
     wm (fun mem => mem.size = wm.size) rfl
-  intro mem ⟨idx, val⟩ hmem_size
-  -- Need: (mem.write pos val).size = wm.size, given mem.size = wm.size
-  -- and pos < wm.size (from h_inbounds, since (idx, val) came from vals.enum)
-  rw [size_write_eq]
-  exact hmem_size
-  rw [hmem_size]
-  -- Need to show idx < vals.length to use h_inbounds
-  -- But we don't have direct access to the enum index here.
-  -- This requires knowing that (idx, val) ∈ vals.enum → idx < vals.length
-  sorry -- Requires: enum membership → index bound → position bound
+  intro mem ⟨idx, val⟩ h_mem hmem_size
+  dsimp only
+  have h_idx_lt : idx < vals.length := List.fst_lt_of_mem_enum h_mem
+  have h_pos_lt : evalIdxExpr env s.baseAddr + s.stride * idx < mem.size :=
+    hmem_size ▸ h_inbounds idx h_idx_lt
+  rw [Memory.size_write_eq mem _ val h_pos_lt, hmem_size]
 
 /-- Scatter.block: For the I⊗B kron case, scatter writes at positions
     blockSize * loopVal + j for j < vals.length.
@@ -2688,11 +2698,19 @@ theorem evalScatter_block_size_preserved
     (hloopVal : env loopVar < m₁)
     (hvals : vals.length ≤ blockSize) :
     (evalScatter env (Scatter.block blockSize loopVar) wm vals).size = m₁ * blockSize := by
-  -- Scatter.block writes at base = blockSize * env(loopVar), stride = 1
-  -- Position j: blockSize * env(loopVar) + 1 * j = blockSize * env(loopVar) + j
-  -- For j < vals.length ≤ blockSize:
-  --   blockSize * env(loopVar) + j < blockSize * (env(loopVar) + 1) ≤ blockSize * m₁
-  sorry -- Follows from evalScatter_preserves_size + arithmetic bounds
+  rw [← hwm]
+  apply evalScatter_preserves_size
+  intro j hj
+  simp only [Scatter.block, evalIdxExpr]
+  rw [hwm]
+  -- Goal: 0 + blockSize * env loopVar + 1 * j < m₁ * blockSize
+  -- Since j < vals.length ≤ blockSize and env loopVar < m₁
+  calc 0 + blockSize * env loopVar + 1 * j
+      = blockSize * env loopVar + j := by omega
+    _ < blockSize * env loopVar + blockSize := by omega
+    _ = blockSize * (env loopVar + 1) := by ring
+    _ ≤ blockSize * m₁ := Nat.mul_le_mul_left _ (by omega)
+    _ = m₁ * blockSize := by ring
 
 /-- Scatter with stride: For the A⊗I kron case, scatter writes at positions
     loopVal + innerSize * k for k < vals.length.
@@ -2706,11 +2724,18 @@ theorem evalScatter_stride_size_preserved
     (hvals : vals.length ≤ m₁) :
     (evalScatter env { count := m₁, baseAddr := .var loopVar, stride := innerSize } wm vals).size =
     m₁ * innerSize := by
-  -- Scatter writes at base = env(loopVar), stride = innerSize
-  -- Position k: env(loopVar) + innerSize * k
-  -- For k < vals.length ≤ m₁:
-  --   env(loopVar) + innerSize * k < innerSize + innerSize * (m₁ - 1) = innerSize * m₁
-  sorry -- Follows from evalScatter_preserves_size + arithmetic bounds
+  rw [← hwm]
+  apply evalScatter_preserves_size
+  intro j hj
+  simp only [evalIdxExpr]
+  rw [hwm]
+  -- Goal: env loopVar + innerSize * j < m₁ * innerSize
+  -- Since env loopVar < innerSize and j < vals.length ≤ m₁
+  calc env loopVar + innerSize * j
+      < innerSize + innerSize * j := by omega
+    _ = innerSize * (j + 1) := by ring
+    _ ≤ innerSize * m₁ := Nat.mul_le_mul_left _ (by omega)
+    _ = m₁ * innerSize := by ring
 
 set_option maxHeartbeats 3200000 in
 /-- Size preservation for lowered expressions: evaluating (lower m n state mat).1
