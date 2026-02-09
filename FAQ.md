@@ -1,121 +1,119 @@
-# FAQ: Preguntas Críticas sobre AMO-Lean
+# FAQ: Critical Questions About AMO-Lean
 
-**Audiencia**: Desarrolladores Rust senior en ZK/Ethereum con experiencia en zkVMs
-**Contexto**: Presentación del proyecto AMO-Lean como herramienta complementaria
-**Versión**: v0.7.0 (Phase 6B)
-
----
-
-## Pregunta 1: "Si Plonky3 ya funciona y es más rápido, ¿para qué necesitamos esto?"
-
-### La pregunta detrás de la pregunta
-Plonky3 tiene años de desarrollo, está battle-tested en producción, y AMO-Lean es 30% más lento. ¿Por qué invertir tiempo en algo inferior?
-
-### Respuesta
-
-AMO-Lean **no compite con Plonky3** — lo **complementa** de tres formas:
-
-**1. Verificación independiente**
-```
-Tu código Plonky3 → AMO-Lean oracle tests → Garantía de corrección
-```
-Cuando tu zkVM procesa una transacción de $100M, ¿confías solo en tests? AMO-Lean te da una segunda opinión matemáticamente fundamentada.
-
-**2. Especificación ejecutable**
-Los 71 teoremas en Lean son una **especificación formal** de qué debe hacer un NTT correcto. Esto es documentación que no miente y no se desactualiza.
-
-**3. Detección de bugs sutiles**
-Los 120 vectores patológicos de hardening (sparse, geometric, boundary) han encontrado bugs en implementaciones que pasaban tests unitarios normales.
-
-### Mejoras futuras que lo harían más útil
-
-| Mejora | Impacto para ustedes |
-|--------|---------------------|
-| Radix-4 verificado | Cerrar gap de performance a ~85% |
-| Rust bindings nativos | Integración directa sin FFI |
-| Soporte multi-field | Verificar BabyBear, Mersenne31 |
+**Audience**: Senior Rust developers in ZK/Ethereum with zkVM experience
+**Context**: AMO-Lean as a complementary tool for verified cryptographic primitives
+**Version**: v1.0.1 (Feb 2026)
 
 ---
 
-## Pregunta 2: "¿Por qué Lean y no Coq, Isabelle, o incluso Rust con Kani/Creusot?"
+## Question 1: "If Plonky3 already works and is faster, why do we need this?"
 
-### La pregunta detrás de la pregunta
-El ecosistema ZK está en Rust. Agregar Lean es otra dependencia, otro lenguaje que aprender, otra herramienta que mantener.
+### The question behind the question
+Plonky3 has years of development, is battle-tested in production, and AMO-Lean is 1.65x slower. Why invest in something slower?
 
-### Respuesta
+### Answer
 
-**Lean 4 fue elegido por razones técnicas específicas:**
+AMO-Lean **does not compete with Plonky3** -- it **complements** it:
 
-| Criterio | Lean 4 | Coq | Isabelle | Rust+Kani |
+**1. Independent verification**
+```
+Your Plonky3 code --> AMO-Lean oracle tests --> Correctness guarantee
+```
+When your zkVM processes a $100M transaction, do you trust only tests? AMO-Lean provides a mathematically grounded second opinion. Our 64/64 bit-exact oracle tests confirm Plonky3's NTT produces identical results to our formally verified specification.
+
+**2. Executable specification**
+The formally proven theorems in Lean are a **living specification** of what a correct NTT must do. This is documentation that cannot lie and cannot become outdated.
+
+**3. Subtle bug detection**
+The 120 pathological vectors (sparse, geometric, boundary, max entropy) are specifically designed to trigger edge cases that standard unit tests miss.
+
+### Performance in context
+
+| Size | AMO-Lean | Plonky3 | Ratio |
+|------|----------|---------|-------|
+| N=256 | 4.8 us | 3.4 us | 1.39x |
+| N=1024 | 23.3 us | 14.6 us | 1.59x |
+| N=65536 | 2.50 ms | 1.48 ms | 1.69x |
+
+The 1.65x gap is predominantly due to twiddle factor caching strategy (Plonky3 pre-computes aggressively; AMO-Lean uses a balanced approach to avoid cache thrashing at large sizes).
+
+---
+
+## Question 2: "Why Lean and not Coq, Isabelle, or Rust with Kani/Creusot?"
+
+### The question behind the question
+The ZK ecosystem is in Rust. Adding Lean is another dependency, another language, another tool to maintain.
+
+### Answer
+
+**Lean 4 was chosen for specific technical reasons:**
+
+| Criterion | Lean 4 | Coq | Isabelle | Rust+Kani |
 |----------|--------|-----|----------|-----------|
-| Performance del compilador | ✅ Rápido | ❌ Lento | ⚠️ Medio | ✅ Rápido |
-| Metaprogramación | ✅ Nativa | ⚠️ Ltac | ⚠️ ML | ❌ Limitada |
-| Matemáticas (Mathlib) | ✅ Extenso | ✅ Extenso | ✅ Extenso | ❌ Mínimo |
-| Curva de aprendizaje | ⚠️ Media | ❌ Alta | ❌ Alta | ✅ Baja |
-| Code extraction a C | ✅ Custom | ⚠️ OCaml | ⚠️ Scala | ❌ No aplica |
+| Compiler performance | Fast | Slow | Medium | Fast |
+| Metaprogramming | Native | Ltac | ML | Limited |
+| Mathematics (Mathlib) | Extensive | Extensive | Extensive | Minimal |
+| Code extraction to C | Custom | OCaml | Scala | N/A |
 
-**El punto clave**: Lean 4 permite escribir **código ejecutable** que también es **una prueba**. El mismo código que define `NTT_recursive` se puede ejecutar para testing Y se puede probar equivalente a la especificación.
+**The key point**: Lean 4 allows writing **executable code** that is also **a proof**. The same code that defines `NTT_recursive` can be executed for testing AND proven equivalent to the specification.
 
-**Rust+Kani** verifica propiedades sobre código existente, pero no genera código desde especificaciones. Son herramientas complementarias, no competidoras.
-
-### Mejoras futuras
-
-- **Lean-to-Rust codegen**: Generar Rust directamente, eliminando la barrera C
-- **Integración con cargo**: `cargo build` que invoque verificación Lean automáticamente
+**Rust+Kani** verifies properties of existing code but does not generate code from specifications. They are complementary, not competing tools.
 
 ---
 
-## Pregunta 3: "El 89% de teoremas verificados significa que el 11% tiene `sorry`. ¿No es eso un agujero de seguridad?"
+## Question 3: "30 sorry statements and 17 axioms -- is that a security hole?"
 
-### La pregunta detrás de la pregunta
-¿De qué sirve la verificación formal si está incompleta? Un solo `sorry` podría ocultar un bug crítico.
+### The question behind the question
+What good is formal verification if it is incomplete? A single `sorry` could hide a critical bug.
 
-### Respuesta
+### Answer
 
-**Transparencia total**: Sí, hay 9 teoremas con `sorry`. Aquí están todos:
+**Full transparency**. Here is the complete breakdown:
 
-| Teorema | Por qué tiene sorry | Riesgo real |
-|---------|---------------------|-------------|
-| `ct_recursive_eq_spec` | Inducción fuerte compleja | ⚠️ Medio - es el teorema central |
-| `cooley_tukey_upper_half` | Splitting de DFT | Bajo - verificado empíricamente |
-| `cooley_tukey_lower_half` | Usa ω^(n/2) = -1 | Bajo - trivial matemáticamente |
-| `intt_ntt_identity_finset` | Doble suma + ortogonalidad | Bajo - standard en literatura |
-| `parseval` | Teorema de Plancherel | Bajo - bien conocido |
-| `ntt_coeff_add` | Linealidad de foldl | Bajo - trivial |
-| `ntt_coeff_scale` | Linealidad de foldl | Bajo - trivial |
-| `lazy_butterfly_simulates` | Bounds de lazy reduction | ⚠️ Medio - crítico para correctitud |
+| Classification | Count | Detail |
+|----------------|-------|--------|
+| **Active** (genuine proof gaps) | **5** | 3 kron bounds in AlgebraicSemantics, 2 Merkle invariants in FRI |
+| **Computational** (backed by tests) | **12** | All in Poseidon_Semantics (Lean match splitter limitation) |
+| **Deprecated** (superseded code) | **7** | Old Float-based Theorems.lean, replaced by AlgebraicSemantics |
+| **Commented out** (inactive) | **6** | Inside `/-...-/` comment blocks |
 
-**Mitigación**: Cada `sorry` tiene **validación empírica**:
-- 64/64 oracle tests vs Plonky3
-- 120/120 vectores patológicos
-- 1M+ iteraciones de stress testing
+**What is 100% sorry-free:**
+- NTT Core (Butterfly, CooleyTukey, Correctness, LazyButterfly): **0 sorry**
+- FRI Folding (FRI_Properties): **0 sorry**
+- Matrix/Perm: **0 sorry**
+- E-Graph rewrite rules: **0 sorry** (19/20 verified)
 
-**La honestidad importa**: Preferimos documentar lo que falta que pretender 100% de verificación. El 89% verificado + 11% validado empíricamente es más honesto que "trust me bro".
+**The 5 active sorry** are in the AlgebraicSemantics lowering engine (kron tensor product bounds) and FRI Merkle tree (structural invariants). Neither affects the correctness of generated C code or test results -- they are internal to the verification pipeline.
 
-### Mejoras futuras
+**Empirical mitigation** for every sorry:
+- 64/64 oracle tests vs Plonky3 (bit-exact)
+- 120/120 pathological vectors (bit-exact)
+- 37/37 Goldilocks field tests with UBSan (0 violations)
+- 3M+ FFI calls with 0 errors
 
-- **Fase de "sorry hunting"**: Dedicar sprint a cerrar los 9 sorry restantes
-- **Priorizar `ct_recursive_eq_spec`**: El teorema central merece atención especial
+**On the 17 axioms**: These are documented facts about number theory (e.g., "p = 2^64 - 2^32 + 1 is prime") and specification axioms for Radix-4. None are in the NTT core proof chain.
+
+See [BENCHMARKS.md](docs/BENCHMARKS.md) for the complete audit.
 
 ---
 
-## Pregunta 4: "¿Cómo integramos esto con nuestra zkVM en Rust sin reescribir todo?"
+## Question 4: "How do we integrate this with our Rust zkVM without rewriting everything?"
 
-### La pregunta detrás de la pregunta
-Tenemos 100K+ líneas de Rust. No vamos a tirar eso a la basura por código C.
+### The question behind the question
+We have 100K+ lines of Rust. We are not throwing that away for C code.
 
-### Respuesta
+### Answer
 
-**Integración mínimamente invasiva en 3 niveles**:
+**Minimally invasive integration at 3 levels:**
 
-**Nivel 1: Verificación externa (cero cambios a tu código)**
+**Level 1: External verification (zero code changes)**
 ```bash
-# En CI/CD
-./amolean_oracle_test --input your_ntt_output.bin --expected amolean_reference.bin
+# In CI/CD -- verify your NTT output against AMO-Lean reference
+clang -DFIELD_NATIVE -O2 -o oracle_test generated/oracle_test.c
+./oracle_test  # 64/64 tests in <1 second
 ```
-Simplemente verifica que tu output es correcto. No toca tu código.
 
-**Nivel 2: Testing con oracle (cambios mínimos)**
+**Level 2: Oracle testing (minimal changes)**
 ```rust
 #[cfg(test)]
 mod amolean_verification {
@@ -130,346 +128,207 @@ mod amolean_verification {
 }
 ```
 
-**Nivel 3: Componente drop-in (para módulos críticos)**
+**Level 3: Drop-in component (for critical modules)**
 ```rust
-// Solo para el NTT del commitment scheme, por ejemplo
 use amolean::NttContext;
 
 impl<F: GoldilocksField> CommitmentScheme<F> {
     fn commit(&self, data: &mut [F]) {
-        // Usar AMO-Lean para la parte más crítica
         let ctx = NttContext::new(data.len().ilog2() as usize);
         ctx.forward(data);  // FFI overhead: 0.03%
     }
 }
 ```
 
-### Mejoras futuras
-
-| Mejora | Beneficio |
-|--------|-----------|
-| `amolean-rs` crate | `cargo add amolean` sin compilar C |
-| Trait `VerifiedNTT` | Drop-in para `p3-dft::TwoAdicSubgroupDft` |
-| Feature flags | `#[cfg(feature = "amolean-verified")]` |
+The FFI overhead is 0.03% (measured: 1.08 ns per call vs 3316 ns for NTT N=256). For context, this means using AMO-Lean's verified NTT adds negligible latency even as a drop-in.
 
 ---
 
-## Pregunta 5: "¿Qué pasa con otros campos? Nuestra zkVM usa BabyBear, no Goldilocks."
+## Question 5: "What about other fields? Our zkVM uses BabyBear, not Goldilocks."
 
-### La pregunta detrás de la pregunta
-Goldilocks es solo uno de varios campos usados en ZK. Si solo soporta Goldilocks, el alcance es limitado.
+### Answer
 
-### Respuesta
+**Current**: Goldilocks only (p = 2^64 - 2^32 + 1)
 
-**Estado actual**: Solo Goldilocks (p = 2^64 - 2^32 + 1)
-
-**Por qué empezamos con Goldilocks**:
-1. Es el campo de Plonky3 (referencia de comparación)
-2. Tiene estructura especial que permite reducción eficiente sin Barrett/Montgomery
-3. Es 64-bit (cabe en registros nativos)
-
-**La arquitectura soporta extensión**:
+**Architecture supports extension** -- the NTT is parametrized over a field typeclass:
 
 ```lean
--- El NTT está parametrizado sobre NTTField
 class NTTField (F : Type*) extends Add F, Sub F, Mul F where
-  inv : F → F
-  pow : F → Nat → F
-  char : Nat
+  inv : F -> F
+  pow : F -> Nat -> F
   -- ...
 
--- Goldilocks es una instancia
-instance : NTTField Goldilocks := { ... }
-
--- BabyBear sería otra instancia
-instance : NTTField BabyBear := { ... }  -- TODO
+instance : NTTField Goldilocks := { ... }    -- Implemented
+instance : NTTField BabyBear := { ... }      -- Planned
 ```
 
-### Mejoras futuras (roadmap realista)
-
-| Campo | Dificultad | Prioridad | Notas |
-|-------|------------|-----------|-------|
-| BabyBear (p = 2^31 - 2^27 + 1) | Media | Alta | Usado en Risc0, SP1 |
-| Mersenne31 (p = 2^31 - 1) | Baja | Media | Reducción trivial |
-| BN254 scalar field | Alta | Baja | 256-bit, muy diferente |
-
-**Estimación**: 2-3 semanas por campo adicional (aritmética + tests + teoremas).
+| Field | Difficulty | Priority | Notes |
+|-------|-----------|----------|-------|
+| BabyBear (p = 2^31 - 2^27 + 1) | Medium | High | Used in Risc0, SP1 |
+| Mersenne31 (p = 2^31 - 1) | Low | Medium | Trivial reduction |
+| BN254 scalar field | High | Low | 256-bit, structurally different |
 
 ---
 
-## Pregunta 6: "¿Quién mantiene esto? ¿Qué pasa si abandonan el proyecto?"
+## Question 6: "Who maintains this? What if the project is abandoned?"
 
-### La pregunta detrás de la pregunta
-Hemos visto proyectos open source prometedores que mueren. No queremos depender de algo que nadie mantiene.
+### Answer
 
-### Respuesta
+**Honest risks**: The bus factor is low and there is no large company backing the project.
 
-**Riesgos honestos**:
-- Es un proyecto relativamente nuevo (v0.7.0)
-- El bus factor es bajo actualmente
-- No hay empresa grande detrás
+**Mitigations**:
 
-**Mitigaciones**:
+1. **Self-contained code**: `libamolean/` is header-only C with zero external dependencies. Works without Lean installed.
+2. **Exhaustive documentation**: 32K+ lines of progress logs, 24 design decisions, 85+ QA lessons.
+3. **Fork-friendly**: MIT License, comprehensive CI pipeline, 2850+ automated tests.
 
-1. **Código autocontenido**:
-   - `libamolean/` es header-only C, cero dependencias externas
-   - Funciona sin Lean instalado (el código C ya está generado)
-
-2. **Documentación exhaustiva**:
-   - 27KB de PROGRESS.md documentando cada decisión
-   - ADRs (Architecture Decision Records) explicando el "por qué"
-   - Código Lean comentado con referencias a papers
-
-3. **Fork-friendly**:
-   - MIT License
-   - Estructura clara para contribuciones
-   - Tests automatizados que validan cambios
-
-**El peor caso**: El proyecto se abandona, pero ustedes tienen:
-- Código C funcional que pueden mantener
-- Especificaciones Lean como documentación
-- Tests que pueden seguir usando
-
-### Mejoras para reducir riesgo
-
-- Documentar proceso de contribución
-- Buscar co-maintainers en la comunidad ZK
-- Publicar en crates.io para mayor visibilidad
+**Worst case**: The project is abandoned, but you keep:
+- Working C code you can maintain independently
+- Lean specifications as formal documentation
+- Full test suite you can continue running
 
 ---
 
-## Pregunta 7: "El código generado es C, no Rust. ¿Cómo sabemos que es memory-safe?"
+## Question 7: "Generated C code, not Rust. How do we know it is memory-safe?"
 
-### La pregunta detrás de la pregunta
-C tiene UB, buffer overflows, y toda clase de problemas. ¿Por qué confiar en código C en 2026?
+### Answer
 
-### Respuesta
+**Multi-layer safety:**
 
-**Medidas de seguridad implementadas**:
+| Layer | Protection | Evidence |
+|-------|-----------|---------|
+| Compilation | `-Wall -Wextra -Werror` | CI enforced |
+| Runtime | UndefinedBehaviorSanitizer | 37 Goldilocks + 4 NTT tests, 0 violations |
+| Bounds | Formal verification of ranges | Lean theorems |
+| Overflow | `__uint128_t` for intermediates | Edge case tests |
+| FFI | Panic safety (catch_unwind + panic=abort) | 3M+ stress calls |
 
-| Capa | Protección | Verificación |
-|------|------------|--------------|
-| **Compilación** | `-Wall -Wextra -Werror` | CI obligatorio |
-| **Runtime** | AddressSanitizer (ASan) | 37 tests con ASan |
-| **Runtime** | UndefinedBehaviorSanitizer | 37 tests con UBSan |
-| **Bounds** | Verificación formal de rangos | Teoremas en Lean |
-| **Overflow** | `__uint128_t` para intermedios | Tests de borde |
-
-**Por qué C y no Rust generado**:
-
-1. **FFI más simple**: C ABI es estable y universal
-2. **Verificación de assembly**: Podemos inspeccionar qué genera el compilador
-3. **Control total**: Sin abstracciones de Rust que oculten comportamiento
-
-**El código es intencionalmente simple**:
+**The generated code is intentionally simple:**
 ```c
-// Todo el NTT es ~300 líneas de C
-// Sin malloc dinámico en hot path (pre-allocated buffers)
-// Sin punteros a función
-// Sin recursión (loop iterativo)
-```
-
-### Mejoras futuras
-
-| Mejora | Beneficio |
-|--------|-----------|
-| Rust codegen | Memory safety por construcción |
-| Miri testing | Verificar UB en Rust FFI |
-| Formal C verification (VST) | Probar ausencia de UB en C |
-
----
-
-## Pregunta 8: "70% de Plonky3 no es suficiente para producción. ¿Cuándo llegan al 95%?"
-
-### La pregunta detrás de la pregunta
-En un prover STARK, el NTT puede ser 30-50% del tiempo total. Perder 30% de performance ahí es inaceptable.
-
-### Respuesta
-
-**Contexto importante**:
-- 70% es para N=256 (tamaños pequeños)
-- Para N=65536, es ~58%
-- El gap viene principalmente de:
-  1. Twiddle caching menos agresivo (por diseño, evita cache thrashing)
-  2. Sin SIMD para multiplicación (SIMD es más lento para Goldilocks)
-  3. Radix-2 vs optimizaciones más agresivas de Plonky3
-
-**Camino a mejor performance**:
-
-| Optimización | Impacto esperado | Estado |
-|--------------|------------------|--------|
-| Radix-4 en Lean | +20-30% | Diseñado, no implementado |
-| Mejor scheduling de memoria | +5-10% | Investigación |
-| Montgomery form | +10-15% | Requiere cambio de representación |
-| **Total potencial** | **85-95%** | Requiere 6-8 semanas |
-
-**Pregunta para ustedes**: ¿Cuánto vale el 30% de performance vs tener especificación formal?
-
-Para la zkVM completa:
-- Si NTT es 40% del tiempo → pierden 12% total
-- Si la verificación formal evita UN bug en producción → ¿cuánto vale eso?
-
-### Mejoras comprometidas
-
-- **Fase 6C**: Radix-4 verificado en Lean (siguiente prioridad)
-- **Meta realista**: 85% de Plonky3 con verificación formal
-
----
-
-## Pregunta 9: "¿Cómo sabemos que los oracle tests realmente prueban equivalencia y no solo casos fáciles?"
-
-### La pregunta detrás de la pregunta
-64 tests suenan bien, pero un NTT tiene 2^64 inputs posibles. ¿Qué cobertura real tienen?
-
-### Respuesta
-
-**Estrategia de testing multi-capa**:
-
-**Capa 1: Tests estructurados (64 tests)**
-```
-Para cada N ∈ {8, 16, 32, 64, 128, 256, 512, 1024}:
-  - Secuencial [1, 2, 3, ..., N]
-  - Todos ceros
-  - Todos unos
-  - Impulso [1, 0, 0, ...]
-  - Valores máximos (p-1)
-  - Random (50 valores)
-```
-
-**Capa 2: Vectores patológicos (120 tests)**
-```
-Diseñados para encontrar bugs específicos:
-  - Sparse: [p-1, 0, 0, ..., 0, 1]     → Detecta problemas de carry
-  - Geometric: [1, ω, ω², ω³, ...]     → Detecta errores de twiddle
-  - Max entropy: [p-1, p-2, p-3, ...]  → Stress de reducción
-  - Boundary: [0, 1, p-1, p-2, ...]    → Edge cases
-  - Alternating: [0, p-1, 0, p-1, ...] → Patrones periódicos
-```
-
-**Capa 3: Propiedades algebraicas**
-```
-Verificadas para TODOS los tests:
-  - Roundtrip: INTT(NTT(x)) = x
-  - Linealidad: NTT(a+b) = NTT(a) + NTT(b)
-  - Scaling: NTT(c·a) = c·NTT(a)
-```
-
-**Capa 4: Stress testing**
-```
-1,000,000 iteraciones de FFI
-→ 0 errores
-→ 0 memory leaks (Valgrind)
-→ 0 UB (sanitizers)
-```
-
-**Capa 5: Verificación formal**
-```
-Teoremas probados en Lean:
-  - butterfly_sum: (a+ωb) + (a-ωb) = 2a
-  - butterfly_diff: (a+ωb) - (a-ωb) = 2ωb
-  - orthogonality_sum: Σᵢ ω^(ij) = 0 para j≠0
-  - ... (71 teoremas más)
-```
-
-### Mejoras futuras
-
-- **Property-based testing**: QuickCheck/Hypothesis para Lean
-- **Mutation testing**: Verificar que tests detectan bugs inyectados
-- **Fuzzing guiado por cobertura**: AFL/libFuzzer para el código C
-
----
-
-## Pregunta 10: "Si tuviéramos que apostar el futuro de nuestra zkVM en una herramienta de verificación, ¿por qué AMO-Lean y no algo más establecido?"
-
-### La pregunta detrás de la pregunta
-Hay proyectos como Fiat-Crypto (usado en BoringSSL), Hacspec, o Jasmin que tienen track record. ¿Por qué arriesgarse con algo nuevo?
-
-### Respuesta
-
-**Comparación honesta**:
-
-| Herramienta | Fortaleza | Debilidad para zkVMs |
-|-------------|-----------|----------------------|
-| **Fiat-Crypto** | Probado en producción (Chrome) | Solo aritmética de campo, no NTT |
-| **Hacspec** | Especificaciones legibles | No genera código optimizado |
-| **Jasmin** | Assembly verificado | Muy bajo nivel, difícil de usar |
-| **AMO-Lean** | NTT + campo + E-Graph completo | Nuevo, menos battle-tested |
-
-**El nicho de AMO-Lean**:
-
-```
-Fiat-Crypto: "Aritmética de campo verificada"
-Hacspec:     "Especificaciones de protocolos"
-Jasmin:      "Assembly criptográfico verificado"
-AMO-Lean:    "Pipeline completo para primitivas STARK"
-             (campo → NTT → FRI → código optimizado)
-```
-
-**No es "o AMO-Lean o nada"**:
-
-La propuesta realista es **complementar**, no reemplazar:
-
-```
-Tu zkVM actual (Rust + Plonky3)
-         │
-         ├── Usa Plonky3 para performance
-         │
-         └── Usa AMO-Lean para:
-             ├── Verificar que Plonky3 output es correcto
-             ├── Generar tests de regresión
-             ├── Documentar especificación formal
-             └── Auditorías de seguridad
-```
-
-### La apuesta que SÍ hacemos
-
-AMO-Lean apuesta a que **la verificación formal se volverá estándar** en infraestructura ZK crítica, igual que:
-- TLS requiere pruebas de seguridad
-- Contratos inteligentes requieren auditorías
-- Hardware criptográfico requiere certificación
-
-**Pregunta para ustedes**: Cuando su zkVM procese miles de millones de dólares, ¿preferirían tener especificación formal o no?
-
----
-
-## Resumen: ¿Qué pueden esperar de AMO-Lean?
-
-### Hoy (v0.7.0)
-
-| Funcionalidad | Utilidad para ustedes |
-|---------------|----------------------|
-| NTT verificado (Goldilocks) | Verificar su implementación |
-| 64 oracle tests | Agregar a su CI |
-| 120 vectores patológicos | Encontrar edge cases |
-| Especificación formal | Documentación que no miente |
-
-### Próximos 3-6 meses
-
-| Mejora | Impacto |
-|--------|---------|
-| Radix-4 | Performance ~85% de Plonky3 |
-| BabyBear support | Verificar implementaciones Risc0-style |
-| Rust bindings | Integración nativa sin FFI |
-
-### Visión a largo plazo
-
-```
-Especificación Lean → Código Rust verificado → zkVM production-ready
-        ↓
-   Auditable por cualquiera
-   Documentación matemática
-   Tests generados automáticamente
+// The entire NTT is ~300 lines of C
+// No dynamic malloc in hot path (pre-allocated buffers)
+// No function pointers
+// No recursion (iterative loop)
 ```
 
 ---
 
-## Próximos pasos sugeridos
+## Question 8: "60% of Plonky3 throughput is not enough for production."
 
-1. **Mínimo esfuerzo**: Agregar oracle tests a su CI (2 horas)
-2. **Exploración**: Correr hardening suite contra su NTT (1 día)
-3. **Integración**: Usar AMO-Lean para módulo crítico específico (1 semana)
-4. **Feedback**: Reportar qué funcionalidades necesitan para su caso de uso
+### The question behind the question
+In a STARK prover, NTT can be 30-50% of total time. Losing 40% there is significant.
+
+### Answer
+
+**Current performance data** (Feb 2026 benchmark):
+
+| Size | AMO-Lean | Plonky3 | AMO Throughput |
+|------|----------|---------|----------------|
+| N=256 | 4.8 us | 3.4 us | 53.7 Melem/s |
+| N=1024 | 23.3 us | 14.6 us | 44.0 Melem/s |
+| N=65536 | 2.50 ms | 1.48 ms | 26.2 Melem/s |
+
+**The gap comes from**:
+1. Twiddle caching strategy (Plonky3 pre-computes more aggressively)
+2. Radix-2 vs Plonky3's more aggressive optimizations
+3. No SIMD for multiplication (validated as slower for Goldilocks on both x86 and ARM)
+
+**Path to better performance:**
+
+| Optimization | Expected Impact | Status |
+|-------------|-----------------|--------|
+| Radix-4 codegen | +20-30% | Butterfly verified, codegen pending |
+| Improved memory scheduling | +5-10% | Research |
+| Montgomery form | +10-15% | Requires representation change |
+| **Potential total** | **85-95%** | |
+
+**The tradeoff question**: For the full zkVM pipeline, if NTT is 40% of time, the formal verification overhead is ~24% total. If that verification prevents ONE bug in production, what is that worth?
 
 ---
 
-*¿Más preguntas? Abran un issue en GitHub o contacten al equipo.*
+## Question 9: "How do 64 oracle tests prove equivalence? An NTT has 2^64 possible inputs."
+
+### Answer
+
+**Multi-layer testing strategy:**
+
+**Layer 1: Structured tests (64 tests)**
+For each N in {8, 16, 32, 64, 128, 256, 512, 1024}: sequential, zeros, ones, impulse, max values, random. All bit-exact vs Plonky3.
+
+**Layer 2: Pathological vectors (120 tests)**
+Sparse ([p-1, 0, ..., 0, 1]), geometric ([1, w, w^2, ...]), max entropy ([p-1, p-2, ...]), boundary ([0, 1, p-1, p-2, ...]), alternating ([0, p-1, 0, p-1, ...]). All bit-exact.
+
+**Layer 3: Algebraic properties**
+Roundtrip (INTT(NTT(x)) = x), butterfly sum (a'+b' = 2a mod p), reduction idempotence. Verified with 1000 random inputs each.
+
+**Layer 4: Stress testing**
+1,000,000 FFI iterations, 0 errors, 0 memory leaks, 0 UB.
+
+**Layer 5: Formal verification**
+71+ theorems proven in Lean, including butterfly correctness, orthogonality sums, and Cooley-Tukey equivalence. These cover ALL inputs by construction.
+
+---
+
+## Question 10: "Why AMO-Lean vs established tools (Fiat-Crypto, Hacspec, Jasmin)?"
+
+### Answer
+
+**Honest comparison:**
+
+| Tool | Strength | Weakness for zkVMs |
+|------|----------|---------------------|
+| **Fiat-Crypto** | Proven in production (Chrome/BoringSSL) | Only field arithmetic, not NTT/FRI |
+| **Hacspec** | Readable specifications | Does not generate optimized code |
+| **Jasmin** | Verified assembly | Very low level, hard to use |
+| **AMO-Lean** | Full STARK pipeline (field -> NTT -> FRI -> optimized C) | Newer, less battle-tested |
+
+**AMO-Lean's niche:**
+
+```
+Fiat-Crypto: "Verified field arithmetic"
+Hacspec:     "Protocol specifications"
+Jasmin:      "Verified cryptographic assembly"
+AMO-Lean:    "Complete verified pipeline for STARK primitives"
+             (field -> NTT -> FRI -> E-Graph optimization -> C code)
+```
+
+The proposal is **complementary**, not replacement:
+
+```
+Your zkVM (Rust + Plonky3)
+       |
+       +-- Use Plonky3 for performance
+       |
+       +-- Use AMO-Lean for:
+           +-- Verifying Plonky3 output is correct (64/64 oracle tests)
+           +-- Generating regression tests (120 pathological vectors)
+           +-- Formal specification (documentation that cannot lie)
+           +-- Security audits (2850+ tests, UBSan, FFI stress)
+```
+
+---
+
+## Summary: What can you expect from AMO-Lean?
+
+### Today (v1.0.1)
+
+| Capability | For your team |
+|-----------|---------------|
+| Verified NTT (Goldilocks) | Verify your implementation (64/64 bit-exact) |
+| 2850+ tests | Add to your CI pipeline |
+| 120 pathological vectors | Find edge cases in any NTT |
+| Formal specification | Auditable documentation |
+| Poseidon2 BN254 | Hash verification (134K H/s, HorizenLabs-compatible) |
+| FRI fold verified | Folding correctness (0 sorry) |
+
+### Next steps
+
+| Improvement | Impact |
+|------------|--------|
+| BabyBear field | Verify Risc0/SP1 implementations |
+| Radix-4 codegen | Close performance gap to ~85% |
+| Rust bindings | Native integration without FFI |
+
+---
+
+*Questions? Open an issue on GitHub or contact the team.*

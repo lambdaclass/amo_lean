@@ -297,9 +297,9 @@ def measureSaturation (expr : Expr Int) (config : SaturationConfig) : IO Saturat
 def stressTestExpr : Expr Int :=
   -- Deeply nested expression
   let depth := 10
-  let rec build (n : Nat) : Expr Int :=
-    if n == 0 then Expr.var 0
-    else Expr.add (Expr.mul (build (n-1)) (Expr.const 1)) (Expr.const 0)
+  let rec build : Nat → Expr Int
+    | 0 => Expr.var 0
+    | n + 1 => Expr.add (Expr.mul (build n) (Expr.const 1)) (Expr.const 0)
   build depth
 
 def testCompilationTime : IO Bool := do
@@ -384,6 +384,6 @@ def main : IO UInt32 := do
     IO.println "╚══════════════════════════════════════════════════════════════════════╝"
     return 1
 
-#eval! main
+#eval! do let _ ← main; return ()
 
 end Tests.Optimization.QABenchmark

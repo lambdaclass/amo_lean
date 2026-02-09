@@ -1,68 +1,63 @@
-# AMO-Lean: Documentación
+# AMO-Lean: Documentation
 
-## Qué es AMO-Lean
+## What is AMO-Lean
 
 **AMO-Lean** = *Automatic Mathematical Optimizer in Lean*
 
-Un optimizador formal que toma especificaciones matemáticas y genera código C optimizado con garantías de corrección.
+A verified optimizing compiler that transforms mathematical specifications in Lean 4 into optimized C code with formal correctness guarantees.
 
 ```
-Spec Matemática  →  E-Graph Saturation  →  Código C Optimizado
-  (MatExpr)          (reglas verificadas)   (correcto por construcción)
-```
-
----
-
-## Estructura de Documentación
-
-```
-docs/
-├── README.md                    # Este archivo
-├── project/                     # ← DOCUMENTACIÓN PRINCIPAL
-│   ├── README.md               # Overview del proyecto
-│   ├── ROADMAP.md              # ** ROADMAP OFICIAL **
-│   ├── DESIGN_DECISIONS.md     # Decisiones técnicas (DD-001 a DD-024)
-│   ├── PROGRESS.md             # Log de progreso
-│   ├── BENCHMARKS.md           # Resultados de rendimiento
-│   ├── PHASE5_NTT_PLAN.md      # Plan NTT (completado)
-│   ├── PHASE5_ISSUES.md        # Issues Fase 5
-│   └── PHASE5_BIBLIOGRAPHY.md  # Fuentes NTT
-├── archive/                     # Documentación obsoleta (NO USAR)
-├── references/                  # Material de referencia
-└── poseidon/                    # Docs de Poseidon (caso de prueba)
+Mathematical Spec  →  E-Graph Saturation  →  Algebraic IR  →  Optimized C
+  (MatExpr)          (verified rules)      (Sigma-SPL)      (correct by construction)
 ```
 
 ---
 
-## Documentación Principal
+## Documentation Structure
 
-| Documento | Propósito |
-|-----------|-----------|
-| **[project/ROADMAP.md](project/ROADMAP.md)** | **Plan oficial** - fases, entregables, criterios |
-| [project/README.md](project/README.md) | Overview y estado actual |
-| [project/DESIGN_DECISIONS.md](project/DESIGN_DECISIONS.md) | Decisiones técnicas |
-| [project/PROGRESS.md](project/PROGRESS.md) | Log de trabajo completado |
-| [project/BENCHMARKS.md](project/BENCHMARKS.md) | Resultados de rendimiento |
-
----
-
-## Material de Referencia
-
-| Documento | Propósito |
-|-----------|-----------|
-| [poseidon/](poseidon/) | Documentación de Poseidon2 (caso de prueba) |
-| [references/](references/) | Papers y notas de referencia |
-| [archive/](archive/) | Documentación histórica (no usar) |
-
----
-
-## Nota Importante
-
-> **El roadmap oficial está en `project/ROADMAP.md`.**
->
-> La carpeta `archive/` contiene documentos obsoletos que causaron
-> confusión anteriormente (múltiples roadmaps, "Option A", etc.)
+```
+/                               # Repository root
+├── README.md                   # Main project README (start here)
+├── FAQ.md                      # 10 critical questions for ZK developers
+├── RELEASE_NOTES.md            # Version history
+│
+├── docs/                       # Documentation directory
+│   ├── README.md               # This file
+│   ├── BENCHMARKS.md           # ← BENCHMARK REPORT (v1.0.1)
+│   ├── sorry_elimination_plan.md  # Sorry elimination tracker
+│   │
+│   ├── project/                # Development documentation
+│   │   ├── ROADMAP.md          # Development roadmap
+│   │   ├── DESIGN_DECISIONS.md # Technical decisions (DD-001 to DD-024)
+│   │   ├── PROGRESS.md         # Progress log
+│   │   ├── SORRY_ELIMINATION_PLAN.md  # Detailed sorry analysis
+│   │   └── Radix4/             # Radix-4 development docs
+│   │
+│   ├── poseidon/               # Poseidon2 documentation
+│   ├── references/             # Reference material
+│   └── archive/                # Obsolete documentation (historical)
+```
 
 ---
 
-*AMO-Lean: Automatic Mathematical Optimizer in Lean*
+## Reading Path
+
+| Document | Audience | Purpose |
+|----------|----------|---------|
+| **[README.md](../README.md)** | Everyone | Project overview, quick start, architecture |
+| **[FAQ.md](../FAQ.md)** | ZK/Rust developers | 10 critical questions with benchmark data |
+| **[docs/BENCHMARKS.md](BENCHMARKS.md)** | Technical auditors | Complete benchmark report (2850+ tests) |
+| [RELEASE_NOTES.md](../RELEASE_NOTES.md) | Contributors | Version history and changelogs |
+| [project/DESIGN_DECISIONS.md](project/DESIGN_DECISIONS.md) | Contributors | 24 technical decisions with rationale |
+| [project/ROADMAP.md](project/ROADMAP.md) | Contributors | Development phases and progress |
+
+---
+
+## Notes
+
+- The `archive/` directory contains obsolete documents from earlier phases. Do not use for current reference.
+- Benchmark data in `project/BENCHMARKS.md` is superseded by `docs/BENCHMARKS.md` (Feb 2026).
+
+---
+
+*AMO-Lean v1.0.1 -- Formal verification meets practical performance.*
