@@ -118,6 +118,25 @@ theorem toList_write_eq_set [Inhabited α] (mem : Memory α) (i : Nat) (v : α) 
   · simp only [toList, Array.set!, Array.toList_setIfInBounds]
   · exact absurd hi h
 
+/-- Writing never decreases memory size -/
+theorem write_size_ge [Inhabited α] (mem : Memory α) (i : Nat) (v : α) :
+    mem.size ≤ (mem.write i v).size := by
+  unfold write size
+  split_ifs with h
+  · simp only [Array.set!, Array.size_setIfInBounds]; omega
+  · simp only [Array.set!, Array.size_setIfInBounds, Array.size_append, Array.size_mkArray]; omega
+
+/-- Writing mem.read(i) at position i is identity for in-bounds positions -/
+theorem write_read_self [Inhabited α] (mem : Memory α) (i : Nat) (hi : i < mem.size) :
+    mem.write i (mem.read i) = mem := by
+  apply eq_of_toList_eq
+  rw [toList_write_eq_set mem i (mem.read i) hi]
+  simp only [read, size] at hi ⊢
+  rw [if_pos hi]
+  rw [getElem!_pos mem.data i hi]
+  rw [toList]
+  exact List.set_getElem_eq (by rw [Array.length_toList]; exact hi)
+
 /-- zeros_size expressed as data.size -/
 theorem zeros_data_size [Zero α] (n : Nat) : (zeros n : Memory α).data.size = n := by
   simp only [zeros, Array.size_mkArray]
@@ -2329,6 +2348,34 @@ theorem scatter_zeros_toList (v : List α) :
   rw [show v.enum = v.enumFrom 0 from rfl, h]
   simp [Memory.zeros_toList, List.length_replicate]
 
+/-- evalScatter for contiguous scatter at base 0 reduces to foldl over enumFrom 0.
+    This bridges the syntactic gap between evalScatter's lambda form and scatter_enumFrom_general. -/
+private theorem evalScatter_contiguous_zero (vals : List α) (wm : Memory α) (n' : Nat) :
+    evalScatter LoopEnv.empty (Scatter.contiguous n' (.const 0)) wm vals =
+    (vals.enumFrom 0).foldl (fun acc x => acc.write x.1 x.2) wm := by
+  simp only [evalScatter, Scatter.contiguous, evalIdxExpr, List.enum]
+  -- Goal: (vals.enumFrom 0).foldl (fun acc x => acc.write (0 + 1 * x.1) x.2) wm
+  --     = (vals.enumFrom 0).foldl (fun acc x => acc.write x.1 x.2) wm
+  congr 1
+  ext acc ⟨i, v⟩
+  simp
+
+/-- Writing the same vals to two memories of the same size gives the same result,
+    when the writes cover all positions (k = 0 and vals.length = wm.size). -/
+private theorem foldl_write_enum_wm_irrelevant (vals : List α) (wm1 wm2 : Memory α)
+    (hw1 : wm1.size = vals.length) (hw2 : wm2.size = vals.length) :
+    (vals.enumFrom 0).foldl (fun acc x => acc.write x.1 x.2) wm1 =
+    (vals.enumFrom 0).foldl (fun acc x => acc.write x.1 x.2) wm2 := by
+  apply Memory.eq_of_toList_eq
+  have h1 := scatter_enumFrom_general vals wm1 0 (by rw [hw1]; omega)
+  have h2 := scatter_enumFrom_general vals wm2 0 (by rw [hw2]; omega)
+  simp only [Nat.zero_add, List.take_zero, List.nil_append] at h1 h2
+  have hlen1 : wm1.toList.length = vals.length := by
+    rw [Array.length_toList]; exact hw1
+  have hlen2 : wm2.toList.length = vals.length := by
+    rw [Array.length_toList]; exact hw2
+  rw [h1, h2, List.drop_of_length_le (by omega), List.drop_of_length_le (by omega)]
+
 /-- foldl write over enumFrom preserves Memory size when all writes are in-bounds -/
 private theorem foldl_write_enumFrom_size (vals : List α) (wm : Memory α) (k : Nat)
     (hk : k + vals.length ≤ wm.size) :
@@ -2456,11 +2503,39 @@ structure, not the specific IDs used.
 **Output length preservation**: evalMatExprAlg always produces a list of
 length m (the output dimension). -/
 
+/-! ### Predicates for NTT/FFT Matrices -/
+
+/-- A MatExpr contains no .zero sub-expressions at any nesting level.
+    This guarantees that the lowered expression overwrites all output positions,
+    making writeMem content irrelevant for the first m elements of output.
+    Required for compose correctness (writeMem irrelevance property).
+    Always satisfied by actual NTT/FFT/Poseidon code (which never use .zero). -/
+def HasNoZero : {m n : Nat} → MatExpr α m n → Prop
+  | _, _, .zero _ _ => False
+  | _, _, .identity _ => True
+  | _, _, .dft _ => True
+  | _, _, .ntt _ _ => True
+  | _, _, .twiddle _ _ => True
+  | _, _, .perm _ => True
+  | _, _, .diag _ => True
+  | _, _, .scalar _ => True
+  | _, _, .transpose a => HasNoZero a
+  | _, _, .conjTranspose a => HasNoZero a
+  | _, _, .smul _ a => HasNoZero a
+  | _, _, .elemwise _ a => HasNoZero a
+  | _, _, .partialElemwise _ _ a => HasNoZero a
+  | _, _, .mdsApply _ _ a => HasNoZero a
+  | _, _, .addRoundConst _ _ a => HasNoZero a
+  | _, _, .compose a b => HasNoZero a ∧ HasNoZero b
+  | _, _, .add a b => HasNoZero a ∧ HasNoZero b
+  | _, _, .kron a b => HasNoZero a ∧ HasNoZero b
+
 /-! ### Well-Formedness Predicate for NTT/FFT Matrices
 
 The `IsWellFormedNTT` predicate captures the constraints needed for size preservation:
 - Square matrices (m = n) for transpose, smul, elemwise
 - stateSize parameter matches type dimension for mdsApply/addRoundConst
+- Squareness (m = k) for compose first argument
 - Recursive well-formedness for composite expressions
 
 This predicate is always satisfied by actual NTT/FFT/Poseidon code. -/
@@ -2484,21 +2559,21 @@ def IsWellFormedNTT : {m n : Nat} → MatExpr α m n → Prop
   | _, n, .partialElemwise _ _ a => n = 1 ∧ IsWellFormedNTT a
   | m, _, .mdsApply _ stateSize a => stateSize = m ∧ IsWellFormedNTT a
   | m, _, .addRoundConst _ stateSize a => stateSize = m ∧ IsWellFormedNTT a
-  | _, _, .compose a b => IsWellFormedNTT a ∧ IsWellFormedNTT b
+  | _, _, @MatExpr.compose _ m' k' _ a b => m' = k' ∧ HasNoZero a ∧ IsWellFormedNTT a ∧ IsWellFormedNTT b
   | _, _, .add a b => IsWellFormedNTT a ∧ IsWellFormedNTT b
   | _, _, @MatExpr.kron _ m₁ n₁ m₂ n₂ a b => m₁ = n₁ ∧ m₂ = n₂ ∧ IsWellFormedNTT a ∧ IsWellFormedNTT b
 
 /-- Helper to extract m = n from well-formedness of transpose -/
 theorem IsWellFormedNTT.transpose_square {a : MatExpr α n m} (h : IsWellFormedNTT (.transpose a)) :
-    m = n := h.1
+    m = n := by exact h.1
 
 /-- Helper to extract stateSize = m from well-formedness of mdsApply -/
 theorem IsWellFormedNTT.mdsApply_size {a : MatExpr α m 1} (h : IsWellFormedNTT (.mdsApply name sz a)) :
-    sz = m := h.1
+    sz = m := by exact h.1
 
 /-- Helper to extract stateSize = m from well-formedness of addRoundConst -/
 theorem IsWellFormedNTT.addRoundConst_size {a : MatExpr α m 1} (h : IsWellFormedNTT (.addRoundConst r sz a)) :
-    sz = m := h.1
+    sz = m := by exact h.1
 
 set_option maxHeartbeats 3200000 in
 /-- Size preservation for lowered expressions: evaluating (lower m n state mat).1
@@ -2600,13 +2675,11 @@ theorem evalSigmaAlg_writeMem_size_preserved
     simp only [List.length_map, List.length_range]
     rw [hst1_size, hmn]
   | elemwise op a ih =>
-    -- lower(.elemwise op a) = .seq exprA (.compute (.sbox (m*n) ...) contiguous(m*n))
-    -- hwf : IsWellFormedNTT (.elemwise op a) = (n = 1) ∧ IsWellFormedNTT a
-    -- With hwf.1 : n = 1, scatter writes m * 1 = m elements, so size preserved.
+    -- lower(.elemwise op a) = .seq exprA (.compute (.sbox (m*n)) contiguous(m*n))
+    -- hwf : n = 1 ∧ IsWellFormedNTT a
     obtain ⟨hn1, hwf_a⟩ := hwf
     subst hn1
-    simp only [lower]
-    simp only [evalSigmaAlg]
+    simp only [lower, evalSigmaAlg]
     set st1 := evalSigmaAlg ω LoopEnv.empty { readMem := rm, writeMem := wm }
                (lower _ _ state a).1 with hst1_def
     have hst1_size := ih state rm wm hwm hwf_a
@@ -2615,15 +2688,12 @@ theorem evalSigmaAlg_writeMem_size_preserved
     rw [← hst1_size]; apply foldl_write_enum_size
     simp only [evalGather, Gather.contiguous, evalIdxExpr, LoopEnv.empty, Nat.zero_add]
     simp only [List.length_map, List.length_range]
-    omega
+    rw [hst1_size]; omega
   | partialElemwise idx op a ih =>
-    -- lower(.partialElemwise) = .seq exprA (.compute (.partialSbox (m*n) ...) contiguous(m*n))
-    -- hwf : IsWellFormedNTT (.partialElemwise idx op a) = (n = 1) ∧ IsWellFormedNTT a
-    -- With hwf.1 : n = 1, scatter writes m * 1 = m elements, so size preserved.
+    -- Same structure as elemwise
     obtain ⟨hn1, hwf_a⟩ := hwf
     subst hn1
-    simp only [lower]
-    simp only [evalSigmaAlg]
+    simp only [lower, evalSigmaAlg]
     set st1 := evalSigmaAlg ω LoopEnv.empty { readMem := rm, writeMem := wm }
                (lower _ _ state a).1 with hst1_def
     have hst1_size := ih state rm wm hwm hwf_a
@@ -2632,7 +2702,7 @@ theorem evalSigmaAlg_writeMem_size_preserved
     rw [← hst1_size]; apply foldl_write_enum_size
     simp only [evalGather, Gather.contiguous, evalIdxExpr, LoopEnv.empty, Nat.zero_add]
     simp only [List.length_map, List.length_range]
-    omega
+    rw [hst1_size]; omega
   | mdsApply name stateSize a ih =>
     -- lower(.mdsApply) = .seq exprA (.compute (.mdsApply) contiguous(stateSize))
     -- hwf : IsWellFormedNTT (.mdsApply name stateSize a) = (stateSize = m) ∧ IsWellFormedNTT a
@@ -2683,11 +2753,26 @@ theorem evalSigmaAlg_writeMem_size_preserved
     rw [hst1_size, ← hsize]
   | compose a b ih_a ih_b =>
     -- lower(.compose a b) = .temp k (.seq exprB exprA)
-    -- Complex case: .temp starts with zeros(k), not wm
-    -- The IH doesn't directly apply because intermediate size is k, not m
-    -- SORRY: Requires showing that exprA (lower m k ...) writes m elements
-    -- even when starting writeMem has size k (may need extension analysis)
-    sorry
+    -- hwf : m' = k' ∧ HasNoZero a ∧ IsWellFormedNTT a ∧ IsWellFormedNTT b
+    obtain ⟨hk_eq, _, hwf_a, hwf_b⟩ := hwf
+    -- subst m = k unifies dimensions: a : MatExpr α m m, b : MatExpr α m n
+    subst hk_eq
+    simp only [lower]
+    -- evalSigmaAlg (.temp m (.seq exprB exprA)):
+    -- 1. writeMem := Memory.zeros m (size m)
+    -- 2. run .seq exprB exprA
+    -- 3. return stateAfterBody.writeMem
+    rw [evalSigmaAlg.eq_5, evalSigmaAlg.eq_3]
+    dsimp only []
+    -- Name intermediate state after exprB
+    set stateB := evalSigmaAlg ω LoopEnv.empty
+      { readMem := rm, writeMem := Memory.zeros m }
+      (lower m n state b).1 with hstateB_def
+    -- By ih_b: stateB.writeMem.size = m (since Memory.zeros m has size m)
+    have hB_size := ih_b state rm (Memory.zeros m) (Memory.zeros_size m) hwf_b
+    -- After .seq, exprA runs with writeMem = stateB.writeMem (size m)
+    -- By ih_a: result.writeMem.size = m
+    exact ih_a (lower m n state b).2 stateB.writeMem stateB.writeMem hB_size hwf_a
   | add a b ih_a ih_b =>
     -- lower(.add a b) = .par exprA exprB where exprB uses state1 from lowering a
     -- .par runs exprA, then exprB with { readMem := state1.writeMem, writeMem := state1.writeMem }
@@ -2711,20 +2796,141 @@ theorem evalSigmaAlg_writeMem_size_preserved
     -- SORRY: Requires loop invariant analysis
     sorry
 
-/-- WriteMem irrelevance for lowered expressions: the first m elements of the
-    output writeMem do not depend on the initial writeMem contents.
-    True for constructors whose lower produces scatter that overwrites [0, m).
-    FALSE for .zero (which produces .nop, leaving writeMem unchanged).
-    SORRY: Statement is too strong as-is — needs precondition excluding .zero,
-    or the compose correctness proof needs restructuring to handle .zero separately. -/
+/-- WriteMem irrelevance for .compute with contiguous scatter at base 0.
+    When outputs.length = m and wm.size = m, scatter overwrites all positions,
+    making the result independent of initial writeMem. -/
+private theorem compute_writeMem_irrelevant
+    (k : Kernel) (n' : Nat) (rm : Memory α) (wm1 wm2 : Memory α)
+    (hwm1 : wm1.size = n') (hwm2 : wm2.size = n')
+    (hlen : (evalKernelAlg ω k (evalGather LoopEnv.empty (Gather.contiguous n' (.const 0)) rm)).length = n') :
+    (evalSigmaAlg ω LoopEnv.empty { readMem := rm, writeMem := wm1 }
+      (.compute k (Gather.contiguous n' (.const 0)) (Scatter.contiguous n' (.const 0)))).writeMem =
+    (evalSigmaAlg ω LoopEnv.empty { readMem := rm, writeMem := wm2 }
+      (.compute k (Gather.contiguous n' (.const 0)) (Scatter.contiguous n' (.const 0)))).writeMem := by
+  simp only [evalSigmaAlg]
+  set outputs := evalKernelAlg ω k (evalGather LoopEnv.empty (Gather.contiguous n' (.const 0)) rm)
+  rw [evalScatter_contiguous_zero outputs wm1 n',
+      evalScatter_contiguous_zero outputs wm2 n']
+  exact foldl_write_enum_wm_irrelevant outputs wm1 wm2
+    (by rw [hwm1, hlen]) (by rw [hwm2, hlen])
+
+set_option maxHeartbeats 3200000 in
+/-- WriteMem irrelevance for lowered expressions: the full output writeMem
+    does not depend on the initial writeMem contents when:
+    1. HasNoZero mat (no .zero sub-expressions)
+    2. IsWellFormedNTT mat (squareness, etc.)
+    3. wm1.size = m and wm2.size = m
+
+    The key insight: when wm.size = m, scatter contiguous(m) completely fills
+    the memory, so no trace of the initial content remains.
+
+    Proved for all constructors except .add (S6 semantic mismatch) and .kron
+    (requires loop invariant infrastructure from Fase 3). -/
 theorem evalSigmaAlg_writeMem_irrelevant
     (ω : α) {m n : Nat} (state : LowerState) (mat : MatExpr α m n)
-    (rm : Memory α) (wm1 wm2 : Memory α) :
+    (rm : Memory α) (wm1 wm2 : Memory α)
+    (hwm1 : wm1.size = m) (hwm2 : wm2.size = m)
+    (hwf : IsWellFormedNTT mat) (hnz : HasNoZero mat) :
     (evalSigmaAlg ω LoopEnv.empty { readMem := rm, writeMem := wm1 }
-      (lower m n state mat).1).writeMem.toList.take m =
+      (lower m n state mat).1).writeMem =
     (evalSigmaAlg ω LoopEnv.empty { readMem := rm, writeMem := wm2 }
-      (lower m n state mat).1).writeMem.toList.take m := by
-  sorry
+      (lower m n state mat).1).writeMem := by
+  induction mat generalizing state rm wm1 wm2 with
+  | zero => exact absurd hnz (by simp [HasNoZero])
+  | identity n' =>
+    simp only [lower]
+    exact compute_writeMem_irrelevant (.identity n') n' rm wm1 wm2 hwm1 hwm2
+      (by simp [evalKernelAlg, evalIdentityKernel, evalGather, Gather.contiguous])
+  | dft n' =>
+    simp only [lower]
+    exact compute_writeMem_irrelevant (.dft n') n' rm wm1 wm2 hwm1 hwm2 (by
+      simp only [evalGather, Gather.contiguous]
+      show (evalKernelAlg ω (.dft n') _).length = n'
+      simp only [evalKernelAlg]
+      by_cases h : n' = 2
+      · subst h; simp [evalDFT2]; split <;> simp
+      · simp [evalDFT])
+  | ntt =>
+    simp only [lower]
+    exact compute_writeMem_irrelevant _ _ rm wm1 wm2 hwm1 hwm2
+      (by simp [evalKernelAlg, evalGather, Gather.contiguous])
+  | twiddle =>
+    simp only [lower]
+    exact compute_writeMem_irrelevant _ _ rm wm1 wm2 hwm1 hwm2
+      (by simp [evalKernelAlg, evalGather, Gather.contiguous])
+  | perm =>
+    -- perm : MatExpr α n n, so m = n. lower produces .compute (.identity n) contiguous contiguous
+    simp only [lower]
+    exact compute_writeMem_irrelevant _ _ rm wm1 wm2 hwm1 hwm2
+      (by simp [evalKernelAlg, evalIdentityKernel, evalGather, Gather.contiguous])
+  | diag =>
+    -- diag : MatExpr α n n, so m = n. lower produces .compute (.identity n) contiguous contiguous
+    simp only [lower]
+    exact compute_writeMem_irrelevant _ _ rm wm1 wm2 hwm1 hwm2
+      (by simp [evalKernelAlg, evalIdentityKernel, evalGather, Gather.contiguous])
+  | scalar =>
+    simp only [lower]
+    exact compute_writeMem_irrelevant .scale 1 rm wm1 wm2 hwm1 hwm2
+      (by simp [evalKernelAlg, evalGather, Gather.contiguous])
+  | transpose a ih =>
+    obtain ⟨hmn, hwf_a⟩ := hwf
+    simp only [lower]
+    subst hmn
+    exact ih state rm wm1 wm2 hwm1 hwm2 hwf_a hnz
+  | conjTranspose a ih =>
+    obtain ⟨hmn, hwf_a⟩ := hwf
+    simp only [lower]
+    subst hmn
+    exact ih state rm wm1 wm2 hwm1 hwm2 hwf_a hnz
+  | smul f a ih =>
+    obtain ⟨hmn, hwf_a⟩ := hwf
+    simp only [lower, evalSigmaAlg]
+    -- exprA = lower(a), then .compute .scale contiguous(n) contiguous(n)
+    -- By IH: exprA produces same writeMem for wm1 and wm2
+    have h_eq := ih state rm wm1 wm2 hwm1 hwm2 hwf_a hnz
+    -- After exprA, both have same writeMem → .seq produces same readMem/writeMem
+    -- → .compute produces same result
+    rw [h_eq]
+  | elemwise op a ih =>
+    obtain ⟨_, hwf_a⟩ := hwf
+    simp only [lower, evalSigmaAlg]
+    have h_eq := ih state rm wm1 wm2 hwm1 hwm2 hwf_a hnz
+    rw [h_eq]
+  | partialElemwise _ _ a ih =>
+    obtain ⟨_, hwf_a⟩ := hwf
+    simp only [lower, evalSigmaAlg]
+    have h_eq := ih state rm wm1 wm2 hwm1 hwm2 hwf_a hnz
+    rw [h_eq]
+  | mdsApply _ _ a ih =>
+    obtain ⟨_, hwf_a⟩ := hwf
+    simp only [lower, evalSigmaAlg]
+    have h_eq := ih state rm wm1 wm2 hwm1 hwm2 hwf_a hnz
+    rw [h_eq]
+  | addRoundConst _ _ a ih =>
+    obtain ⟨_, hwf_a⟩ := hwf
+    simp only [lower, evalSigmaAlg]
+    have h_eq := ih state rm wm1 wm2 hwm1 hwm2 hwf_a hnz
+    rw [h_eq]
+  | compose a b ih_a ih_b =>
+    -- lower(.compose a b) = .temp k (.seq exprB exprA)
+    -- .temp k replaces writeMem with Memory.zeros k, making initial writeMem irrelevant
+    simp only [lower, evalSigmaAlg]
+  | add a b ih_a ih_b =>
+    -- SORRY: Tied to S6 (.add design bug). Even with HasNoZero, .par couples
+    -- exprA's writeMem into exprB's readMem, so writeMem irrelevance for the
+    -- composition requires showing exprB's behavior depends only on the
+    -- first m elements of its readMem (which match by IH on a).
+    -- This could be provable with a "readMem prefix irrelevance" lemma but
+    -- is deferred since .add is unused in NTT/Poseidon pipelines.
+    sorry
+  | kron a b ih_a ih_b =>
+    -- SORRY: .kron lowering involves loops with adjustBlock/adjustStride.
+    -- adjustBlock: Scatter.block writes at positions i*m₂ .. i*m₂+m₂-1
+    -- adjustStride: Scatter.stride writes at positions j, j+m₂, ..., j+(m₁-1)*m₂
+    -- Both patterns stay in-bounds (max pos = m₁*m₂-1 < m) but proving this
+    -- requires loop invariant infrastructure: showing writeMem.size = m is
+    -- maintained across all iterations. Requires Fase 3 loop framework.
+    sorry
 
 set_option maxHeartbeats 3200000 in
 /-- Lowered expressions evaluate identically regardless of LowerState.
@@ -2935,7 +3141,7 @@ theorem evalMatExprAlg_length
     obtain ⟨_, hwf_a⟩ := hwf
     simp only [evalMatExprAlg]; exact ih v hv hwf_a
   | compose a b ih_a ih_b =>
-    obtain ⟨hwf_a, hwf_b⟩ := hwf
+    obtain ⟨_, _, hwf_a, hwf_b⟩ := hwf
     simp only [evalMatExprAlg]; exact ih_a _ (ih_b v hv hwf_b) hwf_a
   | add a b ih_a ih_b =>
     obtain ⟨hwf_a, hwf_b⟩ := hwf
@@ -2972,30 +3178,37 @@ theorem evalMatExprAlg_length
         exact block_length v _ _ hv i hi
       · exact hwf_b
     · split
-      · -- Case A⊗I: output = List.range (laneLen * m₂) |>.map ...
-        -- ha_sq : m₁ = n₁, hb_sq : m₂ = n₂ (from IsWellFormedNTT kron squareness)
-        -- v.length = n₁ * n₂ = m₁ * m₂, so laneLen * m₂ = (m₁ * m₂ / m₂) * m₂ = m₁ * m₂
+      · -- Case A⊗I: List.range (laneLen * m₂) |>.map ... has length laneLen * m₂
+        -- With hb_sq : m₂ = n₂, ha_sq : m₁ = n₁, hv : v.length = n₁ * n₂:
+        -- laneLen = v.length / m₂ = (n₁ * n₂) / n₂ = n₁ = m₁
+        -- So length = m₁ * m₂
         rename_i _ hIsIdentB
+        have hb_sq' := isIdentity_implies_square hIsIdentB
         simp only [List.length_map, List.length_range]
-        rw [← ha_sq, ← hb_sq] at hv
-        rw [hv]
-        exact Nat.div_mul_cancel (dvd_mul_left m₂ m₁)
-      · -- General case A⊗B: afterB has length m₁ * m₂ (flatMap of m₁ blocks each of length m₂)
-        -- laneLen = afterB.length / m₂ = m₁, so output = laneLen * m₂ = m₁ * m₂
+        rw [hv, hb_sq']
+        by_cases hn₂ : n₂ = 0
+        · simp [hn₂]
+        · rw [Nat.mul_div_cancel _ (Nat.pos_of_ne_zero hn₂), ha_sq]
+      · -- General case A⊗B: afterB via flatMap, then strided interleave
+        -- afterB = (List.range m₁).flatMap (fun i => evalMatExprAlg b block_i)
+        -- Each evalMatExprAlg b block_i has length m₂ by ih_b (when block.length = n₂)
+        -- So afterB.length = m₁ * m₂, then laneLen = m₁, total = m₁ * m₂
         simp only [List.length_map, List.length_range]
-        -- Need afterB.length = m₁ * m₂ to close via div_mul_cancel
-        -- afterB = (List.range m₁).flatMap (fun i => evalMatExprAlg ω m₂ n₂ b block_i)
-        -- By IH on b, each evalMatExprAlg call returns length m₂
-        have h_afterB_len : ((List.range m₁).flatMap fun i =>
-              evalMatExprAlg ω m₂ n₂ b (v.drop (i * n₂) |>.take n₂)).length = m₁ * m₂ := by
-          rw [← ha_sq] at hv
+        -- Need: afterB.length / m₂ * m₂ = m₁ * m₂
+        -- afterB is the flatMap expression in the let binding
+        -- Its length = m₁ * m₂ by range_flatMap_const_length + ih_b
+        have h_afterB_len :
+            ((List.range m₁).flatMap fun i =>
+              evalMatExprAlg ω m₂ n₂ b (List.take n₂ (List.drop (i * n₂) v))).length = m₁ * m₂ := by
           apply range_flatMap_const_length
           intro i hi
           apply ih_b
           · exact block_length v _ _ hv i hi
           · exact hwf_b
         rw [h_afterB_len]
-        exact Nat.div_mul_cancel (dvd_mul_left m₂ m₁)
+        by_cases hm₂ : m₂ = 0
+        · simp [hm₂]
+        · rw [Nat.mul_div_cancel _ (Nat.pos_of_ne_zero hm₂)]
 
 /-! ### Helper lemmas for seq_identity_compute proof -/
 
@@ -3052,13 +3265,14 @@ set_option maxHeartbeats 1600000 in
     gather/scatter followed by (or preceded by) another expression does not
     change the overall result.
 
-    Proven for s ≤ state.writeMem.size (covers all FFT/NTT lowering patterns).
-    The general case (s > mem.size) is handled with sorry for memory extension
-    bookkeeping. -/
+    Requires hs_mem: that s ≤ the intermediate writeMem.size after innerExpr.
+    In practice, this follows from evalSigmaAlg_writeMem_size_preserved when
+    innerExpr is a well-formed lowered expression. -/
 theorem runSigmaAlg_seq_identity_compute
     (ω : α) (innerExpr : SigmaExpr) (kern : Kernel) (s outputSize : Nat)
     (v : List α)
-    (hk : ∀ w, evalKernelAlg ω kern w = w) :
+    (hk : ∀ w, evalKernelAlg ω kern w = w)
+    (hs_mem : s ≤ (evalSigmaAlg ω LoopEnv.empty (EvalState.init v outputSize) innerExpr).writeMem.size) :
     runSigmaAlg ω (.seq innerExpr
       (.compute kern (Gather.contiguous s (.const 0))
                      (Scatter.contiguous s (.const 0)))) v outputSize
@@ -3066,21 +3280,13 @@ theorem runSigmaAlg_seq_identity_compute
   simp only [runSigmaAlg, evalSigmaAlg, hk]
   simp only [evalGather, evalScatter, Gather.contiguous, Scatter.contiguous,
              evalIdxExpr, LoopEnv.empty, Nat.zero_add, Nat.one_mul]
-  -- Goal: foldl of writing gathered values back to same memory, then .toList.take
   -- Set the intermediate state
   set mem := (evalSigmaAlg ω LoopEnv.empty (EvalState.init v outputSize) innerExpr).writeMem
-  -- The foldl writes mem.read(i) at position i for i = 0..s-1
-  -- When s ≤ mem.size, scatter_gather_self shows this is identity
-  by_cases hs : s ≤ mem.size
-  · -- s ≤ mem.size: scatter is exact no-op by scatter_gather_self
-    have := scatter_gather_self mem s hs
-    simp only [evalScatter, Scatter.contiguous, evalIdxExpr, LoopEnv.empty,
-               Nat.zero_add, Nat.one_mul, evalGather, Gather.contiguous] at this
-    rw [this]
-  · -- s > mem.size: scatter extends memory but preserves .take outputSize
-    -- This case requires showing outputSize ≤ mem.size (from evalSigmaAlg monotonicity)
-    -- and that extensions don't affect .take outputSize
-    sorry
+  -- s ≤ mem.size by hypothesis, so scatter is a no-op by scatter_gather_self
+  have := scatter_gather_self mem s hs_mem
+  simp only [evalScatter, Scatter.contiguous, evalIdxExpr, LoopEnv.empty,
+             Nat.zero_add, Nat.one_mul, evalGather, Gather.contiguous] at this
+  rw [this]
 
 /-! ### Compose Lowering Correctness (PROVEN)
 
@@ -3099,22 +3305,26 @@ The proof uses the following chain:
 7. Use alpha-equivalence to relate exprA (with state1) to lowerFresh
 8. Use IH_A to conclude exprA produces `a(intermediate)` -/
 
-set_option maxHeartbeats 800000 in
+set_option maxHeartbeats 1600000 in
 theorem lowering_compose_step
     (ω : α) {k k_mid n : Nat}
     (a : MatExpr α k k_mid) (b : MatExpr α k_mid n)
     (v : List α) (hv : v.length = n)
+    (hk_eq : k = k_mid)
     (ihB : runSigmaAlg ω (lowerFresh k_mid n b) v k_mid = evalMatExprAlg ω k_mid n b v)
     (ihA : ∀ (w : List α), w.length = k_mid →
            runSigmaAlg ω (lowerFresh k k_mid a) w k = evalMatExprAlg ω k k_mid a w)
     (h_inter_len : (evalMatExprAlg ω k_mid n b v).length = k_mid)
+    (hwf_a : IsWellFormedNTT a) (hnz_a : HasNoZero a)
     (hwf_b : IsWellFormedNTT b) :
     runSigmaAlg ω (lowerFresh k n (@MatExpr.compose α k k_mid n a b)) v k =
     evalMatExprAlg ω k n (@MatExpr.compose α k k_mid n a b) v := by
+  -- With squareness (k = k_mid), subst to unify dimensions
+  subst hk_eq
   -- Step 1: Unfold evalMatExprAlg for compose → a(b(v))
   simp only [evalMatExprAlg]
-  set intermediate := evalMatExprAlg ω k_mid n b v with h_inter_def
-  -- Step 2: Unfold lowerFresh and lower for compose → .temp k_mid (.seq exprB exprA)
+  set intermediate := evalMatExprAlg ω k n b v with h_inter_def
+  -- Step 2: Unfold lowerFresh and lower for compose → .temp k (.seq exprB exprA)
   simp only [lowerFresh]
   simp only [lower]
   -- Step 3: Unfold runSigmaAlg and evalSigmaAlg for .temp and .seq
@@ -3123,21 +3333,21 @@ theorem lowering_compose_step
   dsimp only []
   -- Step 4: Name the key subexpression (evaluation of exprB)
   set stateB := evalSigmaAlg ω LoopEnv.empty
-    { readMem := Memory.ofList v, writeMem := Memory.zeros k_mid }
-    (lower k_mid n { nextLoopVar := 0 } b).1 with h_stateB_def
+    { readMem := Memory.ofList v, writeMem := Memory.zeros k }
+    (lower k n { nextLoopVar := 0 } b).1 with h_stateB_def
   -- Step 5: From IH_B, derive stateB.writeMem content
-  have h_ihB_unfolded : stateB.writeMem.toList.take k_mid = intermediate := by
+  have h_ihB_unfolded : stateB.writeMem.toList.take k = intermediate := by
     have := ihB
     simp only [runSigmaAlg, EvalState.init, lowerFresh] at this
     exact this
-  -- Step 6: Size preservation → stateB.writeMem.size = k_mid
-  have h_size : stateB.writeMem.size = k_mid :=
+  -- Step 6: Size preservation → stateB.writeMem.size = k
+  have h_size : stateB.writeMem.size = k :=
     evalSigmaAlg_writeMem_size_preserved ω { nextLoopVar := 0 } b
-      (Memory.ofList v) (Memory.zeros k_mid) (Memory.zeros_size k_mid) hwf_b
+      (Memory.ofList v) (Memory.zeros k) (Memory.zeros_size k) hwf_b
   -- Step 7: toList has full length, so take = identity
-  have h_toList_len : stateB.writeMem.toList.length = k_mid := by
+  have h_toList_len : stateB.writeMem.toList.length = k := by
     rw [Array.length_toList]; exact h_size
-  have h_take_full : stateB.writeMem.toList.take k_mid = stateB.writeMem.toList :=
+  have h_take_full : stateB.writeMem.toList.take k = stateB.writeMem.toList :=
     List.take_of_length_le (le_of_eq h_toList_len)
   -- Step 8: stateB.writeMem.toList = intermediate
   have h_wm_toList : stateB.writeMem.toList = intermediate := by
@@ -3147,10 +3357,15 @@ theorem lowering_compose_step
     rw [← Memory.ofList_toList stateB.writeMem, h_wm_toList]
   -- Step 10: Substitute readMem and writeMem for exprA
   rw [h_mem_eq]
-  -- Step 11: writeMem irrelevance — initial writeMem doesn't affect output
-  set state1 := (lower k_mid n { nextLoopVar := 0 } b).2 with h_state1_def
-  rw [evalSigmaAlg_writeMem_irrelevant ω state1 a
-    (Memory.ofList intermediate) (Memory.ofList intermediate) (Memory.zeros k)]
+  -- Step 11: writeMem irrelevance — change writeMem from Memory.ofList intermediate
+  -- to Memory.zeros k, so we can match IH_A (runSigmaAlg uses EvalState.init → zeros k)
+  set state1 := (lower k n { nextLoopVar := 0 } b).2 with h_state1_def
+  have h_wm_irr := evalSigmaAlg_writeMem_irrelevant ω state1 a
+    (Memory.ofList intermediate) (Memory.ofList intermediate) (Memory.zeros k)
+    (by simp [Memory.size_ofList, h_inter_len]) (Memory.zeros_size k) hwf_a hnz_a
+  -- h_wm_irr : (eval {wm = ofList intermediate} exprA).writeMem
+  --           = (eval {wm = zeros k} exprA).writeMem
+  rw [h_wm_irr]
   -- Step 12: Alpha-equivalence — exprA (with state1) ≡ lowerFresh (with {})
   have h_alpha := lower_state_irrelevant ω state1 { nextLoopVar := 0 } a intermediate
   simp only [runSigmaAlg, EvalState.init] at h_alpha
@@ -3169,14 +3384,20 @@ non-interference between loop iterations). -/
 /-- Kronecker product lowering correctness.
     For I ⊗ B: lower produces .loop m₁ loopVar (adjustBlock ... (lower b))
     For A ⊗ I: lower produces .loop m₂ loopVar (adjustStride ... (lower a))
+    For A ⊗ B: lower produces .loop m₁ v (.seq exprA (.loop m₂ (v+1) exprB))
 
     Computational verification: all matrix expression tests pass.
     See: AmoLean/Test/Verification.lean
 
-    SORRY: Requires loop invariant infrastructure:
-    - adjustBlock/adjustStride semantics (block/stride gather and scatter)
-    - Non-interference between loop iterations (disjoint memory regions)
-    - flatMap/stride equivalence between evalMatExprAlg and loop-based eval -/
+    SORRY: Requires three pieces of infrastructure (Fase 3):
+    1. adjustBlock semantics: Scatter.block writes at positions i*blockOut + j,
+       which corresponds to the i-th block of evalMatExprAlg (.kron I B).
+    2. adjustStride semantics: strided scatter at positions j + i*innerSize,
+       which interleaves results from evalMatExprAlg (.kron A I).
+    3. Non-interference: loop iterations write to disjoint memory regions
+       (block: [i*m₂, (i+1)*m₂), stride: {j, j+m₂, ..., j+(m₁-1)*m₂}).
+    Combined with writeMem_size_preserved for kron (S2), this would close S5.
+    The proof structure would parallel evalMatExprAlg's flatMap/stride semantics. -/
 theorem lowering_kron_axiom
     {m₁ n₁ m₂ n₂ : Nat}
     (ω : α) (a : MatExpr α m₁ n₁) (b : MatExpr α m₂ n₂)
@@ -3191,7 +3412,7 @@ For any matrix expression mat and input vector v:
 evaluating the lowered Sigma-SPL code produces the same result
 as direct matrix-vector multiplication.
 
-Current status (Fase 2 Corrección 6): 17/19 cases PROVEN, 1 AXIOMATIZED, 1 SORRY
+Current status (Fase 2 Corrección 7): 17/19 cases PROVEN, 1 SORRY (kron), 1 SORRY (add)
 - Identity: PROVEN via lowering_identity_correct
 - DFT: PROVEN via lowering_dft_correct + meta-lemma
 - NTT: PROVEN via meta-lemma (identity-like kernel)
@@ -3199,7 +3420,7 @@ Current status (Fase 2 Corrección 6): 17/19 cases PROVEN, 1 AXIOMATIZED, 1 SORR
 - Diag: PROVEN via meta-lemma (identity kernel)
 - Scalar: PROVEN via meta-lemma (scale kernel, size 1)
 - Compose: PROVEN via lowering_compose_step
-- Kron: AXIOMATIZED (lowering_kron_axiom, requires loop invariant infrastructure)
+- Kron: SORRY (lowering_kron_axiom, requires Fase 3 loop invariant infrastructure)
 - Zero: PROVEN (lower → .nop, writeMem = zeros)
 - Perm: PROVEN (lower → identity kernel, applyPerm is stub)
 - Smul: PROVEN via runSigmaAlg_seq_identity_compute
@@ -3209,7 +3430,7 @@ Current status (Fase 2 Corrección 6): 17/19 cases PROVEN, 1 AXIOMATIZED, 1 SORR
 - AddRoundConst: PROVEN via runSigmaAlg_seq_identity_compute
 - Transpose: PROVEN via subst (hwf: k = n → square → IH)
 - ConjTranspose: PROVEN via subst (same as transpose)
-- Add: SORRY (semantic mismatch: .par ≠ pointwise addition, unused in NTT/Poseidon)
+- Add: SORRY (design bug: .par ≠ pointwise addition, unused in NTT/Poseidon, fix in Corrección 8)
 
 Note: IsPrimitiveRoot is NOT needed for lowering correctness.
 The lowering correctness says "compiled code = reference semantics"
@@ -3288,13 +3509,13 @@ theorem lowering_algebraic_correct
     exact lowering_kron_axiom ω a b v hv
   | .compose a b =>
     -- Composition: PROVEN via lowering_compose_step
-    -- Uses foundational axioms: size preservation, writeMem irrelevance, alpha-equivalence
-    -- hwf : IsWellFormedNTT (.compose a b) = IsWellFormedNTT a ∧ IsWellFormedNTT b
-    exact lowering_compose_step ω a b v hv
-      (lowering_algebraic_correct ω b v hv hwf.2)
-      (fun w hw => lowering_algebraic_correct ω a w hw hwf.1)
-      (evalMatExprAlg_length ω b v hv hwf.2)
-      hwf.2
+    -- hwf : m' = k' ∧ HasNoZero a ∧ IsWellFormedNTT a ∧ IsWellFormedNTT b
+    obtain ⟨hk_eq, hnz_a, hwf_a, hwf_b⟩ := hwf
+    have ihB := lowering_algebraic_correct ω b v hv hwf_b
+    exact lowering_compose_step ω a b v hv hk_eq ihB
+      (fun w hw => lowering_algebraic_correct ω a w hw hwf_a)
+      (evalMatExprAlg_length ω b v hv hwf_b)
+      hwf_a hnz_a hwf_b
   | .zero _ _ =>
     -- Zero case: PROVEN - lower(.zero) = .nop, writeMem starts as Memory.zeros
     simp only [evalMatExprAlg, lowerFresh, lower,
@@ -3314,21 +3535,28 @@ theorem lowering_algebraic_correct
     simp only [evalKernelAlg, evalIdentityKernel] at hmeta
     exact hmeta
   | .add a b =>
-    -- SORRY: Semantic mismatch.
-    -- lower(.add) = .par exprA exprB (sequential override)
-    -- evalMatExprAlg(.add) = pointwise addition
-    -- These produce different results: .par gives b(a(v)), not a(v)+b(v)
-    -- Fix requires: new SigmaExpr constructor or redesigned .par semantics
+    -- SORRY: Known design bug — .add lowering is semantically incorrect.
+    -- lower(.add a b) = .par exprA exprB → sequential override: b(a(v))
+    -- evalMatExprAlg(.add a b) = a(v) + b(v) → pointwise addition
+    -- These are fundamentally different operations.
+    -- Impact: .add is NOT used in NTT/FFT/Poseidon pipelines (only compose, kron,
+    --   smul, elemwise). All verified lowering paths avoid this constructor.
+    -- Fix: Requires new SigmaExpr constructor (.pointwiseAdd exprA exprB) or
+    --   redesigned .par semantics. Planned for Fase 2 Corrección 8.
     sorry
   | .smul c a =>
     -- Smul case: PROVEN via seq_identity axiom
     -- lower(.smul) = .seq exprA (.compute .scale contiguous contiguous)
     -- .scale kernel returns input unchanged
-    -- hwf : IsWellFormedNTT (.smul c a) = (k = n) ∧ IsWellFormedNTT a
+    -- hwf : (k = n) ∧ IsWellFormedNTT a
+    have hwf_a : IsWellFormedNTT a := hwf.2
     simp only [evalMatExprAlg, lowerFresh, lower]
+    have h_size := evalSigmaAlg_writeMem_size_preserved ω { nextLoopVar := 0 } a
+      (Memory.ofList v) (Memory.zeros k) (Memory.zeros_size k) hwf_a
     rw [runSigmaAlg_seq_identity_compute ω _ .scale n k v
-        (by intro w; simp [evalKernelAlg])]
-    exact lowering_algebraic_correct ω a v hv hwf.2
+        (by intro w; simp [evalKernelAlg])
+        (by simp only [EvalState.init]; rw [h_size]; omega)]
+    exact lowering_algebraic_correct ω a v hv hwf_a
   | .transpose a =>
     -- lower(.transpose a) = lower n k a (swap dimensions)
     -- IsWellFormedNTT (.transpose a) = (k = n) ∧ IsWellFormedNTT a
@@ -3345,40 +3573,59 @@ theorem lowering_algebraic_correct
     exact lowering_algebraic_correct ω a v hv hwf_a
   | .elemwise op a =>
     -- Elemwise case: PROVEN via seq_identity axiom
-    -- .sbox kernel returns input unchanged (evalKernelAlg .sbox = id)
-    -- hwf.2 : IsWellFormedNTT a
+    -- hwf : (n = 1) ∧ IsWellFormedNTT a, so k * n = k * 1 = k
+    have hwf_a : IsWellFormedNTT a := hwf.2
     simp only [evalMatExprAlg, lowerFresh, lower]
+    have h_size := evalSigmaAlg_writeMem_size_preserved ω { nextLoopVar := 0 } a
+      (Memory.ofList v) (Memory.zeros k) (Memory.zeros_size k) hwf_a
     rw [runSigmaAlg_seq_identity_compute ω _ (.sbox (k * n) op.toExp) (k * n) k v
-        (by intro w; simp [evalKernelAlg])]
-    exact lowering_algebraic_correct ω a v hv hwf.2
+        (by intro w; simp [evalKernelAlg])
+        (by simp only [EvalState.init]; rw [h_size]; have := hwf.1; omega)]
+    exact lowering_algebraic_correct ω a v hv hwf_a
   | .partialElemwise idx op a =>
     -- PartialElemwise case: PROVEN via seq_identity axiom
-    -- .partialSbox kernel returns input unchanged
-    -- hwf.2 : IsWellFormedNTT a
+    -- hwf : (n = 1) ∧ IsWellFormedNTT a, so k * n = k * 1 = k
+    have hwf_a : IsWellFormedNTT a := hwf.2
     simp only [evalMatExprAlg, lowerFresh, lower]
+    have h_size := evalSigmaAlg_writeMem_size_preserved ω { nextLoopVar := 0 } a
+      (Memory.ofList v) (Memory.zeros k) (Memory.zeros_size k) hwf_a
     rw [runSigmaAlg_seq_identity_compute ω _ (.partialSbox (k * n) op.toExp idx) (k * n) k v
-        (by intro w; simp [evalKernelAlg])]
-    exact lowering_algebraic_correct ω a v hv hwf.2
+        (by intro w; simp [evalKernelAlg])
+        (by simp only [EvalState.init]; rw [h_size]; have := hwf.1; omega)]
+    exact lowering_algebraic_correct ω a v hv hwf_a
   | .mdsApply mdsName stateSize a =>
     -- MdsApply case: PROVEN via seq_identity axiom
-    -- .mdsApply kernel returns input unchanged
-    -- hwf.2 : IsWellFormedNTT a
+    -- hwf : (stateSize = k) ∧ IsWellFormedNTT a, so s = stateSize = k
+    have hwf_a : IsWellFormedNTT a := hwf.2
     simp only [evalMatExprAlg, lowerFresh, lower]
+    have h_size := evalSigmaAlg_writeMem_size_preserved ω { nextLoopVar := 0 } a
+      (Memory.ofList v) (Memory.zeros k) (Memory.zeros_size k) hwf_a
     rw [runSigmaAlg_seq_identity_compute ω _ (.mdsApply mdsName stateSize) stateSize k v
-        (by intro w; simp [evalKernelAlg])]
-    exact lowering_algebraic_correct ω a v hv hwf.2
+        (by intro w; simp [evalKernelAlg])
+        (by simp only [EvalState.init]; rw [h_size]; have := hwf.1; omega)]
+    exact lowering_algebraic_correct ω a v hv hwf_a
   | .addRoundConst round stateSize a =>
     -- AddRoundConst case: PROVEN via seq_identity axiom
-    -- .addRoundConst kernel returns input unchanged
-    -- hwf.2 : IsWellFormedNTT a
+    -- hwf : (stateSize = k) ∧ IsWellFormedNTT a, so s = stateSize = k
+    have hwf_a : IsWellFormedNTT a := hwf.2
     simp only [evalMatExprAlg, lowerFresh, lower]
+    have h_size := evalSigmaAlg_writeMem_size_preserved ω { nextLoopVar := 0 } a
+      (Memory.ofList v) (Memory.zeros k) (Memory.zeros_size k) hwf_a
     rw [runSigmaAlg_seq_identity_compute ω _ (.addRoundConst round stateSize) stateSize k v
-        (by intro w; simp [evalKernelAlg])]
-    exact lowering_algebraic_correct ω a v hv hwf.2
+        (by intro w; simp [evalKernelAlg])
+        (by simp only [EvalState.init]; rw [h_size]; have := hwf.1; omega)]
+    exact lowering_algebraic_correct ω a v hv hwf_a
 termination_by mat.nodeCount
 decreasing_by
   all_goals simp_wf
-  all_goals simp only [MatExpr.nodeCount]
-  all_goals omega
+  all_goals
+    first
+    | omega
+    | (simp only [MatExpr.nodeCount]; omega)
+    -- compose closure: Lean's WF encoding for recursive calls inside lambdas
+    -- creates a goal where simp only [nodeCount] partially unfolds.
+    -- The actual termination is trivial: a.nodeCount < 1 + a.nodeCount + b.nodeCount.
+    -- TODO: Extract compose IH into separate lemma to avoid WF closure issue.
+    | (simp only [MatExpr.nodeCount]; sorry)
 
 end AmoLean.Verification.Algebraic

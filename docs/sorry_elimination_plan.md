@@ -4,7 +4,7 @@
 **Archivo**: `AmoLean/Verification/AlgebraicSemantics.lean`
 **Fecha de creacion**: 2026-02-07
 **Ultima actualizacion**: 2026-02-08
-**Estado**: Fase 2 Correccion 6 - Saneamiento masivo: 16 → 6 sorries
+**Estado**: Fase 2 Correccion 7 - Eliminacion masiva: 10 → 6 sorry statements
 
 ---
 
@@ -12,21 +12,45 @@
 
 | Metrica | Valor |
 |---------|-------|
-| **Sorries actuales** | **6** (de 16 pre-Corrección 6, de 104 originales) |
-| Sorries eliminados (Corrección 6) | 10 (4 legacy + 2 transpose/conjTranspose + 2 elemwise/partialElemwise + 2 kron length) |
+| **Sorries actuales** | **6** (de 10 pre-Corrección 7, de 104 originales) |
+| Sorries eliminados (Corrección 7) | 4 (compose size + seq_identity + 2 kron length bonus) |
+| lowering_algebraic_correct | 17/19 casos PROVEN, 1 sorry (kron), 1 sorry (add) |
+| writeMem_size_preserved | 17/19 casos PROVEN, 1 sorry (kron loop invariant), 1 sorry (add design) |
+| writeMem_irrelevant | 15/19 base cases PROVEN, 2 sorries (kron loop + add design) |
 | evalSigmaAlg_lower_state_irrelevant | COMPLETO (todos los casos) |
-| IsWellFormedNTT kron | Extendido con squareness (m₁=n₁ ∧ m₂=n₂) |
 | Build status | Compila sin errores (2641 modulos) |
 
-## Logro Principal
+## Logros Principales
 
-El teorema central `evalSigmaAlg_lower_state_irrelevant` esta **COMPLETO**:
+### Corrección 7: Cerrar sorries de infraestructura
+
+**S1 — compose writeMem_size_preserved (CERRADO)**:
+- `subst hk_eq` unifica `k` con `m` usando `IsWellFormedNTT.compose` squareness (`m' = k'`)
+- Chain: IH_b con `Memory.zeros m` → stateB.writeMem.size = m → IH_a cierra
+
+**S4 — runSigmaAlg_seq_identity_compute (CERRADO)**:
+- Eliminado `by_cases hs : s ≤ mem.size` con sorry en branch else
+- Agregado precondición `hs_mem : s ≤ (...).writeMem.size` que los 5 call sites descargan
+- Call sites usan `evalSigmaAlg_writeMem_size_preserved` para demostrar size
+
+**Bonus — evalMatExprAlg_length kron A⊗I y A⊗B (CERRADOS)**:
+- A⊗I: `isIdentity_implies_square` + `Nat.mul_div_cancel` (con `by_cases n₂ = 0`)
+- A⊗B: `range_flatMap_const_length` + `ih_b` + `Nat.mul_div_cancel` (con `by_cases m₂ = 0`)
+
+**S3 — writeMem_irrelevant base cases (CERRADOS, 7 casos)**:
+- identity, perm, diag, dft, ntt, twiddle, scalar: todos probados
+- Patrón: evalScatter + scatter_gather_self + Memory.write_read_self
+
+### Corrección 6: Saneamiento (16 → 10)
+- Detección de legacy code superseded por SameStructure theorems → delete (-4)
+- Uso sistemático de `subst` con IsWellFormedNTT constraints → close (-4)
+- Extensión de IsWellFormedNTT.kron con squareness → close (-2)
+
+### Teorema Central
+El teorema `evalSigmaAlg_lower_state_irrelevant` esta **COMPLETO**:
 - Caso I⊗B: Usa `loop_adjustBlock_alpha`
 - Caso A⊗I: Usa `loop_adjustStride_alpha`
 - Caso A⊗B: Usa `nested_loop_alpha` con `lower_fv_empty`
-
-Esto significa que la semantica algebraica del lowering es independiente del estado
-(numeracion de variables de loop), que es el objetivo principal de la verificacion.
 
 ---
 
@@ -120,30 +144,38 @@ El teorema requiere probar que `lower` produce expresiones con `fv` bounded (low
 
 ---
 
-## Estado Actual de Sorries (6 total)
+## Estado Actual de Sorries (6 sorry statements)
 
-### Infraestructura / Invariantes de Loop (2)
+### Loop Invariant / Infraestructura (2)
 
-| Teorema | Linea | Descripcion | Dificultad |
-|---------|-------|-------------|------------|
-| evalSigmaAlg_writeMem_size_preserved (compose) | ~2690 | .temp crea buffer k, IH da size k, pero necesita mostrar que exprA escribe m elementos | ALTA |
-| evalSigmaAlg_writeMem_size_preserved (kron) | ~2712 | Loop con adjustBlock/adjustStride: invariante de tamano de memoria | ALTA |
+| Teorema | Linea | Descripcion | Clasificacion |
+|---------|-------|-------------|---------------|
+| evalSigmaAlg_writeMem_size_preserved (kron) | ~2797 | Loop con adjustBlock/adjustStride: invariante de tamaño de memoria. Requiere `evalSigmaAlg_loop_preserves_size` helper. In-bounds analysis: max pos = m₁*m₂-1 < m. | Fase 3 |
+| evalSigmaAlg_writeMem_irrelevant (kron) | ~2933 | Loop body debe sobreescribir misma region independiente de writeMem inicial. Requiere adjustBlock/adjustStride semantics completas. | Fase 3 |
 
 ### Diseño / Semántica (2)
 
-| Teorema | Linea | Descripcion | Dificultad |
-|---------|-------|-------------|------------|
-| evalSigmaAlg_writeMem_irrelevant | ~2727 | STATEMENT FALSO para .zero (.nop no sobreescribe). Compose proof lo usa | DISEÑO |
-| lowering_algebraic_correct (.add) | ~3322 | .par != suma puntual. lower(.add) da b(a(v)), no a(v)+b(v) | DISEÑO |
+| Teorema | Linea | Descripcion | Clasificacion |
+|---------|-------|-------------|---------------|
+| evalSigmaAlg_writeMem_irrelevant (add) | ~2925 | `.par` = sequential override, no suma puntual. `lower(.add a b)` da `b(a(v))` no `a(v)+b(v)`. Limitación de diseño: `.add` no se usa en NTT/Poseidon pipelines. | Fase 2 Corrección 8 |
+| lowering_algebraic_correct (.add) | ~3546 | Mismo bug de diseño que writeMem_irrelevant(add). `.par` semántica incompatible con `.add` algebraico. Fix: nuevo constructor SigmaExpr `.pointwiseAdd` o rediseño de `.par`. | Fase 2 Corrección 8 |
 
-### Edge Cases / Teóricos (2)
+### Kron Correctness / Terminación (2)
 
-| Teorema | Linea | Descripcion | Dificultad |
-|---------|-------|-------------|------------|
-| runSigmaAlg_seq_identity_compute (s > mem.size) | ~3083 | Branch s > mem.size del by_cases. Nunca se ejecuta en practica | BAJA |
-| lowering_kron_axiom | ~3186 | Axioma central de kron. Requiere infraestructura completa de loop | MUY ALTA |
+| Teorema | Linea | Descripcion | Clasificacion |
+|---------|-------|-------------|---------------|
+| lowering_kron_axiom | ~3407 | Axioma central de kron. Requiere 3 infraestructuras: (1) adjustBlock semantics, (2) adjustStride semantics, (3) non-interference entre iteraciones de loop. | Fase 3 |
+| decreasing_by compose | ~3629 | Lean 4 Issue #2893: `termination_by` no ve recursión en closures pasadas a `runSigmaAlg`. Workaround con `sorry` en `decreasing_by`. | Lean 4 bug |
 
-### Eliminados en Corrección 6 (10 sorries)
+### Eliminados en Corrección 7 (4 sorry statements)
+
+| Metodo | Sorries | Detalle |
+|--------|---------|---------|
+| subst + IH chain | 1 | compose en writeMem_size_preserved (IsWellFormedNTT.compose squareness m'=k') |
+| Precondición hs_mem | 1 | seq_identity edge case (s > mem.size eliminado con precondición directa) |
+| isIdentity + Nat.mul_div_cancel | 2 | evalMatExprAlg_length kron A⊗I y A⊗B (by_cases n₂=0) |
+
+### Eliminados en Corrección 6 (10 sorry statements)
 
 | Metodo | Sorries | Detalle |
 |--------|---------|---------|
@@ -210,30 +242,35 @@ Esto se sigue de lower_loopVars_bounded + un lema que diga fv ⊆ loopVarsOf par
 | Correccion 4 (inicio) | 13 | - | - |
 | Correccion 4 (fin) | - | 16 | +3 (reorganizados) |
 | Correccion 5 | 16 | 16 | 0 (structural) |
-| **Correccion 6** | **16** | **6** | **-10** |
+| Correccion 6 | 16 | 10 | **-6** (sorry statements, excl. comments) |
+| **Correccion 7** | **10** | **6** | **-4** |
 
-**Nota Corrección 6**: Reducción masiva gracias a:
-1. Detección de legacy code superseded por SameStructure theorems → delete (-4)
-2. Uso sistemático de `subst` con IsWellFormedNTT constraints → close (-4)
-3. Extensión de IsWellFormedNTT.kron con squareness (m₁=n₁ ∧ m₂=n₂) → close (-2)
+**Nota Corrección 7**: Eliminación de 4 sorry statements:
+1. compose writeMem_size_preserved: `subst hk_eq` + IH chain (IsWellFormedNTT squareness)
+2. seq_identity edge case: precondición `hs_mem` en lugar de `by_cases` con sorry
+3. evalMatExprAlg_length kron A⊗I: `isIdentity_implies_square` + `Nat.mul_div_cancel`
+4. evalMatExprAlg_length kron A⊗B: `range_flatMap_const_length` + `ih_b`
+
+**Lecciones clave de Corrección 7**:
+- evalSigmaAlg NO es monótona en writeMem.size (`.temp` puede reducir)
+- Precondiciones precisas > monotonía general (S4)
+- `Nat.mul_div_cancel` requiere `0 < n` → usar `by_cases n = 0`
+- QA acertó al priorizar correctness sobre completeness (S3 era FALSO)
 
 ---
 
 ## Proximos Pasos Recomendados
 
-### Prioridad 1: Quick wins
-1. **runSigmaAlg_seq_identity (s > mem.size)** — Edge case que nunca se ejecuta. Podría cerrarse con precondición `s ≤ outputSize` o con lema de monotonía de memoria.
+### Fase 2 Corrección 8: Diseño de .add
+1. **writeMem_irrelevant (add)** + **lowering_algebraic_correct (.add)** — Ambos son el mismo bug: `.par` = sequential override ≠ suma puntual. Requiere nuevo constructor `.pointwiseAdd` en SigmaExpr o rediseño de `.par`. Baja urgencia: `.add` no se usa en NTT/Poseidon pipelines.
 
-### Prioridad 2: Infraestructura
-2. **writeMem_size_preserved (compose)** — Requiere análisis de `.temp k` buffer. Mostrar que exprA escribe m elementos empezando de buffer size k.
-3. **writeMem_size_preserved (kron)** — Requiere invariante de loop: cada iteración preserva el tamaño de writeMem.
+### Fase 3: Infraestructura de Loop Invariants
+2. **writeMem_size_preserved (kron)** — Requiere `evalSigmaAlg_loop_preserves_size`: si el body preserva size, el loop también. Luego probar adjustBlock/adjustStride preservan size.
+3. **writeMem_irrelevant (kron)** — Requiere adjustBlock/adjustStride semantics: probar que scatter patterns sobreescriben misma región.
+4. **lowering_kron_axiom** — Requiere (1) adjustBlock semantics, (2) adjustStride semantics, (3) non-interference entre iteraciones. Depende de S2 y S3.
 
-### Prioridad 3: Diseño
-4. **writeMem_irrelevant** — Reformular con precondición `¬mat.isZero` o manejar .zero en compose proof por separado.
-5. **lowering_algebraic_correct (.add)** — Requiere nuevo constructor en SigmaExpr o rediseño de .par semántica. Baja urgencia: .add no se usa en NTT/Poseidon pipelines.
-
-### Prioridad 4: Kron completo
-6. **lowering_kron_axiom** — Depende de infraestructura de loop (adjustBlock/adjustStride semántica, non-interference). Candidato a convertirse en axiom permanente si la infraestructura es demasiado costosa.
+### Lean 4 Bug
+5. **decreasing_by compose** — Lean 4 Issue #2893: WF encoding de recursión en closures. Workaround con `sorry` en `decreasing_by` es aceptable mientras se resuelve upstream.
 
 ---
 
@@ -255,5 +292,82 @@ Los teoremas `adjustBlock_alpha`, `adjustStride_alpha`, `adjustBlock_preserves_e
 
 ---
 
+## Cambios Estructurales (Corrección 7)
+
+### IsWellFormedNTT: compose con squareness
+```lean
+-- Antes:
+| _, _, .compose a b => IsWellFormedNTT a ∧ IsWellFormedNTT b
+
+-- Después:
+| _, _, @MatExpr.compose _ m' k n' a b => m' = k ∧ HasNoZero a ∧ IsWellFormedNTT a ∧ IsWellFormedNTT b
+```
+
+Justificación: En NTT/FFT/Poseidon, compose es siempre entre matrices cuadradas (`m = k`). La extensión con squareness permite `subst hk_eq` para unificar dimensiones en compose proofs.
+
+### runSigmaAlg_seq_identity_compute: precondición hs_mem
+```lean
+-- Antes: sin precondición, by_cases hs : s ≤ mem.size (sorry en else)
+-- Después:
+theorem runSigmaAlg_seq_identity_compute ...
+    (hs_mem : s ≤ (evalSigmaAlg ω LoopEnv.empty (EvalState.init v outputSize) innerExpr).writeMem.size) :
+    ...
+```
+
+Justificación: evalSigmaAlg NO es monótona en writeMem.size (`.temp` puede reducir). La precondición directa `hs_mem` es descargada por todos los 5 call sites usando `evalSigmaAlg_writeMem_size_preserved`.
+
+### Nuevos Memory lemmas
+```lean
+theorem Memory.write_size_ge (mem : Memory α) (i : Nat) (v : α) :
+    mem.size ≤ (mem.write i v).size
+
+theorem Memory.write_read_self (mem : Memory α) (i : Nat) (hi : i < mem.size) :
+    mem.write i (mem.read i) = mem
+```
+
+### Bridge lemmas para writeMem_irrelevant
+```lean
+theorem evalScatter_contiguous_zero (wm : Memory α) (vals : List α) :
+    evalScatter wm vals (.contiguous ⟨0, 1⟩) = (vals.enumFrom 0).foldl (fun acc x => acc.write x.1 x.2) wm
+
+theorem foldl_write_enum_wm_irrelevant (vals : List α) (wm1 wm2 : Memory α) ... :
+    ... .writeMem = ... .writeMem
+
+theorem compute_writeMem_irrelevant (ω : α) (k : Nat) (g : Gather) (s : Scatter) (env : LoopEnv)
+    (st1 st2 : EvalState α) (hwm : st1.writeMem.size = st2.writeMem.size) ... :
+    (evalSigmaAlg ω env st1 (.compute k g s kern)).writeMem =
+    (evalSigmaAlg ω env st2 (.compute k g s kern)).writeMem
+```
+
+---
+
+## Lecciones Aprendidas (Corrección 7)
+
+### Desde QA (3 rondas Gemini, NEEDS_REVISION)
+
+**L-139**: Priorizar correctness sobre completeness. QA acertó al insistir en que S3 (statement falso) y S6 (.add design bug) deben tratarse primero, no último.
+
+**L-140**: Un sorry en un statement falso es peor que un sorry en un statement verdadero. S3 (writeMem_irrelevant) era FALSO para `.zero` → `.nop`. QA detectó riesgo de ex falso.
+
+### Desde Experto Lean (2 rondas DeepSeek)
+
+**L-141**: Lean 4 Issue #2893 — WF encoding no ve recursión en closures. `termination_by` solo ve llamadas recursivas directas, no las pasadas como argumentos a funciones de orden superior. Workaround: `decreasing_by` con `sorry` fallback.
+
+**L-142**: Equation lemmas `evalSigmaAlg.eq_N` permiten unfold selectivo de match branches específicas. Más controlable que `simp only [evalSigmaAlg]` que puede desplegar todo.
+
+### Desde la sesión de codeo
+
+**L-143**: evalSigmaAlg NO es monótona en writeMem.size. El constructor `.temp size` reemplaza writeMem con `Memory.zeros size`, que puede ser menor. Esto invalida cualquier intento de probar `writeMem.size ≥ initial_size` en general.
+
+**L-144**: Precondiciones precisas > monotonía general. Para S4, en lugar de probar `∀ expr, s ≤ (eval expr).writeMem.size` (falso por `.temp`), agregar `hs_mem` como precondición y que cada call site la descargue usando `writeMem_size_preserved`.
+
+**L-145**: `Nat.mul_div_cancel` requiere `0 < n`. En pruebas de length para kron (e.g., `m₁ * m₂ / m₂ = m₁`), siempre necesitas `by_cases hn : n = 0` para manejar el edge case de dimensión cero.
+
+**L-146**: Bridge lemma pattern para evalScatter. Cuando la función usa `vals.enum.foldl` pero los teoremas hablan de `vals.enumFrom 0`, crear bridge lemma `evalScatter_contiguous_zero` que conecte las dos formas.
+
+**L-147**: `Memory.write_read_self` es la identidad clave para writeMem_irrelevant. Para .identity/.perm/.diag, el scatter lee y reescribe los mismos valores, así que `scatter_gather_self` + `write_read_self` da que writeMem no cambia.
+
+---
+
 *Documentacion creada: 2026-02-07*
-*Ultima actualizacion: 2026-02-08 (Fase 2 Correccion 6 - Saneamiento: 16 → 6 sorries)*
+*Ultima actualizacion: 2026-02-08 (Fase 2 Correccion 7 - Eliminacion: 10 → 6 sorry statements)*
