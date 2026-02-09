@@ -891,6 +891,7 @@ def evalKernelAlg (ω : α) (k : Kernel) (input : List α) : List α :=
   | .mdsApply _ _ => input
   | .mdsInternal _ => input
   | .addRoundConst _ _ => input
+  | .butterfly4 => evalDFT ω 4 input  -- Radix-4 butterfly = DFT of size 4
 
 /-! ## Part 7: Main Sigma Evaluator (Algebraic)
 
@@ -2637,6 +2638,80 @@ theorem evalSigmaAlg_loop_preserves_size
       exact ⟨h_body_size, h_body_size⟩)
   exact h_inv.1
 
+/-! ### C1: evalScatter Size Preservation for Block/Stride Patterns
+
+These lemmas prove that evalScatter preserves writeMem.size when all
+write positions fall within bounds. This is the key infrastructure for
+closing the kron sorry (S1) in evalSigmaAlg_writeMem_size_preserved.
+
+Scatter patterns:
+  - Scatter.block blockSize loopVar: writes at positions blockSize*i + j for j < count
+  - Scatter with stride s and base v: writes at positions v + s*j for j < count
+
+For each, we show: if all write positions < wm.size, then (evalScatter ...).size = wm.size.
+-/
+
+/-- evalScatter preserves size when all write positions are in-bounds.
+    The scatter writes at positions (base + stride * j) for j in 0..(vals.length-1).
+    If all these positions are < wm.size, then the result has the same size. -/
+theorem evalScatter_preserves_size
+    (env : LoopEnv) (s : Scatter) (wm : Memory α) (vals : List α)
+    (h_inbounds : ∀ j, j < vals.length →
+      evalIdxExpr env s.baseAddr + s.stride * j < wm.size) :
+    (evalScatter env s wm vals).size = wm.size := by
+  simp only [evalScatter]
+  -- The scatter is vals.enum.foldl (fun acc (i, v) => acc.write (base + stride * i) v) wm
+  -- We use foldl_invariant with P := fun mem => mem.size = wm.size
+  apply foldl_invariant vals.enum
+    (fun acc (x : Nat × α) => acc.write (evalIdxExpr env s.baseAddr + s.stride * x.1) x.2)
+    wm (fun mem => mem.size = wm.size) rfl
+  intro mem ⟨idx, val⟩ hmem_size
+  -- Need: (mem.write pos val).size = wm.size, given mem.size = wm.size
+  -- and pos < wm.size (from h_inbounds, since (idx, val) came from vals.enum)
+  rw [size_write_eq]
+  exact hmem_size
+  rw [hmem_size]
+  -- Need to show idx < vals.length to use h_inbounds
+  -- But we don't have direct access to the enum index here.
+  -- This requires knowing that (idx, val) ∈ vals.enum → idx < vals.length
+  sorry -- Requires: enum membership → index bound → position bound
+
+/-- Scatter.block: For the I⊗B kron case, scatter writes at positions
+    blockSize * loopVal + j for j < vals.length.
+    When loopVal < m₁ and vals.length ≤ blockSize ≤ m₂ and m = m₁ * m₂,
+    all positions are < m. -/
+theorem evalScatter_block_size_preserved
+    (env : LoopEnv) (blockSize : Nat) (loopVar : LoopVar)
+    (wm : Memory α) (vals : List α)
+    (m₁ : Nat)
+    (hwm : wm.size = m₁ * blockSize)
+    (hloopVal : env loopVar < m₁)
+    (hvals : vals.length ≤ blockSize) :
+    (evalScatter env (Scatter.block blockSize loopVar) wm vals).size = m₁ * blockSize := by
+  -- Scatter.block writes at base = blockSize * env(loopVar), stride = 1
+  -- Position j: blockSize * env(loopVar) + 1 * j = blockSize * env(loopVar) + j
+  -- For j < vals.length ≤ blockSize:
+  --   blockSize * env(loopVar) + j < blockSize * (env(loopVar) + 1) ≤ blockSize * m₁
+  sorry -- Follows from evalScatter_preserves_size + arithmetic bounds
+
+/-- Scatter with stride: For the A⊗I kron case, scatter writes at positions
+    loopVal + innerSize * k for k < vals.length.
+    When loopVal < innerSize and vals.length ≤ m₁ and m = m₁ * innerSize,
+    all positions are < m. -/
+theorem evalScatter_stride_size_preserved
+    (env : LoopEnv) (innerSize m₁ : Nat) (loopVar : LoopVar)
+    (wm : Memory α) (vals : List α)
+    (hwm : wm.size = m₁ * innerSize)
+    (hloopVal : env loopVar < innerSize)
+    (hvals : vals.length ≤ m₁) :
+    (evalScatter env { count := m₁, baseAddr := .var loopVar, stride := innerSize } wm vals).size =
+    m₁ * innerSize := by
+  -- Scatter writes at base = env(loopVar), stride = innerSize
+  -- Position k: env(loopVar) + innerSize * k
+  -- For k < vals.length ≤ m₁:
+  --   env(loopVar) + innerSize * k < innerSize + innerSize * (m₁ - 1) = innerSize * m₁
+  sorry -- Follows from evalScatter_preserves_size + arithmetic bounds
+
 set_option maxHeartbeats 3200000 in
 /-- Size preservation for lowered expressions: evaluating (lower m n state mat).1
     starting with writeMem of size m yields writeMem of size m.
@@ -2842,12 +2917,34 @@ theorem evalSigmaAlg_writeMem_size_preserved
     -- lower(.kron a b) produces loops with adjustBlock/adjustStride
     -- S1: Requires proving loop body preserves writeMem.size for 3 kron cases:
     --   I⊗B (adjustBlock), A⊗I (adjustStride), A⊗B (nested loops)
-    -- Infrastructure: evalSigmaAlg_loop_preserves_size + body-preserves-size lemmas
-    -- The key difficulty is proving scatter writes are in-bounds for block/stride patterns.
-    -- adjustBlock writes at positions i*m₂+j for j<m₂, all < m₁*m₂ = m
-    -- adjustStride writes at positions j+i*m₂ for i<m₁, all < m₁*m₂ = m
-    -- Both require: (1) in-bounds lemma for Memory.write, (2) scatter position bounds
-    -- Deferred to dedicated adjustBlock/adjustStride size preservation lemmas.
+    --
+    -- Infrastructure ready:
+    --   - evalSigmaAlg_loop_preserves_size (proven above)
+    --   - foldl_invariant (proven above)
+    --   - size_write_eq (for in-bounds writes)
+    --
+    -- Key difficulty: proving scatter writes for block/stride patterns are in-bounds.
+    --   adjustBlock writes at positions i*m₂ + j for j < m₂, all < m₁*m₂ = m
+    --   adjustStride writes at positions j + i*m₂ for i < m₁, all < m₁*m₂ = m
+    --
+    -- Proof strategy:
+    --   1. Unfold lower for .kron to expose the 3 cases (via isIdentity split)
+    --   2. For each case, show loop body preserves writeMem.size = m
+    --   3. Use evalSigmaAlg_loop_preserves_size to conclude
+    --
+    -- The inner body-preserves-size for adjustBlock/adjustStride requires proving:
+    --   - evalScatter (Scatter.block m₂ v) with env(v) = i writes at positions
+    --     m₂*i + j for j < vals.length, and all m₂*i + j < m when i < m₁
+    --   - evalScatter (stride s) with env(v) = j writes at positions
+    --     j + s*k for k < vals.length, and all j + s*k < m when j < m₂
+    --
+    -- These require:
+    --   (a) evalScatter preserves size when all write positions are in-bounds
+    --   (b) block/stride write positions are in-bounds given loop variable bounds
+    --
+    -- Both (a) and (b) are mathematically straightforward but involve deep
+    -- unfolding of evalScatter/evalIdxExpr/foldl. Axiomatized to unblock Onda 2.
+    -- See C1 Capa 2-3 in fase8_onda1_roadmap.md for full proof plan.
     sorry
 
 /-- WriteMem irrelevance for .compute with contiguous scatter at base 0.

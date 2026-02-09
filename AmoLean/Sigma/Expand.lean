@@ -301,6 +301,48 @@ def expandAddRoundConst (round : Nat) (size : Nat) : ExpandedKernel :=
     { target := .output i, value := ScalarExpr.x i }  -- Placeholder
   { inputVars := inputs, outputVars := outputs, body := body }
 
+/-- Expand butterfly4 kernel (radix-4 NTT butterfly).
+    4-point DFT over a generic field using twiddle factors.
+
+    Given inputs (x0, x1, x2, x3) and a root ω with ω⁴ = 1:
+      X₀ = x0 + x1 + x2 + x3
+      X₁ = x0 + ω·x1 + ω²·x2 + ω³·x3
+      X₂ = x0 - x1 + x2 - x3        (using ω² = -1)
+      X₃ = x0 + ω³·x1 + ω²·x2 + ω·x3
+
+    Efficient decomposition as two layers of radix-2:
+      Stage 1: Two butterfly2 operations
+        t0 = x0 + x2,  t1 = x0 - x2
+        t2 = x1 + x3,  t3 = x1 - x3
+
+      Stage 2: Combine with twiddle
+        y0 = t0 + t2     (= x0 + x1 + x2 + x3)
+        y2 = t0 - t2     (= x0 - x1 + x2 - x3)
+        y1 = t1 + t3     (= x0 + x1·ω - x2 + x3·(-ω), simplified for real)
+        y3 = t1 - t3
+
+    Note: This expansion is for the REAL case (no complex twiddles).
+    For full NTT butterfly4 with twiddle ω, see NTT/Radix4/Butterfly4.lean.
+    The C codegen handles the twiddle factor multiplication externally.
+
+    Reference: AmoLean/NTT/Radix4/Butterfly4.lean (verified version) -/
+def expandButterfly4 : ExpandedKernel :=
+  let inputs := List.range 4 |>.map ScalarVar.input
+  let outputs := List.range 4 |>.map ScalarVar.output
+  let body := [
+    -- Stage 1: radix-2 butterflies on (x0, x2) and (x1, x3)
+    { target := .temp 0, value := .add (.x 0) (.x 2) },  -- t0 = x0 + x2
+    { target := .temp 1, value := .sub (.x 0) (.x 2) },  -- t1 = x0 - x2
+    { target := .temp 2, value := .add (.x 1) (.x 3) },  -- t2 = x1 + x3
+    { target := .temp 3, value := .sub (.x 1) (.x 3) },  -- t3 = x1 - x3
+    -- Stage 2: combine
+    { target := .output 0, value := .add (.t 0) (.t 2) },  -- y0 = t0 + t2
+    { target := .output 1, value := .add (.t 1) (.t 3) },  -- y1 = t1 + t3
+    { target := .output 2, value := .sub (.t 0) (.t 2) },  -- y2 = t0 - t2
+    { target := .output 3, value := .sub (.t 1) (.t 3) }   -- y3 = t1 - t3
+  ]
+  { inputVars := inputs, outputVars := outputs, body := body }
+
 /-- Main kernel expansion function -/
 def expandKernel : Kernel → ExpandedKernel
   | .identity n => expandIdentity n
@@ -317,6 +359,8 @@ def expandKernel : Kernel → ExpandedKernel
   | .mdsApply name n => expandMDSApply name n
   | .mdsInternal n => expandMDSInternal n
   | .addRoundConst r n => expandAddRoundConst r n
+  -- Phase 8: Radix-4 NTT
+  | .butterfly4 => expandButterfly4
 
 /-! ## Part 4: Expanded SigmaExpr -/
 

@@ -221,6 +221,7 @@ def evalKernel (k : Kernel) (input : List Float) : List Float :=
   | .mdsApply _ _ => panic! "evalKernel: mdsApply not yet implemented"
   | .mdsInternal _ => panic! "evalKernel: mdsInternal not yet implemented"
   | .addRoundConst _ _ => panic! "evalKernel: addRoundConst not yet implemented"
+  | .butterfly4 => evalDFT4Kernel input
 
 /-! ## Part 6: Main Sigma Evaluator
 

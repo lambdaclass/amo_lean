@@ -130,6 +130,8 @@ inductive Kernel where
   | mdsApply : String → Nat → Kernel       -- MDS matrix multiplication: name, size
   | mdsInternal : Nat → Kernel             -- Poseidon2 internal MDS: size
   | addRoundConst : Nat → Nat → Kernel     -- Add round constants: round, size
+  -- Phase 8: Radix-4 NTT
+  | butterfly4 : Kernel                    -- Radix-4 butterfly (4-point DFT with ω)
   deriving Repr, BEq, Inhabited
 
 namespace Kernel
@@ -146,6 +148,7 @@ def inputSize : Kernel → Nat
   | mdsApply _ n => n
   | mdsInternal n => n
   | addRoundConst _ n => n
+  | butterfly4 => 4
 
 def toString : Kernel → String
   | identity n => s!"I_{n}"
@@ -159,6 +162,7 @@ def toString : Kernel → String
   | mdsApply name n => s!"MDS_{name}({n})"
   | mdsInternal n => s!"MDS_Internal({n})"
   | addRoundConst r n => s!"AddRC(round={r}, size={n})"
+  | butterfly4 => "Butterfly4"
 
 instance : ToString Kernel := ⟨Kernel.toString⟩
 

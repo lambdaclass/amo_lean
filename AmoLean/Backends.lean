@@ -13,6 +13,9 @@
 import AmoLean.CodeGen
 import AmoLean.Sigma.CodeGen
 
+-- Rust backend (Fase 8: External Adoption)
+import AmoLean.Backends.Rust
+
 -- Future backends will be imported here:
 -- import AmoLean.Backends.C_AVX512
 -- import AmoLean.Backends.CUDA

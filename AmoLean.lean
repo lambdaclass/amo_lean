@@ -55,6 +55,9 @@ import AmoLean.Verification.Poseidon_Semantics
 -- Sigma Module: SIMD code generation with Matrix/Perm support
 import AmoLean.Sigma.Basic
 
+-- Backends: Code generators for C, Rust, CUDA, AVX512
+import AmoLean.Backends
+
 -- NTT Module: Re-enabled after fixing Butterfly.lean and related files
 import AmoLean.NTT
 

@@ -283,6 +283,24 @@ def kernelToC (state : CodeGenState) (kernel : Kernel) (gather : Gather) (scatte
     s!"{pad}// Add round constants (round={round}, size={size})
 {pad}add_round_const_{round}_{size}(&in[{gatherAddr}], &out[{scatterAddr}], round_constants);"
 
+  -- .butterfly4: Radix-4 butterfly (4-point DFT)
+  | .butterfly4 =>
+    let i0 := gatherAddr
+    let o0 := scatterAddr
+    let lb := "{"
+    let rb := "}"
+    s!"{pad}// Radix-4 butterfly (4-point DFT)
+{pad}{lb}
+{pad}  double t0 = in[{i0}] + in[{i0} + 2];
+{pad}  double t1 = in[{i0}] - in[{i0} + 2];
+{pad}  double t2 = in[{i0} + 1] + in[{i0} + 3];
+{pad}  double t3 = in[{i0} + 1] - in[{i0} + 3];
+{pad}  out[{o0}]     = t0 + t2;
+{pad}  out[{o0} + 1] = t1 + t3;
+{pad}  out[{o0} + 2] = t0 - t2;
+{pad}  out[{o0} + 3] = t1 - t3;
+{pad}{rb}"
+
 /-! ## Part 8: CryptoSigma Code Generation -/
 
 /-- Generate C code from CryptoSigma -/

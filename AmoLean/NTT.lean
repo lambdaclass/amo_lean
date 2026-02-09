@@ -22,6 +22,7 @@
 import AmoLean.NTT.Field
 import AmoLean.NTT.RootsOfUnity
 import AmoLean.NTT.Goldilocks
+import AmoLean.NTT.BabyBear
 import AmoLean.NTT.ListUtils
 import AmoLean.NTT.Spec
 import AmoLean.NTT.Properties
