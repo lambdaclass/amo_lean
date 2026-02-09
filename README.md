@@ -26,11 +26,11 @@ Mathematical Spec (Lean 4)
         |
         v
   E-Graph Optimization Engine
-  (equality saturation with 19/20 verified rewrite rules)
+  (equality saturation optimization strategy)
         |
         v
   Algebraic Semantics (Sigma-SPL IR)
-  (verified lowering: 18/19 matrix operations proven correct)
+  (verified lowering for matrix operations)
         |
         v
   Optimized C / SIMD Code
@@ -39,7 +39,7 @@ Mathematical Spec (Lean 4)
 
 ### Formal Optimization Strategy
 
-AMO-Lean uses **equality saturation** via e-graphs to find optimal equivalent forms of mathematical expressions. Unlike hand-tuned optimizers, every rewrite rule in our e-graph is a formally proven theorem in Lean 4. The process:
+AMO-Lean uses **equality saturation** via e-graphs to find optimal formal equivalent forms of mathematical expressions. Unlike hand-tuned optimizers, every rewrite rule in our e-graph is a formally proven theorem in Lean 4. The process:
 
 1. **Encode** the mathematical specification as an e-graph
 2. **Saturate** by applying all verified rewrite rules until a fixed point
@@ -66,7 +66,7 @@ This architecture is **portable and modular**: adding a new primitive means writ
 | N=4096 | 109.5 us | 65.9 us | 1.66x |
 | N=65536 | 2.50 ms | 1.48 ms | 1.69x |
 
-**Average**: 1.65x slower than Plonky3 (60% throughput) with **full formal verification**.
+**Average**: 1.65x slower than Plonky3 (60% throughput) with **full formal verification**. Aiming at 85% throughput in upcoming release, with full formal verification.
 
 <details>
 <summary>Full benchmark results (all sizes)</summary>
