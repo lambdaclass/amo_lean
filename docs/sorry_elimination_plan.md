@@ -3,8 +3,8 @@
 **Proyecto**: amo-lean
 **Archivo**: `AmoLean/Verification/AlgebraicSemantics.lean`
 **Fecha de creacion**: 2026-02-07
-**Ultima actualizacion**: 2026-02-08
-**Estado**: Fase 7B Correccion 8 - Eliminacion: 6 → 3 sorry statements (all kron-related)
+**Ultima actualizacion**: 2026-02-09
+**Estado**: Fase 8 Onda 1 C1 Correccion 1 - Eliminacion: 6 → 3 sorry statements, 5 → 2 sorry warnings
 
 ---
 
@@ -12,16 +12,42 @@
 
 | Metrica | Valor |
 |---------|-------|
-| **Sorries actuales** | **3** (de 6 pre-Corrección 8, de 104 originales) |
+| **Sorry statements** | **3** (de 6 pre-Corrección 8, de 104 originales) |
+| **Sorry warnings (Lean build)** | **2** (de 5 pre-Corrección 9) |
+| Sorries eliminados (C1 Corrección 1) | 3 evalScatter sorry (preserves_size, block, stride) |
 | Sorries eliminados (Corrección 8) | 3 (DD-ADD ×2 + compose WF termination) |
 | lowering_algebraic_correct | 18/19 casos PROVEN, 1 sorry (kron) |
 | writeMem_size_preserved | 18/19 casos PROVEN, 1 sorry (kron loop invariant) |
 | writeMem_irrelevant | 18/19 base cases PROVEN, 1 sorry (kron loop) |
 | evalSigmaAlg_lower_state_irrelevant | COMPLETO (todos los casos) |
+| evalScatter infrastructure | foldl_invariant_mem + evalScatter_preserves_size + block/stride PROVEN |
 | Loop invariant infrastructure | foldl_invariant + evalSigmaAlg_loop_preserves_size PROVEN |
 | Build status | Pre-existing errors only (eq_of_toList_eq fwd ref, kron identifier names) |
 
 ## Logros Principales
+
+### Fase 8 Onda 1 C1 Corrección 1: Cerrar 3 evalScatter sorry
+
+**foldl_invariant_mem (NUEVO)**:
+- Variante de `foldl_invariant` que pasa membership proof (`a ∈ l`) al step function
+- Necesario cuando la preservación requiere info del elemento (e.g., index bounds de enum)
+- Proof por inducción con `List.mem_cons_self`/`List.mem_cons_of_mem`
+
+**evalScatter_preserves_size (CERRADO)**:
+- Reescrito usando `foldl_invariant_mem` en lugar de `foldl_invariant`
+- `List.fst_lt_of_mem_enum` extrae `idx < vals.length` de la membership en `vals.enum`
+- Con eso, `h_inbounds` da la cota para `Memory.size_write_eq`
+
+**evalScatter_block_size_preserved (CERRADO)**:
+- Delega a `evalScatter_preserves_size` via `rw [← hwm]`
+- Arithmetic bound via `calc`: `blockSize * env loopVar + j < m₁ * blockSize`
+- Usa `Nat.mul_le_mul_left` + `omega` para la cota
+
+**evalScatter_stride_size_preserved (CERRADO)**:
+- Misma delegación pattern
+- Arithmetic bound: `env loopVar + innerSize * j < m₁ * innerSize`
+
+**Impacto**: sorry warnings en build bajan de 5 → 2. Los 2 restantes son kron-related (líneas ~3006, ~3588).
 
 ### Corrección 7: Cerrar sorries de infraestructura
 
@@ -145,20 +171,29 @@ El teorema requiere probar que `lower` produce expresiones con `fv` bounded (low
 
 ---
 
-## Estado Actual de Sorries (3 sorry statements — all kron-related)
+## Estado Actual de Sorries (3 sorry statements, 2 sorry warnings — all kron-related)
 
-### Kron Loop Invariant (2)
+### Infraestructura evalScatter: COMPLETADA
+
+| Teorema | Estado | Commit |
+|---------|--------|--------|
+| foldl_invariant_mem | PROVEN | 071d2cf |
+| evalScatter_preserves_size | PROVEN | 071d2cf |
+| evalScatter_block_size_preserved | PROVEN | 071d2cf |
+| evalScatter_stride_size_preserved | PROVEN | 071d2cf |
+
+### Kron Loop Invariant (2 sorry statements)
 
 | Teorema | Linea | Descripcion | Bloqueador |
 |---------|-------|-------------|------------|
-| evalSigmaAlg_writeMem_size_preserved (kron) | ~2851 | Loop con adjustBlock/adjustStride: invariante de tamaño de memoria. Loop infrastructure (foldl_invariant + evalSigmaAlg_loop_preserves_size) PROVEN. Falta: probar body preserves size (scatter in-bounds). | adjustBlock/adjustStride body size preservation |
-| evalSigmaAlg_writeMem_irrelevant (kron) | ~2984 | Loop body produce mismo writeMem independiente del writeMem inicial. Same infrastructure as S1. Falta: body writeMem determinism. | adjustBlock/adjustStride body determinism |
+| evalSigmaAlg_writeMem_size_preserved (kron) | ~2974 | Loop con adjustBlock/adjustStride: invariante de tamaño de memoria. Infrastructure COMPLETA: foldl_invariant, evalSigmaAlg_loop_preserves_size, evalScatter_preserves_size, block/stride all PROVEN. Falta: conectar evalScatter_{block,stride}_size_preserved con el body del loop kron. | adjustBlock/adjustStride body → evalScatter connection |
+| evalSigmaAlg_writeMem_irrelevant (kron) | ~3107 | Loop body produce mismo writeMem independiente del writeMem inicial. Same infrastructure as S1. Falta: body writeMem determinism. | adjustBlock/adjustStride body determinism |
 
-### Kron Core Correctness (1)
+### Kron Core Correctness (1 sorry statement)
 
 | Teorema | Linea | Descripcion | Bloqueador |
 |---------|-------|-------------|------------|
-| lowering_kron_axiom | ~3472 | Axioma central de kron. Requiere: adjustBlock/adjustStride semantics + S1 dependency + non-interference. See detailed blocker list in sorry comment. | S1 + 6 specific lemmas |
+| lowering_kron_axiom | ~3595 | Axioma central de kron. Requiere: adjustBlock/adjustStride semantics + S1 dependency + non-interference. See detailed blocker list in sorry comment. | S1 + 6 specific lemmas |
 
 ### Eliminados en Corrección 8 (3 sorry statements)
 
@@ -254,6 +289,14 @@ Esto se sigue de lower_loopVars_bounded + un lema que diga fv ⊆ loopVarsOf par
 | Correccion 6 | 16 | 10 | **-6** (sorry statements, excl. comments) |
 | Correccion 7 | 10 | 6 | **-4** |
 | **Correccion 8** | **6** | **3** | **-3** |
+| **C1 Corrección 1** | **5 warnings** | **2 warnings** | **-3 sorry warnings** |
+
+**Nota C1 Corrección 1 (Fase 8 Onda 1)**: Eliminación de 3 evalScatter sorry:
+1. `foldl_invariant_mem`: nuevo lemma auxiliar (membership-aware foldl invariant)
+2. `evalScatter_preserves_size`: reescrito con `foldl_invariant_mem` + `List.fst_lt_of_mem_enum`
+3. `evalScatter_block_size_preserved`: delegación + calc arithmetic
+4. `evalScatter_stride_size_preserved`: delegación + calc arithmetic
+5. Commit: 071d2cf
 
 **Nota Corrección 8**: Eliminación de 3 sorry statements + 3 pre-existing omega fixes + 2 WF fixes:
 1. DD-ADD (S2): IsWellFormedNTT .add → False, writeMem_irrelevant(add) closed via hwf.elim
@@ -262,8 +305,8 @@ Esto se sigue de lower_loopVars_bounded + un lema que diga fv ⊆ loopVarsOf par
 4. Loop infrastructure: foldl_invariant + evalSigmaAlg_loop_preserves_size (new proven theorems)
 5. Pre-existing fixes: 3 omega failures (smul/elemwise/partialElemwise), 1 evalMatExprAlg_length add case
 
-**Remaining 3 sorries** are all kron-related and blocked by scatter in-bounds proofs:
-- S1: writeMem_size_preserved kron — needs adjustBlock/adjustStride body size preservation
+**Remaining 3 sorries** are all kron-related. Scatter in-bounds infrastructure now COMPLETE:
+- S1: writeMem_size_preserved kron — evalScatter_{block,stride}_size_preserved PROVEN. Falta: conectar con loop body (adjustBlock/adjustStride → evalScatter)
 - S3: writeMem_irrelevant kron — needs adjustBlock/adjustStride body determinism
 - S4: lowering_kron_axiom — needs S1 + full adjustBlock/adjustStride correctness
 
@@ -277,13 +320,17 @@ Esto se sigue de lower_loopVars_bounded + un lema que diga fv ⊆ loopVarsOf par
 
 ## Proximos Pasos Recomendados
 
-### Fase 2 Corrección 8: Diseño de .add
-1. **writeMem_irrelevant (add)** + **lowering_algebraic_correct (.add)** — Ambos son el mismo bug: `.par` = sequential override ≠ suma puntual. Requiere nuevo constructor `.pointwiseAdd` en SigmaExpr o rediseño de `.par`. Baja urgencia: `.add` no se usa en NTT/Poseidon pipelines.
+### Prioridad 1: Conectar evalScatter con loop body kron
+1. **writeMem_size_preserved (kron)** — Toda la infraestructura bottom-up esta PROVEN: foldl_invariant_mem → evalScatter_preserves_size → evalScatter_{block,stride}_size_preserved → evalSigmaAlg_loop_preserves_size. Falta: probar que el body del loop kron (adjustBlock/adjustStride + compute) preserva size, conectando con evalScatter_{block,stride}_size_preserved.
 
-### Fase 3: Infraestructura de Loop Invariants
-2. **writeMem_size_preserved (kron)** — Requiere `evalSigmaAlg_loop_preserves_size`: si el body preserva size, el loop también. Luego probar adjustBlock/adjustStride preservan size.
-3. **writeMem_irrelevant (kron)** — Requiere adjustBlock/adjustStride semantics: probar que scatter patterns sobreescriben misma región.
-4. **lowering_kron_axiom** — Requiere (1) adjustBlock semantics, (2) adjustStride semantics, (3) non-interference entre iteraciones. Depende de S2 y S3.
+### Prioridad 2: writeMem determinism
+2. **writeMem_irrelevant (kron)** — Requiere adjustBlock/adjustStride semantics: probar que scatter patterns sobreescriben misma región.
+
+### Prioridad 3: Kron axiom
+3. **lowering_kron_axiom** — Requiere (1) adjustBlock semantics, (2) adjustStride semantics, (3) non-interference entre iteraciones. Depende de S1 y S3.
+
+### Baja urgencia: .add design
+4. **writeMem_irrelevant (add)** + **lowering_algebraic_correct (.add)** — Ambos son el mismo bug: `.par` = sequential override ≠ suma puntual. Requiere nuevo constructor `.pointwiseAdd` en SigmaExpr o rediseño de `.par`. Baja urgencia: `.add` no se usa en NTT/Poseidon pipelines.
 
 ### Lean 4 Bug
 5. **decreasing_by compose** — Lean 4 Issue #2893: WF encoding de recursión en closures. Workaround con `sorry` en `decreasing_by` es aceptable mientras se resuelve upstream.
@@ -385,5 +432,19 @@ theorem compute_writeMem_irrelevant (ω : α) (k : Nat) (g : Gather) (s : Scatte
 
 ---
 
+## Lecciones Aprendidas (Fase 8 Onda 1 C1 Corrección 1)
+
+**L-148**: `foldl_invariant` sin membership es insuficiente para size preservation. Cuando `P (f b a)` depende de propiedades de `a` (e.g., `a ∈ l`), se necesita `foldl_invariant_mem` con `h_step : ∀ b a, a ∈ l → P b → P (f b a)`.
+
+**L-149**: `List.fst_lt_of_mem_enum` es la clave para conectar enum membership con index bounds. Disponible en Lean 4 core (`Init.Data.List.Nat.Range`), no requiere import extra.
+
+**L-150**: `dsimp only` reduce projections `(idx, val).1` → `idx` que `simp only` puede no tocar. Necesario después de pattern-matching `intro mem ⟨idx, val⟩` cuando el goal retiene projections.
+
+**L-151**: `Memory.size_write_eq` necesita `i < mem.size` (no `i < wm.size`). Usar `hmem_size ▸ h_inbounds` para transportar la cota al tamaño actual de `mem`.
+
+**L-152**: Patrón delegación para scatter variants: `rw [← hwm]; apply evalScatter_preserves_size; intro j hj; simp [Scatter.X, evalIdxExpr]; rw [hwm]; calc ...`. Reutilizable para futuros scatter patterns.
+
+---
+
 *Documentacion creada: 2026-02-07*
-*Ultima actualizacion: 2026-02-08 (Fase 2 Correccion 7 - Eliminacion: 10 → 6 sorry statements)*
+*Ultima actualizacion: 2026-02-09 (Fase 8 Onda 1 C1 Correccion 1 - 3 evalScatter sorry cerrados, 5 → 2 sorry warnings)*
