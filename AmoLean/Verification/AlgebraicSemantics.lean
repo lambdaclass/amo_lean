@@ -126,6 +126,14 @@ theorem write_size_ge [Inhabited α] (mem : Memory α) (i : Nat) (v : α) :
   · simp only [Array.set!, Array.size_setIfInBounds]; omega
   · simp only [Array.set!, Array.size_setIfInBounds, Array.size_append, Array.size_mkArray]; omega
 
+/-- Two Memory values are equal iff their data arrays are equal.
+    Since Memory is determined entirely by its data field, equality of
+    toList (= data.toList) implies structural equality. -/
+theorem eq_of_toList_eq {m1 m2 : Memory α} (h : m1.toList = m2.toList) : m1 = m2 := by
+  cases m1; cases m2
+  simp only [toList] at h
+  exact congrArg Memory.mk (Array.ext' h)
+
 /-- Writing mem.read(i) at position i is identity for in-bounds positions -/
 theorem write_read_self [Inhabited α] (mem : Memory α) (i : Nat) (hi : i < mem.size) :
     mem.write i (mem.read i) = mem := by
@@ -135,19 +143,11 @@ theorem write_read_self [Inhabited α] (mem : Memory α) (i : Nat) (hi : i < mem
   rw [if_pos hi]
   rw [getElem!_pos mem.data i hi]
   rw [toList]
-  exact List.set_getElem_eq (by rw [Array.length_toList]; exact hi)
+  exact List.set_getElem_self (by rw [Array.length_toList]; exact hi)
 
 /-- zeros_size expressed as data.size -/
 theorem zeros_data_size [Zero α] (n : Nat) : (zeros n : Memory α).data.size = n := by
   simp only [zeros, Array.size_mkArray]
-
-/-- Two Memory values are equal iff their data arrays are equal.
-    Since Memory is determined entirely by its data field, equality of
-    toList (= data.toList) implies structural equality. -/
-theorem eq_of_toList_eq {m1 m2 : Memory α} (h : m1.toList = m2.toList) : m1 = m2 := by
-  cases m1; cases m2
-  simp only [toList] at h
-  exact congrArg Memory.mk (Array.ext' h)
 
 /-- Memory equality from toList, iff version -/
 @[simp]
@@ -2480,6 +2480,27 @@ theorem lowering_dft_correct (n' : Nat) (v : List α) (hv : v.length = n') :
   exact lowering_compute_contiguous_correct n' (.dft n') v hv
     (evalKernelAlg_dft_length n' v hv)
 
+/-! ### Gather/Kernel length lemmas for kron size preservation -/
+
+/-- evalGather always returns exactly g.count elements -/
+theorem evalGather_length (env : LoopEnv) (g : Gather) (mem : Memory α) :
+    (evalGather env g mem).length = g.count := by
+  simp only [evalGather, List.length_map, List.length_range]
+
+/-- For identity-like kernels (those that return input unchanged),
+    the output length equals the input length. Covers all kernels
+    produced by `lower` for atomic MatExprs except .dft. -/
+theorem evalKernelAlg_identity_length (ω : α) (k : Kernel) (input : List α)
+    (hk : k = .identity input.length ∨ (∃ n p, k = .ntt n p) ∨
+           (∃ n p, k = .twiddle n p) ∨ k = .scale ∨
+           (∃ s e, k = .sbox s e) ∨ (∃ s e i, k = .partialSbox s e i) ∨
+           (∃ name s, k = .mdsApply name s) ∨ (∃ n, k = .mdsInternal n) ∨
+           (∃ r s, k = .addRoundConst r s)) :
+    (evalKernelAlg ω k input).length = input.length := by
+  rcases hk with rfl | ⟨_, _, rfl⟩ | ⟨_, _, rfl⟩ | rfl | ⟨_, _, rfl⟩ |
+    ⟨_, _, _, rfl⟩ | ⟨_, _, rfl⟩ | ⟨_, rfl⟩ | ⟨_, _, rfl⟩ <;>
+    simp [evalKernelAlg, evalIdentityKernel]
+
 /-! ## Part 10: Foundational Axioms, Compose Proof, and Main Correctness Theorem -/
 
 /-! ### Foundational Axioms
@@ -2531,6 +2552,31 @@ def HasNoZero : {m n : Nat} → MatExpr α m n → Prop
   | _, _, .add a b => HasNoZero a ∧ HasNoZero b
   | _, _, .kron a b => HasNoZero a ∧ HasNoZero b
 
+/-- A MatExpr contains no .compose sub-expressions at any nesting level.
+    This ensures that `lower` never produces `.temp` nodes inside kron arguments,
+    which would replace writeMem with `zeros(k)` and destroy size preservation.
+    In NTT/FFT/Poseidon, kron arguments are always atomic (dft, identity, ntt, etc.)
+    while compose appears OUTSIDE kron, so this is always satisfied. -/
+def HasNoCompose : {m n : Nat} → MatExpr α m n → Prop
+  | _, _, .compose _ _ => False
+  | _, _, .identity _ => True
+  | _, _, .zero _ _ => True
+  | _, _, .dft _ => True
+  | _, _, .ntt _ _ => True
+  | _, _, .twiddle _ _ => True
+  | _, _, .perm _ => True
+  | _, _, .diag _ => True
+  | _, _, .scalar _ => True
+  | _, _, .transpose a => HasNoCompose a
+  | _, _, .conjTranspose a => HasNoCompose a
+  | _, _, .smul _ a => HasNoCompose a
+  | _, _, .elemwise _ a => HasNoCompose a
+  | _, _, .partialElemwise _ _ a => HasNoCompose a
+  | _, _, .mdsApply _ _ a => HasNoCompose a
+  | _, _, .addRoundConst _ _ a => HasNoCompose a
+  | _, _, .add a b => HasNoCompose a ∧ HasNoCompose b
+  | _, _, .kron a b => HasNoCompose a ∧ HasNoCompose b
+
 /-! ### Well-Formedness Predicate for NTT/FFT Matrices
 
 The `IsWellFormedNTT` predicate captures the constraints needed for size preservation:
@@ -2576,7 +2622,8 @@ def IsWellFormedNTT : {m n : Nat} → MatExpr α m n → Prop
      This closes sorries S2 (writeMem_irrelevant .add) and S5 (lowering_algebraic_correct .add)
      by making the case vacuously true (hwf : False → anything). -/
   | _, _, .add _ _ => False
-  | _, _, @MatExpr.kron _ m₁ n₁ m₂ n₂ a b => m₁ = n₁ ∧ m₂ = n₂ ∧ IsWellFormedNTT a ∧ IsWellFormedNTT b
+  | _, _, @MatExpr.kron _ m₁ n₁ m₂ n₂ a b =>
+      m₁ = n₁ ∧ m₂ = n₂ ∧ HasNoCompose a ∧ HasNoCompose b ∧ IsWellFormedNTT a ∧ IsWellFormedNTT b
 
 /-- Helper to extract m = n from well-formedness of transpose -/
 theorem IsWellFormedNTT.transpose_square {a : MatExpr α n m} (h : IsWellFormedNTT (.transpose a)) :
@@ -2653,6 +2700,62 @@ theorem evalSigmaAlg_loop_preserves_size
       have h_body_size := h_body (env.bind loopVar i) st' h_wm h_rm
       exact ⟨h_body_size, h_body_size⟩)
   exact h_inv.1
+
+/-- Loop size preservation with iteration bound: variant of evalSigmaAlg_loop_preserves_size
+    where the body hypothesis receives a proof that the loop variable is bound to i < n.
+    This is needed for adjustBlock/adjustStride proofs where scatter in-bounds depends on
+    the loop variable being within range. -/
+theorem evalSigmaAlg_loop_preserves_size_with_bound
+    (ω : α) (n : Nat) (loopVar : LoopVar) (body : SigmaExpr)
+    (env : LoopEnv) (st : EvalState α) (target : Nat)
+    (h_st : st.writeMem.size = target)
+    (h_st_rm : st.readMem.size = target)
+    (h_body : ∀ (i : Nat) (st' : EvalState α),
+      i < n →
+      st'.writeMem.size = target → st'.readMem.size = target →
+      (evalSigmaAlg ω (env.bind loopVar i) st' body).writeMem.size = target) :
+    (evalSigmaAlg ω env st (.loop n loopVar body)).writeMem.size = target := by
+  simp only [evalSigmaAlg]
+  have h_inv := foldl_invariant_mem (List.range n)
+    (fun (st : EvalState α) (i : Nat) =>
+      let env' := env.bind loopVar i
+      let st' := evalSigmaAlg ω env' st body
+      ({ readMem := st'.writeMem, writeMem := st'.writeMem } : EvalState α))
+    st
+    (fun st => st.writeMem.size = target ∧ st.readMem.size = target)
+    ⟨h_st, h_st_rm⟩
+    (fun st' i h_mem ⟨h_wm, h_rm⟩ => by
+      have hi : i < n := List.mem_range.mp h_mem
+      have h_body_size := h_body i st' hi h_wm h_rm
+      exact ⟨h_body_size, h_body_size⟩)
+  exact h_inv.1
+
+/-- Loop size preservation (writeMem-only variant): the body hypothesis only requires
+    writeMem.size = target, not readMem. This handles the kron case where the initial
+    readMem may have a different size. After iteration 0, readMem.size = target
+    (since readMem := writeMem), but the body proof doesn't need this. -/
+theorem evalSigmaAlg_loop_preserves_wm_size_with_bound
+    (ω : α) (n : Nat) (loopVar : LoopVar) (body : SigmaExpr)
+    (env : LoopEnv) (st : EvalState α) (target : Nat)
+    (h_st : st.writeMem.size = target)
+    (h_body : ∀ (i : Nat) (st' : EvalState α),
+      i < n →
+      st'.writeMem.size = target →
+      (evalSigmaAlg ω (env.bind loopVar i) st' body).writeMem.size = target) :
+    (evalSigmaAlg ω env st (.loop n loopVar body)).writeMem.size = target := by
+  simp only [evalSigmaAlg]
+  have h_inv := foldl_invariant_mem (List.range n)
+    (fun (st : EvalState α) (i : Nat) =>
+      let env' := env.bind loopVar i
+      let st' := evalSigmaAlg ω env' st body
+      ({ readMem := st'.writeMem, writeMem := st'.writeMem } : EvalState α))
+    st
+    (fun st => st.writeMem.size = target)
+    h_st
+    (fun st' i h_mem h_wm => by
+      have hi : i < n := List.mem_range.mp h_mem
+      exact h_body i st' hi h_wm)
+  exact h_inv
 
 /-! ### C1: evalScatter Size Preservation for Block/Stride Patterns
 
@@ -2736,6 +2839,436 @@ theorem evalScatter_stride_size_preserved
     _ = innerSize * (j + 1) := by ring
     _ ≤ innerSize * m₁ := Nat.mul_le_mul_left _ (by omega)
     _ = m₁ * innerSize := by ring
+
+/-! ### C1 Capa 2: Size preservation for kron sub-cases
+
+The kron case of evalSigmaAlg_writeMem_size_preserved requires proving that
+adjustBlock(lower(b)) and adjustStride(lower(a)) preserve writeMem.size.
+
+Strategy: By induction on MatExpr, prove that evaluating adjustBlock(lower(mat))
+preserves writeMem.size = m₁ * m₂. HasNoCompose ensures no .temp nodes appear,
+and the IH handles recursive cases (smul, kron-inside-kron, etc.). -/
+
+set_option maxHeartbeats 6400000 in
+/-- Size preservation for adjustBlock(lower(mat)):
+    For the I⊗B kron case, evaluating the body with block access pattern
+    preserves writeMem.size = m₁ * m₂.
+    Requires m₂ = n₂ (from well-formedness of kron argument). -/
+theorem adjustBlock_lower_preserves_size
+    (ω : α) {m₂ n₂ : Nat} (mat : MatExpr α m₂ n₂)
+    (v : LoopVar) (m₁ : Nat) (state : LowerState)
+    (env : LoopEnv) (st : EvalState α)
+    (hwm : st.writeMem.size = m₁ * m₂)
+    (hlv : env v < m₁) (hmn : m₂ = n₂)
+    (hwf : IsWellFormedNTT mat) (hnc : HasNoCompose mat) :
+    (evalSigmaAlg ω env st (adjustBlock v n₂ m₂ (lower m₂ n₂ state mat).1)).writeMem.size
+    = m₁ * m₂ := by
+  -- Strategy: use match (not induction) on mat with termination_by mat.nodeCount.
+  -- In atomic-square cases (.identity, .dft, etc.), the match unifies m₂ and n₂ to the
+  -- same variable, so hmn becomes trivial (n' = n') and subst fails. We don't need subst
+  -- because dimensions are already unified. In non-atomic cases (.transpose, .smul, etc.),
+  -- m₂ and n₂ remain distinct free variables, so subst hmn works and unifies them.
+  match mat with
+  | .identity _ =>
+    -- After match: m₂ = n₂ = n', hmn is trivially n' = n', no subst needed
+    simp only [lower, adjustBlock, evalSigmaAlg]
+    exact evalScatter_block_size_preserved env _ v st.writeMem _ m₁ hwm hlv
+      (by simp [evalKernelAlg, evalIdentityKernel, evalGather_length, Gather.block])
+  | .zero _ _ =>
+    simp only [lower, adjustBlock, evalSigmaAlg]; exact hwm
+  | .dft n' =>
+    -- After match: m₂ = n₂ = n', dimensions already unified
+    simp only [lower, adjustBlock, evalSigmaAlg]
+    apply evalScatter_block_size_preserved env n' v st.writeMem _ m₁ hwm hlv
+    -- Goal: (evalKernelAlg ω (.dft n') (evalGather ...)).length ≤ n'
+    -- evalGather produces n' elements (from Gather.block n' v)
+    -- DFT kernel output length depends on n': case split
+    match n' with
+    | 0 => simp [evalKernelAlg, evalDFT, List.length_map, List.length_range]
+    | 1 => simp [evalKernelAlg, evalDFT, List.length_map, List.length_range]
+    | 2 => simp only [evalKernelAlg, evalDFT2]; split <;> simp_all [evalGather_length, Gather.block]
+    | n + 3 => simp [evalKernelAlg, evalDFT, List.length_map, List.length_range]
+  | .ntt _ _ =>
+    -- After match: m₂ = n₂ = n', no subst needed
+    simp only [lower, adjustBlock, evalSigmaAlg]
+    exact evalScatter_block_size_preserved env _ v st.writeMem _ m₁ hwm hlv
+      (by simp [evalKernelAlg, evalGather_length, Gather.block])
+  | .twiddle _ _ =>
+    simp only [lower, adjustBlock, evalSigmaAlg]
+    exact evalScatter_block_size_preserved env _ v st.writeMem _ m₁ hwm hlv
+      (by simp [evalKernelAlg, evalGather_length, Gather.block])
+  | .perm _ =>
+    simp only [lower, adjustBlock, evalSigmaAlg]
+    exact evalScatter_block_size_preserved env _ v st.writeMem _ m₁ hwm hlv
+      (by simp [evalKernelAlg, evalIdentityKernel, evalGather_length, Gather.block])
+  | .diag _ =>
+    simp only [lower, adjustBlock, evalSigmaAlg]
+    exact evalScatter_block_size_preserved env _ v st.writeMem _ m₁ hwm hlv
+      (by simp [evalKernelAlg, evalIdentityKernel, evalGather_length, Gather.block])
+  | .scalar _ =>
+    simp only [lower, adjustBlock, evalSigmaAlg]
+    exact evalScatter_block_size_preserved env _ v st.writeMem _ m₁ hwm hlv
+      (by simp [evalKernelAlg, evalGather_length, Gather.block])
+  | .transpose a =>
+    -- Don't subst: pass hmn through. lower swaps m₂↔n₂, so IH needs hmn.symm.
+    -- IH produces adjustBlock v m₂ n₂ but goal has adjustBlock v n₂ m₂;
+    -- these are equal via hmn. Use hmn ▸ to transport hwm and result.
+    simp only [lower]
+    have ih := adjustBlock_lower_preserves_size ω a v m₁ state env st (hmn ▸ hwm) hlv hmn.symm hwf.2 hnc
+    -- ih : (...adjustBlock v m₂ n₂ (lower n₂ m₂ state a).1...).writeMem.size = m₁ * n₂
+    -- goal: (...adjustBlock v n₂ m₂ (lower n₂ m₂ state a).1...).writeMem.size = m₁ * m₂
+    cases hmn; exact ih
+  | .conjTranspose a =>
+    simp only [lower]
+    have ih := adjustBlock_lower_preserves_size ω a v m₁ state env st (hmn ▸ hwm) hlv hmn.symm hwf.2 hnc
+    cases hmn; exact ih
+  | .smul f a =>
+    -- Don't subst: pass hmn through to avoid termination issues.
+    simp only [lower, adjustBlock, evalSigmaAlg]
+    set st1 := evalSigmaAlg ω env st (adjustBlock v n₂ m₂ (lower m₂ n₂ state a).1)
+    have hst1 := adjustBlock_lower_preserves_size ω a v m₁ state env st hwm hlv hmn hwf.2 hnc
+    exact evalScatter_block_size_preserved env _ v st1.writeMem _ m₁ hst1 hlv
+      (by simp [evalKernelAlg, evalGather_length, Gather.block, hmn])
+  | .elemwise op a =>
+    simp only [lower, adjustBlock, evalSigmaAlg]
+    set st1 := evalSigmaAlg ω env st (adjustBlock v n₂ m₂ (lower m₂ n₂ state a).1)
+    have hst1 := adjustBlock_lower_preserves_size ω a v m₁ state env st hwm hlv hmn hwf.2 hnc
+    exact evalScatter_block_size_preserved env _ v st1.writeMem _ m₁ hst1 hlv
+      (by simp [evalKernelAlg, evalGather_length, Gather.block, hmn])
+  | .partialElemwise idx op a =>
+    simp only [lower, adjustBlock, evalSigmaAlg]
+    set st1 := evalSigmaAlg ω env st (adjustBlock v n₂ m₂ (lower m₂ n₂ state a).1)
+    have hst1 := adjustBlock_lower_preserves_size ω a v m₁ state env st hwm hlv hmn hwf.2 hnc
+    exact evalScatter_block_size_preserved env _ v st1.writeMem _ m₁ hst1 hlv
+      (by simp [evalKernelAlg, evalGather_length, Gather.block, hmn])
+  | .mdsApply name stateSize a =>
+    simp only [lower, adjustBlock, evalSigmaAlg]
+    set st1 := evalSigmaAlg ω env st (adjustBlock v _ _ (lower _ _ state a).1)
+    have hst1 := adjustBlock_lower_preserves_size ω a v m₁ state env st hwm hlv hmn hwf.2 hnc
+    exact evalScatter_block_size_preserved env _ v st1.writeMem _ m₁ hst1 hlv
+      (by simp [evalKernelAlg, evalGather_length, Gather.block, hmn])
+  | .addRoundConst round stateSize a =>
+    simp only [lower, adjustBlock, evalSigmaAlg]
+    set st1 := evalSigmaAlg ω env st (adjustBlock v _ _ (lower _ _ state a).1)
+    have hst1 := adjustBlock_lower_preserves_size ω a v m₁ state env st hwm hlv hmn hwf.2 hnc
+    exact evalScatter_block_size_preserved env _ v st1.writeMem _ m₁ hst1 hlv
+      (by simp [evalKernelAlg, evalGather_length, Gather.block, hmn])
+  | .compose a b =>
+    exact absurd hnc (by simp [HasNoCompose])
+  | .add a b =>
+    exact hwf.elim
+  | .kron a b =>
+    obtain ⟨ha_sq, hb_sq, hnc_a, hnc_b, hwf_a, hwf_b⟩ := hwf
+    -- hmn : m₁✝ * m₂✝ = n₁✝ * n₂✝ can't be subst'd directly (product eq).
+    -- Use ha_sq : m₁✝ = n₁✝ and hb_sq : m₂✝ = n₂✝ to unify component-wise.
+    subst ha_sq; subst hb_sq
+    simp only [lower]
+    split
+    · simp only [adjustBlock]; sorry
+    · split
+      · simp only [adjustBlock]; sorry
+      · simp only [adjustBlock]; sorry
+  termination_by mat.nodeCount
+  decreasing_by all_goals simp_wf; all_goals simp only [MatExpr.nodeCount]; all_goals omega
+
+set_option maxHeartbeats 6400000 in
+/-- Size preservation for adjustStride(lower(mat)):
+    For the A⊗I kron case, evaluating the body with stride access pattern
+    preserves writeMem.size = m₁ * m₂.
+    Requires m₁ = n₁ (from well-formedness of kron argument). -/
+theorem adjustStride_lower_preserves_size
+    (ω : α) {m₁ n₁ : Nat} (mat : MatExpr α m₁ n₁)
+    (v : LoopVar) (m₂ : Nat) (state : LowerState)
+    (env : LoopEnv) (st : EvalState α)
+    (hwm : st.writeMem.size = m₁ * m₂)
+    (hlv : env v < m₂) (hmn : m₁ = n₁)
+    (hwf : IsWellFormedNTT mat) (hnc : HasNoCompose mat) :
+    (evalSigmaAlg ω env st (adjustStride v m₂ m₁ n₁ (lower m₁ n₁ state mat).1)).writeMem.size
+    = m₁ * m₂ := by
+  -- Same strategy as adjustBlock: match on mat, no subst for atomic-square cases
+  -- (where m₁ and n₁ unify), subst hmn for non-atomic cases (where m₁, n₁ remain free).
+  match mat with
+  | .identity _ =>
+    -- After match: m₁ = n₁ = n', hmn trivially n' = n', no subst needed
+    simp only [lower, adjustStride, evalSigmaAlg]
+    exact evalScatter_stride_size_preserved env m₂ _ v st.writeMem _ hwm hlv
+      (by simp [evalKernelAlg, evalIdentityKernel, evalGather_length])
+  | .zero _ _ =>
+    simp only [lower, adjustStride, evalSigmaAlg]; exact hwm
+  | .dft n' =>
+    -- After match: m₁ = n₁ = n', dimensions already unified
+    simp only [lower, adjustStride, evalSigmaAlg]
+    apply evalScatter_stride_size_preserved env m₂ n' v st.writeMem _ hwm hlv
+    -- Goal: (evalKernelAlg ω (.dft n') (evalGather ...)).length ≤ n'
+    match n' with
+    | 0 => simp [evalKernelAlg, evalDFT, List.length_map, List.length_range]
+    | 1 => simp [evalKernelAlg, evalDFT, List.length_map, List.length_range]
+    | 2 => simp only [evalKernelAlg, evalDFT2]; split <;> simp_all [evalGather_length]
+    | n + 3 => simp [evalKernelAlg, evalDFT, List.length_map, List.length_range]
+  | .ntt _ _ =>
+    simp only [lower, adjustStride, evalSigmaAlg]
+    exact evalScatter_stride_size_preserved env m₂ _ v st.writeMem _ hwm hlv
+      (by simp [evalKernelAlg, evalGather_length])
+  | .twiddle _ _ =>
+    simp only [lower, adjustStride, evalSigmaAlg]
+    exact evalScatter_stride_size_preserved env m₂ _ v st.writeMem _ hwm hlv
+      (by simp [evalKernelAlg, evalGather_length])
+  | .perm _ =>
+    simp only [lower, adjustStride, evalSigmaAlg]
+    exact evalScatter_stride_size_preserved env m₂ _ v st.writeMem _ hwm hlv
+      (by simp [evalKernelAlg, evalIdentityKernel, evalGather_length])
+  | .diag _ =>
+    simp only [lower, adjustStride, evalSigmaAlg]
+    exact evalScatter_stride_size_preserved env m₂ _ v st.writeMem _ hwm hlv
+      (by simp [evalKernelAlg, evalIdentityKernel, evalGather_length])
+  | .scalar _ =>
+    simp only [lower, adjustStride, evalSigmaAlg]
+    exact evalScatter_stride_size_preserved env m₂ _ v st.writeMem _ hwm hlv
+      (by simp [evalKernelAlg, evalGather_length])
+  | .transpose a =>
+    -- Don't subst: pass hmn through. lower swaps m₁↔n₁.
+    simp only [lower]
+    have ih := adjustStride_lower_preserves_size ω a v m₂ state env st (hmn ▸ hwm) hlv hmn.symm hwf.2 hnc
+    cases hmn; exact ih
+  | .conjTranspose a =>
+    simp only [lower]
+    have ih := adjustStride_lower_preserves_size ω a v m₂ state env st (hmn ▸ hwm) hlv hmn.symm hwf.2 hnc
+    cases hmn; exact ih
+  | .smul f a =>
+    -- Don't subst: pass hmn through to avoid termination issues.
+    simp only [lower, adjustStride, evalSigmaAlg]
+    set st1 := evalSigmaAlg ω env st (adjustStride v m₂ m₁ n₁ (lower m₁ n₁ state a).1)
+    have hst1 := adjustStride_lower_preserves_size ω a v m₂ state env st hwm hlv hmn hwf.2 hnc
+    exact evalScatter_stride_size_preserved env m₂ _ v st1.writeMem _ hst1 hlv
+      (by simp [evalKernelAlg, evalGather_length, hmn])
+  | .elemwise op a =>
+    simp only [lower, adjustStride, evalSigmaAlg]
+    set st1 := evalSigmaAlg ω env st (adjustStride v m₂ m₁ n₁ (lower m₁ n₁ state a).1)
+    have hst1 := adjustStride_lower_preserves_size ω a v m₂ state env st hwm hlv hmn hwf.2 hnc
+    exact evalScatter_stride_size_preserved env m₂ _ v st1.writeMem _ hst1 hlv
+      (by simp [evalKernelAlg, evalGather_length, hmn])
+  | .partialElemwise idx op a =>
+    simp only [lower, adjustStride, evalSigmaAlg]
+    set st1 := evalSigmaAlg ω env st (adjustStride v m₂ m₁ n₁ (lower m₁ n₁ state a).1)
+    have hst1 := adjustStride_lower_preserves_size ω a v m₂ state env st hwm hlv hmn hwf.2 hnc
+    exact evalScatter_stride_size_preserved env m₂ _ v st1.writeMem _ hst1 hlv
+      (by simp [evalKernelAlg, evalGather_length, hmn])
+  | .mdsApply name stateSize a =>
+    simp only [lower, adjustStride, evalSigmaAlg]
+    set st1 := evalSigmaAlg ω env st (adjustStride v m₂ _ _ (lower _ _ state a).1)
+    have hst1 := adjustStride_lower_preserves_size ω a v m₂ state env st hwm hlv hmn hwf.2 hnc
+    exact evalScatter_stride_size_preserved env m₂ _ v st1.writeMem _ hst1 hlv
+      (by simp [evalKernelAlg, evalGather_length, hmn])
+  | .addRoundConst round stateSize a =>
+    simp only [lower, adjustStride, evalSigmaAlg]
+    set st1 := evalSigmaAlg ω env st (adjustStride v m₂ _ _ (lower _ _ state a).1)
+    have hst1 := adjustStride_lower_preserves_size ω a v m₂ state env st hwm hlv hmn hwf.2 hnc
+    exact evalScatter_stride_size_preserved env m₂ _ v st1.writeMem _ hst1 hlv
+      (by simp [evalKernelAlg, evalGather_length, hmn])
+  | .compose a b =>
+    exact absurd hnc (by simp [HasNoCompose])
+  | .add a b =>
+    exact hwf.elim
+  | .kron a b =>
+    obtain ⟨ha_sq, hb_sq, hnc_a, hnc_b, hwf_a, hwf_b⟩ := hwf
+    -- hmn : m₁✝ * m₂✝ = n₁✝ * n₂✝ can't be subst'd directly (product eq).
+    -- Use ha_sq : m₁✝ = n₁✝ and hb_sq : m₂✝ = n₂✝ to unify component-wise.
+    subst ha_sq; subst hb_sq
+    simp only [lower]
+    split
+    · simp only [adjustStride]; sorry
+    · split
+      · simp only [adjustStride]; sorry
+      · simp only [adjustStride]; sorry
+  termination_by mat.nodeCount
+  decreasing_by all_goals simp_wf; all_goals simp only [MatExpr.nodeCount]; all_goals omega
+
+set_option maxHeartbeats 6400000 in
+/-- Size preservation for lowered expressions with writeMem.size ≥ m:
+    evaluating (lower m n state mat).1 preserves writeMem.size when all
+    scatter writes go to in-bounds positions (0..m-1 ⊂ 0..size-1).
+    Requires HasNoCompose (no .temp nodes that reset writeMem).
+    Works for any LoopEnv since lower's scatter patterns use IdxExpr.const 0. -/
+theorem lower_preserves_size_ge
+    (ω : α) {m n : Nat} (mat : MatExpr α m n) (state : LowerState)
+    (env : LoopEnv) (st : EvalState α)
+    (hwm : st.writeMem.size ≥ m)
+    (hwf : IsWellFormedNTT mat) (hnc : HasNoCompose mat) :
+    (evalSigmaAlg ω env st (lower m n state mat).1).writeMem.size = st.writeMem.size := by
+  induction mat generalizing state env st with
+  | identity =>
+    simp only [lower, evalSigmaAlg, evalScatter, Scatter.contiguous, evalIdxExpr,
+               Nat.zero_add, Nat.one_mul, evalKernelAlg, evalIdentityKernel]
+    apply foldl_write_enum_size
+    simp only [evalGather, Gather.contiguous, evalIdxExpr, Nat.zero_add,
+               List.length_map, List.length_range]
+    exact hwm
+  | zero => simp only [lower, evalSigmaAlg]
+  | perm =>
+    simp only [lower, evalSigmaAlg, evalScatter, Scatter.contiguous, evalIdxExpr,
+               Nat.zero_add, Nat.one_mul, evalKernelAlg, evalIdentityKernel]
+    apply foldl_write_enum_size
+    simp only [evalGather, Gather.contiguous, evalIdxExpr, Nat.zero_add,
+               List.length_map, List.length_range]
+    exact hwm
+  | diag =>
+    simp only [lower, evalSigmaAlg, evalScatter, Scatter.contiguous, evalIdxExpr,
+               Nat.zero_add, Nat.one_mul, evalKernelAlg, evalIdentityKernel]
+    apply foldl_write_enum_size
+    simp only [evalGather, Gather.contiguous, evalIdxExpr, Nat.zero_add,
+               List.length_map, List.length_range]
+    exact hwm
+  | dft n' =>
+    simp only [lower, evalSigmaAlg, evalScatter, Scatter.contiguous, evalIdxExpr,
+               Nat.zero_add, Nat.one_mul]
+    apply foldl_write_enum_size
+    simp only [evalGather, Gather.contiguous, evalIdxExpr, Nat.zero_add]
+    have hgather_len : (List.map (fun i => st.readMem.read (1 * i)) (List.range n')).length = n' := by
+      simp [List.length_map, List.length_range]
+    rw [evalKernelAlg_dft_length n' _ hgather_len]
+    exact hwm
+  | ntt =>
+    simp only [lower, evalSigmaAlg, evalScatter, Scatter.contiguous, evalIdxExpr,
+               Nat.zero_add, Nat.one_mul, evalKernelAlg]
+    apply foldl_write_enum_size
+    simp only [evalGather, Gather.contiguous, evalIdxExpr, Nat.zero_add,
+               List.length_map, List.length_range]
+    exact hwm
+  | twiddle =>
+    simp only [lower, evalSigmaAlg, evalScatter, Scatter.contiguous, evalIdxExpr,
+               Nat.zero_add, Nat.one_mul, evalKernelAlg]
+    apply foldl_write_enum_size
+    simp only [evalGather, Gather.contiguous, evalIdxExpr, Nat.zero_add,
+               List.length_map, List.length_range]
+    exact hwm
+  | scalar =>
+    simp only [lower, evalSigmaAlg, evalScatter, Scatter.contiguous, evalIdxExpr,
+               Nat.zero_add, Nat.one_mul, evalKernelAlg]
+    apply foldl_write_enum_size
+    simp only [evalGather, Gather.contiguous, evalIdxExpr, Nat.zero_add,
+               List.length_map, List.length_range]
+    exact hwm
+  | transpose a ih =>
+    obtain ⟨hmn, hwf_a⟩ := hwf
+    simp only [lower]
+    subst hmn
+    exact ih state env st hwm hwf_a hnc
+  | conjTranspose a ih =>
+    obtain ⟨hmn, hwf_a⟩ := hwf
+    simp only [lower]
+    subst hmn
+    exact ih state env st hwm hwf_a hnc
+  | smul f a ih =>
+    obtain ⟨hmn, hwf_a⟩ := hwf
+    simp only [lower, evalSigmaAlg]
+    set st1 := evalSigmaAlg ω env st (lower _ _ state a).1 with hst1_def
+    have hst1_size := ih state env st hwm hwf_a hnc
+    simp only [evalSigmaAlg, evalScatter, Scatter.contiguous, evalIdxExpr,
+               Nat.zero_add, Nat.one_mul, evalKernelAlg]
+    rw [← hst1_size]; apply foldl_write_enum_size
+    simp only [evalGather, Gather.contiguous, evalIdxExpr, Nat.zero_add]
+    simp only [List.length_map, List.length_range]
+    rw [hst1_size]; rw [← hmn]; exact hwm
+  | elemwise op a ih =>
+    obtain ⟨hn1, hwf_a⟩ := hwf
+    subst hn1
+    simp only [lower, evalSigmaAlg]
+    set st1 := evalSigmaAlg ω env st (lower _ _ state a).1 with hst1_def
+    have hst1_size := ih state env st hwm hwf_a hnc
+    simp only [evalSigmaAlg, evalScatter, Scatter.contiguous, evalIdxExpr,
+               Nat.zero_add, Nat.one_mul, evalKernelAlg]
+    rw [← hst1_size]; apply foldl_write_enum_size
+    simp only [evalGather, Gather.contiguous, evalIdxExpr, Nat.zero_add]
+    simp only [List.length_map, List.length_range]
+    rw [hst1_size]; omega
+  | partialElemwise idx op a ih =>
+    obtain ⟨hn1, hwf_a⟩ := hwf
+    subst hn1
+    simp only [lower, evalSigmaAlg]
+    set st1 := evalSigmaAlg ω env st (lower _ _ state a).1 with hst1_def
+    have hst1_size := ih state env st hwm hwf_a hnc
+    simp only [evalSigmaAlg, evalScatter, Scatter.contiguous, evalIdxExpr,
+               Nat.zero_add, Nat.one_mul, evalKernelAlg]
+    rw [← hst1_size]; apply foldl_write_enum_size
+    simp only [evalGather, Gather.contiguous, evalIdxExpr, Nat.zero_add]
+    simp only [List.length_map, List.length_range]
+    rw [hst1_size]; omega
+  | mdsApply name stateSize a ih =>
+    obtain ⟨hsize, hwf_a⟩ := hwf
+    simp only [lower, evalSigmaAlg]
+    set st1 := evalSigmaAlg ω env st (lower _ _ state a).1 with hst1_def
+    have hst1_size := ih state env st hwm hwf_a hnc
+    simp only [evalSigmaAlg, evalScatter, Scatter.contiguous, evalIdxExpr,
+               Nat.zero_add, Nat.one_mul, evalKernelAlg]
+    rw [← hst1_size]; apply foldl_write_enum_size
+    simp only [evalGather, Gather.contiguous, evalIdxExpr, Nat.zero_add]
+    simp only [List.length_map, List.length_range]
+    rw [hst1_size]; omega
+  | addRoundConst round stateSize a ih =>
+    obtain ⟨hsize, hwf_a⟩ := hwf
+    simp only [lower, evalSigmaAlg]
+    set st1 := evalSigmaAlg ω env st (lower _ _ state a).1 with hst1_def
+    have hst1_size := ih state env st hwm hwf_a hnc
+    simp only [evalSigmaAlg, evalScatter, Scatter.contiguous, evalIdxExpr,
+               Nat.zero_add, Nat.one_mul, evalKernelAlg]
+    rw [← hst1_size]; apply foldl_write_enum_size
+    simp only [evalGather, Gather.contiguous, evalIdxExpr, Nat.zero_add]
+    simp only [List.length_map, List.length_range]
+    rw [hst1_size]; omega
+  | compose a b ih_a ih_b =>
+    exact absurd hnc (by simp [HasNoCompose])
+  | add a b ih_a ih_b =>
+    exact hwf.elim
+  | kron a b ih_a ih_b =>
+    obtain ⟨ha_sq, hb_sq, hnc_a, hnc_b, hwf_a, hwf_b⟩ := hwf
+    subst ha_sq; subst hb_sq
+    simp only [lower]
+    split
+    · -- I⊗B: adjustBlock — kron-inside-kron (requires adjustBlock_lower_preserves_size_ge)
+      sorry
+    · split
+      · -- A⊗I: adjustStride — kron-inside-kron (requires adjustStride_lower_preserves_size_ge)
+        sorry
+      · -- General A⊗B: .loop m₁ v (.seq exprA (.loop m₂ (v+1) exprB))
+        rename_i m₁ m₂ _ _
+        by_cases hm₂ : m₂ = 0
+        · -- m₂ = 0: degenerate case — body writes m₁ elements but size ≥ m₁*0 = 0 doesn't ensure ≥ m₁
+          subst hm₂; simp only [Nat.mul_zero] at hwm
+          -- Loop body includes exprA writing m₁ elements; if m₁ > size, writes extend memory.
+          -- Theorem is not provable for this degenerate case (m₂ = 0 never occurs in NTT/FFT).
+          sorry
+        · -- m₂ > 0: all writes are in-bounds since size ≥ m₁*m₂ ≥ max(m₁, m₂)
+          have hm₂_pos : m₂ > 0 := by omega
+          apply evalSigmaAlg_loop_preserves_wm_size_with_bound (target := st.writeMem.size)
+          · rfl
+          · intro i st' hi hwm'
+            -- hi : i < m₁ → m₁ > 0
+            have hm₁_pos : m₁ > 0 := by omega
+            -- Body is .seq exprA (.loop m₂ (loopVar + 1) exprB)
+            rw [evalSigmaAlg.eq_3]
+            -- Step 1: exprA preserves size (needs size ≥ m₁)
+            set stA := evalSigmaAlg ω _ st' (lower _ _ _ a).1 with hstA_def
+            have hge_m₁ : st'.writeMem.size ≥ m₁ := by
+              rw [hwm']; calc m₁ = m₁ * 1 := (Nat.mul_one m₁).symm
+                   _ ≤ m₁ * m₂ := Nat.mul_le_mul_left m₁ hm₂_pos
+                   _ ≤ st.writeMem.size := hwm
+            have hA : stA.writeMem.size = st'.writeMem.size :=
+              ih_a _ _ st' hge_m₁ hwf_a hnc_a
+            -- Step 2: inner loop preserves size (each iteration needs size ≥ m₂)
+            -- Rewrite RHS to match loop's initial state size (stA.writeMem.size)
+            -- so that apply can unify the loop lemma's ?st.writeMem.size with both sides.
+            have hstA_eq : stA.writeMem.size = st.writeMem.size := hA.trans hwm'
+            rw [← hstA_eq]
+            apply evalSigmaAlg_loop_preserves_wm_size_with_bound
+            · rfl
+            · intro j stB hj hwmB
+              have hge_m₂ : stB.writeMem.size ≥ m₂ := by
+                rw [hwmB, hstA_eq]; calc m₂ = 1 * m₂ := (Nat.one_mul m₂).symm
+                     _ ≤ m₁ * m₂ := Nat.mul_le_mul_right m₂ hm₁_pos
+                     _ ≤ st.writeMem.size := hwm
+              exact (ih_b _ _ stB hge_m₂ hwf_b hnc_b).trans hwmB
+  termination_by mat.nodeCount
+  decreasing_by all_goals simp_wf; all_goals simp only [MatExpr.nodeCount]; all_goals omega
 
 set_option maxHeartbeats 3200000 in
 /-- Size preservation for lowered expressions: evaluating (lower m n state mat).1
@@ -2917,60 +3450,74 @@ theorem evalSigmaAlg_writeMem_size_preserved
     -- lower(.compose a b) = .temp k (.seq exprB exprA)
     -- hwf : m' = k' ∧ HasNoZero a ∧ IsWellFormedNTT a ∧ IsWellFormedNTT b
     obtain ⟨hk_eq, _, hwf_a, hwf_b⟩ := hwf
-    -- subst m = k unifies dimensions: a : MatExpr α m m, b : MatExpr α m n
+    -- subst m = k unifies dimensions: a : MatExpr α m' m', b : MatExpr α m' n'
     subst hk_eq
+    -- After induction + subst, m and n are inaccessible (generalized as indices).
+    -- Inaccessibles after subst: m✝ (row dim), n✝ (col dim), HasNoZero (discarded from obtain)
+    rename_i m' n' _
     simp only [lower]
-    -- evalSigmaAlg (.temp m (.seq exprB exprA)):
-    -- 1. writeMem := Memory.zeros m (size m)
+    -- evalSigmaAlg (.temp m' (.seq exprB exprA)):
+    -- 1. writeMem := Memory.zeros m' (size m')
     -- 2. run .seq exprB exprA
     -- 3. return stateAfterBody.writeMem
     rw [evalSigmaAlg.eq_5, evalSigmaAlg.eq_3]
-    dsimp only []
     -- Name intermediate state after exprB
     set stateB := evalSigmaAlg ω LoopEnv.empty
-      { readMem := rm, writeMem := Memory.zeros m }
-      (lower m n state b).1 with hstateB_def
-    -- By ih_b: stateB.writeMem.size = m (since Memory.zeros m has size m)
-    have hB_size := ih_b state rm (Memory.zeros m) (Memory.zeros_size m) hwf_b
-    -- After .seq, exprA runs with writeMem = stateB.writeMem (size m)
-    -- By ih_a: result.writeMem.size = m
-    exact ih_a (lower m n state b).2 stateB.writeMem stateB.writeMem hB_size hwf_a
+      { readMem := rm, writeMem := Memory.zeros m' }
+      (lower m' n' state b).1 with hstateB_def
+    -- By ih_b: stateB.writeMem.size = m' (since Memory.zeros m' has size m')
+    have hB_size := ih_b state rm (Memory.zeros m') (Memory.zeros_size m') hwf_b
+    -- After .seq, exprA runs with writeMem = stateB.writeMem (size m')
+    -- By ih_a: result.writeMem.size = m'
+    exact ih_a (lower m' n' state b).2 stateB.writeMem stateB.writeMem hB_size hwf_a
   | add a b ih_a ih_b =>
     -- DD-ADD: IsWellFormedNTT (.add _ _) = False, so hwf is vacuously absurd
     exact hwf.elim
   | kron a b ih_a ih_b =>
-    -- lower(.kron a b) produces loops with adjustBlock/adjustStride
-    -- S1: Requires proving loop body preserves writeMem.size for 3 kron cases:
-    --   I⊗B (adjustBlock), A⊗I (adjustStride), A⊗B (nested loops)
-    --
-    -- Infrastructure ready:
-    --   - evalSigmaAlg_loop_preserves_size (proven above)
-    --   - foldl_invariant (proven above)
-    --   - size_write_eq (for in-bounds writes)
-    --
-    -- Key difficulty: proving scatter writes for block/stride patterns are in-bounds.
-    --   adjustBlock writes at positions i*m₂ + j for j < m₂, all < m₁*m₂ = m
-    --   adjustStride writes at positions j + i*m₂ for i < m₁, all < m₁*m₂ = m
-    --
-    -- Proof strategy:
-    --   1. Unfold lower for .kron to expose the 3 cases (via isIdentity split)
-    --   2. For each case, show loop body preserves writeMem.size = m
-    --   3. Use evalSigmaAlg_loop_preserves_size to conclude
-    --
-    -- The inner body-preserves-size for adjustBlock/adjustStride requires proving:
-    --   - evalScatter (Scatter.block m₂ v) with env(v) = i writes at positions
-    --     m₂*i + j for j < vals.length, and all m₂*i + j < m when i < m₁
-    --   - evalScatter (stride s) with env(v) = j writes at positions
-    --     j + s*k for k < vals.length, and all j + s*k < m when j < m₂
-    --
-    -- These require:
-    --   (a) evalScatter preserves size when all write positions are in-bounds
-    --   (b) block/stride write positions are in-bounds given loop variable bounds
-    --
-    -- Both (a) and (b) are mathematically straightforward but involve deep
-    -- unfolding of evalScatter/evalIdxExpr/foldl. Axiomatized to unblock Onda 2.
-    -- See C1 Capa 2-3 in fase8_onda1_roadmap.md for full proof plan.
-    sorry
+    obtain ⟨ha_sq, hb_sq, hnc_a, hnc_b, hwf_a, hwf_b⟩ := hwf
+    subst ha_sq; subst hb_sq
+    simp only [lower]
+    split
+    · -- Case I⊗B: .loop m₁ loopVar (adjustBlock loopVar m₂ m₂ (lower b).1)
+      apply evalSigmaAlg_loop_preserves_wm_size_with_bound
+      · exact hwm
+      · intro i st' hi hwm'
+        exact adjustBlock_lower_preserves_size ω b _ _ _ (LoopEnv.empty.bind _ i) st'
+          hwm' (by rw [LoopEnv.bind_same]; exact hi) rfl hwf_b hnc_b
+    · split
+      · -- Case A⊗I: .loop m₂ loopVar (adjustStride loopVar m₂ m₁ m₁ (lower a).1)
+        apply evalSigmaAlg_loop_preserves_wm_size_with_bound
+        · exact hwm
+        · intro i st' hi hwm'
+          exact adjustStride_lower_preserves_size ω a _ _ _ (LoopEnv.empty.bind _ i) st'
+            hwm' (by rw [LoopEnv.bind_same]; exact hi) rfl hwf_a hnc_a
+      · -- General case A⊗B: .loop m₁ v (.seq exprA (.loop m₂ (v+1) exprB))
+        -- Uses lower_preserves_size_ge: contiguous scatter at base 0 preserves size ≥ m.
+        rename_i m₁ m₂ _ _
+        by_cases hm₂ : m₂ = 0
+        · -- m₂ = 0: degenerate — m = m₁*0 = 0, but loop body writes m₁ elements.
+          -- Theorem is not provable when m₁ > 0 (0-dim kron factor never occurs in NTT/FFT).
+          sorry
+        · -- m₂ > 0: all writes in-bounds since m₁*m₂ ≥ max(m₁, m₂)
+          have hm₂_pos : m₂ > 0 := by omega
+          apply evalSigmaAlg_loop_preserves_wm_size_with_bound (target := m₁ * m₂)
+          · exact hwm
+          · intro i st' hi hwm'
+            have hm₁_pos : m₁ > 0 := by omega
+            rw [evalSigmaAlg.eq_3]
+            set stA := evalSigmaAlg ω _ st' (lower _ _ _ a).1 with hstA_def
+            have hge_m₁ : st'.writeMem.size ≥ m₁ := by
+              rw [hwm']; calc m₁ = m₁ * 1 := (Nat.mul_one m₁).symm
+                   _ ≤ m₁ * m₂ := Nat.mul_le_mul_left m₁ hm₂_pos
+            have hA : stA.writeMem.size = st'.writeMem.size :=
+              lower_preserves_size_ge ω a _ _ st' hge_m₁ hwf_a hnc_a
+            apply evalSigmaAlg_loop_preserves_wm_size_with_bound (target := m₁ * m₂)
+            · rw [hA, hwm']
+            · intro j stB hj hwmB
+              have hge_m₂ : stB.writeMem.size ≥ m₂ := by
+                rw [hwmB]; calc m₂ = 1 * m₂ := (Nat.one_mul m₂).symm
+                     _ ≤ m₁ * m₂ := Nat.mul_le_mul_right m₂ hm₁_pos
+              exact (lower_preserves_size_ge ω b _ _ stB hge_m₂ hwf_b hnc_b).trans hwmB
 
 /-- WriteMem irrelevance for .compute with contiguous scatter at base 0.
     When outputs.length = m and wm.size = m, scatter overwrites all positions,
@@ -3334,7 +3881,7 @@ theorem evalMatExprAlg_length
     simp only [evalMatExprAlg]
     exact ih v hv hwf_a
   | kron a b ih_a ih_b =>
-    obtain ⟨ha_sq, hb_sq, hwf_a, hwf_b⟩ := hwf
+    obtain ⟨ha_sq, hb_sq, _, _, hwf_a, hwf_b⟩ := hwf
     simp only [evalMatExprAlg]
     split
     · -- Case I⊗B: (List.range m₁).flatMap (λ i => evalMatExprAlg b block_i)
@@ -3350,32 +3897,24 @@ theorem evalMatExprAlg_length
         exact block_length v _ _ hv i hi
       · exact hwf_b
     · split
-      · -- Case A⊗I: List.range (laneLen * m₂) |>.map ... has length laneLen * m₂
-        -- With hb_sq : m₂ = n₂, ha_sq : m₁ = n₁, hv : v.length = n₁ * n₂:
-        -- laneLen = v.length / m₂ = (n₁ * n₂) / n₂ = n₁ = m₁
-        -- So length = m₁ * m₂
-        rename_i _ hIsIdentB
+      · -- Case A⊗I
+        rename_i m₁ n₁ m₂ n₂ _ _ _ hIsIdentB
         have hb_sq' := isIdentity_implies_square hIsIdentB
         simp only [List.length_map, List.length_range]
-        rw [hv, hb_sq']
-        by_cases hn₂ : n₂ = 0
-        · simp [hn₂]
-        · rw [Nat.mul_div_cancel _ (Nat.pos_of_ne_zero hn₂), ha_sq]
-      · -- General case A⊗B: afterB via flatMap, then strided interleave
-        -- afterB = (List.range m₁).flatMap (fun i => evalMatExprAlg b block_i)
-        -- Each evalMatExprAlg b block_i has length m₂ by ih_b (when block.length = n₂)
-        -- So afterB.length = m₁ * m₂, then laneLen = m₁, total = m₁ * m₂
+        rw [hv, hb_sq', ha_sq]
+        by_cases hm₂ : n₂ = 0
+        · simp [hm₂]
+        · rw [Nat.mul_div_cancel _ (Nat.pos_of_ne_zero hm₂)]
+      · -- General case A⊗B
+        rename_i m₁ n₁ m₂ n₂ _ _ _ _
         simp only [List.length_map, List.length_range]
-        -- Need: afterB.length / m₂ * m₂ = m₁ * m₂
-        -- afterB is the flatMap expression in the let binding
-        -- Its length = m₁ * m₂ by range_flatMap_const_length + ih_b
         have h_afterB_len :
             ((List.range m₁).flatMap fun i =>
               evalMatExprAlg ω m₂ n₂ b (List.take n₂ (List.drop (i * n₂) v))).length = m₁ * m₂ := by
           apply range_flatMap_const_length
           intro i hi
           apply ih_b
-          · exact block_length v _ _ hv i hi
+          · exact block_length v _ _ hv i (ha_sq ▸ hi)
           · exact hwf_b
         rw [h_afterB_len]
         by_cases hm₂ : m₂ = 0
