@@ -5414,14 +5414,106 @@ theorem lowering_kron_axiom
       -- Stride scatter loop invariant
       have hinv := stride_scatter_loop_inv m₁ m₂ hm₂_pos (Memory.zeros (m₁ * m₂)) vals hvals_len
         (Memory.zeros_size _) m₂ (le_refl m₂)
-      -- Assembly: connect stride scatter loop invariant with evalMatExprAlg A⊗I format
-      -- Infrastructure proven above: h_lf, hker, hvals_len, hvals_eq, hinv
-      -- Remaining: pointwise equality between stride scatter result and strided lane format
-      -- Strategy: rw [h_lf], unfold runSigmaAlg, use hinv for LHS,
-      --   unfold evalMatExprAlg for RHS, connect via hvals_eq pointwise
-      sorry
+      -- ============= A⊗I non-zero assembly =============
+      have mem_toList_len : ∀ (mem : Memory α), mem.toList.length = mem.size :=
+        fun mem => by simp [Memory.toList, Memory.size]
+      -- Take is identity (foldl result has size m₁*m₂)
+      rw [List.take_of_length_le (by rw [mem_toList_len]; exact le_of_eq hinv.1)]
+      -- Step 1: Unfold RHS to clean form using split (like I⊗B proof)
+      have hrhs : evalMatExprAlg ω (m₁ * m₂) (m₁ * m₂) (.kron a b) v =
+          (List.range (m₁ * m₂)).map fun idx =>
+            (vals (idx % m₂)).getD (idx / m₂) default := by
+        conv_lhs => unfold evalMatExprAlg
+        split
+        · next h => exact absurd h h_id_a
+        · split
+          · -- A⊗I branch: simplify laneLen = m₁, then show functions equal
+            simp only [show v.length / m₂ = m₁ from by
+              rw [hv]; exact Nat.mul_div_cancel m₁ hm₂_pos]
+            congr 1; funext idx
+            have hmod : idx % m₂ < m₂ := Nat.mod_lt idx hm₂_pos
+            simp only [List.getElem?_map, List.getElem?_range, hmod, ↓reduceIte,
+                        Option.map_some']
+            exact congrArg (fun l => l.getD (idx / m₂) default) (hvals_eq _ hmod).symm
+          · next h => exact absurd h_id_b h
+      rw [hrhs]
+      -- Step 2: Pointwise equality: foldl_result.toList = map form
+      apply List.ext_getElem
+      · rw [mem_toList_len, hinv.1, List.length_map, List.length_range]
+      · intro i hi1 hi2
+        have hi : i < m₁ * m₂ := by rw [mem_toList_len, hinv.1] at hi1; exact hi1
+        have hmod : i % m₂ < m₂ := Nat.mod_lt i hm₂_pos
+        have hdiv : i / m₂ < m₁ := (Nat.div_lt_iff_lt_mul hm₂_pos).mpr hi
+        have hv_bd : i / m₂ < (vals (i % m₂)).length := by
+          rw [hvals_len _ hmod]; exact hdiv
+        simp only [List.getElem_map, List.getElem_range]
+        -- Goal: foldl_result.toList[i] = (vals (i % m₂)).getD (i / m₂) default
+        -- Use hinv.2 at getElem? level, then convert
+        have h_at := hinv.2 i hi hmod
+        rw [List.getElem?_eq_getElem hi1, List.getElem?_eq_getElem hv_bd] at h_at
+        -- h_at : some (toList[i]) = some ((vals (i % m₂))[i / m₂])
+        simp only [Option.some.injEq] at h_at
+        -- h_at : toList[i] = (vals (i % m₂))[i / m₂]
+        rw [h_at]; show _ = (((vals (i % m₂)).get? (i / m₂)).getD default)
+        rw [List.get?_eq_getElem? (vals (i % m₂)) (i / m₂),
+            List.getElem?_eq_getElem hv_bd, Option.getD_some]
     · -- Zero A: both sides = replicate (m₁*m₂) 0
-      sorry
+      -- lower a = .nop
+      have h_nop_a : (lower m₁ m₁ {} a).1 = .nop :=
+        lower_hasNoSeqLower_notHasNoZero_is_nop {} a h_nsl_a hnz_a
+      have hs_nop : (lower m₁ m₁ { nextLoopVar := 1 } a).1 = .nop :=
+        (lower_hasNoSeqLower_state_eq { nextLoopVar := 1 } {} a h_nsl_a).trans h_nop_a
+      -- lowerFresh kron = .loop m₂ 0 .nop
+      have h_lf : lowerFresh (m₁ * m₂) (m₁ * m₂) (.kron a b) = .loop m₂ 0 .nop := by
+        unfold lowerFresh lower
+        simp only [ha_false, Bool.false_eq_true, ite_false,
+                    h_id_b, ite_true, freshLoopVar, hs_nop, adjustStride]
+      -- evalMatExprAlg a w = replicate m₁ 0 (for any w with w.length = m₁)
+      have ha_zero : ∀ w : List α, w.length = m₁ →
+          evalMatExprAlg ω m₁ m₁ a w = List.replicate m₁ 0 := by
+        intro w hw
+        have h1 := ihA w hw
+        rw [show lowerFresh m₁ m₁ a = .nop from h_nop_a] at h1
+        simp only [runSigmaAlg, evalSigmaAlg, EvalState.init, Memory.zeros_toList] at h1
+        rw [← h1]; simp [List.take_replicate, Nat.min_self]
+      rw [h_lf]
+      -- LHS: runSigmaAlg of loop-of-nop = zeros
+      have lhs_eq : runSigmaAlg ω (.loop m₂ 0 .nop) v (m₁ * m₂) =
+          List.replicate (m₁ * m₂) 0 := by
+        simp only [runSigmaAlg, EvalState.init, evalSigmaAlg.eq_2]
+        suffices ∀ (l : List Nat) (st : EvalState α), l.foldl (fun s j =>
+            evalSigmaAlg ω (LoopEnv.empty.bind 0 j) s .nop) st = st by
+          rw [this]; simp [Memory.zeros_toList, List.take_replicate, Nat.min_self]
+        intro l; induction l with
+        | nil => simp
+        | cons _ _ ih => intro st; simp only [List.foldl_cons, evalSigmaAlg] at ih ⊢; exact ih st
+      -- RHS: evalMatExprAlg kron = replicate (m₁*m₂) 0
+      have rhs_eq : evalMatExprAlg ω (m₁ * m₂) (m₁ * m₂) (.kron a b) v =
+          List.replicate (m₁ * m₂) 0 := by
+        conv_lhs => unfold evalMatExprAlg
+        split
+        · next h => exact absurd h h_id_a
+        · split
+          · -- A⊗I branch: all lanes produce zeros
+            have hLL : v.length / m₂ = m₁ := by
+              rw [hv]; exact Nat.mul_div_cancel m₁ hm₂_pos
+            simp only [hLL]
+            apply List.ext_getElem
+            · simp
+            · intro i h1 h2
+              simp only [List.getElem_map, List.getElem_range, List.getElem_replicate]
+              have hi : i < m₁ * m₂ := by simp at h1; exact h1
+              have hmod : i % m₂ < m₂ := Nat.mod_lt i hm₂_pos
+              have hdiv : i / m₂ < m₁ := (Nat.div_lt_iff_lt_mul hm₂_pos).mpr hi
+              simp only [List.getElem?_map, List.getElem?_range, hmod, ↓reduceIte,
+                          Option.map_some']
+              rw [ha_zero _ (by simp)]
+              -- Goal: (List.replicate m₁ 0).getD (i / m₂) default = 0
+              show ((List.replicate m₁ (0 : α)).get? (i / m₂)).getD default = 0
+              rw [List.get?_eq_getElem? _ _, List.getElem?_eq_getElem (by simp; exact hdiv)]
+              simp [List.getElem_replicate]
+          · next h => exact absurd h_id_b h
+      rw [lhs_eq, rhs_eq]
 
 /-! ### The Fundamental Correctness Theorem
 
@@ -5429,7 +5521,7 @@ For any matrix expression mat and input vector v:
 evaluating the lowered Sigma-SPL code produces the same result
 as direct matrix-vector multiplication.
 
-Current status (Fase 8 Corrección 1): 18/19 cases PROVEN (2 sorry in kron A⊗I)
+Current status: ALL 19/19 cases PROVEN — 0 sorry
 - Identity: PROVEN via lowering_identity_correct
 - DFT: PROVEN via lowering_dft_correct + meta-lemma
 - NTT: PROVEN via meta-lemma (identity-like kernel)
@@ -5437,7 +5529,7 @@ Current status (Fase 8 Corrección 1): 18/19 cases PROVEN (2 sorry in kron A⊗I
 - Diag: PROVEN via meta-lemma (identity kernel)
 - Scalar: PROVEN via meta-lemma (scale kernel, size 1)
 - Compose: PROVEN via lowering_compose_step (WF termination fixed in Corrección 8)
-- Kron: I⊗B PROVEN, A⊗I infra done (2 sorry remain) — Fase 8 Corrección 1
+- Kron: I⊗B PROVEN, A⊗I PROVEN (non-zero via stride_scatter_loop_inv, zero via .nop)
 - Zero: PROVEN (lower → .nop, writeMem = zeros)
 - Perm: PROVEN (lower → identity kernel, applyPerm is stub)
 - Smul: PROVEN via runSigmaAlg_seq_identity_compute
