@@ -7,7 +7,6 @@
   - Finset-based NTT proofs (Properties.lean): ntt_coeff_finset, intt_ntt_identity_finset
 
   Key theorems:
-  - intt_recursive_eq_spec: INTT_recursive = INTT_spec
   - ntt_intt_identity_list: INTT_spec(NTT_spec(a)) = a
 -/
 
@@ -89,55 +88,7 @@ lemma intt_exp_equiv (ω : F) (n i k : ℕ) (hn : n > 0) (hω : IsPrimitiveRoot 
 
 end ExponentEquivalence
 
-/-! ## Part 4: INTT_recursive = INTT_spec -/
-
-section INTTRecursiveSpec
-
-variable {F : Type*} [instL : NTTFieldLawful F] [IsDomain F]
-
-/-- Axiom: NTT_recursive computes the same as NTT_spec for primitive roots.
-
-    This is proven in AmoLean.NTT.Correctness.ct_recursive_eq_spec, but we need
-    an axiom here due to import cycle constraints. The proof in Correctness.lean
-    uses strong induction on input.length and the Cooley-Tukey recurrence. -/
-axiom ct_recursive_eq_spec_axiom (ω : F) (input : List F)
-    (h_pow2 : ∃ k : ℕ, input.length = 2^k)
-    (hω : IsPrimitiveRoot ω input.length) :
-    NTT_recursive ω input = NTT_spec ω input
-
-/-- ω^(n-1) is a primitive n-th root of unity when ω is.
-
-    Proof sketch: (ω^(n-1))^n = ω^(n*(n-1)) = (ω^n)^(n-1) = 1^(n-1) = 1
-    And for 0 < k < n, (ω^(n-1))^k = ω^((n-1)*k) where (n-1)*k ≡ -k (mod n),
-    so this equals ω^(n-k), and n-k ∈ (0, n), so ω^(n-k) ≠ 1.
-
-    This is a standard result in the theory of primitive roots. The full proof
-    involves modular arithmetic that is straightforward but tedious in Lean.
--/
-axiom pow_pred_is_primitive {F : Type*} [NTTFieldLawful F] [IsDomain F]
-    {n : ℕ} (hn : n > 0) {ω : F} (hω : IsPrimitiveRoot ω n) :
-    IsPrimitiveRoot (ω ^ (n - 1)) n
-
-/-- Key lemma: exponent equivalence for inverse transform.
-    For primitive root ω with ω^n = 1:
-    (ω^(n-1))^(k*i) = ω^(n - (k*i % n)) when k*i ≠ 0
-
-    Proof sketch: (ω^(n-1))^(k*i) = ω^((n-1)*(k*i)), and (n-1)*(k*i) ≡ -(k*i) (mod n).
-    For m = k*i, -m ≡ n - (m % n) (mod n) when m % n ≠ 0.
-
-    This follows from the fact that ω^n = 1 and basic modular arithmetic.
--/
-axiom inv_root_exp_equiv {F : Type*} [NTTFieldLawful F] [IsDomain F]
-    {n : ℕ} (hn : n > 0) {ω : F} (hω : IsPrimitiveRoot ω n)
-    (k i : ℕ) (hki : k * i ≠ 0) :
-    (ω ^ (n - 1)) ^ (k * i) = ω ^ (n - (k * i) % n)
-
-/-- When k*i = 0, (ω^(n-1))^0 = 1 = ω^0 -/
-lemma inv_root_exp_zero {n : ℕ} (_hn : n > 0) {ω : F} (_hω : IsPrimitiveRoot ω n)
-    (k i : ℕ) (hki : k * i = 0) :
-    (ω ^ (n - 1)) ^ (k * i) = ω ^ (if i * k = 0 then 0 else n - (i * k) % n) := by
-  have hik : i * k = 0 := by rw [mul_comm]; exact hki
-  simp only [hki, hik, pow_zero, ↓reduceIte]
+/-! ## Part 4: Helper for foldl equivalence (used by Parts 5-6) -/
 
 /-- Helper: foldl is compatible with pointwise equal functions -/
 private lemma list_foldl_eq_of_forall {α β : Type*} (f g : β → α → β) (l : List α) (init : β)
@@ -152,63 +103,6 @@ private lemma list_foldl_eq_of_forall {α β : Type*} (f g : β → α → β) (
     apply ih
     intro acc y hy
     exact h acc y (List.mem_cons_of_mem x hy)
-
-/-- INTT_recursive computes the same result as INTT_spec
-
-The proof shows that NTT with ω^(n-1) (which INTT_recursive uses) produces
-the same coefficients as the explicit inverse transform in INTT_spec.
--/
-theorem intt_recursive_eq_spec (ω n_inv : F) (X : List F)
-    (h_pow2 : ∃ k : ℕ, X.length = 2^k)
-    (hω : IsPrimitiveRoot ω X.length)
-    (hne : X ≠ []) :
-    INTT_recursive ω n_inv X = INTT_spec ω n_inv X := by
-  have hlen_pos : X.length > 0 := List.length_pos.mpr hne
-  -- Alias for use in ω operations
-  let n := X.length
-  have hn_pos : n > 0 := hlen_pos
-
-  -- Unfold INTT_recursive and simplify the dite
-  unfold INTT_recursive
-  simp only [hlen_pos, ↓reduceDIte]
-
-  -- ω^(n-1) is a primitive n-th root
-  have hω_inv := pow_pred_is_primitive hn_pos hω
-
-  -- By ct_recursive_eq_spec_axiom: NTT_recursive (ω^(n-1)) X = NTT_spec (ω^(n-1)) X
-  have h_ct := ct_recursive_eq_spec_axiom (ω ^ (n - 1)) X h_pow2 hω_inv
-  rw [h_ct]
-
-  -- Now show: (NTT_spec (ω^(n-1)) X).map (n_inv * ·) = INTT_spec ω n_inv X
-  unfold INTT_spec NTT_spec
-
-  -- Both are maps over List.range X.length, prove element-wise equality
-  apply List.ext_getElem
-  · simp only [List.length_map, List.length_range]
-  · intro i hi _
-    simp only [List.length_map, List.length_range] at hi
-    simp only [List.getElem_map, List.getElem_range]
-    -- n_inv * (foldl for NTT_spec with ω^(n-1)) = n_inv * (foldl for INTT_spec)
-    congr 1
-    -- Show the foldl sums are equal
-    apply list_foldl_eq_of_forall
-    intro acc k hk
-    simp only [List.mem_range] at hk
-    cases hX : X[k]? with
-    | none => rfl
-    | some Xk =>
-      simp only [hX]
-      -- Show: Xk * (ω^(n-1))^(k*i) = Xk * ω^(if i*k=0 then 0 else X.length-(i*k%X.length))
-      -- Note: n = X.length by definition
-      by_cases hki : k * i = 0
-      · have h := inv_root_exp_zero hn_pos hω k i hki
-        simp only [h]
-        rfl  -- n = X.length by definition
-      · have h := inv_root_exp_equiv hn_pos hω k i hki
-        simp only [h, mul_comm i k, hki, ↓reduceIte]
-        rfl  -- n = X.length by definition
-
-end INTTRecursiveSpec
 
 /-! ## Part 5: NTT List to Finset Bridge
 

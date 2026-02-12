@@ -101,9 +101,21 @@ Todos los 5 entregables completados:
 - `toZMod_inv` → Fermat
 - NTT sorry (generator_is_primitive_root, generator_order) → `native_decide`
 
-### Estado Global Post-BabyBear
-- **Axiomas**: 12 (11 NTT + 1 Perm) — Goldilocks 0, BabyBear 0
-- **Sorry activos**: 14 (12 Poseidon + 2 Merkle)
+### ListFinsetBridge: Eliminación 3 axiomas NTT (2026-02-12)
+
+3 axiomas eliminados de `AmoLean/NTT/ListFinsetBridge.lean`:
+- `ct_recursive_eq_spec_axiom` → referencia directa a theorem probado en Correctness.lean
+- `pow_pred_is_primitive` → probado con aritmética modular (`pred_mul_mod`)
+- `inv_root_exp_equiv` → probado con generalización (`pred_mul_mod_general`)
+
+**Lecciones aprendidas**:
+- L-182: `Nat.add_right_cancel` cierra `a + k = b + k → a = b` para cancelar en ecuaciones de aritmética Nat no-lineal
+- L-183: Para probar `(n-1)*k = n*(k-1) + (n-k)` en Nat, sumar k a ambos lados reduce a lemmas conocidos (`Nat.sub_add_cancel`, `add_mul`)
+- L-184: `Nat.add_mul_mod_self_left` + `Nat.mod_eq_of_lt` es el pattern estándar para `(a + n*b) % n = a` cuando `a < n`
+
+### Estado Global Post-ListFinsetBridge
+- **Axiomas**: 9 (8 NTT/Radix4 + 1 Perm) — Goldilocks 0, BabyBear 0, ListFinsetBridge 0
+- **Sorry activos**: 12 (12 Poseidon)
 - **`lake build`**: PASS (2647 módulos)
 
 ## Archivos Clave

@@ -5,19 +5,58 @@
 [![Tests](https://img.shields.io/badge/Tests-2850%2B-green.svg)](#testing)
 [![Build](https://img.shields.io/badge/Build-2647%20modules-brightgreen.svg)](#build)
 
-**AMO-Lean** is a verified optimizing compiler that transforms mathematical specifications written in Lean 4 into optimized C code with **formal correctness guarantees**. It targets cryptographic primitives used in STARK provers and zkVMs.
+**AMO-Lean** is a verified optimizing compiler that transforms mathematical specifications written in Lean 4 into optimized C/Rust code with **formal correctness guarantees**. It targets cryptographic primitives used in STARK provers and zkVMs.
 
-## Release: v1.0.1
+## Release: v1.1.0 -- Verification Deepening
 
-### Production-Ready Components
+### What Changed Since v1.0.1
+
+In 3 days (Feb 9-12, 2026), we eliminated **8 axioms** and **23 sorry** from the codebase:
+
+| Metric | v1.0.1 | v1.1.0 | Change |
+|--------|--------|--------|--------|
+| **Axioms** | 17 | **9** | **-47%** |
+| **Active sorry** | 30 | **12** | **-60%** |
+| Lines of Code | 32,650 | 36,326 | +11% |
+| Lean Modules | 2,647 | 2,647 | Same |
+| Tests | 2,850+ | 2,850+ | Same (0 failures) |
+
+### Verification Progress Timeline
+
+```
+v1.0.0 (Feb 6)    17 axioms    35 sorry    AlgebraicSemantics: 8 axioms eliminated
+v1.0.1 (Feb 9)    17 axioms    30 sorry    Benchmark audit, 2850+ tests
+  Feb 9-11         -------- Phase 8 Wave 1 --------
+    C1: lowering_kron_axiom PROVEN (19/19 cases, 0 sorry)
+    A1: BabyBear field implementation + NTTField instance
+    A2: Rust codegen backend
+    B1: Radix-4 C codegen
+    E3: Sorry cleanup (deprecated Theorems.lean)
+  Feb 11           12 axioms    14 sorry    Bloque Central: 5 Goldilocks axioms eliminated
+  Feb 12           12 axioms    12 sorry    BabyBear: 4 axioms + 4 sorry eliminated, Merkle 2 sorry closed
+v1.1.0 (Feb 12)    9 axioms    12 sorry    ListFinsetBridge: 3 NTT axioms proven
+```
+
+### Key Achievements (v1.0.1 -> v1.1.0)
+
+1. **Goldilocks Field: 0 axioms** -- All 5 foundational axioms eliminated via Lucas primality test, subtype refactor (fixing a soundness issue), modular decomposition, strong induction, and Fermat's little theorem
+2. **BabyBear Field: 0 axioms, 0 sorry** -- All 4 axioms eliminated, 4 NTT/BabyBear sorry closed via `native_decide`
+3. **NTT Radix-2: 0 axioms** -- Complete Cooley-Tukey chain formally verified including INTT roundtrip. 3 bridge axioms proven via modular arithmetic (`pred_mul_mod`, `pred_mul_mod_general`)
+4. **Kron Verification: 0 sorry** -- `lowering_kron_axiom` fully proven (19/19 matrix operation cases)
+5. **Merkle: 0 sorry** -- 2 structural sorry eliminated via `foldl_preserves_array_size` and `Nat.log2` decidability
+6. **Rust codegen** -- New `expandedSigmaToRust` backend generates compilable Rust code
+
+---
+
+## Production-Ready Components
 
 - **NTT** (Number Theoretic Transform) -- Verified, optimized, Plonky3-compatible
 - **Radix-4 NTT** -- Verified 4-point butterfly with formal proofs
-- **Goldilocks Field** -- Scalar + AVX2 arithmetic (p = 2^64 - 2^32 + 1), 0 axioms
-- **BabyBear Field** -- Scalar arithmetic (p = 2^31 - 2^27 + 1), 0 axioms
+- **Goldilocks Field** -- Scalar + AVX2 arithmetic (p = 2^64 - 2^32 + 1), **0 axioms**
+- **BabyBear Field** -- Scalar arithmetic (p = 2^31 - 2^27 + 1), **0 axioms**
 - **FRI Protocol** -- Folding, Merkle commitments, Fiat-Shamir
 - **E-Graph Optimization** -- 19/20 rewrite rules formally verified
-- **Algebraic Semantics** -- C-Lite++ lowering with verified scatter/gather
+- **Algebraic Semantics** -- C-Lite++ lowering with verified scatter/gather (19/19 cases)
 - **Poseidon2 Hash** -- BN254 t=3 with HorizenLabs-compatible test vectors
 
 ## How It Works
@@ -34,7 +73,7 @@ Mathematical Spec (Lean 4)
   (verified lowering for matrix operations)
         |
         v
-  Optimized C / SIMD Code
+  Optimized C / Rust / SIMD Code
   (correct by construction, Plonky3-compatible)
 ```
 
@@ -45,7 +84,7 @@ AMO-Lean uses **equality saturation** via e-graphs to find optimal formal equiva
 1. **Encode** the mathematical specification as an e-graph
 2. **Saturate** by applying all verified rewrite rules until a fixed point
 3. **Extract** the optimal form using a cost model
-4. **Lower** through AlgebraicSemantics (Sigma-SPL IR) to C code
+4. **Lower** through AlgebraicSemantics (Sigma-SPL IR) to C/Rust code
 
 This architecture is **portable and modular**: adding a new primitive means writing a Lean specification and lowering rules -- the optimization engine and code generator are reusable across all primitives.
 
@@ -54,7 +93,7 @@ This architecture is **portable and modular**: adding a new primitive means writ
 | Mode | Purpose | Status |
 |------|---------|--------|
 | **Verifier** | Certify external code (e.g., Plonky3) is mathematically correct | Production Ready |
-| **Generator** | Generate verified C code from Lean specs | Production Ready |
+| **Generator** | Generate verified C/Rust code from Lean specs | Production Ready |
 
 ## Performance
 
@@ -67,7 +106,7 @@ This architecture is **portable and modular**: adding a new primitive means writ
 | N=4096 | 109.5 us | 65.9 us | 1.66x |
 | N=65536 | 2.50 ms | 1.48 ms | 1.69x |
 
-**Average**: 1.65x slower than Plonky3 (60% throughput) with **full formal verification**. Aiming at 85% throughput in upcoming release, with full formal verification.
+**Average**: 1.65x slower than Plonky3 (60% throughput) with **full formal verification**.
 
 <details>
 <summary>Full benchmark results (all sizes)</summary>
@@ -132,13 +171,15 @@ ntt_context_destroy(ctx);
 
 ```
 amo-lean/
-├── AmoLean/                    # Lean source (32,650 LOC, 81 files)
+├── AmoLean/                    # Lean source (36,326 LOC, 84 files)
 │   ├── NTT/                    # NTT specification + proofs
 │   │   ├── Spec.lean           # O(N^2) reference specification
 │   │   ├── CooleyTukey.lean    # O(N log N) verified algorithm
 │   │   ├── Butterfly.lean      # Butterfly operation proofs
 │   │   ├── LazyButterfly.lean  # Harvey optimization (lazy reduction)
-│   │   ├── Correctness.lean    # Main equivalence theorems
+│   │   ├── Correctness.lean    # Main equivalence theorems + INTT roundtrip
+│   │   ├── ListFinsetBridge.lean # List<->Finset bridge (0 axioms)
+│   │   ├── BabyBear.lean       # BabyBear NTT (0 sorry)
 │   │   └── Radix4/             # Verified radix-4 implementation
 │   ├── Field/                  # Field implementations (0 axioms, 0 sorry)
 │   │   ├── Goldilocks.lean     # Goldilocks (p = 2^64 - 2^32 + 1)
@@ -146,14 +187,14 @@ amo-lean/
 │   ├── EGraph/                 # E-Graph optimization engine
 │   │   ├── Optimize.lean       # Equality saturation
 │   │   └── VerifiedRules.lean  # 19/20 rules with formal proofs
-│   ├── FRI/                    # FRI protocol components
+│   ├── FRI/                    # FRI protocol components (0 sorry)
 │   ├── Sigma/                  # Sigma-SPL IR definitions
 │   ├── Matrix/                 # Matrix algebra + permutations
 │   ├── Verification/           # Correctness proofs
-│   │   ├── AlgebraicSemantics.lean  # Lowering correctness (3,693 LOC)
+│   │   ├── AlgebraicSemantics.lean  # Lowering correctness (~5,700 LOC, 0 sorry)
 │   │   ├── FRI_Properties.lean      # FRI folding proofs (0 sorry)
-│   │   └── Poseidon_Semantics.lean  # Poseidon2 verification
-│   └── Backends/               # Code generation
+│   │   └── Poseidon_Semantics.lean  # Poseidon2 verification (12 sorry, test-backed)
+│   └── Backends/               # Code generation (C, Rust)
 │
 ├── generated/                  # Generated C code
 │   ├── field_goldilocks.h      # Goldilocks arithmetic (scalar)
@@ -174,19 +215,19 @@ amo-lean/
 
 ### Formal Proofs (Lean 4)
 
-| Component | Status | Sorry | Detail |
-|-----------|--------|-------|--------|
-| NTT Core (Butterfly, CooleyTukey, Correctness) | **100%** | 0 | Fully proven |
-| Radix-4 NTT | **100%** | 0 | Verified 4-point butterfly |
-| FRI Folding | **100%** | 0 | Proven in FRI_Properties.lean |
-| Matrix/Perm | **100%** | 0 | All lemmas proven |
-| E-Graph Rewrite Rules | **95%** | 0 | 19/20 rules verified |
-| Goldilocks Field | **100%** | 0 | 0 axioms (all 5 eliminated) |
-| BabyBear Field | **100%** | 0 | 0 axioms (all 4 eliminated) |
-| AlgebraicSemantics | **100%** | 0 | 19/19 cases proven |
-| Poseidon2 | Computational | 12 | All backed by test vectors |
+| Component | Status | Sorry | Axioms | Detail |
+|-----------|--------|-------|--------|--------|
+| NTT Radix-2 (CooleyTukey + INTT roundtrip) | **100%** | 0 | 0 | Fully proven incl. bridge |
+| NTT Radix-4 | Interface | 0 | 8 | Opaque functions + properties |
+| FRI (Folding + Merkle) | **100%** | 0 | 0 | Fully proven |
+| Matrix/Perm | **100%** | 0 | 1 | Match splitter limitation |
+| E-Graph Rewrite Rules | **95%** | 0 | 0 | 19/20 rules verified |
+| Goldilocks Field | **100%** | 0 | 0 | All 5 axioms eliminated |
+| BabyBear Field | **100%** | 0 | 0 | All 4 axioms eliminated |
+| AlgebraicSemantics | **100%** | 0 | 0 | 19/19 cases proven |
+| Poseidon2 | Computational | 12 | 0 | All backed by 21 test vectors |
 
-**Codebase**: 32,650 LOC | 12 axioms | 14 active sorry (12 Poseidon computational, 2 Merkle structural)
+**Codebase**: 36,326 LOC | **9 axioms** (8 Radix-4 + 1 Perm) | **12 active sorry** (all Poseidon, match splitter limitation)
 
 ### Testing (2850+ tests, 0 failures)
 
@@ -199,8 +240,8 @@ amo-lean/
 | Poseidon2 (S-box + vectors + differential) | 10 | Pass |
 | E-Graph Optimizer | 4 | Pass |
 | Hardening (fuzz + FFI stress + ABI) | 120 | Pass |
-| Lean Build (modules) | 2647 | Pass |
-| **Total** | **~2850** | **0 failures** |
+| Lean Build (modules) | 2,647 | Pass |
+| **Total** | **~2,850** | **0 failures** |
 
 ## Key Design Decisions
 
@@ -216,14 +257,12 @@ amo-lean/
 
 | Task | Relevance | Difficulty | Status |
 |------|-----------|------------|--------|
-| **Poseidon formal proofs** (12 sorry) | Medium -- currently validated computationally | Medium -- Lean match splitter limitation | Tests pass; formal proofs optional |
+| **Poseidon formal proofs** (12 sorry) | Medium -- currently validated computationally | Medium -- Lean match splitter limitation | Tests pass; formal proofs deferred |
 | **Mersenne31 field** | High -- enables SP1 verification | Medium -- architecture supports it | Designed |
-| **Rust code generation** | High -- direct integration with Rust zkVMs | Medium -- requires new backend | Future |
-| **NTT Radix-4 codegen** | Medium -- potential 20-30% speedup | Low -- butterfly already verified | Designed |
-| **NTT axiom elimination** (11 axioms) | Medium -- roundtrip correctness proofs | High -- requires function implementations | Documented |
-| **Merkle tree invariants** (2 sorry in FRI) | Low -- structural, no correctness risk | Low | Documented |
+| **NTT Radix-4 axiom elimination** (8 axioms) | Medium -- Radix-2 already proven | High -- requires function implementations | Segmented |
+| **Perm axiom** (1) | Low -- match splitter limitation | Very High -- Lean compiler limitation | Documented |
 
-None of these items block the current release. The 14 active sorry statements are isolated to Poseidon (12, match splitter limitation) and Merkle (2, structural invariants), and do not affect the correctness of generated code or test results.
+The 12 remaining sorry statements are isolated to Poseidon2 (Lean match splitter limitation) and backed by 21 computational test vectors. The 9 remaining axioms are in Radix-4 NTT (8, opaque interface) and Matrix/Perm (1, compiler limitation). None block the correctness of the Radix-2 NTT pipeline, which is fully verified end-to-end.
 
 ## References
 
@@ -240,4 +279,4 @@ MIT License -- see [LICENSE](LICENSE) for details.
 
 ---
 
-**AMO-Lean v1.0.1** -- Formal verification meets practical performance.
+**AMO-Lean v1.1.0** -- Formal verification meets practical performance.

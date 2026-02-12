@@ -279,19 +279,5 @@ The correct version for finite fields would involve the "correlation" form:
 This is left for future work as it requires additional machinery.
 -/
 
-/-
--- Original (incorrect) statement preserved for reference:
-section Parseval
-
-variable {F : Type*} [CommRing F] [IsDomain F]
-
-theorem parseval {n : ℕ} (hn : n > 1) (ω : F) (hω : IsPrimitiveRoot ω n)
-    (a : Fin n → F) :
-    (n : F) * (Finset.univ.sum fun i => a i * a i) =
-    Finset.univ.sum fun k => ntt_coeff_finset ω a k * ntt_coeff_finset ω a k := by
-  sorry
-
-end Parseval
--/
 
 end AmoLean.NTT

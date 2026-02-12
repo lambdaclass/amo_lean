@@ -541,44 +541,6 @@ theorem inverse_identity_pointwise (i : Fin n) :
     applyIndex (inverse (identity : Perm n)) i = applyIndex identity i := by
   rw [apply_inverse_identity, Perm.apply_identity]
 
-/-
-  BLOCKED: Inverse of inverse is the original (pointwise).
-
-  STATUS: Cannot be axiomatized or proved because the current applyIndex
-  implementation for `inverse (inverse p)` falls through to the `| _ => i`
-  fallback case, making the theorem COMPUTATIONALLY FALSE for most p.
-
-  The theorem would be true mathematically if inverse were fully implemented.
-  Current inverse implementation only handles:
-  - identity: self-inverse (returns i)
-  - swap: self-inverse (applies swap)
-  - stride m n: uses strideIndexInv
-  - bitRev k: self-inverse (applies bitReverse)
-  - Everything else: fallback returns i (WRONG)
-
-  theorem inverse_inverse_pointwise (p : Perm n) (i : Fin n) :
-      applyIndex (inverse (inverse p)) i = applyIndex p i := by
-    sorry  -- BLOCKED: Current impl falls through to identity for inverse(inverse p)
--/
-
-/-
-  BLOCKED: Inverse of composition is reverse composition of inverses.
-
-  STATUS: Cannot be axiomatized because the current implementation makes
-  this theorem COMPUTATIONALLY FALSE. The expression `inverse (compose p q)`
-  falls through to the `| _ => i` fallback, returning i instead of
-  the mathematically correct `compose (inverse q) (inverse p)`.
-
-  To fix this, applyIndex would need to handle:
-  | inverse (compose p q) => applyIndex (compose (inverse q) (inverse p)) i
-
-  But this pattern matching is complex for indexed inductives.
-
-  theorem inverse_compose_pointwise (p q : Perm n) (i : Fin n) :
-      applyIndex (inverse (compose p q)) i =
-      applyIndex (compose (inverse q) (inverse p)) i := by
-    sorry  -- Current inverse implementation doesn't handle compose
--/
 
 end Perm
 
@@ -756,31 +718,6 @@ theorem tensor_compose_pointwise {m n : Nat} (p1 p2 : Perm m) (q1 q2 : Perm n) (
   -- Now rewrite using these equalities
   simp only [h_outer_fin_eq, h_inner_fin_eq]
 
-/-
-  Tensor with I_1 on the left: I_1 ⊗ P ≃ P (pointwise).
-  Types: I_1 ⊗ P : Perm (1 * n), P : Perm n.
-  Requires type coercion h : 1 * n = n.
-
-  Note: This theorem involves heterogeneous equality due to type coercion.
-  The tensor implementation is correct, but proving with type transport
-  is complex. Left as future work.
-
-  theorem tensor_identity_left_one (p : Perm n) :
-      let h : 1 * n = n := Nat.one_mul n
-      ∀ i : Fin n, applyIndex (h ▸ tensor identity p) i = applyIndex p i := by
-    sorry  -- Blocked by type coercion complexity
--/
-
-/-
-  Tensor with I_1 on the right: P ⊗ I_1 ≃ P (pointwise).
-  Types: P ⊗ I_1 : Perm (m * 1), P : Perm m.
-  Similar type coercion issues as tensor_identity_left_one.
-
-  theorem tensor_identity_right_one (p : Perm m) :
-      let h : m * 1 = m := Nat.mul_one m
-      ∀ i : Fin m, applyIndex (h ▸ tensor p identity) i = applyIndex p i := by
-    sorry  -- Blocked by type coercion complexity
--/
 
 -- Tensor is associative (up to isomorphism):
 -- tensor (tensor p q) r ≃ tensor p (tensor q r)

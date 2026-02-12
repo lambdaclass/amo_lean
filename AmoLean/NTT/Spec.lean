@@ -344,14 +344,6 @@ end SingletonINTT
     The deprecated version below is commented out because it has insufficient
     hypotheses and cannot be proven without strengthening them to IsPrimitiveRoot. -/
 
-/-  DEPRECATED: This theorem has insufficient hypotheses
-theorem ntt_intt_identity_deprecated (ω n_inv : F) (a : List F) (n_as_field : F)
-    (hω_n : HPow.hPow ω a.length = inst.one)
-    (hn_inv : inst.mul n_inv n_as_field = inst.one)
-    (hne : a ≠ []) :
-    INTT_spec ω n_inv (NTT_spec ω a) = a := by
-  sorry
--/
 
 /-! ## Part 8: Quick Tests (small N only!) -/
 

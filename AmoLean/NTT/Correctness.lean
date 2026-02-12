@@ -399,6 +399,121 @@ decreasing_by
     simp only [h_evens_len, h_odds_len, hexp, Nat.pow_succ]
     omega
 
+/-! ### Auxiliary: Modular arithmetic for inverse root -/
+
+/-- (n-1)*k mod n = n-k when 0 < k < n -/
+private lemma pred_mul_mod (n k : ℕ) (hn : n > 0) (hk : 0 < k) (hk_lt : k < n) :
+    (n - 1) * k % n = n - k := by
+  -- Key equation: (n-1)*k = n*(k-1) + (n-k)
+  have key : (n - 1) * k = n * (k - 1) + (n - k) := by
+    have eq_lhs : (n - 1) * k + k = n * k := by
+      have : (n - 1 + 1) = n := Nat.sub_add_cancel hn
+      calc (n - 1) * k + k
+          = (n - 1) * k + 1 * k := by rw [one_mul]
+        _ = (n - 1 + 1) * k := by rw [add_mul]
+        _ = n * k := by rw [this]
+    have eq_rhs : n * (k - 1) + (n - k) + k = n * k := by
+      have hle : k ≤ n := Nat.le_of_lt hk_lt
+      calc n * (k - 1) + (n - k) + k
+          = n * (k - 1) + (n - k + k) := by rw [Nat.add_assoc]
+        _ = n * (k - 1) + n := by rw [Nat.sub_add_cancel hle]
+        _ = n * (k - 1) + n * 1 := by rw [Nat.mul_one]
+        _ = n * (k - 1 + 1) := by rw [← Nat.mul_add]
+        _ = n * k := by rw [Nat.sub_add_cancel hk]
+    have : (n - 1) * k + k = n * (k - 1) + (n - k) + k := by
+      rw [eq_lhs, eq_rhs]
+    exact Nat.add_right_cancel this
+  rw [key, Nat.add_comm, Nat.add_mul_mod_self_left, Nat.mod_eq_of_lt (by omega : n - k < n)]
+
+/-- General version: (n-1)*m mod n = (n - m%n) mod n -/
+private lemma pred_mul_mod_general (n m : ℕ) (hn : n > 0) :
+    (n - 1) * m % n = (n - m % n) % n := by
+  conv_lhs => rw [Nat.mul_mod, Nat.mod_eq_of_lt (show n - 1 < n by omega)]
+  set r := m % n with hr_def
+  have hr_lt : r < n := Nat.mod_lt m hn
+  by_cases hr_zero : r = 0
+  · simp [hr_zero, Nat.mod_self]
+  · rw [pred_mul_mod n r hn (Nat.pos_of_ne_zero hr_zero) hr_lt,
+        Nat.mod_eq_of_lt (show n - r < n by omega)]
+
+/-- ω^(n-1) is a primitive n-th root of unity when ω is -/
+theorem pow_pred_is_primitive {n : ℕ} (hn : n > 0) {ω : F} (hω : IsPrimitiveRoot ω n) :
+    IsPrimitiveRoot (ω ^ (n - 1)) n := by
+  constructor
+  · -- pow_eq_one: (ω^(n-1))^n = ω^((n-1)*n) = (ω^n)^(n-1) = 1
+    rw [← pow_mul, mul_comm, pow_mul, hω.pow_eq_one, one_pow]
+  · -- pow_ne_one_of_lt: for 0 < k < n, (ω^(n-1))^k ≠ 1
+    intro k hk hk_lt
+    rw [← pow_mul, hω.pow_eq_pow_mod hn]
+    rw [pred_mul_mod n k hn hk hk_lt]
+    exact hω.pow_ne_one_of_lt (n - k) (by omega) (by omega)
+
+/-- (ω^(n-1))^(k*i) = ω^(n - (k*i % n)) for primitive ω, k*i ≠ 0 -/
+theorem inv_root_exp_equiv {n : ℕ} (hn : n > 0) {ω : F} (hω : IsPrimitiveRoot ω n)
+    (k i : ℕ) (hki : k * i ≠ 0) :
+    (ω ^ (n - 1)) ^ (k * i) = ω ^ (n - (k * i) % n) := by
+  rw [← pow_mul, hω.pow_eq_pow_mod hn]
+  conv_rhs => rw [hω.pow_eq_pow_mod hn]
+  congr 1
+  exact pred_mul_mod_general n (k * i) hn
+
+/-- When k*i = 0, (ω^(n-1))^0 = 1 = ω^0 -/
+lemma inv_root_exp_zero {n : ℕ} (_hn : n > 0) {ω : F} (_hω : IsPrimitiveRoot ω n)
+    (k i : ℕ) (hki : k * i = 0) :
+    (ω ^ (n - 1)) ^ (k * i) = ω ^ (if i * k = 0 then 0 else n - (i * k) % n) := by
+  have hik : i * k = 0 := by rw [mul_comm]; exact hki
+  simp only [hki, hik, pow_zero, ↓reduceIte]
+
+/-- Helper: foldl is compatible with pointwise equal functions -/
+private lemma list_foldl_eq_of_forall₂ {α β : Type*} (f g : β → α → β) (l : List α) (init : β)
+    (h : ∀ acc x, x ∈ l → f acc x = g acc x) :
+    l.foldl f init = l.foldl g init := by
+  induction l generalizing init with
+  | nil => rfl
+  | cons x xs ih =>
+    simp only [List.foldl_cons]
+    have hx : x ∈ x :: xs := List.mem_cons_self x xs
+    rw [h init x hx]
+    apply ih
+    intro acc y hy
+    exact h acc y (List.mem_cons_of_mem x hy)
+
+/-- INTT_recursive computes the same result as INTT_spec -/
+theorem intt_recursive_eq_spec' (ω n_inv : F) (X : List F)
+    (h_pow2 : ∃ k : ℕ, X.length = 2^k)
+    (hω : IsPrimitiveRoot ω X.length)
+    (hne : X ≠ []) :
+    INTT_recursive ω n_inv X = INTT_spec ω n_inv X := by
+  have hlen_pos : X.length > 0 := List.length_pos.mpr hne
+  let n := X.length
+  have hn_pos : n > 0 := hlen_pos
+  unfold INTT_recursive
+  simp only [hlen_pos, ↓reduceDIte]
+  have hω_inv := pow_pred_is_primitive hn_pos hω
+  have h_ct := ct_recursive_eq_spec (ω ^ (n - 1)) X h_pow2 hω_inv
+  rw [h_ct]
+  unfold INTT_spec NTT_spec
+  apply List.ext_getElem
+  · simp only [List.length_map, List.length_range]
+  · intro i hi _
+    simp only [List.length_map, List.length_range] at hi
+    simp only [List.getElem_map, List.getElem_range]
+    congr 1
+    apply list_foldl_eq_of_forall₂
+    intro acc k hk
+    simp only [List.mem_range] at hk
+    cases hX : X[k]? with
+    | none => rfl
+    | some Xk =>
+      simp only [hX]
+      by_cases hki : k * i = 0
+      · have h := inv_root_exp_zero hn_pos hω k i hki
+        simp only [h]
+        rfl
+      · have h := inv_root_exp_equiv hn_pos hω k i hki
+        simp only [h, mul_comm i k, hki, ↓reduceIte]
+        rfl
+
 /-- Corollary: NTT roundtrip works for recursive version -/
 theorem ntt_intt_recursive_roundtrip (ω n_inv : F) (input : List F)
     (h_pow2 : ∃ k : ℕ, input.length = 2^k)
@@ -416,7 +531,7 @@ theorem ntt_intt_recursive_roundtrip (ω n_inv : F) (input : List F)
     -- 0 > 0 is false, so the if returns []
     simp
   · -- Non-empty input
-    have h_intt_eq := intt_recursive_eq_spec ω n_inv (NTT_spec ω input)
+    have h_intt_eq := intt_recursive_eq_spec' ω n_inv (NTT_spec ω input)
         (by rw [NTT_spec_length]; exact h_pow2)
         (by rw [NTT_spec_length]; exact hω)
         (by intro h; have := congrArg List.length h; simp [NTT_spec_length] at this; exact hne this)

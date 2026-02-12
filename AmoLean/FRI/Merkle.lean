@@ -224,6 +224,16 @@ def testHash (a b : UInt64) : UInt64 :=
 /-- Hash function signature for generic tree building -/
 abbrev HashFn (F : Type) := F → F → F
 
+/-- Foldl preserves array size when each step preserves size. -/
+private theorem foldl_preserves_array_size {α β : Type*}
+    (f : Array α → β → Array α)
+    (hf : ∀ (arr : Array α) (x : β), (f arr x).size = arr.size)
+    (init : Array α) (l : List β) :
+    (l.foldl f init).size = init.size := by
+  induction l generalizing init with
+  | nil => rfl
+  | cons x xs ih => exact (ih (f init x)).trans (hf init x)
+
 /-- Build a Merkle tree from leaves (functional style).
 
     Algorithm:
@@ -238,11 +248,7 @@ def buildTree [FRIField F] [Inhabited F] (leaves : Array F) (hashFn : HashFn F) 
     Option (FlatMerkle F leaves.size) :=
   let n := leaves.size
   if h1 : n == 0 then none
-  else
-    -- Check power of 2
-    let isPow2 := n &&& (n - 1) == 0
-    if !isPow2 then none
-    else
+  else if h_pow2 : 2 ^ (Nat.log2 n) = n then
       -- Initialize array with leaves + space for internals
       let totalSize := 2 * n - 1
       let initialNodes : Array F := Array.mkArray totalSize default
@@ -276,9 +282,16 @@ def buildTree [FRIField F] [Inhabited F] (leaves : Array F) (hashFn : HashFn F) 
 
       some {
         nodes := finalNodes
-        h_size := by sorry  -- Size invariant
-        h_pow2 := ⟨Nat.log2 n, by sorry⟩  -- Power of 2
+        h_size := by
+          have h_wl : withLeaves.size = initialNodes.size :=
+            foldl_preserves_array_size _ (fun arr _ => by simp [Array.set!]) _ _
+          have h_fn : finalNodes.size = withLeaves.size :=
+            foldl_preserves_array_size _ (fun arr _ => by
+              apply foldl_preserves_array_size; intro arr2 _; simp [Array.set!]) _ _
+          exact h_fn.trans (h_wl.trans (Array.size_mkArray _ _))
+        h_pow2 := ⟨Nat.log2 n, h_pow2.symm⟩
       }
+  else none
 
 /-- Generate Merkle proof for a leaf -/
 def generateProof [FRIField F] [Inhabited F] (tree : FlatMerkle F n) (leafIndex : Nat) :
