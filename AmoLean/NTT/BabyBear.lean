@@ -48,7 +48,7 @@ For NTT of size n (power of 2), the primitive n-th root is:
 -/
 
 /-- The multiplicative generator of BabyBear: g = 31 -/
-def GENERATOR : BabyBearField := ⟨31⟩
+def GENERATOR : BabyBearField := ⟨31, by native_decide⟩
 
 /-- p - 1, the order of the multiplicative group -/
 def P_MINUS_ONE : Nat := ORDER.toNat - 1
@@ -85,22 +85,17 @@ Prime factors of (p-1): {2, 3, 5}
 -/
 theorem babybear_generator_is_primitive_root :
     -- g^((p-1)/2) ≠ 1
-    BabyBearField.pow ⟨31⟩ (P_MINUS_ONE / 2) ≠ BabyBearField.one ∧
+    BabyBearField.pow ⟨31, by native_decide⟩ (P_MINUS_ONE / 2) ≠ BabyBearField.one ∧
     -- g^((p-1)/3) ≠ 1
-    BabyBearField.pow ⟨31⟩ (P_MINUS_ONE / 3) ≠ BabyBearField.one ∧
+    BabyBearField.pow ⟨31, by native_decide⟩ (P_MINUS_ONE / 3) ≠ BabyBearField.one ∧
     -- g^((p-1)/5) ≠ 1
-    BabyBearField.pow ⟨31⟩ (P_MINUS_ONE / 5) ≠ BabyBearField.one := by
-  -- These are computational checks.
-  -- native_decide would work but may timeout for large exponents.
-  -- For now we axiomatize; the #eval tests below verify empirically.
-  exact ⟨by sorry, by sorry, by sorry⟩
+    BabyBearField.pow ⟨31, by native_decide⟩ (P_MINUS_ONE / 5) ≠ BabyBearField.one :=
+  ⟨by native_decide, by native_decide, by native_decide⟩
 
 /-- g = 31 has full order p-1 -/
 theorem babybear_generator_order :
-    BabyBearField.pow ⟨31⟩ P_MINUS_ONE = BabyBearField.one := by
-  -- g^(p-1) = 1 by Fermat's little theorem
-  -- Verified empirically by the eval tests below
-  sorry
+    BabyBearField.pow ⟨31, by native_decide⟩ P_MINUS_ONE = BabyBearField.one := by
+  native_decide
 
 /-! ## Part 4: Precomputed Roots for Common NTT Sizes -/
 
@@ -234,7 +229,7 @@ def testNTTRoundtrip (n : Nat) (hn : n > 0) : IO Bool := do
 
   -- Test 5: Generator g=31 tests
   IO.println "\n5. Generator g=31:"
-  let g : BabyBearField := ⟨31⟩
+  let g : BabyBearField := ⟨31, by native_decide⟩
   let g_pMinus1 := BabyBearField.pow g P_MINUS_ONE
   IO.println s!"   g^(p-1) = {g_pMinus1.value} (expected: 1)"
   let g_half := BabyBearField.pow g (P_MINUS_ONE / 2)

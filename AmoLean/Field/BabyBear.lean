@@ -29,6 +29,7 @@ import Mathlib.Algebra.Field.Defs
 import Mathlib.Algebra.Ring.Defs
 import Mathlib.Data.ZMod.Basic
 import Mathlib.Algebra.Ring.Equiv
+import Mathlib.FieldTheory.Finite.Basic
 import Batteries.Data.UInt
 
 namespace AmoLean.Field.BabyBear
@@ -43,7 +44,7 @@ def ORDER_NAT : Nat := ORDER.toNat
 
 /-- BabyBear prime is prime.
     Unlike Goldilocks, this IS small enough for native_decide. -/
-axiom babybear_prime_is_prime : Nat.Prime ORDER_NAT
+theorem babybear_prime_is_prime : Nat.Prime ORDER_NAT := by native_decide
 
 instance : Fact (Nat.Prime ORDER_NAT) := ⟨babybear_prime_is_prime⟩
 
@@ -70,12 +71,22 @@ def LOW_31_MASK : UInt32 := 0x7FFFFFFF
 /-! ## Part 2: BabyBear Field Type -/
 
 /-- BabyBear field element.
-    Invariant: value < ORDER -/
+    Invariant enforced at type level: value < ORDER -/
 structure BabyBearField where
   value : UInt32
-  deriving Repr, DecidableEq, Hashable
+  h_lt : value.toNat < ORDER.toNat
 
-instance : Inhabited BabyBearField := ⟨⟨0⟩⟩
+instance : DecidableEq BabyBearField := fun a b =>
+  if h : a.value = b.value then isTrue (by cases a; cases b; simp_all)
+  else isFalse (by intro hab; exact h (congrArg BabyBearField.value hab))
+
+instance : Repr BabyBearField where
+  reprPrec a n := reprPrec a.value n
+
+instance : Hashable BabyBearField where
+  hash a := hash a.value
+
+instance : Inhabited BabyBearField := ⟨⟨0, by native_decide⟩⟩
 
 namespace BabyBearField
 
@@ -91,8 +102,13 @@ theorem ext {a b : BabyBearField} (h : a.value = b.value) : a = b := by
 
 /-- Create a field element from UInt32, reducing if necessary -/
 def ofUInt32 (n : UInt32) : BabyBearField :=
-  if n < ORDER then ⟨n⟩
-  else ⟨n - ORDER⟩
+  if h : n < ORDER then ⟨n, h⟩
+  else ⟨(n.toNat % ORDER.toNat).toUInt32, by
+    have hord_pos : 0 < ORDER.toNat := order_nat_pos
+    have hord_lt : ORDER.toNat < UInt32.size := by native_decide
+    have hlt : n.toNat % ORDER.toNat < ORDER.toNat := Nat.mod_lt _ hord_pos
+    simp only [Nat.toUInt32, UInt32.toNat_ofNat, Nat.mod_eq_of_lt (by omega : n.toNat % ORDER.toNat < UInt32.size)]
+    exact hlt⟩
 
 /-- Create a field element from Nat -/
 def ofNat (n : Nat) : BabyBearField :=
@@ -100,10 +116,10 @@ def ofNat (n : Nat) : BabyBearField :=
   ofUInt32 reduced.toUInt32
 
 /-- Zero element -/
-def zero : BabyBearField := ⟨0⟩
+def zero : BabyBearField := ⟨0, by native_decide⟩
 
 /-- One element -/
-def one : BabyBearField := ⟨1⟩
+def one : BabyBearField := ⟨1, by native_decide⟩
 
 /-! ## Part 4: Core Arithmetic Operations -/
 
@@ -112,19 +128,53 @@ def one : BabyBearField := ⟨1⟩
 def add (a b : BabyBearField) : BabyBearField :=
   let sum := a.value.toNat + b.value.toNat
   let reduced := if sum >= ORDER.toNat then sum - ORDER.toNat else sum
-  ⟨reduced.toUInt32⟩
+  ⟨reduced.toUInt32, by
+    have ha := a.h_lt; have hb := b.h_lt
+    have hord_lt : ORDER.toNat < UInt32.size := by native_decide
+    have hlt : reduced < ORDER.toNat := by
+      show (if a.value.toNat + b.value.toNat ≥ ORDER.toNat
+            then a.value.toNat + b.value.toNat - ORDER.toNat
+            else a.value.toNat + b.value.toNat) < ORDER.toNat
+      split_ifs with h <;> omega
+    simp only [Nat.toUInt32, UInt32.toNat_ofNat, Nat.mod_eq_of_lt (by omega : reduced < UInt32.size)]
+    exact hlt⟩
 
 /-- Subtraction: (a - b) mod p -/
 def sub (a b : BabyBearField) : BabyBearField :=
-  if a.value >= b.value then
-    ⟨a.value - b.value⟩
+  if h : a.value >= b.value then
+    ⟨a.value - b.value, by
+      have ha := a.h_lt
+      have hsub : (a.value - b.value).toNat = a.value.toNat - b.value.toNat := by
+        rw [UInt32.toNat_sub_of_le]; exact h
+      rw [hsub]; omega⟩
   else
-    ⟨ORDER - b.value + a.value⟩
+    ⟨ORDER - b.value + a.value, by
+      have ha := a.h_lt; have hb := b.h_lt
+      have halt : a.value.toNat < b.value.toNat := by
+        simp only [ge_iff_le, UInt32.le_iff_toNat_le, not_le] at h; exact h
+      have hb_le_ord : b.value ≤ ORDER := by
+        simp only [UInt32.le_iff_toNat_le]; omega
+      have hsub1 : (ORDER - b.value).toNat = ORDER.toNat - b.value.toNat := by
+        rw [UInt32.toNat_sub_of_le]; exact hb_le_ord
+      have hsum_lt : ORDER.toNat - b.value.toNat + a.value.toNat < UInt32.size := by
+        have : ORDER.toNat < UInt32.size := by native_decide
+        omega
+      have hadd : (ORDER - b.value + a.value).toNat =
+                  (ORDER - b.value).toNat + a.value.toNat := by
+        simp only [UInt32.toNat_add, hsub1, Nat.mod_eq_of_lt hsum_lt]
+      rw [hadd, hsub1]; omega⟩
 
 /-- Negation: -a mod p -/
 def neg (a : BabyBearField) : BabyBearField :=
-  if a.value == 0 then ⟨0⟩
-  else ⟨ORDER - a.value⟩
+  if h : a.value = 0 then ⟨0, by native_decide⟩
+  else ⟨ORDER - a.value, by
+    have ha := a.h_lt
+    have ha_pos : 0 < a.value.toNat := by
+      by_contra hle; push_neg at hle
+      exact h (UInt32.ext (Nat.eq_zero_of_le_zero hle))
+    have hsub : (ORDER - a.value).toNat = ORDER.toNat - a.value.toNat := by
+      rw [UInt32.toNat_sub_of_le]; simp only [UInt32.le_iff_toNat_le]; omega
+    rw [hsub]; omega⟩
 
 /-- BabyBear modular reduction for multiplication.
 
@@ -139,7 +189,12 @@ def neg (a : BabyBearField) : BabyBearField :=
 
     For now, we use the simple % reduction which is correct by definition. -/
 def reduceMul (product : Nat) : BabyBearField :=
-  ⟨(product % ORDER.toNat).toUInt32⟩
+  ⟨(product % ORDER.toNat).toUInt32, by
+    have hord_pos : 0 < ORDER.toNat := order_nat_pos
+    have hord_lt : ORDER.toNat < UInt32.size := by native_decide
+    have hlt : product % ORDER.toNat < ORDER.toNat := Nat.mod_lt _ hord_pos
+    simp only [Nat.toUInt32, UInt32.toNat_ofNat, Nat.mod_eq_of_lt (by omega : product % ORDER.toNat < UInt32.size)]
+    exact hlt⟩
 
 /-- Multiplication: (a * b) mod p -/
 def mul (a b : BabyBearField) : BabyBearField :=
@@ -232,10 +287,10 @@ end BabyBearField
 /-! ## Part 8: Constants -/
 
 /-- p - 1: Maximum valid field element -/
-def P_MINUS_1 : BabyBearField := ⟨ORDER - 1⟩
+def P_MINUS_1 : BabyBearField := ⟨ORDER - 1, by native_decide⟩
 
 /-- p - 2: Used for inverse calculation -/
-def P_MINUS_2 : BabyBearField := ⟨ORDER - 2⟩
+def P_MINUS_2 : BabyBearField := ⟨ORDER - 2, by native_decide⟩
 
 /-! ## Part 9: ZMod Isomorphism Infrastructure
 
@@ -248,15 +303,22 @@ def toZMod (x : BabyBearField) : ZMod ORDER_NAT :=
 
 /-- Conversion from ZMod ORDER_NAT back to BabyBearField -/
 def ofZMod (z : ZMod ORDER_NAT) : BabyBearField :=
-  ⟨(ZMod.val z).toUInt32⟩
+  ⟨(ZMod.val z).toUInt32, by
+    have hval : ZMod.val z < ORDER_NAT := ZMod.val_lt z
+    have hlt_size : ZMod.val z < UInt32.size := by
+      have : ORDER_NAT < UInt32.size := by native_decide
+      omega
+    simp only [Nat.toUInt32, UInt32.toNat_ofNat, Nat.mod_eq_of_lt hlt_size]
+    exact hval⟩
 
 /-! ### Canonicity -/
 
 /-- A BabyBearField element is canonical if value < ORDER -/
 def BabyBearField.isCanonical (a : BabyBearField) : Prop := a.value < ORDER
 
-/-- All BabyBearField values are canonical. -/
-axiom babybear_canonical (a : BabyBearField) : a.isCanonical
+/-- All BabyBearField values are canonical.
+    Now a trivial consequence of the h_lt proof field. -/
+theorem babybear_canonical (a : BabyBearField) : a.isCanonical := a.h_lt
 
 /-! ### val_eq Lemmas -/
 
@@ -296,10 +358,8 @@ theorem neg_val_eq (a : BabyBearField) :
   have ha_mod : a.value.toNat % ORDER.toNat = a.value.toNat := Nat.mod_eq_of_lt ha
   rw [ha_mod]
   split_ifs with h
-  · simp only [beq_iff_eq] at h
-    simp only [h, UInt32.toNat_zero, Nat.sub_zero, Nat.mod_self]
-  · simp only [beq_iff_eq, ne_eq] at h
-    have ha_pos : 0 < a.value.toNat := by
+  · simp only [h, UInt32.toNat_zero, Nat.sub_zero, Nat.mod_self]
+  · have ha_pos : 0 < a.value.toNat := by
       by_contra hcon
       push_neg at hcon
       have : a.value.toNat = 0 := Nat.eq_zero_of_le_zero hcon
@@ -480,19 +540,73 @@ theorem toZMod_ofNat (n : Nat) :
   have hcond : (n % ORDER.toNat).toUInt32 < ORDER := by
     simp only [UInt32.lt_iff_toNat_lt, htoUInt32]
     exact hlt
-  simp only [hcond, ↓reduceIte, htoUInt32]
+  simp only [dif_pos hcond, htoUInt32]
   rw [ZMod.natCast_eq_natCast_iff]
   exact Nat.mod_modEq n ORDER.toNat
 
-/-- toZMod respects pow. -/
-@[simp]
-axiom toZMod_pow (a : BabyBearField) (n : Nat) :
-    toZMod (BabyBearField.pow a n) = (toZMod a) ^ n
+/-- Bridge: BabyBearField.mul equals * (for simp unification). -/
+private theorem mul_def (a b : BabyBearField) : BabyBearField.mul a b = a * b := rfl
 
-/-- toZMod respects inv. -/
+/-- toZMod respects square (helper for toZMod_pow). -/
+private theorem toZMod_square (a : BabyBearField) :
+    toZMod (BabyBearField.square a) = (toZMod a) * (toZMod a) :=
+  toZMod_mul a a
+
+/-- toZMod respects pow.
+    Proved by strong induction matching the binary exponentiation structure
+    of BabyBearField.pow. Each branch reduces to toZMod_mul and toZMod_one. -/
 @[simp]
-axiom toZMod_inv (a : BabyBearField) :
-    toZMod (BabyBearField.inv a) = (toZMod a)⁻¹
+theorem toZMod_pow (a : BabyBearField) (n : Nat) :
+    toZMod (BabyBearField.pow a n) = (toZMod a) ^ n := by
+  induction n using Nat.strongRecOn with
+  | ind k ih =>
+    match k with
+    | 0 =>
+      simp only [BabyBearField.pow, pow_zero]
+      exact toZMod_one
+    | 1 => simp [BabyBearField.pow, pow_one]
+    | n + 2 =>
+      have h_lt : (n + 2) / 2 < n + 2 := Nat.div_lt_self (by omega) (by omega)
+      have hrec := ih _ h_lt
+      simp only [BabyBearField.pow]
+      split
+      · next heven =>
+        have hmod : (n + 2) % 2 = 0 := eq_of_beq heven
+        simp only [BabyBearField.square, mul_def, toZMod_mul, hrec, ← pow_add]
+        congr 1; omega
+      · next hodd =>
+        have hmod : (n + 2) % 2 ≠ 0 := by intro h; exact hodd (by simp [h])
+        simp only [BabyBearField.square, mul_def, toZMod_mul, hrec, ← pow_add, ← pow_succ]
+        congr 1; omega
+
+/-- toZMod respects inv.
+    For a = 0: inv 0 = 0 and 0⁻¹ = 0 in ZMod.
+    For a ≠ 0: inv a = a^(p-2) and a^(p-2) = a⁻¹ by Fermat's Little Theorem
+    (ZMod.pow_card_sub_one_eq_one). -/
+@[simp]
+theorem toZMod_inv (a : BabyBearField) :
+    toZMod (BabyBearField.inv a) = (toZMod a)⁻¹ := by
+  simp only [BabyBearField.inv]
+  split
+  · next hzero =>
+    have htza : toZMod a = 0 := by
+      have hv : a.value = 0 := eq_of_beq hzero
+      show (a.value.toNat : ZMod ORDER_NAT) = 0
+      rw [hv]; simp
+    rw [htza, inv_zero]; exact toZMod_zero
+  · next hnonzero =>
+    rw [toZMod_pow, order_toNat_eq]
+    have hne : toZMod a ≠ 0 := by
+      intro heq; apply hnonzero
+      have := toZMod_injective (heq.trans toZMod_zero.symm)
+      subst this; native_decide
+    have hfermat : (toZMod a) ^ (ORDER_NAT - 1) = 1 :=
+      ZMod.pow_card_sub_one_eq_one hne
+    have h1 : (toZMod a) ^ (ORDER_NAT - 2) * toZMod a = 1 := by
+      rw [← pow_succ, show ORDER_NAT - 2 + 1 = ORDER_NAT - 1 from by
+        have := order_nat_ge_two; omega]
+      exact hfermat
+    exact mul_right_cancel₀ hne (h1.trans (inv_mul_cancel₀ hne).symm)
 
 /-! ## Part 10: Algebraic Instances via toZMod -/
 
@@ -555,14 +669,9 @@ instance : CommRing BabyBearField where
     ring
   nsmul := fun n a => BabyBearField.mul (BabyBearField.ofNat n) a
   nsmul_zero := fun a => by
-    show BabyBearField.mul (BabyBearField.ofNat 0) a = 0
-    have h0 : BabyBearField.ofNat 0 = BabyBearField.zero := by
-      simp only [BabyBearField.ofNat, BabyBearField.ofUInt32, BabyBearField.zero]
-      native_decide
-    rw [h0]
-    simp only [BabyBearField.mul, BabyBearField.zero, BabyBearField.reduceMul]
-    simp only [UInt32.toNat_zero, Nat.zero_mul, Nat.zero_mod, Nat.toUInt32]
-    native_decide
+    show BabyBearField.ofNat 0 * a = 0
+    apply toZMod_injective
+    rw [toZMod_mul, toZMod_ofNat, Nat.cast_zero, zero_mul, toZMod_zero]
   nsmul_succ := fun n a => by
     show (BabyBearField.ofNat (n + 1)).mul a = (BabyBearField.ofNat n).mul a + a
     apply toZMod_injective
@@ -578,14 +687,9 @@ instance : CommRing BabyBearField where
                       else BabyBearField.neg (BabyBearField.mul (BabyBearField.ofNat (-n).toNat) a)
   zsmul_zero' := fun a => by
     simp only [ge_iff_le, le_refl, ↓reduceIte, Int.toNat_zero]
-    show BabyBearField.mul (BabyBearField.ofNat 0) a = 0
-    have h0 : BabyBearField.ofNat 0 = BabyBearField.zero := by
-      simp only [BabyBearField.ofNat, BabyBearField.ofUInt32, BabyBearField.zero]
-      native_decide
-    rw [h0]
-    simp only [BabyBearField.mul, BabyBearField.zero, BabyBearField.reduceMul]
-    simp only [UInt32.toNat_zero, Nat.zero_mul, Nat.zero_mod, Nat.toUInt32]
-    native_decide
+    show BabyBearField.ofNat 0 * a = 0
+    apply toZMod_injective
+    rw [toZMod_mul, toZMod_ofNat, Nat.cast_zero, zero_mul, toZMod_zero]
   zsmul_succ' := fun n a => by
     simp only [ge_iff_le]
     rw [if_pos (Int.natCast_nonneg n.succ)]
@@ -658,15 +762,11 @@ instance : CommRing BabyBearField where
     simp only [toZMod_mul, toZMod_add]
     ring
   zero_mul := fun a => by
-    show BabyBearField.mul BabyBearField.zero a = BabyBearField.zero
-    simp only [BabyBearField.mul, BabyBearField.zero, BabyBearField.reduceMul]
-    simp only [UInt32.toNat_zero, Nat.zero_mul, Nat.zero_mod, Nat.toUInt32]
-    native_decide
+    apply toZMod_injective
+    rw [toZMod_mul, toZMod_zero, zero_mul]
   mul_zero := fun a => by
-    show BabyBearField.mul a BabyBearField.zero = BabyBearField.zero
-    simp only [BabyBearField.mul, BabyBearField.zero, BabyBearField.reduceMul]
-    simp only [UInt32.toNat_zero, Nat.mul_zero, Nat.zero_mod, Nat.toUInt32]
-    native_decide
+    apply toZMod_injective
+    rw [toZMod_mul, toZMod_zero, mul_zero]
   natCast := fun n => BabyBearField.ofNat n
   natCast_zero := by rfl
   natCast_succ := fun n => by
@@ -713,7 +813,7 @@ instance : Field BabyBearField where
       rw [heq, toZMod_zero]
     exact mul_inv_cancel₀ hne
   inv_zero := by
-    show BabyBearField.inv ⟨0⟩ = ⟨0⟩
+    show BabyBearField.inv ⟨0, by native_decide⟩ = ⟨0, by native_decide⟩
     simp only [BabyBearField.inv, beq_self_eq_true, ↓reduceIte, BabyBearField.zero]
   div := BabyBearField.div
   div_eq_mul_inv := fun a b => by rfl
@@ -769,7 +869,7 @@ open BabyBearField in
   IO.println s!"1 + 1 = {r2} (expected: 2)"
 
   -- Test 3: (p-1) + 1 = 0
-  let pMinus1 : BabyBearField := ⟨ORDER - 1⟩
+  let pMinus1 : BabyBearField := ⟨ORDER - 1, by native_decide⟩
   let r3 := add pMinus1 one
   IO.println s!"(p-1) + 1 = {r3} (expected: 0)"
 
@@ -789,7 +889,7 @@ open BabyBearField in
   IO.println s!"x * x^(-1) = {r6} (expected: 1)"
 
   -- Test 7: Generator g=31, g^(p-1) = 1
-  let g : BabyBearField := ⟨31⟩
+  let g : BabyBearField := ⟨31, by native_decide⟩
   let r7 := pow g (ORDER.toNat - 1)
   IO.println s!"31^(p-1) = {r7} (expected: 1)"
 

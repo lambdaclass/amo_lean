@@ -794,5 +794,92 @@ Solo `AmoLean/Field/Goldilocks.lean`:
 
 ---
 
+---
+
+# BabyBear: Eliminación de 4 Axiomas + 4 Sorry
+
+**Fecha**: 2026-02-12
+**Archivos**: `AmoLean/Field/BabyBear.lean`, `AmoLean/NTT/BabyBear.lean`
+**Metodología**: Replicación del Bloque Central de Goldilocks, simplificada para 31-bit prime
+
+## Objetivo
+
+Eliminar 4 axiomas de `BabyBear.lean` y 4 sorry de `NTT/BabyBear.lean`.
+
+| # | Target | Tipo | Estado |
+|---|--------|------|--------|
+| 1 | `babybear_prime_is_prime` | axiom → theorem | **ELIMINADO** |
+| 2 | `babybear_canonical` | axiom → theorem | **ELIMINADO** |
+| 3 | `toZMod_pow` | axiom → theorem | **ELIMINADO** |
+| 4 | `toZMod_inv` | axiom → theorem | **ELIMINADO** |
+| 5-7 | `babybear_generator_is_primitive_root` (3 conjuncts) | sorry → native_decide | **ELIMINADO** |
+| 8 | `babybear_generator_order` | sorry → native_decide | **ELIMINADO** |
+
+## Simplificaciones vs Goldilocks
+
+| Aspecto | Goldilocks | BabyBear |
+|---------|------------|----------|
+| Primo | 2^64 - 2^32 + 1 (~64 bits) | 2013265921 (~31 bits) |
+| Tipo base | UInt64 | UInt32 |
+| Primalidad | Lucas + zpowMod (obligatorio) | `native_decide` (directo) |
+| Multiplicación | reduce128 (6 sub-lemas) | `product % ORDER` (trivial) |
+| `2*ORDER` vs `UIntN.size` | `2*ORDER > UInt64.size` | `2*ORDER < UInt32.size` |
+
+## Progreso
+
+| Bloque | Estado | Notas |
+|--------|--------|-------|
+| GATE: prime | **COMPLETADO** | `native_decide` directo (~ms) |
+| Bloque 1: canonical refactor | **COMPLETADO** | Subtype + proofs en todas las ops |
+| Bloque 2: toZMod_pow | **COMPLETADO** | Strong induction (copy de Goldilocks) |
+| Bloque 3: toZMod_inv | **COMPLETADO** | Fermat (ZMod.pow_card_sub_one_eq_one) |
+| Bloque 4: NTT sorry | **COMPLETADO** | `native_decide` directo |
+
+## Notas de Implementación
+
+### GATE: `babybear_prime_is_prime`
+
+`native_decide` funciona directamente para 31-bit prime (√p ≈ 44860, ~ms).
+No fue necesario Lucas/zpowMod como en Goldilocks.
+
+### Bloque 1: Subtype Refactor
+
+Mismo patrón que Goldilocks: añadir `h_lt : value.toNat < ORDER.toNat`.
+
+**Diferencias clave**:
+- `ofUInt32` else-branch usa `n.toNat % ORDER.toNat` (no substracción) porque `2*ORDER < UInt32.size`
+- `neg` cambiado de `if a.value == 0` (BEq/ite) a `if h : a.value = 0` (Prop/dite)
+- `native_decide` falla con "free variables" al comparar structs con proof fields → reemplazado por `toZMod_injective`-based proofs en `zero_mul`, `mul_zero`, `nsmul_zero`, `zsmul_zero`
+
+### Bloques 2-3: toZMod_pow y toZMod_inv
+
+Copiados directamente del patrón Goldilocks sin `reduce128` intermedio (BabyBear no lo necesita).
+
+### Bloque 4: NTT Sorry
+
+Los 4 sorry (3 en `babybear_generator_is_primitive_root` + 1 en `babybear_generator_order`) reemplazados por `native_decide`. Todos los constructores `⟨31⟩` actualizados a `⟨31, by native_decide⟩`.
+
+## Lecciones Nuevas (L-198 a L-202)
+
+| ID | Lección |
+|----|---------|
+| L-198 | `native_decide` falla con "free variables" en struct equality con proof fields → usar `toZMod_injective` |
+| L-199 | `2*ORDER` vs `UIntN.size` determina estrategia de `ofUIntN` else-branch (substracción vs módulo) |
+| L-200 | Pattern replication: Goldilocks → BabyBear elimina Bloque 2 entero (no reduce128) |
+| L-201 | Para primos < 32 bits, `native_decide` resuelve primalidad y NTT sorry directamente |
+| L-202 | Actualizar constructores en archivos dependientes: `lake env lean` puede usar oleans cached, `lake build` no |
+
+## QA Feedback (2 rondas Gemini)
+
+**Recomendación**: APPROVE
+- Metodología probada replicada exitosamente
+- Sugerencias menores: unificar dite pattern en neg/inv, optimizar ofUInt32, formalizar guideline native_decide
+
+## Resultado Final
+
+**8/8 targets eliminados**: 0 axiomas, 0 sorry. `lake build` PASS.
+
+---
+
 *Creado: 2026-02-11*
-*Última actualización: 2026-02-11 (BLOQUE CENTRAL COMPLETADO — 5/5 axiomas eliminados)*
+*Última actualización: 2026-02-12 (BabyBear 4 axiomas + 4 sorry eliminados)*
