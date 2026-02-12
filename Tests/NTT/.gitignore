@@ -1,0 +1,7 @@
+# Compiled test binaries (local only)
+BitReversalTest
+C_KernelTest
+SanitizerTest
+
+# Debug symbols
+*.dSYM/
