@@ -3,7 +3,7 @@
 [![Lean 4](https://img.shields.io/badge/Lean-4.16.0-blue.svg)](https://leanprover.github.io/lean4/doc/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Tests](https://img.shields.io/badge/Tests-2850%2B-green.svg)](#testing)
-[![Build](https://img.shields.io/badge/Build-2641%20modules-brightgreen.svg)](#build)
+[![Build](https://img.shields.io/badge/Build-2647%20modules-brightgreen.svg)](#build)
 
 **AMO-Lean** is a verified optimizing compiler that transforms mathematical specifications written in Lean 4 into optimized C code with **formal correctness guarantees**. It targets cryptographic primitives used in STARK provers and zkVMs.
 
@@ -13,7 +13,8 @@
 
 - **NTT** (Number Theoretic Transform) -- Verified, optimized, Plonky3-compatible
 - **Radix-4 NTT** -- Verified 4-point butterfly with formal proofs
-- **Goldilocks Field** -- Scalar + AVX2 arithmetic (p = 2^64 - 2^32 + 1)
+- **Goldilocks Field** -- Scalar + AVX2 arithmetic (p = 2^64 - 2^32 + 1), 0 axioms
+- **BabyBear Field** -- Scalar arithmetic (p = 2^31 - 2^27 + 1), 0 axioms
 - **FRI Protocol** -- Folding, Merkle commitments, Fiat-Shamir
 - **E-Graph Optimization** -- 19/20 rewrite rules formally verified
 - **Algebraic Semantics** -- C-Lite++ lowering with verified scatter/gather
@@ -139,8 +140,9 @@ amo-lean/
 │   │   ├── LazyButterfly.lean  # Harvey optimization (lazy reduction)
 │   │   ├── Correctness.lean    # Main equivalence theorems
 │   │   └── Radix4/             # Verified radix-4 implementation
-│   ├── Field/                  # Field implementations
-│   │   └── Goldilocks.lean     # Goldilocks (p = 2^64 - 2^32 + 1)
+│   ├── Field/                  # Field implementations (0 axioms, 0 sorry)
+│   │   ├── Goldilocks.lean     # Goldilocks (p = 2^64 - 2^32 + 1)
+│   │   └── BabyBear.lean       # BabyBear (p = 2^31 - 2^27 + 1)
 │   ├── EGraph/                 # E-Graph optimization engine
 │   │   ├── Optimize.lean       # Equality saturation
 │   │   └── VerifiedRules.lean  # 19/20 rules with formal proofs
@@ -179,11 +181,12 @@ amo-lean/
 | FRI Folding | **100%** | 0 | Proven in FRI_Properties.lean |
 | Matrix/Perm | **100%** | 0 | All lemmas proven |
 | E-Graph Rewrite Rules | **95%** | 0 | 19/20 rules verified |
-| Goldilocks Field | **93%** | 0 | 5 axioms (well-known properties) |
-| AlgebraicSemantics | **95%** | 3 | 18/19 cases proven; kron pending |
+| Goldilocks Field | **100%** | 0 | 0 axioms (all 5 eliminated) |
+| BabyBear Field | **100%** | 0 | 0 axioms (all 4 eliminated) |
+| AlgebraicSemantics | **100%** | 0 | 19/19 cases proven |
 | Poseidon2 | Computational | 12 | All backed by test vectors |
 
-**Codebase**: 32,650 LOC | 17 axioms | 30 sorry (5 active, 12 computational, 7 deprecated, 6 commented-out)
+**Codebase**: 32,650 LOC | 12 axioms | 14 active sorry (12 Poseidon computational, 2 Merkle structural)
 
 ### Testing (2850+ tests, 0 failures)
 
@@ -196,13 +199,13 @@ amo-lean/
 | Poseidon2 (S-box + vectors + differential) | 10 | Pass |
 | E-Graph Optimizer | 4 | Pass |
 | Hardening (fuzz + FFI stress + ABI) | 120 | Pass |
-| Lean Build (modules) | 2641 | Pass |
+| Lean Build (modules) | 2647 | Pass |
 | **Total** | **~2850** | **0 failures** |
 
 ## Key Design Decisions
 
 1. **Equality Saturation (E-Graphs)**: Optimization via verified rewrite rules rather than ad-hoc transformations. Every optimization is a theorem.
-2. **Sigma-SPL Algebraic IR**: Matrix expressions lowered through scatter/gather semantics. 18/19 operations formally verified.
+2. **Sigma-SPL Algebraic IR**: Matrix expressions lowered through scatter/gather semantics. 19/19 operations formally verified.
 3. **Lazy Reduction (Harvey 2014)**: Defer modular reduction in butterfly operations for reduced modular arithmetic overhead.
 4. **Skeleton + Kernel Architecture**: Manual C loop structure (skeleton) with Lean-verified butterfly (kernel). Combines performance control with formal guarantees.
 5. **Twiddle Factor Caching**: Pre-computed twiddle factors for all NTT layers, stored in NttContext.
@@ -213,15 +216,14 @@ amo-lean/
 
 | Task | Relevance | Difficulty | Status |
 |------|-----------|------------|--------|
-| **Kron bounds** (3 sorry in AlgebraicSemantics) | Medium -- internal to verification, no external impact | High -- requires scatter/gather in-bounds proofs | Documented, non-blocking |
 | **Poseidon formal proofs** (12 sorry) | Medium -- currently validated computationally | Medium -- Lean match splitter limitation | Tests pass; formal proofs optional |
-| **BabyBear / Mersenne31 fields** | High -- enables Risc0/SP1 verification | Medium -- architecture supports it | Designed, not started |
+| **Mersenne31 field** | High -- enables SP1 verification | Medium -- architecture supports it | Designed |
 | **Rust code generation** | High -- direct integration with Rust zkVMs | Medium -- requires new backend | Future |
 | **NTT Radix-4 codegen** | Medium -- potential 20-30% speedup | Low -- butterfly already verified | Designed |
+| **NTT axiom elimination** (11 axioms) | Medium -- roundtrip correctness proofs | High -- requires function implementations | Documented |
 | **Merkle tree invariants** (2 sorry in FRI) | Low -- structural, no correctness risk | Low | Documented |
-| **Deprecated sorry cleanup** (7 in Theorems.lean) | Low -- superseded by AlgebraicSemantics | Trivial -- delete file | Housekeeping |
 
-None of these items block the current release. The 5 active sorry statements are isolated to internal verification modules and do not affect the correctness of generated code or test results.
+None of these items block the current release. The 14 active sorry statements are isolated to Poseidon (12, match splitter limitation) and Merkle (2, structural invariants), and do not affect the correctness of generated code or test results.
 
 ## References
 

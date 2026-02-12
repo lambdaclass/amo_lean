@@ -61,7 +61,7 @@ The ZK ecosystem is in Rust. Adding Lean is another dependency, another language
 
 ---
 
-## Question 3: "30 sorry statements and 17 axioms -- is that a security hole?"
+## Question 3: "14 sorry statements and 12 axioms -- is that a security hole?"
 
 ### The question behind the question
 What good is formal verification if it is incomplete? A single `sorry` could hide a critical bug.
@@ -72,8 +72,7 @@ What good is formal verification if it is incomplete? A single `sorry` could hid
 
 | Classification | Count | Detail |
 |----------------|-------|--------|
-| **Active** (genuine proof gaps) | **5** | 3 kron bounds in AlgebraicSemantics, 2 Merkle invariants in FRI |
-| **Computational** (backed by tests) | **12** | All in Poseidon_Semantics (Lean match splitter limitation) |
+| **Active** (genuine proof gaps) | **14** | 12 Poseidon (match splitter limitation), 2 Merkle invariants in FRI |
 | **Deprecated** (superseded code) | **7** | Old Float-based Theorems.lean, replaced by AlgebraicSemantics |
 | **Commented out** (inactive) | **6** | Inside `/-...-/` comment blocks |
 
@@ -82,8 +81,11 @@ What good is formal verification if it is incomplete? A single `sorry` could hid
 - FRI Folding (FRI_Properties): **0 sorry**
 - Matrix/Perm: **0 sorry**
 - E-Graph rewrite rules: **0 sorry** (19/20 verified)
+- AlgebraicSemantics: **0 sorry** (19/19 cases proven)
+- Goldilocks Field: **0 sorry, 0 axioms** (all 5 axioms eliminated)
+- BabyBear Field: **0 sorry, 0 axioms** (all 4 axioms + 4 sorry eliminated)
 
-**The 5 active sorry** are in the AlgebraicSemantics lowering engine (kron tensor product bounds) and FRI Merkle tree (structural invariants). Neither affects the correctness of generated C code or test results -- they are internal to the verification pipeline.
+**The 14 active sorry** are in the Poseidon_Semantics module (12, Lean match splitter limitation for indexed inductives) and FRI Merkle tree (2, structural invariants). Neither affects the correctness of generated C code or test results -- they are internal to the verification pipeline.
 
 **Empirical mitigation** for every sorry:
 - 64/64 oracle tests vs Plonky3 (bit-exact)
@@ -91,7 +93,7 @@ What good is formal verification if it is incomplete? A single `sorry` could hid
 - 37/37 Goldilocks field tests with UBSan (0 violations)
 - 3M+ FFI calls with 0 errors
 
-**On the 17 axioms**: These are documented facts about number theory (e.g., "p = 2^64 - 2^32 + 1 is prime") and specification axioms for Radix-4. None are in the NTT core proof chain.
+**On the 12 axioms**: These are specification axioms for the NTT Radix-4 algorithm (11) and a match splitter workaround in Matrix/Perm (1). The field implementations (Goldilocks, BabyBear) have **0 axioms** -- all number-theoretic properties are formally proven. None of the remaining axioms are in the NTT core proof chain.
 
 See [BENCHMARKS.md](docs/BENCHMARKS.md) for the complete audit.
 

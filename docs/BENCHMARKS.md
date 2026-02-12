@@ -1,6 +1,6 @@
 # AMO-Lean v1.0.1 -- Benchmark Report
 
-**Date**: 2026-02-09
+**Date**: 2026-02-12
 **Platform**: macOS Darwin 24.6.0, Apple Silicon (ARM64)
 **Lean**: v4.16.0, Mathlib v4.16.0
 **C Compiler**: Apple clang 17, -O2/-O3
@@ -11,7 +11,7 @@
 
 | Target | Modules | Result |
 |--------|---------|--------|
-| `lake build AmoLean` | 2641 | **PASS** (0 errors) |
+| `lake build AmoLean` | 2647 | **PASS** (0 errors) |
 | `lake build Tests` | 10 targets | **PASS** (10/10) |
 | `lake build Benchmarks` | 3 targets | **PASS** |
 
@@ -21,20 +21,20 @@
 
 ## 2. Formal Verification Audit
 
-### Sorry Inventory (30 total)
+### Sorry Inventory (27 total)
 
 | Classification | Count | Components |
 |----------------|-------|------------|
-| **Active** (genuine gaps) | 5 | AlgebraicSemantics (3 kron), FRI/Merkle (2) |
-| **Computational** (test-backed) | 12 | Poseidon_Semantics (match splitter limitation) |
+| **Active** (genuine gaps) | 14 | Poseidon (12 match splitter), FRI/Merkle (2) |
 | **Deprecated** (superseded) | 7 | Verification/Theorems (Float-based, obsolete) |
 | **Commented out** (inactive code) | 6 | Matrix/Perm (4), NTT/Spec (1), NTT/Properties (1) |
 
-### Axiom Inventory (17 total)
+### Axiom Inventory (12 total)
 
 | Component | Axioms | Risk Level |
 |-----------|--------|------------|
-| Goldilocks Field | 5 | Low-Medium (well-known number-theoretic properties) |
+| Goldilocks Field | 0 | **CLEAN** (5 axioms eliminated 2026-02-11) |
+| BabyBear Field | 0 | **CLEAN** (4 axioms eliminated 2026-02-12) |
 | NTT Radix-4 | 8 | Medium (roundtrip correctness, specification axioms) |
 | NTT ListFinsetBridge | 3 | Low (bridge axioms avoiding import cycles) |
 | Matrix/Perm | 1 | Low (match splitter workaround) |
@@ -48,9 +48,10 @@
 | FRI Folding (FRI_Properties) | 0 | 0 | **CLEAN** |
 | Matrix/Perm | 0 active | 1 | **CLEAN** |
 | EGraph/VerifiedRules | 0 | 0 | **CLEAN** (19/20 rules) |
-| AlgebraicSemantics | 3 | 0 | 18/19 cases proven |
+| AlgebraicSemantics | 0 | 0 | **CLEAN** (19/19 cases proven) |
 | Poseidon_Semantics | 12 | 0 | Computationally verified |
-| Goldilocks Field | 0 | 5 | Axioms for known facts |
+| Goldilocks Field | 0 | 0 | **CLEAN** (5 axioms eliminated) |
+| BabyBear Field | 0 | 0 | **CLEAN** (4 axioms + 4 sorry eliminated) |
 
 ---
 

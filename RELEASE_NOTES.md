@@ -54,7 +54,9 @@ Comprehensive benchmark audit (2850+ tests, 0 failures) and documentation overha
 | FRI Folding | 0 | 0 | **CLEAN** |
 | Matrix/Perm | 0 | 1 | **CLEAN** |
 | E-Graph Rules | 0 | 0 | **CLEAN** (19/20) |
-| AlgebraicSemantics | 3 | 0 | 18/19 cases proven |
+| AlgebraicSemantics | 0 | 0 | **CLEAN** (19/19 cases proven) |
+| Goldilocks Field | 0 | 0 | **CLEAN** (5 axioms eliminated) |
+| BabyBear Field | 0 | 0 | **CLEAN** (4 axioms + 4 sorry eliminated) |
 | Poseidon | 12 | 0 | Computationally verified |
 
 ### Testing Summary
@@ -264,9 +266,9 @@ First production-ready release with verified Plonky3 compatibility.
 
 | Task | Relevance | Difficulty |
 |------|-----------|------------|
-| BabyBear / Mersenne31 fields | High -- enables Risc0/SP1 verification | Medium |
+| Mersenne31 field | High -- enables SP1 verification | Medium |
 | Radix-4 codegen | Medium -- potential 20-30% speedup | Low |
 | Rust code generation | High -- direct Rust zkVM integration | Medium |
-| Kron bounds (3 sorry) | Medium -- internal to verification | High |
+| NTT axiom elimination (11 axioms) | Medium -- roundtrip correctness | High |
 | Poseidon formal proofs (12 sorry) | Medium -- currently validated computationally | Medium |
 | FRI Merkle invariants (2 sorry) | Low -- structural, no correctness risk | Low |

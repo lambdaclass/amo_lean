@@ -1,6 +1,6 @@
 # Contexto de Reanudación: Fase 8 Onda 1 — COMPLETADA
 
-**Fecha**: 2026-02-11
+**Fecha**: 2026-02-12
 **Archivo principal**: `AmoLean/Verification/AlgebraicSemantics.lean` (~5700 líneas)
 **Lean**: 4.16.0, Mathlib v4.16.0
 
@@ -83,10 +83,35 @@ Todos los 5 entregables completados:
 - **L-180**: `simp only [Option.some.injEq] at h` para inyectividad robusta (mejor que `▸`)
 - **L-181**: `adjustStride .nop = .nop` es definitionally true — no necesita lema explícito
 
+## Post-Onda 1: Bloque Central + BabyBear (2026-02-11/12)
+
+### Bloque Central: Goldilocks (2026-02-11)
+5/5 axiomas fundacionales eliminados de `AmoLean/Field/Goldilocks.lean`:
+- `goldilocks_prime_is_prime` → Lucas + zpowMod
+- `goldilocks_canonical` → subtype refactor (proof field `h_lt`)
+- `reduce128_correct` → descomposición modular (6 sub-lemas)
+- `toZMod_pow` → strong induction
+- `toZMod_inv` → Fermat (ZMod.pow_card_sub_one_eq_one)
+
+### BabyBear (2026-02-12)
+4 axiomas + 4 sorry eliminados de `AmoLean/Field/BabyBear.lean` y `AmoLean/NTT/BabyBear.lean`:
+- `babybear_prime_is_prime` → `native_decide` (31-bit prime)
+- `babybear_canonical` → subtype refactor
+- `toZMod_pow` → strong induction
+- `toZMod_inv` → Fermat
+- NTT sorry (generator_is_primitive_root, generator_order) → `native_decide`
+
+### Estado Global Post-BabyBear
+- **Axiomas**: 12 (11 NTT + 1 Perm) — Goldilocks 0, BabyBear 0
+- **Sorry activos**: 14 (12 Poseidon + 2 Merkle)
+- **`lake build`**: PASS (2647 módulos)
+
 ## Archivos Clave
 
 - `AmoLean/Verification/AlgebraicSemantics.lean` — archivo principal (~5700 líneas)
-- `AmoLean/Verification/Semantics.lean` — `evalSigma` (operational semantics)
-- `AmoLean/Sigma/Basic.lean` — `lower`, `adjustBlock`, `adjustStride`
-- `AmoLean/Matrix/Basic.lean` — `MatExpr`, `nodeCount`
+- `AmoLean/Field/Goldilocks.lean` — campo Goldilocks (0 axiomas, 0 sorry)
+- `AmoLean/Field/BabyBear.lean` — campo BabyBear (0 axiomas, 0 sorry)
+- `AmoLean/NTT/BabyBear.lean` — NTT BabyBear (0 sorry)
+- `Bloque_central_plan.md` — plan + notas Goldilocks + BabyBear
+- `TASKS_COMPLETED.md` — fuente de verdad del proyecto
 - `docs/fase8_onda1_roadmap.md` — roadmap completo de Onda 1
