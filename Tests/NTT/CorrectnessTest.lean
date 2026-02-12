@@ -240,9 +240,9 @@ def testEquivalenceDetailed (input : List UInt64) : IO Bool := do
   let mut allPassed := true
 
   -- Test N=4
-  let input4 : List GoldilocksField := (List.range 4).map fun i => GoldilocksField.mk (i + 1).toUInt64
+  let input4 : List GoldilocksField := (List.range 4).map fun i => GoldilocksField.ofUInt64 (i + 1).toUInt64
   let ω4 := primitiveRoot 4 (by decide)
-  let n_inv4 := GoldilocksField.inv (GoldilocksField.mk 4)
+  let n_inv4 := GoldilocksField.inv (GoldilocksField.ofUInt64 4)
   let ntt4 : List GoldilocksField := NTT_spec ω4 input4
   let intt_spec4 : List GoldilocksField := INTT_spec ω4 n_inv4 ntt4
   let intt_rec4 : List GoldilocksField := INTT_recursive ω4 n_inv4 ntt4
@@ -253,9 +253,9 @@ def testEquivalenceDetailed (input : List UInt64) : IO Bool := do
   if !passed4 || !rt4 then allPassed := false
 
   -- Test N=8
-  let input8 : List GoldilocksField := (List.range 8).map fun i => GoldilocksField.mk (i + 1).toUInt64
+  let input8 : List GoldilocksField := (List.range 8).map fun i => GoldilocksField.ofUInt64 (i + 1).toUInt64
   let ω8 := primitiveRoot 8 (by decide)
-  let n_inv8 := GoldilocksField.inv (GoldilocksField.mk 8)
+  let n_inv8 := GoldilocksField.inv (GoldilocksField.ofUInt64 8)
   let ntt8 : List GoldilocksField := NTT_spec ω8 input8
   let intt_spec8 : List GoldilocksField := INTT_spec ω8 n_inv8 ntt8
   let intt_rec8 : List GoldilocksField := INTT_recursive ω8 n_inv8 ntt8
@@ -266,9 +266,9 @@ def testEquivalenceDetailed (input : List UInt64) : IO Bool := do
   if !passed8 || !rt8 then allPassed := false
 
   -- Test N=16
-  let input16 : List GoldilocksField := (List.range 16).map fun i => GoldilocksField.mk (i + 1).toUInt64
+  let input16 : List GoldilocksField := (List.range 16).map fun i => GoldilocksField.ofUInt64 (i + 1).toUInt64
   let ω16 := primitiveRoot 16 (by decide)
-  let n_inv16 := GoldilocksField.inv (GoldilocksField.mk 16)
+  let n_inv16 := GoldilocksField.inv (GoldilocksField.ofUInt64 16)
   let ntt16 : List GoldilocksField := NTT_spec ω16 input16
   let intt_spec16 : List GoldilocksField := INTT_spec ω16 n_inv16 ntt16
   let intt_rec16 : List GoldilocksField := INTT_recursive ω16 n_inv16 ntt16

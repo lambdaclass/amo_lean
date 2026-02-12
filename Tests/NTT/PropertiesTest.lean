@@ -94,7 +94,7 @@ def testNTTLength (n : Nat) (hn : n > 0) : Bool :=
 def testINTTLength (n : Nat) (hn : n > 0) : Bool :=
   let input := toGF ((List.range n).map fun i => i.toUInt64)
   let ω := primitiveRoot n hn
-  let n_inv := GoldilocksField.inv (GoldilocksField.mk n.toUInt64)
+  let n_inv := GoldilocksField.inv (GoldilocksField.ofUInt64 n.toUInt64)
   let output := INTT_spec ω n_inv input
   output.length == n
 

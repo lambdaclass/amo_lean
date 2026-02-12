@@ -43,9 +43,9 @@ def listAdd (xs ys : List GoldilocksField) : List GoldilocksField :=
 
   -- Test 1.1: N=4, entrada delta [1,0,0,0]
   IO.println "\n1.1 Roundtrip N=4, delta [1,0,0,0]:"
-  let delta4 : List GoldilocksField := [⟨1⟩, ⟨0⟩, ⟨0⟩, ⟨0⟩]
+  let delta4 : List GoldilocksField := [⟨1, by native_decide⟩, ⟨0, by native_decide⟩, ⟨0, by native_decide⟩, ⟨0, by native_decide⟩]
   let ω4 := primitiveRoot 4 (by decide)
-  let n_inv4 := GoldilocksField.inv ⟨4⟩
+  let n_inv4 := GoldilocksField.inv ⟨4, by native_decide⟩
   let ntt_delta4 := NTT_spec ω4 delta4
   let roundtrip_delta4 := INTT_spec ω4 n_inv4 ntt_delta4
   IO.println s!"    Input:     {toVals delta4}"
@@ -55,7 +55,7 @@ def listAdd (xs ys : List GoldilocksField) : List GoldilocksField :=
 
   -- Test 1.2: N=4, entrada constante [1,1,1,1]
   IO.println "\n1.2 Roundtrip N=4, constante [1,1,1,1]:"
-  let const4 : List GoldilocksField := [⟨1⟩, ⟨1⟩, ⟨1⟩, ⟨1⟩]
+  let const4 : List GoldilocksField := [⟨1, by native_decide⟩, ⟨1, by native_decide⟩, ⟨1, by native_decide⟩, ⟨1, by native_decide⟩]
   let ntt_const4 := NTT_spec ω4 const4
   let roundtrip_const4 := INTT_spec ω4 n_inv4 ntt_const4
   IO.println s!"    Input:     {toVals const4}"
@@ -65,7 +65,7 @@ def listAdd (xs ys : List GoldilocksField) : List GoldilocksField :=
 
   -- Test 1.3: N=4, entrada secuencial [1,2,3,4]
   IO.println "\n1.3 Roundtrip N=4, secuencial [1,2,3,4]:"
-  let seq4 : List GoldilocksField := [⟨1⟩, ⟨2⟩, ⟨3⟩, ⟨4⟩]
+  let seq4 : List GoldilocksField := [⟨1, by native_decide⟩, ⟨2, by native_decide⟩, ⟨3, by native_decide⟩, ⟨4, by native_decide⟩]
   let ntt_seq4 := NTT_spec ω4 seq4
   let roundtrip_seq4 := INTT_spec ω4 n_inv4 ntt_seq4
   IO.println s!"    Input:     {toVals seq4}"
@@ -75,9 +75,9 @@ def listAdd (xs ys : List GoldilocksField) : List GoldilocksField :=
 
   -- Test 1.4: N=16
   IO.println "\n1.4 Roundtrip N=16, secuencial [1..16]:"
-  let seq16 : List GoldilocksField := (List.range 16).map fun i => ⟨(i + 1).toUInt64⟩
+  let seq16 : List GoldilocksField := (List.range 16).map fun i => GoldilocksField.ofUInt64 (i + 1).toUInt64
   let ω16 := primitiveRoot 16 (by decide)
-  let n_inv16 := GoldilocksField.inv ⟨16⟩
+  let n_inv16 := GoldilocksField.inv ⟨16, by native_decide⟩
   let ntt_seq16 := NTT_spec ω16 seq16
   let roundtrip_seq16 := INTT_spec ω16 n_inv16 ntt_seq16
   IO.println s!"    Input (primeros 4):     {toVals (seq16.take 4)}"
@@ -97,8 +97,8 @@ def listAdd (xs ys : List GoldilocksField) : List GoldilocksField :=
 
   -- Test 2.1: a = [1,0,0,0], b = [0,1,0,0]
   IO.println "\n2.1 Linealidad con delta en diferentes posiciones:"
-  let a1 : List GoldilocksField := [⟨1⟩, ⟨0⟩, ⟨0⟩, ⟨0⟩]
-  let b1 : List GoldilocksField := [⟨0⟩, ⟨1⟩, ⟨0⟩, ⟨0⟩]
+  let a1 : List GoldilocksField := [⟨1, by native_decide⟩, ⟨0, by native_decide⟩, ⟨0, by native_decide⟩, ⟨0, by native_decide⟩]
+  let b1 : List GoldilocksField := [⟨0, by native_decide⟩, ⟨1, by native_decide⟩, ⟨0, by native_decide⟩, ⟨0, by native_decide⟩]
   let ab1 := listAdd a1 b1  -- [1,1,0,0]
 
   let ntt_a1 := NTT_spec ω4 a1
@@ -114,8 +114,8 @@ def listAdd (xs ys : List GoldilocksField) : List GoldilocksField :=
 
   -- Test 2.2: a = [1,2,3,4], b = [5,6,7,8]
   IO.println "\n2.2 Linealidad con secuencias:"
-  let a2 : List GoldilocksField := [⟨1⟩, ⟨2⟩, ⟨3⟩, ⟨4⟩]
-  let b2 : List GoldilocksField := [⟨5⟩, ⟨6⟩, ⟨7⟩, ⟨8⟩]
+  let a2 : List GoldilocksField := [⟨1, by native_decide⟩, ⟨2, by native_decide⟩, ⟨3, by native_decide⟩, ⟨4, by native_decide⟩]
+  let b2 : List GoldilocksField := [⟨5, by native_decide⟩, ⟨6, by native_decide⟩, ⟨7, by native_decide⟩, ⟨8, by native_decide⟩]
   let ab2 := listAdd a2 b2  -- [6,8,10,12]
 
   let ntt_a2 := NTT_spec ω4 a2
@@ -174,11 +174,11 @@ def listAdd (xs ys : List GoldilocksField) : List GoldilocksField :=
   IO.println "═══════════════════════════════════════════════════════════"
 
   let ω8 := primitiveRoot 8 (by decide)
-  let n_inv8 := GoldilocksField.inv ⟨8⟩
+  let n_inv8 := GoldilocksField.inv ⟨8, by native_decide⟩
 
   -- 4.1: Delta (impulso unitario)
   IO.println "\n4.1 Delta (impulso en posición 0):"
-  let delta8 : List GoldilocksField := [⟨1⟩, ⟨0⟩, ⟨0⟩, ⟨0⟩, ⟨0⟩, ⟨0⟩, ⟨0⟩, ⟨0⟩]
+  let delta8 : List GoldilocksField := [⟨1, by native_decide⟩, ⟨0, by native_decide⟩, ⟨0, by native_decide⟩, ⟨0, by native_decide⟩, ⟨0, by native_decide⟩, ⟨0, by native_decide⟩, ⟨0, by native_decide⟩, ⟨0, by native_decide⟩]
   let ntt_delta8 := NTT_spec ω8 delta8
   IO.println s!"    Input: {toVals delta8}"
   IO.println s!"    NTT:   {toVals ntt_delta8}"
@@ -186,7 +186,7 @@ def listAdd (xs ys : List GoldilocksField) : List GoldilocksField :=
 
   -- 4.2: Constante
   IO.println "\n4.2 Constante [3,3,3,3,3,3,3,3]:"
-  let const8 : List GoldilocksField := (List.range 8).map fun _ => ⟨3⟩
+  let const8 : List GoldilocksField := (List.range 8).map fun _ => ⟨3, by native_decide⟩
   let ntt_const8 := NTT_spec ω8 const8
   IO.println s!"    Input: {toVals const8}"
   IO.println s!"    NTT:   {toVals ntt_const8}"
@@ -196,7 +196,7 @@ def listAdd (xs ys : List GoldilocksField) : List GoldilocksField :=
   IO.println "\n4.3 Alternante [1,p-1,1,p-1,...]:"
   let neg_one := ORDER - 1  -- -1 en Goldilocks
   let alt8 : List GoldilocksField := (List.range 8).map fun i =>
-    if i % 2 == 0 then ⟨1⟩ else ⟨neg_one⟩
+    if i % 2 == 0 then ⟨1, by native_decide⟩ else GoldilocksField.ofUInt64 neg_one
   let ntt_alt8 := NTT_spec ω8 alt8
   IO.println s!"    Input: {toVals alt8}"
   IO.println s!"    NTT:   {toVals ntt_alt8}"
@@ -239,12 +239,12 @@ def listAdd (xs ys : List GoldilocksField) : List GoldilocksField :=
   let ω4 := primitiveRoot 4 (by decide)
 
   -- Propiedad: butterfly4 de delta da constante
-  let bf_delta := Radix4.butterfly4 (⟨1⟩ : GoldilocksField) ⟨0⟩ ⟨0⟩ ⟨0⟩ ω4
+  let bf_delta := Radix4.butterfly4 (⟨1, by native_decide⟩ : GoldilocksField) ⟨0, by native_decide⟩ ⟨0, by native_decide⟩ ⟨0, by native_decide⟩ ω4
   IO.println s!"    butterfly4(1,0,0,0) = {[bf_delta.1.value, bf_delta.2.1.value, bf_delta.2.2.1.value, bf_delta.2.2.2.value]}"
   IO.println s!"    (Esperado: todos iguales = DFT de delta)"
 
   -- Propiedad: butterfly4 de constante da delta escalado
-  let bf_const := Radix4.butterfly4 (⟨1⟩ : GoldilocksField) ⟨1⟩ ⟨1⟩ ⟨1⟩ ω4
+  let bf_const := Radix4.butterfly4 (⟨1, by native_decide⟩ : GoldilocksField) ⟨1, by native_decide⟩ ⟨1, by native_decide⟩ ⟨1, by native_decide⟩ ω4
   IO.println s!"    butterfly4(1,1,1,1) = {[bf_const.1.value, bf_const.2.1.value, bf_const.2.2.1.value, bf_const.2.2.2.value]}"
   IO.println s!"    (Esperado: [4,0,0,0] = DFT de constante)"
 

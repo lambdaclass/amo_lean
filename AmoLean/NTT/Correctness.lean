@@ -458,12 +458,12 @@ section TestConsistency
 open AmoLean.Field.Goldilocks
 
 /-- Compile-time verification for small sizes -/
-example : NTT_recursive (primitiveRoot 4 (by decide)) [⟨1⟩, ⟨2⟩, ⟨3⟩, ⟨4⟩] =
-          NTT_spec (primitiveRoot 4 (by decide)) [⟨1⟩, ⟨2⟩, ⟨3⟩, ⟨4⟩] := by
+example : NTT_recursive (primitiveRoot 4 (by decide)) [⟨1, by native_decide⟩, ⟨2, by native_decide⟩, ⟨3, by native_decide⟩, ⟨4, by native_decide⟩] =
+          NTT_spec (primitiveRoot 4 (by decide)) [⟨1, by native_decide⟩, ⟨2, by native_decide⟩, ⟨3, by native_decide⟩, ⟨4, by native_decide⟩] := by
   native_decide
 
-example : NTT_recursive (primitiveRoot 8 (by decide)) [⟨1⟩, ⟨2⟩, ⟨3⟩, ⟨4⟩, ⟨5⟩, ⟨6⟩, ⟨7⟩, ⟨8⟩] =
-          NTT_spec (primitiveRoot 8 (by decide)) [⟨1⟩, ⟨2⟩, ⟨3⟩, ⟨4⟩, ⟨5⟩, ⟨6⟩, ⟨7⟩, ⟨8⟩] := by
+example : NTT_recursive (primitiveRoot 8 (by decide)) [⟨1, by native_decide⟩, ⟨2, by native_decide⟩, ⟨3, by native_decide⟩, ⟨4, by native_decide⟩, ⟨5, by native_decide⟩, ⟨6, by native_decide⟩, ⟨7, by native_decide⟩, ⟨8, by native_decide⟩] =
+          NTT_spec (primitiveRoot 8 (by decide)) [⟨1, by native_decide⟩, ⟨2, by native_decide⟩, ⟨3, by native_decide⟩, ⟨4, by native_decide⟩, ⟨5, by native_decide⟩, ⟨6, by native_decide⟩, ⟨7, by native_decide⟩, ⟨8, by native_decide⟩] := by
   native_decide
 
 end TestConsistency

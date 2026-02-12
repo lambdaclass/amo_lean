@@ -231,10 +231,10 @@ def tupleToList (t : GoldilocksField × GoldilocksField × GoldilocksField × Go
   -- Test 1: butterfly4 con entrada simple [1, 0, 0, 0] (delta)
   IO.println "\n─────────────────────────────────────────────────────────────"
   IO.println "Test 1: butterfly4(1, 0, 0, 0, ω₄)"
-  let a1 : GoldilocksField := ⟨1⟩
-  let b1 : GoldilocksField := ⟨0⟩
-  let c1 : GoldilocksField := ⟨0⟩
-  let d1 : GoldilocksField := ⟨0⟩
+  let a1 : GoldilocksField := ⟨1, by native_decide⟩
+  let b1 : GoldilocksField := ⟨0, by native_decide⟩
+  let c1 : GoldilocksField := ⟨0, by native_decide⟩
+  let d1 : GoldilocksField := ⟨0, by native_decide⟩
   let result1 := Radix4.butterfly4 a1 b1 c1 d1 ω4
   IO.println s!"  Input:  [1, 0, 0, 0]"
   IO.println s!"  Output: {tupleToList result1}"
@@ -243,10 +243,10 @@ def tupleToList (t : GoldilocksField × GoldilocksField × GoldilocksField × Go
   -- Test 2: butterfly4 con entrada constante [1, 1, 1, 1]
   IO.println "\n─────────────────────────────────────────────────────────────"
   IO.println "Test 2: butterfly4(1, 1, 1, 1, ω₄)"
-  let a2 : GoldilocksField := ⟨1⟩
-  let b2 : GoldilocksField := ⟨1⟩
-  let c2 : GoldilocksField := ⟨1⟩
-  let d2 : GoldilocksField := ⟨1⟩
+  let a2 : GoldilocksField := ⟨1, by native_decide⟩
+  let b2 : GoldilocksField := ⟨1, by native_decide⟩
+  let c2 : GoldilocksField := ⟨1, by native_decide⟩
+  let d2 : GoldilocksField := ⟨1, by native_decide⟩
   let result2 := Radix4.butterfly4 a2 b2 c2 d2 ω4
   IO.println s!"  Input:  [1, 1, 1, 1]"
   IO.println s!"  Output: {tupleToList result2}"
@@ -255,10 +255,10 @@ def tupleToList (t : GoldilocksField × GoldilocksField × GoldilocksField × Go
   -- Test 3: butterfly4 con [1, 2, 3, 4]
   IO.println "\n─────────────────────────────────────────────────────────────"
   IO.println "Test 3: butterfly4(1, 2, 3, 4, ω₄)"
-  let a3 : GoldilocksField := ⟨1⟩
-  let b3 : GoldilocksField := ⟨2⟩
-  let c3 : GoldilocksField := ⟨3⟩
-  let d3 : GoldilocksField := ⟨4⟩
+  let a3 : GoldilocksField := ⟨1, by native_decide⟩
+  let b3 : GoldilocksField := ⟨2, by native_decide⟩
+  let c3 : GoldilocksField := ⟨3, by native_decide⟩
+  let d3 : GoldilocksField := ⟨4, by native_decide⟩
   let result3 := Radix4.butterfly4 a3 b3 c3 d3 ω4
   IO.println s!"  Input:  [1, 2, 3, 4]"
   IO.println s!"  Output: {tupleToList result3}"

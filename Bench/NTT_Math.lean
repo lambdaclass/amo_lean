@@ -35,7 +35,7 @@ def timeIt {α : Type} (action : Unit → α) : IO (α × Nat) := do
 
 /-- Generate test input of size n -/
 def genInput (n : Nat) : List GoldilocksField :=
-  (List.range n).map fun i => GoldilocksField.mk ((i * 7 + 3) % 1000).toUInt64
+  (List.range n).map fun i => GoldilocksField.ofUInt64 ((i * 7 + 3) % 1000).toUInt64
 
 /-! ═══════════════════════════════════════════════════════════════════════════
     BENCHMARK SUITE
@@ -218,7 +218,7 @@ def genInput (n : Nat) : List GoldilocksField :=
   -- N=64
   let input64 := genInput 64
   let ω64 := primitiveRoot 64 (by decide)
-  let n_inv64 := GoldilocksField.inv (GoldilocksField.mk 64)
+  let n_inv64 := GoldilocksField.inv (GoldilocksField.ofUInt64 64)
   let (_, rt64) ← timeIt fun _ =>
     let ntt_result : List GoldilocksField := NTT_recursive ω64 input64
     let _ : List GoldilocksField := INTT_recursive ω64 n_inv64 ntt_result
@@ -228,7 +228,7 @@ def genInput (n : Nat) : List GoldilocksField :=
   -- N=128
   let input128 := genInput 128
   let ω128 := primitiveRoot 128 (by decide)
-  let n_inv128 := GoldilocksField.inv (GoldilocksField.mk 128)
+  let n_inv128 := GoldilocksField.inv (GoldilocksField.ofUInt64 128)
   let (_, rt128) ← timeIt fun _ =>
     let ntt_result : List GoldilocksField := NTT_recursive ω128 input128
     let _ : List GoldilocksField := INTT_recursive ω128 n_inv128 ntt_result
@@ -238,7 +238,7 @@ def genInput (n : Nat) : List GoldilocksField :=
   -- N=256
   let input256 := genInput 256
   let ω256 := primitiveRoot 256 (by decide)
-  let n_inv256 := GoldilocksField.inv (GoldilocksField.mk 256)
+  let n_inv256 := GoldilocksField.inv (GoldilocksField.ofUInt64 256)
   let (_, rt256) ← timeIt fun _ =>
     let ntt_result : List GoldilocksField := NTT_recursive ω256 input256
     let _ : List GoldilocksField := INTT_recursive ω256 n_inv256 ntt_result

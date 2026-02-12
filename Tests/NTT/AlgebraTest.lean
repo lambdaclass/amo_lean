@@ -68,7 +68,7 @@ def testOrthogonality' (n : Nat) : Bool :=
 def testMulInverse' (x : UInt64) : Bool :=
   if x == 0 then true
   else
-    let gf := GoldilocksField.mk x
+    let gf := GoldilocksField.ofUInt64 x
     let inv := GoldilocksField.inv gf
     let prod := GoldilocksField.mul gf inv
     prod.value == 1

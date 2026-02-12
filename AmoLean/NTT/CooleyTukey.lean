@@ -232,7 +232,7 @@ def gfVal' (x : GoldilocksField) : UInt64 := x.value
   IO.println "\n1. NTT_recursive vs NTT_spec (N=4):"
   let n := 4
   let ω := primitiveRoot n (by decide)
-  let input : List GoldilocksField := [⟨1⟩, ⟨2⟩, ⟨3⟩, ⟨4⟩]
+  let input : List GoldilocksField := [⟨1, by native_decide⟩, ⟨2, by native_decide⟩, ⟨3, by native_decide⟩, ⟨4, by native_decide⟩]
 
   let spec_result : List GoldilocksField := NTT_spec ω input
   let rec_result : List GoldilocksField := NTT_recursive ω input
@@ -246,7 +246,7 @@ def gfVal' (x : GoldilocksField) : UInt64 := x.value
   IO.println "\n2. NTT_recursive vs NTT_spec (N=8):"
   let n8 := 8
   let ω8 := primitiveRoot n8 (by decide)
-  let input8 : List GoldilocksField := (List.range 8).map fun i => ⟨(i + 1).toUInt64⟩
+  let input8 : List GoldilocksField := (List.range 8).map fun i => GoldilocksField.ofUInt64 (i + 1).toUInt64
 
   let spec8 : List GoldilocksField := NTT_spec ω8 input8
   let rec8 : List GoldilocksField := NTT_recursive ω8 input8
@@ -258,7 +258,7 @@ def gfVal' (x : GoldilocksField) : UInt64 := x.value
 
   -- Test 3: Roundtrip
   IO.println "\n3. Roundtrip INTT_recursive(NTT_recursive(x)) = x (N=8):"
-  let n_inv8 := GoldilocksField.inv ⟨8⟩
+  let n_inv8 := GoldilocksField.inv ⟨8, by native_decide⟩
   let roundtrip8 : List GoldilocksField := INTT_recursive ω8 n_inv8 rec8
 
   IO.println s!"   Input:    {input8.map gfVal'}"
@@ -269,7 +269,7 @@ def gfVal' (x : GoldilocksField) : UInt64 := x.value
   IO.println "\n4. NTT_recursive vs NTT_spec (N=16):"
   let n16 := 16
   let ω16 := primitiveRoot n16 (by decide)
-  let input16 : List GoldilocksField := (List.range 16).map fun i => ⟨(i + 1).toUInt64⟩
+  let input16 : List GoldilocksField := (List.range 16).map fun i => GoldilocksField.ofUInt64 (i + 1).toUInt64
 
   let spec16 : List GoldilocksField := NTT_spec ω16 input16
   let rec16 : List GoldilocksField := NTT_recursive ω16 input16

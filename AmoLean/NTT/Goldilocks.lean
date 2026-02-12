@@ -52,7 +52,7 @@ For NTT of size n (power of 2), the primitive n-th root is:
 -/
 
 /-- The multiplicative generator of Goldilocks: g = 7 -/
-def GENERATOR : GoldilocksField := ⟨7⟩
+def GENERATOR : GoldilocksField := ⟨7, by native_decide⟩
 
 /-- p - 1, the order of the multiplicative group -/
 def P_MINUS_ONE : Nat := ORDER.toNat - 1

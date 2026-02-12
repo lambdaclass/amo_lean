@@ -371,7 +371,7 @@ def gfVal (x : GoldilocksField) : UInt64 := x.value
   -- For [1, 1, 1, 1], X₀ = 4, Xₖ = 0 for k > 0 (if ω is primitive)
   let n := 4
   let ω := primitiveRoot n (by decide)
-  let ones : List GoldilocksField := List.replicate n ⟨1⟩
+  let ones : List GoldilocksField := List.replicate n ⟨1, by native_decide⟩
 
   IO.println s!"\n1. NTT of [1, 1, 1, 1] with ω₄:"
   let ntt_ones : List GoldilocksField := NTT_spec ω ones
@@ -381,14 +381,14 @@ def gfVal (x : GoldilocksField) : UInt64 := x.value
 
   -- Test 2: NTT of delta sequence [1, 0, 0, 0]
   -- NTT of delta should be all 1s
-  let delta : List GoldilocksField := [⟨1⟩, ⟨0⟩, ⟨0⟩, ⟨0⟩]
+  let delta : List GoldilocksField := [⟨1, by native_decide⟩, ⟨0, by native_decide⟩, ⟨0, by native_decide⟩, ⟨0, by native_decide⟩]
   let ntt_delta : List GoldilocksField := NTT_spec ω delta
   IO.println s!"\n2. NTT of [1, 0, 0, 0]:"
   IO.println s!"   Output: {ntt_delta.map gfVal}"
   IO.println s!"   Should be all 1s"
 
   -- Test 3: Verify length preservation
-  let input8 : List GoldilocksField := List.replicate 8 ⟨1⟩
+  let input8 : List GoldilocksField := List.replicate 8 ⟨1, by native_decide⟩
   let ω8 := primitiveRoot 8 (by decide)
   let output8 : List GoldilocksField := NTT_spec ω8 input8
   IO.println s!"\n3. Length preservation:"
@@ -397,11 +397,11 @@ def gfVal (x : GoldilocksField) : UInt64 := x.value
 
   -- Test 4: Roundtrip NTT -> INTT
   IO.println s!"\n4. Roundtrip test (NTT -> INTT):"
-  let test_input : List GoldilocksField := [⟨1⟩, ⟨2⟩, ⟨3⟩, ⟨4⟩]
+  let test_input : List GoldilocksField := [⟨1, by native_decide⟩, ⟨2, by native_decide⟩, ⟨3, by native_decide⟩, ⟨4, by native_decide⟩]
   let n4 := 4
   let ω4 := primitiveRoot n4 (by decide)
   -- n_inv = 4^(-1) mod p
-  let n_inv4 := GoldilocksField.inv ⟨4⟩
+  let n_inv4 := GoldilocksField.inv ⟨4, by native_decide⟩
   let ntt_result : List GoldilocksField := NTT_spec ω4 test_input
   let intt_result : List GoldilocksField := INTT_spec ω4 n_inv4 ntt_result
 
@@ -412,10 +412,10 @@ def gfVal (x : GoldilocksField) : UInt64 := x.value
 
   -- Test 5: Another roundtrip with N=8
   IO.println s!"\n5. Roundtrip test (N=8):"
-  let test8 : List GoldilocksField := [⟨5⟩, ⟨7⟩, ⟨11⟩, ⟨13⟩, ⟨17⟩, ⟨19⟩, ⟨23⟩, ⟨29⟩]
+  let test8 : List GoldilocksField := [⟨5, by native_decide⟩, ⟨7, by native_decide⟩, ⟨11, by native_decide⟩, ⟨13, by native_decide⟩, ⟨17, by native_decide⟩, ⟨19, by native_decide⟩, ⟨23, by native_decide⟩, ⟨29, by native_decide⟩]
   let n8 := 8
   let ω_8 := primitiveRoot n8 (by decide)
-  let n_inv8 := GoldilocksField.inv ⟨8⟩
+  let n_inv8 := GoldilocksField.inv ⟨8, by native_decide⟩
   let ntt8 : List GoldilocksField := NTT_spec ω_8 test8
   let intt8 : List GoldilocksField := INTT_spec ω_8 n_inv8 ntt8
 
@@ -425,10 +425,10 @@ def gfVal (x : GoldilocksField) : UInt64 := x.value
 
   -- Test 6: Roundtrip with N=16
   IO.println s!"\n6. Roundtrip test (N=16):"
-  let test16 : List GoldilocksField := (List.range 16).map fun i => ⟨(i + 1 : Nat).toUInt64⟩
+  let test16 : List GoldilocksField := (List.range 16).map fun i => GoldilocksField.ofNat (i + 1)
   let n16 := 16
   let ω_16 := primitiveRoot n16 (by decide)
-  let n_inv16 := GoldilocksField.inv ⟨16⟩
+  let n_inv16 := GoldilocksField.inv ⟨16, by native_decide⟩
   let ntt16 : List GoldilocksField := NTT_spec ω_16 test16
   let intt16 : List GoldilocksField := INTT_spec ω_16 n_inv16 ntt16
 
@@ -438,10 +438,10 @@ def gfVal (x : GoldilocksField) : UInt64 := x.value
 
   -- Test 7: Roundtrip with N=32
   IO.println s!"\n7. Roundtrip test (N=32):"
-  let test32 : List GoldilocksField := (List.range 32).map fun i => ⟨((i * 7 + 3) % 100 : Nat).toUInt64⟩
+  let test32 : List GoldilocksField := (List.range 32).map fun i => GoldilocksField.ofNat ((i * 7 + 3) % 100)
   let n32 := 32
   let ω_32 := primitiveRoot n32 (by decide)
-  let n_inv32 := GoldilocksField.inv ⟨32⟩
+  let n_inv32 := GoldilocksField.inv ⟨32, by native_decide⟩
   let ntt32 : List GoldilocksField := NTT_spec ω_32 test32
   let intt32 : List GoldilocksField := INTT_spec ω_32 n_inv32 ntt32
 

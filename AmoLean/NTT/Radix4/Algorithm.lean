@@ -255,7 +255,7 @@ def toValues (xs : List GoldilocksField) : List UInt64 := xs.map fun x => x.valu
   IO.println "\n─────────────────────────────────────────────────────────────"
   IO.println "Test 2: combineRadix4 con E0=E1=E2=E3=[1] (N=4)"
   let ω4 := primitiveRoot 4 (by decide)
-  let E_single : List GoldilocksField := [⟨1⟩]
+  let E_single : List GoldilocksField := [⟨1, by native_decide⟩]
   let combined := combineRadix4 ω4 E_single E_single E_single E_single
   IO.println s!"  E0 = E1 = E2 = E3 = [1]"
   IO.println s!"  ω₄ = {ω4.value}"
@@ -265,8 +265,8 @@ def toValues (xs : List GoldilocksField) : List UInt64 := xs.map fun x => x.valu
   -- Test 3: combineRadix4 con E0=[1], E1=[0], E2=[0], E3=[0]
   IO.println "\n─────────────────────────────────────────────────────────────"
   IO.println "Test 3: combineRadix4 con E0=[1], E1=E2=E3=[0] (N=4)"
-  let E0 : List GoldilocksField := [⟨1⟩]
-  let E_zero : List GoldilocksField := [⟨0⟩]
+  let E0 : List GoldilocksField := [⟨1, by native_decide⟩]
+  let E_zero : List GoldilocksField := [⟨0, by native_decide⟩]
   let combined2 := combineRadix4 ω4 E0 E_zero E_zero E_zero
   IO.println s!"  E0=[1], E1=E2=E3=[0]"
   IO.println s!"  Resultado: {toValues combined2}"
@@ -291,7 +291,7 @@ def toValues (xs : List GoldilocksField) : List UInt64 := xs.map fun x => x.valu
   IO.println "Test 5: combineRadix4 tamaño 16 (4 subproblemas de 4)"
   let ω16 := primitiveRoot 16 (by decide)
   -- Simular E0=E1=E2=E3=[1,1,1,1] (constantes)
-  let E_const : List GoldilocksField := [⟨1⟩, ⟨1⟩, ⟨1⟩, ⟨1⟩]
+  let E_const : List GoldilocksField := [⟨1, by native_decide⟩, ⟨1, by native_decide⟩, ⟨1, by native_decide⟩, ⟨1, by native_decide⟩]
   let combined16 := combineRadix4 ω16 E_const E_const E_const E_const
   IO.println s!"  E0 = E1 = E2 = E3 = [1,1,1,1]"
   IO.println s!"  ω₁₆ = {ω16.value}"

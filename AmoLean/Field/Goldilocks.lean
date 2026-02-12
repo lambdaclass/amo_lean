@@ -17,15 +17,16 @@
   3. Prove toZMod is injective (via canonicity of representations)
   4. Transfer all proofs via toZMod_injective
 
-  The primality of p = 2^64 - 2^32 + 1 is assumed as an axiom since
-  native_decide cannot handle such large numbers. This prime is
-  well-established in cryptographic literature.
+  The primality of p = 2^64 - 2^32 + 1 is formally proved via the
+  Lucas primality test (Mathlib) with witness a = 7 and efficient
+  binary exponentiation (zpowMod) verified by native_decide.
 -/
 
 import Mathlib.Algebra.Field.Defs
 import Mathlib.Algebra.Ring.Defs
 import Mathlib.Data.ZMod.Basic
 import Mathlib.Algebra.Ring.Equiv
+import Mathlib.NumberTheory.LucasPrimality
 import Batteries.Data.UInt
 
 namespace AmoLean.Field.Goldilocks
@@ -38,11 +39,73 @@ def ORDER : UInt64 := 0xFFFFFFFF00000001
 /-- Order as Nat for ZMod usage -/
 def ORDER_NAT : Nat := ORDER.toNat
 
+/-! ### Primality proof infrastructure -/
+
+instance : NeZero ORDER_NAT := ⟨by native_decide⟩
+
+/-- Efficient binary exponentiation in ZMod n. O(log exp) multiplications. -/
+private def zpowMod {n : Nat} [NeZero n] (a : ZMod n) (exp : Nat) : ZMod n :=
+  if exp = 0 then 1
+  else
+    let half := zpowMod a (exp / 2)
+    let sq := half * half
+    if exp % 2 = 1 then sq * a
+    else sq
+termination_by exp
+
+/-- zpowMod computes the standard power a^exp in ZMod n -/
+private theorem zpowMod_eq_pow {n : Nat} [NeZero n] (a : ZMod n) (exp : Nat) :
+    zpowMod a exp = a ^ exp := by
+  induction exp using Nat.strongRecOn with
+  | ind k ih =>
+    cases k with
+    | zero => simp [zpowMod]
+    | succ m =>
+      have h_lt : (m + 1) / 2 < m + 1 := Nat.div_lt_self (by omega) (by omega)
+      have hrec := ih _ h_lt
+      show zpowMod a (m + 1) = a ^ (m + 1)
+      rw [zpowMod, if_neg (by omega)]
+      dsimp only
+      rw [hrec]
+      split_ifs with hodd
+      · rw [← pow_add]
+        have hsum : (m + 1) / 2 + (m + 1) / 2 = m := by omega
+        rw [hsum]; exact (pow_succ a m).symm
+      · rw [← pow_add]; congr 1; omega
+
+private lemma prime_dvd_eq {q p : Nat} (hq : Nat.Prime q) (hp : Nat.Prime p)
+    (h : q ∣ p) : q = p := by
+  rcases hp.eq_one_or_self_of_dvd q h with rfl | rfl
+  · exact absurd hq (by decide)
+  · rfl
+
 /-- Goldilocks prime is prime.
-    Reference: Well-known in cryptography, used by Plonky2/Plonky3.
-    Verification: Can be checked via Pocklington criterion or external tools.
-    The prime factorization of p-1 = 2^32 × 3 × 5 × 17 × 257 × 65537 is known. -/
-axiom goldilocks_prime_is_prime : Nat.Prime ORDER_NAT
+    Proved via Lucas primality test with witness a = 7.
+    p - 1 = 2^32 × 3 × 5 × 17 × 257 × 65537 -/
+theorem goldilocks_prime_is_prime : Nat.Prime ORDER_NAT := by
+  apply lucas_primality ORDER_NAT (7 : ZMod ORDER_NAT)
+  · rw [← zpowMod_eq_pow]; native_decide
+  · intro q hq hqd
+    have hfact : ORDER_NAT - 1 = 2 ^ 32 * 3 * 5 * 17 * 257 * 65537 := by native_decide
+    rw [hfact] at hqd
+    have hqp := hq.prime
+    rcases hqp.dvd_mul.mp hqd with h | h
+    · rcases hqp.dvd_mul.mp h with h | h
+      · rcases hqp.dvd_mul.mp h with h | h
+        · rcases hqp.dvd_mul.mp h with h | h
+          · rcases hqp.dvd_mul.mp h with h | h
+            · have := prime_dvd_eq hq (by decide) (hqp.dvd_of_dvd_pow h)
+              subst this; rw [← zpowMod_eq_pow]; native_decide
+            · have := prime_dvd_eq hq (by decide) h
+              subst this; rw [← zpowMod_eq_pow]; native_decide
+          · have := prime_dvd_eq hq (by decide) h
+            subst this; rw [← zpowMod_eq_pow]; native_decide
+        · have := prime_dvd_eq hq (by decide) h
+          subst this; rw [← zpowMod_eq_pow]; native_decide
+      · have := prime_dvd_eq hq (by native_decide) h
+        subst this; rw [← zpowMod_eq_pow]; native_decide
+    · have := prime_dvd_eq hq (by native_decide) h
+      subst this; rw [← zpowMod_eq_pow]; native_decide
 
 instance : Fact (Nat.Prime ORDER_NAT) := ⟨goldilocks_prime_is_prime⟩
 
@@ -68,14 +131,22 @@ def TWO_POW_32 : UInt64 := 0x100000000
 /-! ## Part 2: Goldilocks Field Type -/
 
 /-- Goldilocks field element.
-    Invariant: value < ORDER -/
+    Invariant enforced at type level: value < ORDER -/
 structure GoldilocksField where
   value : UInt64
-  -- Note: We don't enforce value < ORDER at the type level
-  -- for simplicity, but all operations maintain this invariant
-  deriving Repr, DecidableEq, Hashable
+  h_lt : value.toNat < ORDER.toNat
 
-instance : Inhabited GoldilocksField := ⟨⟨0⟩⟩
+instance : DecidableEq GoldilocksField := fun a b =>
+  if h : a.value = b.value then isTrue (by cases a; cases b; simp_all)
+  else isFalse (by intro hab; exact h (congrArg GoldilocksField.value hab))
+
+instance : Repr GoldilocksField where
+  reprPrec a n := reprPrec a.value n
+
+instance : Hashable GoldilocksField where
+  hash a := hash a.value
+
+instance : Inhabited GoldilocksField := ⟨⟨0, by native_decide⟩⟩
 
 namespace GoldilocksField
 
@@ -89,6 +160,11 @@ theorem uint64_sub_toNat (x y : UInt64) (h : y.toNat ≤ x.toNat) :
     (x - y).toNat = x.toNat - y.toNat :=
   UInt64.toNat_sub_of_le x y h
 
+/-- Helper: Nat.toUInt64.toNat roundtrip for values < UInt64.size -/
+private theorem toUInt64_toNat_of_lt {n : Nat} (h : n < UInt64.size) :
+    n.toUInt64.toNat = n := by
+  simp only [Nat.toUInt64, UInt64.toNat_ofNat, Nat.mod_eq_of_lt h]
+
 /-- Extensionality theorem: two GoldilocksField elements are equal iff their values are equal -/
 @[ext]
 theorem ext {a b : GoldilocksField} (h : a.value = b.value) : a = b := by
@@ -98,8 +174,16 @@ theorem ext {a b : GoldilocksField} (h : a.value = b.value) : a = b := by
 
 /-- Create a field element from UInt64, reducing if necessary -/
 def ofUInt64 (n : UInt64) : GoldilocksField :=
-  if n < ORDER then ⟨n⟩
-  else ⟨n - ORDER⟩
+  if h : n < ORDER then ⟨n, h⟩
+  else ⟨n - ORDER, by
+    have hge : ORDER.toNat ≤ n.toNat := by
+      simp only [UInt64.lt_iff_toNat_lt, not_lt] at h; exact h
+    have hsub : (n - ORDER).toNat = n.toNat - ORDER.toNat := by
+      rw [UInt64.toNat_sub_of_le]; exact hge
+    rw [hsub]
+    have hsize : n.toNat < UInt64.size := n.val.isLt
+    have h2ord : UInt64.size ≤ 2 * ORDER.toNat := by native_decide
+    omega⟩
 
 /-- Create a field element from Nat -/
 def ofNat (n : Nat) : GoldilocksField :=
@@ -107,10 +191,10 @@ def ofNat (n : Nat) : GoldilocksField :=
   ofUInt64 reduced.toUInt64
 
 /-- Zero element -/
-def zero : GoldilocksField := ⟨0⟩
+def zero : GoldilocksField := ⟨0, by native_decide⟩
 
 /-- One element -/
-def one : GoldilocksField := ⟨1⟩
+def one : GoldilocksField := ⟨1, by native_decide⟩
 
 /-! ## Part 4: Core Arithmetic Operations -/
 
@@ -122,20 +206,54 @@ def add (a b : GoldilocksField) : GoldilocksField :=
   -- Use Nat arithmetic to avoid overflow
   let sum := a.value.toNat + b.value.toNat
   let reduced := if sum >= ORDER.toNat then sum - ORDER.toNat else sum
-  ⟨reduced.toUInt64⟩
+  ⟨reduced.toUInt64, by
+    have ha := a.h_lt; have hb := b.h_lt
+    have hord_lt : ORDER.toNat < UInt64.size := by native_decide
+    have hlt : reduced < ORDER.toNat := by
+      show (if a.value.toNat + b.value.toNat ≥ ORDER.toNat
+            then a.value.toNat + b.value.toNat - ORDER.toNat
+            else a.value.toNat + b.value.toNat) < ORDER.toNat
+      split_ifs with h <;> omega
+    simp only [Nat.toUInt64, UInt64.toNat_ofNat, Nat.mod_eq_of_lt (by omega : reduced < UInt64.size)]
+    exact hlt⟩
 
 /-- Subtraction: (a - b) mod p -/
 def sub (a b : GoldilocksField) : GoldilocksField :=
-  if a.value >= b.value then
-    ⟨a.value - b.value⟩
+  if h : a.value >= b.value then
+    ⟨a.value - b.value, by
+      have ha := a.h_lt
+      have hsub : (a.value - b.value).toNat = a.value.toNat - b.value.toNat := by
+        rw [UInt64.toNat_sub_of_le]; exact h
+      rw [hsub]; omega⟩
   else
     -- a < b, so result would be negative. Add ORDER.
-    ⟨ORDER - b.value + a.value⟩
+    ⟨ORDER - b.value + a.value, by
+      have ha := a.h_lt; have hb := b.h_lt
+      have halt : a.value.toNat < b.value.toNat := by
+        simp only [ge_iff_le, UInt64.le_iff_toNat_le, not_le] at h; exact h
+      have hb_le_ord : b.value ≤ ORDER := by
+        simp only [UInt64.le_iff_toNat_le]; omega
+      have hsub1 : (ORDER - b.value).toNat = ORDER.toNat - b.value.toNat := by
+        rw [UInt64.toNat_sub_of_le]; exact hb_le_ord
+      have hsum_lt : ORDER.toNat - b.value.toNat + a.value.toNat < UInt64.size := by
+        have : ORDER.toNat < UInt64.size := by native_decide
+        omega
+      have hadd : (ORDER - b.value + a.value).toNat =
+                  (ORDER - b.value).toNat + a.value.toNat := by
+        simp only [UInt64.toNat_add, hsub1, Nat.mod_eq_of_lt hsum_lt]
+      rw [hadd, hsub1]; omega⟩
 
 /-- Negation: -a mod p -/
 def neg (a : GoldilocksField) : GoldilocksField :=
-  if a.value == 0 then ⟨0⟩
-  else ⟨ORDER - a.value⟩
+  if h : a.value = 0 then ⟨0, by native_decide⟩
+  else ⟨ORDER - a.value, by
+    have ha := a.h_lt
+    have ha_pos : 0 < a.value.toNat := by
+      by_contra hle; push_neg at hle
+      exact h (UInt64.ext (Nat.eq_zero_of_le_zero hle))
+    have hsub : (ORDER - a.value).toNat = ORDER.toNat - a.value.toNat := by
+      rw [UInt64.toNat_sub_of_le]; simp only [UInt64.le_iff_toNat_le]; omega
+    rw [hsub]; omega⟩
 
 /-- Reduce a 128-bit value (represented as pair of UInt64) modulo p
 
@@ -169,7 +287,11 @@ def reduce128 (x_lo x_hi : UInt64) : GoldilocksField :=
 
     -- May need another reduction
     let result := intermediate % ORDER.toNat
-    ⟨result.toUInt64⟩
+    ⟨result.toUInt64, by
+      have hord_pos : 0 < ORDER.toNat := by native_decide
+      have hord_lt : ORDER.toNat < UInt64.size := by native_decide
+      have hlt : result < ORDER.toNat := Nat.mod_lt intermediate hord_pos
+      rw [toUInt64_toNat_of_lt (by omega)]; exact hlt⟩
 
 /-- Multiplication: (a * b) mod p
 
@@ -280,10 +402,10 @@ end GoldilocksField
 /-! ## Part 8: Constants -/
 
 /-- p - 1: Maximum valid field element -/
-def P_MINUS_1 : GoldilocksField := ⟨ORDER - 1⟩
+def P_MINUS_1 : GoldilocksField := ⟨ORDER - 1, by native_decide⟩
 
 /-- p - 2: Used for inverse calculation -/
-def P_MINUS_2 : GoldilocksField := ⟨ORDER - 2⟩
+def P_MINUS_2 : GoldilocksField := ⟨ORDER - 2, by native_decide⟩
 
 /-! ## Part 9: ZMod Isomorphism Infrastructure
 
@@ -303,20 +425,23 @@ def toZMod (x : GoldilocksField) : ZMod ORDER_NAT :=
 
 /-- Conversion from ZMod ORDER_NAT back to GoldilocksField -/
 def ofZMod (z : ZMod ORDER_NAT) : GoldilocksField :=
-  ⟨(ZMod.val z).toUInt64⟩
+  ⟨(ZMod.val z).toUInt64, by
+    have hval : ZMod.val z < ORDER_NAT := ZMod.val_lt z
+    have hord_lt : ORDER_NAT < UInt64.size := by native_decide
+    simp only [Nat.toUInt64, UInt64.toNat_ofNat, Nat.mod_eq_of_lt (by omega : ZMod.val z < UInt64.size)]
+    exact hval⟩
 
 /-! ### Canonicity
 
-All GoldilocksField elements produced by our constructors and operations
-have value < ORDER. We formalize this as an axiom. -/
+Canonicity is now enforced at the type level: every GoldilocksField element
+carries a proof h_lt : value.toNat < ORDER.toNat.
+The old axiom goldilocks_canonical is eliminated. -/
 
 /-- A GoldilocksField element is canonical if value < ORDER -/
 def GoldilocksField.isCanonical (a : GoldilocksField) : Prop := a.value < ORDER
 
-/-- All GoldilocksField values are canonical.
-    This is maintained by all constructors and operations.
-    In a more refined version, this would be enforced at the type level. -/
-axiom goldilocks_canonical (a : GoldilocksField) : a.isCanonical
+/-- All GoldilocksField values are canonical (now a theorem, not an axiom). -/
+theorem goldilocks_canonical (a : GoldilocksField) : a.isCanonical := a.h_lt
 
 /-! ### val_eq Lemmas
 
@@ -515,30 +640,172 @@ theorem uint64_decomp (x : UInt64) :
   rw [Nat.mul_comm] at h
   exact h.symm
 
-/-- reduce128 preserves congruence: (reduce128 x_lo x_hi).value.toNat ≡ x_lo + x_hi * 2^64 (mod ORDER)
+/-- Bound on high 32 bits of a UInt64: (x >>> 32).toNat < 2^32 -/
+private theorem x_hi_hi_bound (x : UInt64) : (x >>> 32).toNat < 2^32 := by
+  simp only [UInt64.toNat_shiftRight]
+  have h32 : (32 : UInt64).toNat % 64 = 32 := by native_decide
+  simp only [h32, Nat.shiftRight_eq_div_pow]
+  exact Nat.div_lt_of_lt_mul (by exact x.val.isLt)
 
-    This is the key correctness property of the Goldilocks reduction algorithm.
+/-- Bound on low 32 bits of a UInt64 masked with EPSILON: (x &&& EPSILON).toNat < 2^32 -/
+private theorem x_hi_lo_bound (x : UInt64) : (x &&& EPSILON).toNat < 2^32 := by
+  have hmask : EPSILON.toNat = 2^32 - 1 := by native_decide
+  simp only [UInt64.toNat_and, hmask, Nat.and_pow_two_sub_one_eq_mod]
+  exact Nat.mod_lt _ (by norm_num)
 
-    Mathematical justification:
-    The reduce128 function uses the Goldilocks identity: 2^64 ≡ 2^32 - 1 (mod p)
-    where p = 2^64 - 2^32 + 1.
+/-- The intermediate value in reduce128 is bounded below 2 * ORDER -/
+private theorem reduce128_intermediate_bound (x_lo x_hi : UInt64) :
+    let x_hi_hi := (x_hi >>> 32).toNat
+    let x_hi_lo := (x_hi &&& EPSILON).toNat
+    let term1 := x_lo.toNat
+    let term3 := x_hi_lo * EPSILON.toNat
+    let intermediate := if term1 >= x_hi_hi
+                        then term1 - x_hi_hi + term3
+                        else ORDER.toNat - x_hi_hi + term1 + term3
+    intermediate < 2 * ORDER.toNat := by
+  simp only
+  have h_hi_hi : (x_hi >>> 32).toNat < 2^32 := x_hi_hi_bound x_hi
+  have h_hi_lo : (x_hi &&& EPSILON).toNat < 2^32 := x_hi_lo_bound x_hi
+  have h_eps_val : EPSILON.toNat = 4294967295 := by native_decide
+  have h_ord_val : ORDER.toNat = 18446744069414584321 := by native_decide
+  have h_t1 : x_lo.toNat < 2^64 := x_lo.val.isLt
+  -- term3 = x_hi_lo * EPSILON ≤ (2^32-1)*(2^32-1) = 18446744065119617025
+  have h_t3 : (x_hi &&& EPSILON).toNat * EPSILON.toNat ≤ 18446744065119617025 := by
+    rw [h_eps_val]; nlinarith [h_hi_lo]
+  split_ifs with h
+  · -- No underflow: term1 - x_hi_hi + term3 ≤ 2^64 - 1 + (2^32-1)^2 < 2*ORDER
+    rw [h_ord_val]; omega
+  · -- Underflow: term1 < x_hi_hi, so ORDER - x_hi_hi + term1 < ORDER
+    -- result < ORDER + term3 ≤ ORDER + (2^32-1)^2 < 2*ORDER
+    have h_t1_lt : x_lo.toNat < (x_hi >>> 32).toNat := by omega
+    rw [h_ord_val]; omega
 
-    The algorithm decomposes x_hi = x_hi_lo + x_hi_hi * 2^32 and computes:
-    x_lo + x_hi * 2^64 = x_lo + x_hi_lo * 2^64 + x_hi_hi * 2^96
-                       ≡ x_lo + x_hi_lo * EPSILON + x_hi_hi * (ORDER - 1) (mod ORDER)
-                       ≡ x_lo + x_hi_lo * EPSILON - x_hi_hi (mod ORDER)
+/-- Core algebraic identity: x_lo + x_hi * 2^64 ≡ x_lo + x_hi_lo * EPSILON + x_hi_hi * (ORDER-1) (mod ORDER)
+    where x_hi = x_hi_lo + x_hi_hi * 2^32 -/
+private theorem reduce128_algebraic (x_lo x_hi : UInt64) :
+    (x_lo.toNat + x_hi.toNat * 2^64) % ORDER_NAT =
+    (x_lo.toNat + (x_hi &&& EPSILON).toNat * EPSILON.toNat +
+     (x_hi >>> 32).toNat * (ORDER_NAT - 1)) % ORDER_NAT := by
+  -- Decompose x_hi = x_hi_lo + x_hi_hi * 2^32
+  conv_lhs => rw [show x_hi.toNat = (x_hi &&& EPSILON).toNat + (x_hi >>> 32).toNat * 2^32
+                   from uint64_decomp x_hi]
+  set a := x_lo.toNat; set b := (x_hi &&& EPSILON).toNat; set c := (x_hi >>> 32).toNat
+  -- Expand: a + (b + c * 2^32) * 2^64 = a + b * 2^64 + c * 2^96
+  have h_expand : a + (b + c * 2 ^ 32) * 2 ^ 64 = a + b * 2^64 + c * 2^96 := by ring
+  rw [h_expand]
+  -- Key modular replacements
+  have h_eps_lt : EPSILON.toNat < ORDER_NAT := by native_decide
+  have h_ordm1_lt : ORDER_NAT - 1 < ORDER_NAT := Nat.sub_lt order_nat_pos Nat.one_pos
+  have h1 : (b * 2^64) % ORDER_NAT = (b * EPSILON.toNat) % ORDER_NAT := by
+    conv_lhs => rw [Nat.mul_mod, pow_64_mod_order]
+    conv_rhs => rw [Nat.mul_mod, Nat.mod_eq_of_lt h_eps_lt]
+  have h2 : (c * 2^96) % ORDER_NAT = (c * (ORDER_NAT - 1)) % ORDER_NAT := by
+    conv_lhs => rw [Nat.mul_mod, pow_96_mod_order]
+    conv_rhs => rw [Nat.mul_mod, Nat.mod_eq_of_lt h_ordm1_lt]
+  -- Reduce: separate a from the sum, replace inner terms, recombine
+  suffices h : (b * 2^64 + c * 2^96) % ORDER_NAT =
+               (b * EPSILON.toNat + c * (ORDER_NAT - 1)) % ORDER_NAT by
+    rw [Nat.add_assoc, Nat.add_assoc]
+    rw [Nat.add_mod a, h, ← Nat.add_mod]
+  calc (b * 2^64 + c * 2^96) % ORDER_NAT
+      = ((b * 2^64) % ORDER_NAT + (c * 2^96) % ORDER_NAT) % ORDER_NAT := Nat.add_mod _ _ _
+    _ = ((b * EPSILON.toNat) % ORDER_NAT + (c * (ORDER_NAT - 1)) % ORDER_NAT) % ORDER_NAT := by
+        rw [h1, h2]
+    _ = (b * EPSILON.toNat + c * (ORDER_NAT - 1)) % ORDER_NAT := (Nat.add_mod _ _ _).symm
 
-    The implementation handles underflow (x_lo < x_hi_hi) by adding ORDER.
+/-- No-underflow branch: (term1 - term2 + term3) % p = (term1 + term3 + term2*(p-1)) % p -/
+private theorem reduce128_no_underflow
+    (term1 term2 term3 : Nat)
+    (h_ge : term1 >= term2) :
+    (term1 - term2 + term3) % ORDER_NAT =
+    (term1 + term3 + term2 * (ORDER_NAT - 1)) % ORDER_NAT := by
+  -- Key identity: term2 * ORDER = term2 * (ORDER - 1) + term2
+  have h_ge1 : ORDER_NAT ≥ 1 := Nat.one_le_of_lt order_nat_pos
+  have key : term2 * ORDER_NAT = term2 * (ORDER_NAT - 1) + term2 := by
+    conv_lhs => rw [show ORDER_NAT = (ORDER_NAT - 1) + 1 from (Nat.sub_add_cancel h_ge1).symm]
+    ring
+  -- RHS = (term1 - term2 + term3 + term2 * ORDER) % ORDER = LHS
+  suffices h : term1 + term3 + term2 * (ORDER_NAT - 1) =
+               term1 - term2 + term3 + term2 * ORDER_NAT by
+    symm; rw [h, Nat.add_mul_mod_self_right]
+  -- Now omega can solve: A + C + D = A - B + C + (D + B) with A >= B
+  -- Using key: term2 * ORDER_NAT = term2 * (ORDER_NAT - 1) + term2
+  omega
 
-    Verification:
-    - Extensively tested in #eval blocks at end of file
-    - Mathematical correctness is well-established (used in Plonky2/Plonky3)
-    - Full formal proof deferred due to complexity of modular arithmetic with split cases
+/-- Underflow branch: (ORDER - term2 + term1 + term3) % p = (term1 + term3 + term2*(p-1)) % p -/
+private theorem reduce128_underflow
+    (term1 term2 term3 : Nat)
+    (h_lt : term1 < term2)
+    (h_t2_bound : term2 < ORDER_NAT) :
+    (ORDER_NAT - term2 + term1 + term3) % ORDER_NAT =
+    (term1 + term3 + term2 * (ORDER_NAT - 1)) % ORDER_NAT := by
+  -- Key identity: term2 * ORDER = term2 * (ORDER - 1) + term2
+  have h_ge1 : ORDER_NAT ≥ 1 := Nat.one_le_of_lt order_nat_pos
+  have key : term2 * ORDER_NAT = term2 * (ORDER_NAT - 1) + term2 := by
+    conv_lhs => rw [show ORDER_NAT = (ORDER_NAT - 1) + 1 from (Nat.sub_add_cancel h_ge1).symm]
+    ring
+  -- Also: (term2-1)*ORDER = term2*ORDER - ORDER
+  have h_t2_pos : 1 ≤ term2 := by omega
+  have key2 : (term2 - 1) * ORDER_NAT + ORDER_NAT = term2 * ORDER_NAT := by
+    conv_rhs => rw [show term2 = (term2 - 1) + 1 from (Nat.sub_add_cancel h_t2_pos).symm]
+    ring
+  -- Show RHS = (ORDER - term2 + term1 + term3 + (term2 - 1) * ORDER) % ORDER
+  suffices h : term1 + term3 + term2 * (ORDER_NAT - 1) =
+               ORDER_NAT - term2 + term1 + term3 + (term2 - 1) * ORDER_NAT by
+    symm; rw [h, Nat.add_mul_mod_self_right]
+  -- With key and key2, omega can solve this as linear arithmetic on atoms
+  omega
 
-    Reference: Goldilocks field reduction as used in Polygon's Plonky2/Plonky3 -/
-axiom reduce128_correct (x_lo x_hi : UInt64) :
+/-- reduce128 preserves congruence modulo ORDER -/
+theorem reduce128_correct (x_lo x_hi : UInt64) :
     (GoldilocksField.reduce128 x_lo x_hi).value.toNat % ORDER_NAT =
-    (x_lo.toNat + x_hi.toNat * 2^64) % ORDER_NAT
+    (x_lo.toNat + x_hi.toNat * 2^64) % ORDER_NAT := by
+  by_cases h_zero : x_hi = 0
+  · -- Case x_hi = 0
+    subst h_zero
+    simp only [Nat.zero_mul, Nat.add_zero, UInt64.toNat_zero]
+    rw [reduce128_zero_hi, Nat.mod_mod_of_dvd _ (dvd_refl _)]
+  · -- Case x_hi ≠ 0
+    -- The function has: if x_hi == 0 then ofUInt64 x_lo else <non-zero branch>
+    -- Prove via helper: reduce128 for nonzero x_hi computes intermediate % ORDER
+    -- Strategy: show (reduce128 x_lo x_hi).value.toNat = intermediate % ORDER_NAT
+    -- where intermediate is the if-then-else from the definition
+    -- Then: LHS = (intermediate % ORDER_NAT) % ORDER_NAT = intermediate % ORDER_NAT
+    -- And use algebraic + branch lemmas for intermediate % ORDER_NAT = RHS
+    set x_hi_hi := (x_hi >>> 32).toNat
+    set x_hi_lo := (x_hi &&& EPSILON).toNat
+    set term1 := x_lo.toNat
+    set term3 := x_hi_lo * EPSILON.toNat
+    set intermediate := if term1 ≥ x_hi_hi then term1 - x_hi_hi + term3
+                        else ORDER_NAT - x_hi_hi + term1 + term3
+    -- Key fact: reduce128 computes intermediate % ORDER_NAT for nonzero x_hi
+    have h_val : (GoldilocksField.reduce128 x_lo x_hi).value.toNat = intermediate % ORDER_NAT := by
+      simp only [GoldilocksField.reduce128]
+      have hbeq_false : (x_hi == (0 : UInt64)) = false := by
+        simp [beq_iff_eq, h_zero]
+      rw [if_neg (by rw [hbeq_false]; exact Bool.false_ne_true)]
+      simp only [ORDER_NAT, intermediate, term3, x_hi_lo, x_hi_hi, term1]
+      have h_ord_pos : 0 < ORDER.toNat := by native_decide
+      have h_ord_lt_size : ORDER.toNat < UInt64.size := by native_decide
+      have h_mod_lt : (if x_lo.toNat ≥ (x_hi >>> 32).toNat
+            then x_lo.toNat - (x_hi >>> 32).toNat + (x_hi &&& EPSILON).toNat * EPSILON.toNat
+            else ORDER.toNat - (x_hi >>> 32).toNat + x_lo.toNat +
+                (x_hi &&& EPSILON).toNat * EPSILON.toNat) %
+          ORDER.toNat < UInt64.size := by
+        exact Nat.lt_trans (Nat.mod_lt _ h_ord_pos) h_ord_lt_size
+      exact GoldilocksField.toUInt64_toNat_of_lt h_mod_lt
+    rw [h_val, Nat.mod_mod_of_dvd _ (dvd_refl _)]
+    -- Now: intermediate % ORDER_NAT = (x_lo + x_hi * 2^64) % ORDER_NAT
+    rw [reduce128_algebraic x_lo x_hi]
+    simp only [intermediate]
+    split_ifs with h_uf
+    · exact reduce128_no_underflow term1 x_hi_hi term3 h_uf
+    · have h_lt : term1 < x_hi_hi := by omega
+      have h_hi_hi_bound : x_hi_hi < ORDER_NAT := by
+        have : x_hi_hi < 2^32 := x_hi_hi_bound x_hi
+        have : ORDER_NAT = 18446744069414584321 := by native_decide
+        omega
+      exact reduce128_underflow term1 x_hi_hi term3 h_lt h_hi_hi_bound
 
 /-- Multiplication produces the modular product at the Nat level.
     This shows (a * b).value.toNat ≡ a.value.toNat * b.value.toNat (mod ORDER).
@@ -737,8 +1004,8 @@ theorem toZMod_ofNat (n : Nat) :
   have hcond : (n % ORDER.toNat).toUInt64 < ORDER := by
     simp only [UInt64.lt_iff_toNat_lt, htoUInt64]
     exact hlt
-  -- Use the condition to simplify the if-then-else
-  simp only [hcond, ↓reduceIte, htoUInt64]
+  -- Use the condition to simplify the dependent if-then-else
+  simp only [dif_pos hcond, htoUInt64]
   -- Goal: (n % ORDER : ZMod ORDER) = (n : ZMod ORDER)
   -- In ZMod, x % n casts to same as x
   rw [ZMod.natCast_eq_natCast_iff]
@@ -991,8 +1258,8 @@ instance : CommRing GoldilocksField where
     have hlt_ord : a.value.toNat.toUInt64 < ORDER := by
       simp only [Nat.toUInt64, UInt64.lt_iff_toNat_lt, UInt64.toNat_ofNat, Nat.mod_eq_of_lt ha']
       exact ha
-    rw [if_pos hlt_ord]
-    -- Now prove { value := a.value.toNat.toUInt64 } = a
+    rw [dif_pos hlt_ord]
+    -- Now prove { value := a.value.toNat.toUInt64, h_lt := _ } = a
     -- a.value.toNat.toUInt64 = a.value by roundtrip
     ext
     simp only [Nat.toUInt64, UInt64.toNat_ofNat, Nat.mod_eq_of_lt ha']
@@ -1013,7 +1280,7 @@ instance : CommRing GoldilocksField where
     have hlt_ord : a.value.toNat.toUInt64 < ORDER := by
       simp only [Nat.toUInt64, UInt64.lt_iff_toNat_lt, UInt64.toNat_ofNat, Nat.mod_eq_of_lt ha']
       exact ha
-    rw [if_pos hlt_ord]
+    rw [dif_pos hlt_ord]
     ext
     simp only [Nat.toUInt64, UInt64.toNat_ofNat, Nat.mod_eq_of_lt ha']
   mul_comm := fun a b => by
@@ -1123,7 +1390,7 @@ instance : Field GoldilocksField where
       rw [heq, toZMod_zero]
     exact mul_inv_cancel₀ hne
   inv_zero := by
-    show GoldilocksField.inv ⟨0⟩ = ⟨0⟩
+    show GoldilocksField.inv ⟨0, by native_decide⟩ = ⟨0, by native_decide⟩
     simp only [GoldilocksField.inv, beq_self_eq_true, ↓reduceIte, GoldilocksField.zero]
   div := GoldilocksField.div
   div_eq_mul_inv := fun a b => by rfl
@@ -1193,7 +1460,7 @@ open GoldilocksField in
   IO.println s!"1 + 1 = {r2} (expected: 2)"
 
   -- Test 3: (p-1) + 1 = 0
-  let pMinus1 : GoldilocksField := ⟨ORDER - 1⟩
+  let pMinus1 : GoldilocksField := ⟨ORDER - 1, by native_decide⟩
   let r3 := add pMinus1 one
   IO.println s!"(p-1) + 1 = {r3} (expected: 0)"
 
@@ -1207,7 +1474,7 @@ open GoldilocksField in
   IO.println s!"(p-1) * (p-1) = {r5} (expected: 1)"
 
   -- Test 6: 2^32 * 2^32 = EPSILON
-  let twoPow32 : GoldilocksField := ⟨TWO_POW_32⟩
+  let twoPow32 : GoldilocksField := ⟨TWO_POW_32, by native_decide⟩
   let r6 := mul twoPow32 twoPow32
   IO.println s!"2^32 * 2^32 = {r6} (expected: {EPSILON})"
 
