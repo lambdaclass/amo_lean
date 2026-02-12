@@ -27,6 +27,7 @@ import Mathlib.Algebra.Ring.Defs
 import Mathlib.Data.ZMod.Basic
 import Mathlib.Algebra.Ring.Equiv
 import Mathlib.NumberTheory.LucasPrimality
+import Mathlib.FieldTheory.Finite.Basic
 import Batteries.Data.UInt
 
 namespace AmoLean.Field.Goldilocks
@@ -1011,42 +1012,75 @@ theorem toZMod_ofNat (n : Nat) :
   rw [ZMod.natCast_eq_natCast_iff]
   exact Nat.mod_modEq n ORDER.toNat
 
+/-- Bridge: GoldilocksField.mul equals * (for simp unification). -/
+private theorem mul_def (a b : GoldilocksField) : GoldilocksField.mul a b = a * b := rfl
+
+/-- toZMod respects square (helper for toZMod_pow). -/
+private theorem toZMod_square (a : GoldilocksField) :
+    toZMod (GoldilocksField.square a) = (toZMod a) * (toZMod a) :=
+  toZMod_mul a a  -- square a = mul a a = a * a definitionally
+
 /-- toZMod respects pow.
-
-    This is mathematically correct because both GoldilocksField.pow and ZMod's pow
-    compute the same operation (exponentiation in the field). The GoldilocksField.pow
-    uses binary exponentiation for efficiency, while ZMod uses the standard definition.
-
-    Mathematical justification:
-    - GoldilocksField.pow computes repeated squaring and multiplication
-    - Each square uses mul which respects toZMod (toZMod_mul)
-    - Therefore the final result equals (toZMod a)^n
-
-    Verification:
-    - Extensively tested computationally
-    - Mathematical equivalence is straightforward
-
-    Note: A full formal proof would require strong induction matching the
-    binary exponentiation structure, which is non-trivial but possible. -/
+    Proved by strong induction matching the binary exponentiation structure
+    of GoldilocksField.pow. Each branch reduces to toZMod_mul and toZMod_one. -/
 @[simp]
-axiom toZMod_pow (a : GoldilocksField) (n : Nat) :
-    toZMod (GoldilocksField.pow a n) = (toZMod a) ^ n
+theorem toZMod_pow (a : GoldilocksField) (n : Nat) :
+    toZMod (GoldilocksField.pow a n) = (toZMod a) ^ n := by
+  induction n using Nat.strongRecOn with
+  | ind k ih =>
+    match k with
+    | 0 =>
+      simp only [GoldilocksField.pow, pow_zero]
+      exact toZMod_one
+    | 1 => simp [GoldilocksField.pow, pow_one]
+    | n + 2 =>
+      have h_lt : (n + 2) / 2 < n + 2 := Nat.div_lt_self (by omega) (by omega)
+      have hrec := ih _ h_lt
+      simp only [GoldilocksField.pow]
+      split
+      · next heven =>
+        have hmod : (n + 2) % 2 = 0 := eq_of_beq heven
+        simp only [GoldilocksField.square, mul_def, toZMod_mul, hrec, ← pow_add]
+        congr 1; omega
+      · next hodd =>
+        have hmod : (n + 2) % 2 ≠ 0 := by intro h; exact hodd (by simp [h])
+        simp only [GoldilocksField.square, mul_def, toZMod_mul, hrec, ← pow_add, ← pow_succ]
+        congr 1; omega
 
 /-- toZMod respects inv.
-
-    Mathematical justification (Fermat's Little Theorem):
-    For prime p and a ≠ 0: a^(p-1) ≡ 1 (mod p)
-    Therefore: a^(p-2) ≡ a^(-1) (mod p)
-
-    GoldilocksField.inv computes a^(ORDER-2) which equals a^(-1) in ZMod ORDER.
-
-    Verification:
-    - Extensively tested computationally
-    - Fermat's Little Theorem is well-established
-    - Requires goldilocks_prime_is_prime axiom for formal proof -/
+    For a = 0: inv 0 = 0 and 0⁻¹ = 0 in ZMod.
+    For a ≠ 0: inv a = a^(p-2) and a^(p-2) = a⁻¹ by Fermat's Little Theorem
+    (ZMod.pow_card_sub_one_eq_one). -/
 @[simp]
-axiom toZMod_inv (a : GoldilocksField) :
-    toZMod (GoldilocksField.inv a) = (toZMod a)⁻¹
+theorem toZMod_inv (a : GoldilocksField) :
+    toZMod (GoldilocksField.inv a) = (toZMod a)⁻¹ := by
+  simp only [GoldilocksField.inv]
+  split
+  · next hzero =>
+    -- a.value == 0: inv a = zero, a = 0, both sides are 0
+    have htza : toZMod a = 0 := by
+      have hv : a.value = 0 := eq_of_beq hzero
+      show (a.value.toNat : ZMod ORDER_NAT) = 0
+      rw [hv]; simp
+    rw [htza, inv_zero]; exact toZMod_zero
+  · next hnonzero =>
+    -- a.value ≠ 0: inv a = pow a (ORDER.toNat - 2)
+    rw [toZMod_pow, order_toNat_eq]
+    -- Goal: (toZMod a) ^ (ORDER_NAT - 2) = (toZMod a)⁻¹
+    have hne : toZMod a ≠ 0 := by
+      intro heq; apply hnonzero
+      have := toZMod_injective (heq.trans toZMod_zero.symm)
+      subst this; native_decide
+    -- Fermat's Little Theorem: a^(p-1) = 1
+    have hfermat : (toZMod a) ^ (ORDER_NAT - 1) = 1 :=
+      ZMod.pow_card_sub_one_eq_one hne
+    -- a^(p-2) * a = a^(p-1) = 1
+    have h1 : (toZMod a) ^ (ORDER_NAT - 2) * toZMod a = 1 := by
+      rw [← pow_succ, show ORDER_NAT - 2 + 1 = ORDER_NAT - 1 from by
+        have := order_nat_ge_two; omega]
+      exact hfermat
+    -- Uniqueness of inverse: x * a = 1 = a⁻¹ * a → x = a⁻¹
+    exact mul_right_cancel₀ hne (h1.trans (inv_mul_cancel₀ hne).symm)
 
 /-! ## Part 10: Algebraic Instances via toZMod
 

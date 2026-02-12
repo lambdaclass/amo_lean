@@ -18,8 +18,8 @@ Eliminar los 5 axiomas fundacionales de `AmoLean/Field/Goldilocks.lean` que sopo
 | 1 | `goldilocks_prime_is_prime` | 45 | **ELIMINADO** (theorem, Lucas) | 85 |
 | 2 | `goldilocks_canonical` | 319 | **ELIMINADO** (theorem, subtype) | 444 |
 | 3 | `reduce128_correct` | 539 | **ELIMINADO** (theorem, modular decomp) | 760 |
-| 4 | `toZMod_pow` | 765 | PENDIENTE (axiom) | ~1032 |
-| 5 | `toZMod_inv` | 781 | PENDIENTE (axiom) | ~1048 |
+| 4 | `toZMod_pow` | 765 | **ELIMINADO** (theorem, strong induction) | ~1028 |
+| 5 | `toZMod_inv` | 781 | **ELIMINADO** (theorem, Fermat) | ~1053 |
 
 ---
 
@@ -346,6 +346,11 @@ theorem toZMod_inv (a : GoldilocksField) :
 | L-082 | Axiom auditing: cada axiom debe tener plan de eliminación | Este plan |
 | L-134 | DAG de de-risking: orden topológico = orden de trabajo | GATE first |
 | L-136 | De-risk nodo crítico con sketch antes de auxiliares | Primality sketch |
+| L-189 | Bridge lemma `rfl` para unificar `def` raw con instancia typeclass en simp | Bloque 3: mul_def |
+| L-190 | `exact` maneja def. eq. donde `simp` falla por mismatch sintáctico | Bloque 3: toZMod_one |
+| L-192 | Bool split da `¬(= true)` no `= false`; convertir con `eq_of_beq`/`simp` | Bloques 3 y 4 |
+| L-194 | Fermat en ZMod requiere `FieldTheory.Finite.Basic`, no `Data.ZMod.Basic` | Bloque 4 |
+| L-196 | Contraposición `toZMod a ≠ 0` via `toZMod_injective` + `subst` + `native_decide` | Bloque 4 |
 
 ---
 
@@ -381,10 +386,10 @@ theorem toZMod_inv (a : GoldilocksField) :
 | GATE: prime | **COMPLETADO** | 2026-02-11 | Lucas primality + zpowMod |
 | Bloque 1: canonical refactor | **COMPLETADO** | 2026-02-11 | Subtype + 7 sorry eliminados |
 | Bloque 2: reduce128 | **COMPLETADO** | 2026-02-11 | 6 sub-lemas, descomp. modular |
-| Bloque 3: toZMod_pow | PENDIENTE | — | Strong induction on binary exp |
-| Bloque 4: toZMod_inv | PENDIENTE | — | Fermat via toZMod_pow |
+| Bloque 3: toZMod_pow | **COMPLETADO** | 2026-02-11 | Strong induction + mul_def bridge |
+| Bloque 4: toZMod_inv | **COMPLETADO** | 2026-02-11 | Fermat (ZMod.pow_card_sub_one_eq_one) |
 
-**Resumen**: 3/5 axiomas eliminados, 0 sorry, 2 axiomas restantes (`toZMod_pow`, `toZMod_inv`). `lake build` OK.
+**Resumen**: **5/5 axiomas eliminados**, 0 sorry, 0 axiomas restantes. `lake build` OK. **BLOQUE CENTRAL COMPLETADO.**
 
 ---
 
@@ -562,56 +567,232 @@ La prueba se estructura en 3 capas:
 
 ---
 
-## Contexto para Reanudar en Nueva Sesión
+## Notas de Implementación: Bloque 3 (toZMod_pow)
 
-### Estado actual del archivo
+### Arquitectura de la prueba
 
-- **Archivo**: `AmoLean/Field/Goldilocks.lean` (1346 líneas)
-- **Axiomas eliminados**: 2/5 (`goldilocks_prime_is_prime`, `goldilocks_canonical`)
-- **Axiomas pendientes**: 3 (`reduce128_correct` L664, `toZMod_pow` L890, `toZMod_inv` L906)
-- **Sorry**: 0
-- **Build**: `lake build` pasa limpio (solo warnings de unused vars en NTT/Radix4/)
+Inducción fuerte (`Nat.strongRecOn`) con 3 ramas matching la definición de `GoldilocksField.pow`:
 
-### Próximo paso: Bloque 2 — `reduce128_correct`
+```
+match k with
+| 0      → simp [pow, pow_zero] + exact toZMod_one
+| 1      → simp [pow, pow_one]
+| n + 2  → split on (n+2) % 2 == 0 (Bool)
+            ├── Even: toZMod_square + hrec + ← pow_add + congr 1; omega
+            └── Odd:  toZMod_mul + toZMod_square + hrec + ← pow_add + ← pow_succ + congr 1; omega
+```
+
+### Lemas helper añadidos
+
+| Lema | Línea | Propósito |
+|------|-------|-----------|
+| `mul_def` | ~1014 | Bridge: `GoldilocksField.mul a b = a * b := rfl` (unifica sintaxis para simp) |
+| `toZMod_square` | ~1017 | `toZMod (square a) = toZMod a * toZMod a` (via `toZMod_mul` def. eq.) |
+
+### Gotchas y soluciones
+
+| # | Gotcha | Solución | Lección |
+|---|--------|----------|---------|
+| G1 | `GoldilocksField.mul a b` vs `a * b`: simp no unifica términos definitionally-equal con heads distintos (`GoldilocksField.mul` vs `HMul.hMul`) | Lema bridge `mul_def : GoldilocksField.mul a b = a * b := rfl` para normalizar antes de aplicar `toZMod_mul` | L-189 |
+| G2 | `toZMod_one` matchea `toZMod (1 : GoldilocksField)` (via OfNat) pero no `toZMod GoldilocksField.one` (constructor raw) | Separar: `simp only [pow, pow_zero]` para simplificar + `exact toZMod_one` (exact maneja def. eq.) | L-190 |
+| G3 | `dsimp only` innecesario: la ecuación generada de `pow` ya no contiene `let` bindings | Omitir `dsimp only`; verificar el goal post-simp antes de asumir lets | L-191 |
+| G4 | `split` sobre Bool `if` da `h : ... = true` y `h : ¬(... = true)` (no `= false`) | Even: `eq_of_beq heven` (requiere `LawfulBEq`). Odd: `intro h; exact hodd (by simp [h])` | L-192 |
+| G5 | `omega` necesita `(n+2) % 2 = 0` como `Prop`, no como `BEq ... = true` | Convertir siempre el hypothesis Bool a Prop antes de `omega` | L-193 |
+
+### Template de referencia
+
+La prueba sigue el patrón de `zpowMod_eq_pow` (L57-74 mismo archivo) pero adaptada:
+- 3 ramas (0, 1, n+2) vs 2 (0, m+1)
+- Necesita `mul_def` bridge (zpowMod opera directamente en ZMod)
+- `split` en Bool vs `split_ifs` en Prop
+
+### Métricas
+
+- **Líneas añadidas**: ~35 (helpers + theorem)
+- **Intentos de compilación**: 4 (3 fixes: toZMod_square, caso 0, dsimp + beq conversion)
+- **Escalación**: No fue necesaria
+
+---
+
+## Notas de Implementación: Bloque 4 (toZMod_inv)
+
+### Arquitectura de la prueba
+
+Dos casos via `split` sobre `a.value == 0` (condición Bool en `GoldilocksField.inv`):
+
+```
+split on a.value == 0
+├── True (a = 0):  toZMod a = 0 → 0⁻¹ = 0 = toZMod zero
+└── False (a ≠ 0): toZMod_pow → Fermat → uniqueness of inverse
+```
+
+**Caso no-trivial (a ≠ 0)**:
+
+```
+toZMod (pow a (p-2))
+  = (toZMod a) ^ (p-2)                    [toZMod_pow]
+  = (toZMod a)⁻¹                          [Fermat + uniqueness]
+
+Cadena Fermat:
+  (toZMod a)^(p-1) = 1                    [ZMod.pow_card_sub_one_eq_one]
+  (toZMod a)^(p-2) * toZMod a = 1         [pow_succ + omega (p-2+1 = p-1)]
+  x * a = 1 = a⁻¹ * a                     [inv_mul_cancel₀]
+  → x = a⁻¹                               [mul_right_cancel₀]
+```
+
+### Import añadido
 
 ```lean
--- Línea 664:
-axiom reduce128_correct (x_lo x_hi : UInt64) :
-    (GoldilocksField.reduce128 x_lo x_hi).value.toNat % ORDER_NAT =
-    (x_lo.toNat + x_hi.toNat * 2^64) % ORDER_NAT
+import Mathlib.FieldTheory.Finite.Basic    -- ZMod.pow_card_sub_one_eq_one (Fermat)
 ```
 
-**Sub-lemas YA existentes en el archivo** (no hay que crearlos):
-- `pow_64_mod_order` (L614): `2^64 % ORDER_NAT = EPSILON.toNat`
-- `pow_96_mod_order` (L618): `2^96 % ORDER_NAT = ORDER_NAT - 1`
-- `uint64_decomp` (L624): `x.toNat = (x &&& EPSILON).toNat + (x >>> 32).toNat * 2^32`
-- `reduce128_zero_hi` (L577): caso `x_hi = 0` ya probado
+Este import provee `ZMod.pow_card_sub_one_eq_one {p : ℕ} [Fact p.Prime] {a : ZMod p} (ha : a ≠ 0) : a ^ (p - 1) = 1`.
 
-**Lo que falta probar**: caso `x_hi ≠ 0` — la cadena algebraica:
+### Gotchas y soluciones
+
+| # | Gotcha | Solución | Lección |
+|---|--------|----------|---------|
+| G1 | `ZMod.pow_card_sub_one_eq_one` no estaba importado (solo `Mathlib.Data.ZMod.Basic`) | Añadir `import Mathlib.FieldTheory.Finite.Basic` | L-194 |
+| G2 | Probar `a = 0` desde `(a.value == 0) = true` requiere `ext` + `eq_of_beq` | `GoldilocksField.ext (eq_of_beq hzero)` — ext reduce a `.value`, eq_of_beq convierte BEq a Prop | L-195 |
+| G3 | Probar `toZMod a ≠ 0` desde `¬(a.value == 0 = true)` va por contraposición | `intro heq; apply hnonzero; have := toZMod_injective ...; subst this; native_decide` | L-196 |
+| G4 | `ORDER.toNat` vs `ORDER_NAT` en el exponente | `rw [order_toNat_eq]` para normalizar a `ORDER_NAT` | L-186 (repetida) |
+| G5 | `omega` necesita `ORDER_NAT ≥ 2` para `ORDER_NAT - 2 + 1 = ORDER_NAT - 1` | `have := order_nat_ge_two; omega` (el theorem ya existe) | L-197 |
+
+### Lemas Mathlib usados (nuevos en este bloque)
+
+| Lema | Uso |
+|------|-----|
+| `ZMod.pow_card_sub_one_eq_one` | Fermat: `a ^ (p-1) = 1` en `ZMod p` para `a ≠ 0` |
+| `mul_right_cancel₀` | `a ≠ 0 → b * a = c * a → b = c` — unicidad del inverso |
+| `inv_mul_cancel₀` | `a ≠ 0 → a⁻¹ * a = 1` — propiedad del inverso |
+| `eq_of_beq` | `(a == b) = true → a = b` para `LawfulBEq` |
+| `GoldilocksField.ext` | Extensionalidad: `a.value = b.value → a = b` |
+
+### Métricas
+
+- **Líneas añadidas**: ~25 (theorem)
+- **Intentos de compilación**: 2 (1 fix: import faltante)
+- **Escalación**: No fue necesaria
+
+---
+
+## Lecciones Aprendidas: Bloques 3 y 4
+
+### L-189: Bridge lemma para simp con instancias de typeclass
+
+**Problema**: `simp only [toZMod_mul]` no matchea `toZMod (GoldilocksField.mul a b)` porque
+`toZMod_mul` está enunciado con `a * b` (via `HMul.hMul` → `Mul.mul` → `GoldilocksField.mul`).
+Aunque son definitionally equal, simp trabaja a nivel sintáctico.
+
+**Solución**: Crear `private theorem mul_def : GoldilocksField.mul a b = a * b := rfl` y
+añadirlo al simp set antes de `toZMod_mul`.
+
+**Aplicabilidad**: Cualquier situación donde un `def` raw y su instancia de typeclass coexisten
+en goals. Especialmente común al unfold definiciones dentro de structs.
+
+### L-190: `exact` vs `simp` para igualdad definitional
+
+**Problema**: `simp [toZMod_one]` no cierra `toZMod GoldilocksField.one = 1` porque
+`toZMod_one` matchea `toZMod (1 : GoldilocksField)` (via OfNat), no el constructor raw.
+
+**Solución**: Usar `exact toZMod_one` que sí maneja igualdad definitional.
+Pattern general: separar simplificación con `simp only [...]` y cerrar con `exact lemma`.
+
+### L-191: Verificar goal post-simp antes de asumir `let` bindings
+
+**Problema**: `dsimp only` falló porque `simp only [GoldilocksField.pow]` ya inline los lets
+via la equation lemma generada por Lean 4.
+
+**Solución**: No asumir estructura del goal. Verificar con `sorry` + compilar para ver el goal.
+
+### L-192: Bool split hypothesis: `= true` vs `¬(= true)`
+
+**Problema**: `split` sobre `if (b : Bool) then ...` genera `h : b = true` y `h : ¬(b = true)`,
+NO `h : b = false` como se podría esperar.
+
+**Solución**: Para el caso `= true`, usar `eq_of_beq h`. Para `¬(= true)`, usar
+`intro h_prop; exact h_neg (by simp [h_prop])` (construir `= true` para contradecir).
+
+### L-193: `omega` no maneja `BEq` — siempre convertir a `Prop` primero
+
+**Problema**: `omega` trabaja con aritmética lineal de Nat/Int. No entiende
+`((n+2) % 2 == 0) = true`. Necesita `(n+2) % 2 = 0`.
+
+**Solución**: Siempre convertir BEq hypothesis a Prop (con `eq_of_beq` o `intro; simp`)
+antes de invocar `omega`.
+
+### L-194: `ZMod.pow_card_sub_one_eq_one` requiere `FieldTheory.Finite.Basic`
+
+**Problema**: `Mathlib.Data.ZMod.Basic` NO incluye Fermat's Little Theorem.
+
+**Solución**: Añadir `import Mathlib.FieldTheory.Finite.Basic` explícitamente.
+Este módulo provee `ZMod.pow_card_sub_one_eq_one` y `ZMod.pow_card`.
+
+### L-195: Extensionalidad de structs con proof fields
+
+**Problema**: Probar `a = 0` para `GoldilocksField` desde `a.value = 0`.
+
+**Solución**: `GoldilocksField.ext` (auto-generado por Lean 4 para structures) reduce la igualdad
+al campo `value`. El campo `h_lt : Prop` es irrelevante por proof irrelevance.
+Pattern: `GoldilocksField.ext (eq_of_beq h)`.
+
+### L-196: Contraposición para probar `toZMod a ≠ 0` desde `a ≠ 0`
+
+**Problema**: Necesito `toZMod a ≠ 0` pero tengo `¬(a.value == 0 = true)`.
+
+**Solución**: `intro heq; apply hnonzero; have := toZMod_injective (heq.trans toZMod_zero.symm); subst this; native_decide`.
+Cadena: suponer `toZMod a = 0` → `a = 0` por inyectividad → `a.value == 0 = true` por computación → contradicción.
+
+### L-197: `omega` con teoremas del archivo para bounds de constantes
+
+**Problema**: `omega` no puede derivar `ORDER_NAT - 2 + 1 = ORDER_NAT - 1` sin saber `ORDER_NAT ≥ 2`.
+
+**Solución**: `have := order_nat_ge_two; omega`. Siempre inyectar bounds de constantes
+del proyecto como hypothesis antes de `omega`.
+
+---
+
+## Estado Final del Bloque Central
+
+### Resultado
+
+**COMPLETADO**: 5/5 axiomas eliminados formalmente.
+
 ```
-x_lo + x_hi * 2^64
-  ≡ x_lo + x_hi_lo * EPSILON - x_hi_hi (mod ORDER)
-  = intermediate (con manejo de underflow)
-  → result = intermediate % ORDER
+Proyecto: Bloque Central — Eliminación de Axiomas
+├── GATE: goldilocks_prime_is_prime [COMPLETADA] ✓
+│   └── Lucas primality + zpowMod
+├── Bloque 1: goldilocks_canonical [COMPLETADA] ✓
+│   └── Subtype refactor + 7 sorry eliminados
+├── Bloque 2: reduce128_correct [COMPLETADA] ✓
+│   └── 6 sub-lemas, descomposición modular
+├── Bloque 3: toZMod_pow [COMPLETADA] ✓
+│   └── Strong induction + mul_def bridge
+└── Bloque 4: toZMod_inv [COMPLETADA] ✓
+    └── Fermat (ZMod.pow_card_sub_one_eq_one)
 ```
 
-**Estrategia**: Ver sección "Bloque 2" arriba. El sub-lema clave es 2.5 (congruencia nonzero).
+### Métricas finales
 
-### Archivos modificados (para referencia de git)
+| Métrica | Valor |
+|---------|-------|
+| Axiomas eliminados | **5/5** (100%) |
+| Sorry restantes | **0** |
+| `grep "^axiom" Goldilocks.lean` | **0 resultados** |
+| `lake build` | **PASS** |
+| Archivo | `AmoLean/Field/Goldilocks.lean` (~1490 líneas) |
+| Imports añadidos | +1 (`Mathlib.FieldTheory.Finite.Basic`) |
+| Lemas helper añadidos | `mul_def`, `toZMod_square` (Bloque 3) |
 
-Todos los cambios están en `AmoLean/Field/Goldilocks.lean` y los archivos de constructores
-actualizados en la sesión anterior (NTT/, Tests/, Bench/).
+### Archivos modificados (Bloques 3 y 4)
 
-### Instrucciones para nueva sesión
-
-```
-Lee Bloque_central_plan.md (este archivo) como contexto.
-Lee AmoLean/Field/Goldilocks.lean líneas 252-290 (def reduce128) y 577-665 (sub-lemas + axiom).
-Continúa con Bloque 2: eliminar el axioma reduce128_correct.
-```
+Solo `AmoLean/Field/Goldilocks.lean`:
+- L30: import `Mathlib.FieldTheory.Finite.Basic`
+- L1014-1017: `mul_def`, `toZMod_square` (helpers)
+- L1023-1047: `toZMod_pow` (axiom → theorem, strong induction)
+- L1049-1082: `toZMod_inv` (axiom → theorem, Fermat)
 
 ---
 
 *Creado: 2026-02-11*
-*Última actualización: 2026-02-11 (GATE + Bloque 1 completados, 7 sorry eliminados)*
-*Próxima actualización: al completar Bloque 2 (reduce128_correct)*
+*Última actualización: 2026-02-11 (BLOQUE CENTRAL COMPLETADO — 5/5 axiomas eliminados)*
