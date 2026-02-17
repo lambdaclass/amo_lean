@@ -158,7 +158,7 @@ theorem zero_pow_succ_correct (env : VarId → Int) (n : Nat) :
     eval env (.pow (.const (0 : Int)) (n + 1)) = eval env (.const 0) := by
   simp only [eval]
   apply foldl_mul_zero_eq_zero
-  simp only [List.range_succ, ne_eq, List.append_eq_nil, List.cons_ne_self, and_false,
+  simp only [List.range_succ, ne_eq, List.append_eq_nil_iff, List.cons_ne_self, and_false,
              not_false_eq_true]
 
 end PowerRules
