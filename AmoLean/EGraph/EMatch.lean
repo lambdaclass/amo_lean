@@ -1,6 +1,8 @@
 /-
   AMO-Lean: E-Graph E-Matching
 
+  **DEPRECATED**: For new code, use `AmoLean.EGraph.Verified.EMatch` instead.
+
   E-matching: buscar todas las instancias de un patrón en el E-graph.
   Un patrón es como una expresión pero con "variables de patrón" que
   pueden matchear cualquier e-class.

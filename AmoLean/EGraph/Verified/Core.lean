@@ -62,6 +62,27 @@ def localCost : ENode → Nat
   | ⟨.mulGate _ _⟩ => 1
   | _               => 0
 
+/-- Simplicity rank for tiebreaking at equal cost (lower = simpler). -/
+def simplicity : ENode → Nat
+  | ⟨.constGate _⟩  => 0
+  | ⟨.witness _⟩     => 1
+  | ⟨.pubInput _⟩    => 2
+  | ⟨.negGate _⟩     => 3
+  | ⟨.addGate _ _⟩   => 4
+  | ⟨.smulGate _ _⟩  => 5
+  | ⟨.mulGate _ _⟩   => 6
+
+/-- Is (newNode, newCost) strictly better than (oldNode, oldCost)?
+    Lower cost wins; at equal cost, prefer simpler node. -/
+def isBetter (newNode : ENode) (newCost : Nat)
+    (oldNode : Option ENode) (oldCost : Nat) : Bool :=
+  if newCost < oldCost then true
+  else if newCost == oldCost then
+    match oldNode with
+    | none => true
+    | some o => newNode.simplicity < o.simplicity
+  else false
+
 end ENode
 
 /-- An equivalence class: array of equivalent e-nodes + best cost tracking. -/
@@ -83,7 +104,7 @@ def addNode (ec : EClass) (node : ENode) : EClass :=
   else { ec with nodes := ec.nodes.push node }
 
 def updateBest (ec : EClass) (node : ENode) (cost : Nat) : EClass :=
-  if cost < ec.bestCost then
+  if ENode.isBetter node cost ec.bestNode ec.bestCost then
     { ec with bestCost := cost, bestNode := some node }
   else ec
 
@@ -214,7 +235,7 @@ partial def computeCosts (g : EGraph) (costFn : ENode → Nat := ENode.localCost
           let childCosts := node.children.foldl
             (fun sum cid => sum + getCost acc cid) 0
           let cost := costFn node + childCosts
-          if cost < curBest then (cost, some node, true)
+          if ENode.isBetter node cost curNode curBest then (cost, some node, true)
           else (curBest, curNode, curChanged)
       if nodeChanged then
         let updatedClass := { eclass with bestCost := bestCost, bestNode := bestNode }

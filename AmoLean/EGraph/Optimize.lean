@@ -2,6 +2,11 @@
   AMO-Lean: Optimization Engine
   Phase 2 - Optimization Rules with Termination Guarantees
 
+  **DEPRECATED**: For new code, use `AmoLean.EGraph.Verified.Optimize` instead,
+  which provides the same API backed by a formally verified engine.
+  Utility functions (foldConstants, countOps, countNodes, OptConfig, OptStats)
+  are still used by the verified pipeline.
+
   This module implements optimization rules for the E-Graph with
   mitigations against common pitfalls:
 

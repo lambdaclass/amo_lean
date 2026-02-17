@@ -1,6 +1,11 @@
 /-
   AMO-Lean: E-Graph Implementation - Phase 2
 
+  **DEPRECATED**: For new code, use `AmoLean.EGraph.Verified.*` which provides
+  a formally verified e-graph engine (121 theorems, zero sorry).
+  This module is retained for backward compatibility with existing consumers
+  (VecExpr, Vector, Demo, Benchmarks).
+
   Estructuras de datos para E-graphs optimizadas para Lean 4.
   Diseño basado en egg (Willsey et al.) con adaptaciones para evitar
   problemas de memoria con el GC de Lean.

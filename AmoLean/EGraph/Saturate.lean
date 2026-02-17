@@ -1,6 +1,8 @@
 /-
   AMO-Lean: E-Graph Equality Saturation
 
+  **DEPRECATED**: For new code, use `AmoLean.EGraph.Verified.Saturate` instead.
+
   Saturación: aplicar reglas de reescritura repetidamente hasta punto fijo
   o hasta alcanzar un límite de iteraciones/tamaño.
 -/

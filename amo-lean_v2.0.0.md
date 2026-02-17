@@ -468,7 +468,7 @@ Fase 9: Migración Lean 4.26 (amo-lean v2.0.0)
 │   ├── 7.8 Cleanup deprecated ................... [x] 0 deprecation warnings (String.mk, Option, Int)
 │   └── 7.9 Tag v2.0.0-rc1 ...................... [ ] Pendiente (requiere commit)
 │   TAG: v2.0.0-rc1
-└── Subfase 8: Port E-Graph verificado ............ [~] EN PROGRESO 2026-02-17
+└── Subfase 8: Port E-Graph verificado ............ [x] COMPLETADA 2026-02-17
     ├── S8a: Port implementación ................... [x] COMPLETADA
     │   ├── 8.1 UnionFind verificado (1,235 LOC) .. [x] namespace VR1CS→AmoLean.EGraph.Verified
     │   └── 8.2 Core structs (252 LOC) ........... [x] CircuitNodeOp preservado (adaptar en S8d)
@@ -515,9 +515,13 @@ Fase 9: Migración Lean 4.26 (amo-lean v2.0.0)
     │   └── 8.12 VecExpr, Vector ................. [-] ya compatibles (EClassId=Nat)
     │   TOTAL: 13 archivos, 4,594 LOC, 121 teoremas, zero sorry
     │   BUILD: 3134 jobs, 0 errores
-    └── S8f: Limpieza ............................. [ ] FUTURO
-        ├── 8.13 Deprecar EGraph unverified ....... [ ] firewall: mantener ambos
-        └── 8.14 Cost model refinement ........... [ ] prefer simpler at equal cost
+    └── S8f: Limpieza ............................. [x] COMPLETADA
+        ├── 8.13 Deprecar EGraph unverified ....... [x] DEPRECATED notices en Basic/EMatch/Saturate/Optimize
+        └── 8.14 Cost model refinement ........... [x] ENode.simplicity + isBetter tiebreaker
+        │   ├── computeCosts: isBetter replaces strict < ...... [x]
+        │   ├── updateBest: isBetter replaces strict < ........ [x]
+        │   ├── union: unchanged (CoreSpec 78 thms intact) .... [x]
+        │   └── Test: ((x+0)*1)+(y*0) → x (was x+0) ......... [x] ✓
     TAG: v2.1.0
 ```
 
@@ -574,10 +578,9 @@ AmoLean.Correctness               — 1 error
 
 ### Próximos pasos
 
-1. **Commit + Tag** — Subfases 1-8 completas, commit y `git tag v2.0.0`
-2. **S8f (FUTURO)** — Cost model refinement (prefer simpler at equal cost), deprecar EGraph unverified
-3. **S8c (DIFERIDA)** — SemanticSpec/TranslationValidation si se necesitan proofs end-to-end
-4. **Merge a main** — Tras validación final, `git merge feature/lean-4.26-upgrade`
+1. **S8c (DIFERIDA)** — SemanticSpec/TranslationValidation si se necesitan proofs end-to-end
+2. **Merge a main** — Tras validación final, `git merge feature/lean-4.26-upgrade`
+3. **Nuevas funcionalidades** — Explorar nuevas reglas de optimización sobre el motor verificado
 
 ---
 
@@ -637,7 +640,7 @@ AmoLean.Correctness               — 1 error
 - 12 `sorry` warnings (Poseidon_Semantics.lean — pre-existentes, no nuevos)
 - ~150 unused variable / unused section variable warnings (pre-existentes)
 
-*Última actualización: 2026-02-17 (S8e completada)*
+*Última actualización: 2026-02-17 (S8f completada — Fase 9 COMPLETA)*
 *Autor: Claude Opus 4.6 + Manuel Puebla*
 *QA: 1 ciclo completado — 3 blockers resueltos, 8 concerns integrados*
 *Verified E-Graph: 13 archivos portados, 4,594 LOC, 121 teoremas, zero sorry*
