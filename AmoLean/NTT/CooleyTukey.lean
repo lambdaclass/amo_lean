@@ -184,7 +184,7 @@ theorem NTT_recursive_getElem_upper (ω : F) (a : List F) (ha : a.length ≥ 2) 
   simp only []
   rw [List.getElem?_append_left (by simp only [List.length_map, List.length_range]; exact hk)]
   rw [List.getElem?_map, List.getElem?_range hk]
-  simp only [Option.map_some']
+  simp only [Option.map_some]
 
 /-- Element access for NTT_recursive lower half (n/2 ≤ k < n) -/
 theorem NTT_recursive_getElem_lower (ω : F) (a : List F) (ha : a.length ≥ 2)
@@ -204,7 +204,7 @@ theorem NTT_recursive_getElem_lower (ω : F) (a : List F) (ha : a.length ≥ 2)
     have h2 := Nat.mul_div_cancel' heven
     omega
   rw [List.getElem?_map, List.getElem?_range hk_sub]
-  simp only [Option.map_some']
+  simp only [Option.map_some]
 
 /-- NTT_recursive returns none for indices ≥ length -/
 theorem NTT_recursive_getElem_none (ω : F) (a : List F) (k : ℕ)

@@ -215,7 +215,7 @@ def expandSbox (size : Nat) (α : Nat) : ExpandedKernel :=
   -- For each element, compute x^α using square chain if α=5
   let body := if α == 5 then
     -- Square chain: x^5 = x * x^4 = x * (x^2)^2
-    List.range size |>.bind fun i =>
+    List.range size |>.flatMap fun i =>
       let xi := ScalarExpr.x i
       [
         { target := .temp (3*i),     value := .mul xi xi },          -- t_3i = x_i^2
@@ -234,7 +234,7 @@ def expandPartialSbox (size : Nat) (α : Nat) (idx : Nat) : ExpandedKernel :=
   let inputs := List.range size |>.map ScalarVar.input
   let outputs := List.range size |>.map ScalarVar.output
   -- Apply S-box only to element at `idx`, copy others
-  let body := List.range size |>.bind fun i =>
+  let body := List.range size |>.flatMap fun i =>
     if i == idx then
       -- Apply S-box (square chain for α=5)
       if α == 5 then
@@ -378,23 +378,23 @@ namespace ExpandedSigma
 
 partial def toStringIndent (indent : Nat) : ExpandedSigma → String
   | .scalar k g s =>
-    let pad := String.mk (List.replicate indent ' ')
+    let pad := String.ofList (List.replicate indent ' ')
     let bodyStr := k.body.map (fun a => s!"{pad}    {a.target} := {a.value}") |> String.intercalate "\n"
     s!"{pad}Scalar block:\n{bodyStr}\n{pad}  gather: {g}\n{pad}  scatter: {s}"
   | .loop n v body =>
-    let pad := String.mk (List.replicate indent ' ')
+    let pad := String.ofList (List.replicate indent ' ')
     s!"{pad}Loop i{v} = 0 to {n-1}:\n{toStringIndent (indent + 2) body}"
   | .seq s1 s2 =>
-    let pad := String.mk (List.replicate indent ' ')
+    let pad := String.ofList (List.replicate indent ' ')
     s!"{toStringIndent indent s1}\n{pad};\n{toStringIndent indent s2}"
   | .par s1 s2 =>
-    let pad := String.mk (List.replicate indent ' ')
+    let pad := String.ofList (List.replicate indent ' ')
     s!"{toStringIndent indent s1}\n{pad}||\n{toStringIndent indent s2}"
   | .temp size body =>
-    let pad := String.mk (List.replicate indent ' ')
+    let pad := String.ofList (List.replicate indent ' ')
     s!"{pad}Temp[{size}]:\n{toStringIndent (indent + 2) body}"
   | .nop =>
-    let pad := String.mk (List.replicate indent ' ')
+    let pad := String.ofList (List.replicate indent ' ')
     s!"{pad}Nop"
 
 def toString (e : ExpandedSigma) : String := toStringIndent 0 e
@@ -518,10 +518,10 @@ def testVerifyDFT2 : IO Unit := do
     else 0
 
   -- Compute outputs
-  let y0Val := match k.body.get? 0 with
+  let y0Val := match k.body[0]? with
     | some assign => ScalarExpr.eval env assign.value
     | none => 0
-  let y1Val := match k.body.get? 1 with
+  let y1Val := match k.body[1]? with
     | some assign => ScalarExpr.eval env assign.value
     | none => 0
 

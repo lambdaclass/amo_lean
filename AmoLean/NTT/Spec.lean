@@ -94,7 +94,7 @@ end SingletonSimplified
     Because ωⁱ⁰ = ω⁰ = 1 for all i -/
 theorem NTT_spec_coeff_zero (ω : F) (a : List F) (hne : a ≠ []) :
     (NTT_spec ω a)[0]? = some (ntt_coeff ω a 0) := by
-  have hlen : 0 < a.length := List.length_pos.mpr hne
+  have hlen : 0 < a.length := List.length_pos_iff.mpr hne
   simp only [NTT_spec, List.getElem?_map]
   simp only [List.getElem?_range hlen]
   rfl
@@ -106,10 +106,10 @@ variable {F : Type*} [instL : NTTFieldLawful F]
 
 -- Helper lemmas for foldl proofs
 private lemma getElem?_map_mul (a : List F) (c : F) (i : Nat) :
-    (a.map (c * ·))[i]? = (a[i]?).map (c * ·) := List.getElem?_map (c * ·) a i
+    (a.map (c * ·))[i]? = (a[i]?).map (c * ·) := List.getElem?_map
 
 private lemma length_map_mul (a : List F) (c : F) : (a.map (c * ·)).length = a.length :=
-  List.length_map a (c * ·)
+  List.length_map (c * ·)
 
 private lemma scale_term (c aᵢ ωpow : F) :
     (c * aᵢ) * ωpow = c * (aᵢ * ωpow) := mul_assoc c aᵢ ωpow
@@ -137,10 +137,10 @@ private lemma foldl_scale_general (c : F) (a : List F) (ω : F) (k : Nat)
     rw [getElem?_map_mul]
     cases ha : a[i]? with
     | none =>
-      simp only [Option.map_none']
+      simp only [Option.map_none]
       exact ih acc
     | some aᵢ =>
-      simp only [Option.map_some']
+      simp only [Option.map_some]
       have h_acc_eq : c * acc + (c * aᵢ) * HPow.hPow ω (i * k) =
           c * (acc + aᵢ * HPow.hPow ω (i * k)) := by
         rw [mul_add_distrib, scale_term]
@@ -167,7 +167,7 @@ private lemma getElem?_zipWith_add (a b : List F) (i : Nat) :
 
 private lemma length_zipWith_add (a b : List F) :
     (List.zipWith (· + ·) a b).length = min a.length b.length :=
-  List.length_zipWith (· + ·) a b
+  List.length_zipWith
 
 private lemma add_term_distrib (aᵢ bᵢ ωpow : F) :
     (aᵢ + bᵢ) * ωpow = aᵢ * ωpow + bᵢ * ωpow := add_mul aᵢ bᵢ ωpow

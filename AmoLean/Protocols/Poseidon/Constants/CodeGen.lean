@@ -31,8 +31,8 @@ def toLimbs (n : Nat) : Array UInt64 :=
 
 /-- Format a UInt64 as hex for C code -/
 def formatHex (n : UInt64) : String :=
-  let hex := String.mk (Nat.toDigits 16 n.toNat)
-  let padded := String.mk (List.replicate (16 - hex.length) '0') ++ hex
+  let hex := String.ofList (Nat.toDigits 16 n.toNat)
+  let padded := String.ofList (List.replicate (16 - hex.length) '0') ++ hex
   s!"0x{padded}ULL"
 
 /-- Format limbs as C array initializer -/

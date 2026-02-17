@@ -152,7 +152,7 @@ instance : Inhabited GoldilocksField := ⟨⟨0, by native_decide⟩⟩
 namespace GoldilocksField
 
 /-- For any GoldilocksField element, value.toNat < 2^64 -/
-theorem val_lt_size (a : GoldilocksField) : a.value.toNat < UInt64.size := a.value.val.isLt
+theorem val_lt_size (a : GoldilocksField) : a.value.toNat < UInt64.size := UInt64.toNat_lt_size a.value
 
 /-- Helper lemma: UInt64 subtraction when x ≥ y gives x.toNat - y.toNat
     This is a fundamental property of UInt64 arithmetic that Lean 4.16 doesn't
@@ -164,7 +164,7 @@ theorem uint64_sub_toNat (x y : UInt64) (h : y.toNat ≤ x.toNat) :
 /-- Helper: Nat.toUInt64.toNat roundtrip for values < UInt64.size -/
 private theorem toUInt64_toNat_of_lt {n : Nat} (h : n < UInt64.size) :
     n.toUInt64.toNat = n := by
-  simp only [Nat.toUInt64, UInt64.toNat_ofNat, Nat.mod_eq_of_lt h]
+  simp only [Nat.toUInt64, UInt64.toNat_ofNat', Nat.mod_eq_of_lt h]
 
 /-- Extensionality theorem: two GoldilocksField elements are equal iff their values are equal -/
 @[ext]
@@ -182,7 +182,7 @@ def ofUInt64 (n : UInt64) : GoldilocksField :=
     have hsub : (n - ORDER).toNat = n.toNat - ORDER.toNat := by
       rw [UInt64.toNat_sub_of_le]; exact hge
     rw [hsub]
-    have hsize : n.toNat < UInt64.size := n.val.isLt
+    have hsize : n.toNat < UInt64.size := UInt64.toNat_lt_size n
     have h2ord : UInt64.size ≤ 2 * ORDER.toNat := by native_decide
     omega⟩
 
@@ -215,7 +215,7 @@ def add (a b : GoldilocksField) : GoldilocksField :=
             then a.value.toNat + b.value.toNat - ORDER.toNat
             else a.value.toNat + b.value.toNat) < ORDER.toNat
       split_ifs with h <;> omega
-    simp only [Nat.toUInt64, UInt64.toNat_ofNat, Nat.mod_eq_of_lt (by omega : reduced < UInt64.size)]
+    simp only [Nat.toUInt64, UInt64.toNat_ofNat', Nat.mod_eq_of_lt (by omega : reduced < UInt64.size)]
     exact hlt⟩
 
 /-- Subtraction: (a - b) mod p -/
@@ -429,7 +429,7 @@ def ofZMod (z : ZMod ORDER_NAT) : GoldilocksField :=
   ⟨(ZMod.val z).toUInt64, by
     have hval : ZMod.val z < ORDER_NAT := ZMod.val_lt z
     have hord_lt : ORDER_NAT < UInt64.size := by native_decide
-    simp only [Nat.toUInt64, UInt64.toNat_ofNat, Nat.mod_eq_of_lt (by omega : ZMod.val z < UInt64.size)]
+    simp only [Nat.toUInt64, UInt64.toNat_ofNat', Nat.mod_eq_of_lt (by omega : ZMod.val z < UInt64.size)]
     exact hval⟩
 
 /-! ### Canonicity
@@ -469,7 +469,7 @@ theorem add_val_eq (a b : GoldilocksField) :
       have : ORDER.toNat < UInt64.size := by native_decide
       omega
     -- The toUInt64 preserves the value since result < 2^64
-    simp only [Nat.toUInt64, UInt64.toNat_ofNat, hsum_eq, Nat.mod_eq_of_lt hres_lt_size]
+    simp only [Nat.toUInt64, UInt64.toNat_ofNat', hsum_eq, Nat.mod_eq_of_lt hres_lt_size]
     -- Now prove (sum - ORDER) % ORDER = sum % ORDER
     have heq : a.value.toNat + b.value.toNat = ORDER.toNat + (a.value.toNat + b.value.toNat - ORDER.toNat) := by omega
     conv_rhs => rw [heq]
@@ -480,7 +480,7 @@ theorem add_val_eq (a b : GoldilocksField) :
     have hsum_lt_size : a.value.toNat + b.value.toNat < UInt64.size := by
       have : ORDER.toNat < UInt64.size := by native_decide
       omega
-    simp only [Nat.toUInt64, UInt64.toNat_ofNat, hsum_eq, Nat.mod_eq_of_lt hsum_lt_size]
+    simp only [Nat.toUInt64, UInt64.toNat_ofNat', hsum_eq, Nat.mod_eq_of_lt hsum_lt_size]
     exact (Nat.mod_eq_of_lt hsum_lt).symm
 
 /-- Negation produces the modular negation at the Nat level. -/
@@ -590,7 +590,7 @@ theorem reduce128_zero_hi (x_lo : UInt64) :
   · -- x_lo >= ORDER
     have hge : x_lo.toNat ≥ ORDER.toNat := by
       simp only [UInt64.lt_iff_toNat_lt, not_lt] at h; exact h
-    have hlt_size : x_lo.toNat < UInt64.size := x_lo.val.isLt
+    have hlt_size : x_lo.toNat < UInt64.size := UInt64.toNat_lt_size x_lo
     have hlt_2p : x_lo.toNat < 2 * ORDER.toNat := by
       have : ORDER.toNat > UInt64.size / 2 := by native_decide
       omega
@@ -630,7 +630,7 @@ theorem uint64_decomp (x : UInt64) :
   have hmask : EPSILON.toNat = 2^32 - 1 := by native_decide
   have hand : (x &&& EPSILON).toNat = x.toNat % 2^32 := by
     simp only [UInt64.toNat_and, hmask]
-    exact Nat.and_pow_two_sub_one_eq_mod x.toNat 32
+    exact Nat.and_two_pow_sub_one_eq_mod x.toNat 32
   have hshift : (x >>> 32).toNat = x.toNat / 2^32 := by
     simp only [UInt64.toNat_shiftRight]
     have h32 : (32 : UInt64).toNat % 64 = 32 := by native_decide
@@ -646,12 +646,12 @@ private theorem x_hi_hi_bound (x : UInt64) : (x >>> 32).toNat < 2^32 := by
   simp only [UInt64.toNat_shiftRight]
   have h32 : (32 : UInt64).toNat % 64 = 32 := by native_decide
   simp only [h32, Nat.shiftRight_eq_div_pow]
-  exact Nat.div_lt_of_lt_mul (by exact x.val.isLt)
+  exact Nat.div_lt_of_lt_mul (by exact UInt64.toNat_lt_size x)
 
 /-- Bound on low 32 bits of a UInt64 masked with EPSILON: (x &&& EPSILON).toNat < 2^32 -/
 private theorem x_hi_lo_bound (x : UInt64) : (x &&& EPSILON).toNat < 2^32 := by
   have hmask : EPSILON.toNat = 2^32 - 1 := by native_decide
-  simp only [UInt64.toNat_and, hmask, Nat.and_pow_two_sub_one_eq_mod]
+  simp only [UInt64.toNat_and, hmask, Nat.and_two_pow_sub_one_eq_mod]
   exact Nat.mod_lt _ (by norm_num)
 
 /-- The intermediate value in reduce128 is bounded below 2 * ORDER -/
@@ -669,7 +669,7 @@ private theorem reduce128_intermediate_bound (x_lo x_hi : UInt64) :
   have h_hi_lo : (x_hi &&& EPSILON).toNat < 2^32 := x_hi_lo_bound x_hi
   have h_eps_val : EPSILON.toNat = 4294967295 := by native_decide
   have h_ord_val : ORDER.toNat = 18446744069414584321 := by native_decide
-  have h_t1 : x_lo.toNat < 2^64 := x_lo.val.isLt
+  have h_t1 : x_lo.toNat < 2^64 := UInt64.toNat_lt_size x_lo
   -- term3 = x_hi_lo * EPSILON ≤ (2^32-1)*(2^32-1) = 18446744065119617025
   have h_t3 : (x_hi &&& EPSILON).toNat * EPSILON.toNat ≤ 18446744065119617025 := by
     rw [h_eps_val]; nlinarith [h_hi_lo]
@@ -824,11 +824,11 @@ theorem mul_val_eq (a b : GoldilocksField) :
   have hcorrect := reduce128_correct x_lo x_hi
   -- Simplify x_lo.toNat + x_hi.toNat * 2^64 = product
   have hx_lo : x_lo.toNat = product % 2^64 := by
-    simp only [x_lo, Nat.toUInt64, UInt64.toNat_ofNat]
+    simp only [x_lo, Nat.toUInt64, UInt64.toNat_ofNat']
     have hlt : product % 2^64 < 2^64 := Nat.mod_lt _ (by norm_num)
     exact Nat.mod_eq_of_lt hlt
   have hx_hi : x_hi.toNat = product / 2^64 := by
-    simp only [x_hi, Nat.toUInt64, UInt64.toNat_ofNat]
+    simp only [x_hi, Nat.toUInt64, UInt64.toNat_ofNat']
     -- Need: product / 2^64 < 2^64
     -- Since a, b are canonical: a.value.toNat, b.value.toNat < ORDER < 2^64
     -- So product < 2^64 * 2^64 = 2^128, thus product / 2^64 < 2^64
@@ -1000,7 +1000,7 @@ theorem toZMod_ofNat (n : Nat) :
     omega
   -- (n % ORDER).toUInt64.toNat = n % ORDER
   have htoUInt64 : (n % ORDER.toNat).toUInt64.toNat = n % ORDER.toNat := by
-    simp only [Nat.toUInt64, UInt64.toNat_ofNat, Nat.mod_eq_of_lt hlt_size]
+    simp only [Nat.toUInt64, UInt64.toNat_ofNat', Nat.mod_eq_of_lt hlt_size]
   -- (n % ORDER).toUInt64 < ORDER
   have hcond : (n % ORDER.toNat).toUInt64 < ORDER := by
     simp only [UInt64.lt_iff_toNat_lt, htoUInt64]
@@ -1141,7 +1141,7 @@ instance : CommRing GoldilocksField where
     -- Need: ⟨a.value.toNat.toUInt64⟩ = a
     ext
     simp only [Nat.toUInt64]
-    have hlt : a.value.toNat < UInt64.size := a.value.val.isLt
+    have hlt : a.value.toNat < UInt64.size := UInt64.toNat_lt_size a.value
     -- UInt64.ofNat n = n when n < UInt64.size
     rw [UInt64.ofNat_toNat]
   add_zero := fun a => by
@@ -1154,7 +1154,7 @@ instance : CommRing GoldilocksField where
     simp only [hcond, ↓reduceIte]
     ext
     simp only [Nat.toUInt64]
-    have hlt : a.value.toNat < UInt64.size := a.value.val.isLt
+    have hlt : a.value.toNat < UInt64.size := UInt64.toNat_lt_size a.value
     rw [UInt64.ofNat_toNat]
   add_comm := fun a b => by
     -- a + b = b + a: Addition is commutative
@@ -1278,7 +1278,7 @@ instance : CommRing GoldilocksField where
     have h1 : (1 : UInt64).toNat = 1 := rfl
     simp only [h1, Nat.one_mul]
     have ha : a.value.toNat < ORDER_NAT := goldilocks_canonical a
-    have ha' : a.value.toNat < UInt64.size := a.value.val.isLt
+    have ha' : a.value.toNat < UInt64.size := UInt64.toNat_lt_size a.value
     -- product < 2^64, so x_hi = 0
     have hlo : a.value.toNat % (2^64) = a.value.toNat := Nat.mod_eq_of_lt ha'
     have hhi : a.value.toNat / (2^64) = 0 := Nat.div_eq_of_lt ha'
@@ -1290,13 +1290,13 @@ instance : CommRing GoldilocksField where
     -- ofUInt64 for canonical values
     simp only [GoldilocksField.ofUInt64]
     have hlt_ord : a.value.toNat.toUInt64 < ORDER := by
-      simp only [Nat.toUInt64, UInt64.lt_iff_toNat_lt, UInt64.toNat_ofNat, Nat.mod_eq_of_lt ha']
+      simp only [Nat.toUInt64, UInt64.lt_iff_toNat_lt, UInt64.toNat_ofNat', Nat.mod_eq_of_lt ha']
       exact ha
     rw [dif_pos hlt_ord]
     -- Now prove { value := a.value.toNat.toUInt64, h_lt := _ } = a
     -- a.value.toNat.toUInt64 = a.value by roundtrip
     ext
-    simp only [Nat.toUInt64, UInt64.toNat_ofNat, Nat.mod_eq_of_lt ha']
+    simp only [Nat.toUInt64, UInt64.toNat_ofNat', Nat.mod_eq_of_lt ha']
   mul_one := fun a => by
     -- a * 1 = a: Same reasoning as one_mul
     show GoldilocksField.mul a GoldilocksField.one = a
@@ -1304,7 +1304,7 @@ instance : CommRing GoldilocksField where
     have h1 : (1 : UInt64).toNat = 1 := rfl
     simp only [h1, Nat.mul_one]
     have ha : a.value.toNat < ORDER_NAT := goldilocks_canonical a
-    have ha' : a.value.toNat < UInt64.size := a.value.val.isLt
+    have ha' : a.value.toNat < UInt64.size := UInt64.toNat_lt_size a.value
     have hlo : a.value.toNat % (2^64) = a.value.toNat := Nat.mod_eq_of_lt ha'
     have hhi : a.value.toNat / (2^64) = 0 := Nat.div_eq_of_lt ha'
     simp only [GoldilocksField.reduce128, hhi, hlo]
@@ -1312,11 +1312,11 @@ instance : CommRing GoldilocksField where
     rw [if_pos h0eq]
     simp only [GoldilocksField.ofUInt64]
     have hlt_ord : a.value.toNat.toUInt64 < ORDER := by
-      simp only [Nat.toUInt64, UInt64.lt_iff_toNat_lt, UInt64.toNat_ofNat, Nat.mod_eq_of_lt ha']
+      simp only [Nat.toUInt64, UInt64.lt_iff_toNat_lt, UInt64.toNat_ofNat', Nat.mod_eq_of_lt ha']
       exact ha
     rw [dif_pos hlt_ord]
     ext
-    simp only [Nat.toUInt64, UInt64.toNat_ofNat, Nat.mod_eq_of_lt ha']
+    simp only [Nat.toUInt64, UInt64.toNat_ofNat', Nat.mod_eq_of_lt ha']
   mul_comm := fun a b => by
     -- a * b = b * a: Multiplication is commutative
     show GoldilocksField.mul a b = GoldilocksField.mul b a
@@ -1381,7 +1381,7 @@ instance : CommRing GoldilocksField where
     -- Int cast of Nat n equals Nat cast of n
     -- intCast (↑n) = natCast n
     -- Both are GoldilocksField.ofNat n
-    simp only [ge_iff_le, Int.ofNat_nonneg, ↓reduceIte, Int.toNat_natCast]
+    simp only [ge_iff_le, Int.natCast_nonneg, ↓reduceIte, Int.toNat_natCast]
     rfl
   -- Power
   npow := fun n a => GoldilocksField.pow a n
@@ -1403,7 +1403,7 @@ instance : CommRing GoldilocksField where
     Every non-zero element has a multiplicative inverse (via Fermat's little theorem).
     IsDomain comes automatically from Field.
 -/
-instance : Field GoldilocksField where
+noncomputable instance : Field GoldilocksField where
   exists_pair_ne := ⟨0, 1, by decide⟩
   inv := GoldilocksField.inv
   mul_inv_cancel := fun a ha => by

@@ -69,7 +69,7 @@ def CodeGenState.decreaseIndent (s : CodeGenState) : CodeGenState :=
 /-! ## Part 3: C Code Primitives -/
 
 def indentStr (n : Nat) : String :=
-  String.mk (List.replicate (n * 4) ' ')
+  String.ofList (List.replicate (n * 4) ' ')
 
 def line (state : CodeGenState) (content : String) : String :=
   indentStr state.indent ++ content ++ "\n"

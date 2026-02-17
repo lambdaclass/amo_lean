@@ -154,15 +154,15 @@ variable {F : Type} [FRIField F]
 
 /-- Get the root hash -/
 def root (tree : FlatMerkle F n) : F :=
-  tree.nodes.get! (2 * n - 2)
+  tree.nodes[2 * n - 2]!
 
 /-- Get a leaf value -/
 def getLeaf (tree : FlatMerkle F n) (i : Nat) (h : i < n) : F :=
-  tree.nodes.get! i
+  tree.nodes[i]!
 
 /-- Get an internal node -/
 def getInternal (tree : FlatMerkle F n) (i : Nat) : F :=
-  tree.nodes.get! (n + i)
+  tree.nodes[n + i]!
 
 /-- Number of layers (including leaf layer) -/
 def numLayers (n : Nat) : Nat := Nat.log2 n + 1
@@ -251,11 +251,11 @@ def buildTree [FRIField F] [Inhabited F] (leaves : Array F) (hashFn : HashFn F) 
   else if h_pow2 : 2 ^ (Nat.log2 n) = n then
       -- Initialize array with leaves + space for internals
       let totalSize := 2 * n - 1
-      let initialNodes : Array F := Array.mkArray totalSize default
+      let initialNodes : Array F := Array.replicate totalSize default
 
       -- Copy leaves
       let withLeaves := List.range n |>.foldl
-        (fun arr i => arr.set! i (leaves.get! i))
+        (fun arr i => arr.set! i leaves[i]!)
         initialNodes
 
       -- Build internal layers bottom-up
@@ -272,8 +272,8 @@ def buildTree [FRIField F] [Inhabited F] (leaves : Array F) (hashFn : HashFn F) 
             (fun arr2 j =>
               let leftChildIdx := if layer == 1 then 2 * j else childLayerStart + 2 * j
               let rightChildIdx := leftChildIdx + 1
-              let leftChild := arr2.get! leftChildIdx
-              let rightChild := arr2.get! rightChildIdx
+              let leftChild := arr2[leftChildIdx]!
+              let rightChild := arr2[rightChildIdx]!
               let parentHash := hashFn leftChild rightChild
               let parentIdx := thisLayerStart + j
               arr2.set! parentIdx parentHash)
@@ -288,7 +288,7 @@ def buildTree [FRIField F] [Inhabited F] (leaves : Array F) (hashFn : HashFn F) 
           have h_fn : finalNodes.size = withLeaves.size :=
             foldl_preserves_array_size _ (fun arr _ => by
               apply foldl_preserves_array_size; intro arr2 _; simp [Array.set!]) _ _
-          exact h_fn.trans (h_wl.trans (Array.size_mkArray _ _))
+          exact h_fn.trans (h_wl.trans Array.size_replicate)
         h_pow2 := ⟨Nat.log2 n, h_pow2.symm⟩
       }
   else none
@@ -305,10 +305,10 @@ def generateProof [FRIField F] [Inhabited F] (tree : FlatMerkle F n) (leafIndex 
       (fun (sibs, bits, curIdx) layer =>
         let siblingIdx := if curIdx % 2 == 0 then curIdx + 1 else curIdx - 1
         let siblingVal := if layer == 0 then
-          tree.nodes.get! siblingIdx
+          tree.nodes[siblingIdx]!
         else
           let layerStart := 2 * n - n / (2^(layer - 1))
-          tree.nodes.get! (layerStart + siblingIdx)
+          tree.nodes[layerStart + siblingIdx]!
         (sibs ++ [siblingVal], bits ++ [curIdx % 2 == 1], curIdx / 2))
       ([], [], leafIndex)
 
@@ -534,7 +534,7 @@ def testTreeConstruction : IO Unit := do
       IO.println s!"  Path bits: {proof.pathBits}"
 
       -- Verify the proof
-      let leafVal := leaves.get! 3
+      let leafVal := leaves[3]!
       let verified := proof.verify leafVal tree.root testHash
       IO.println s!"  Verification: {if verified then "PASSED" else "FAILED"}"
 

@@ -72,7 +72,7 @@ abbrev State := Array Nat
 
 /-- Create zero state of size t -/
 def zeroState (t : Nat) : State :=
-  Array.mkArray t 0
+  Array.replicate t 0
 
 /-! ## MDS Matrix Operations
 
@@ -99,7 +99,7 @@ def mds3 : Array (Array Nat) := #[
 /-- Matrix-vector multiplication: result[i] = Σⱼ M[i,j] * v[j] -/
 def mdsMultiply (p : Nat) (M : Array (Array Nat)) (v : State) : State :=
   M.map fun row =>
-    row.zipWith v (modMul p) |>.foldl (modAdd p) 0
+    row.zipWith (modMul p) v |>.foldl (modAdd p) 0
 
 /-- External MDS for Poseidon2 (used in full rounds)
     state[i] = state[i] + sum(state) for all i -/
@@ -114,9 +114,9 @@ def mdsExternal (p : Nat) (state : State) : State :=
     state[2] = 2*state[2] + sum -/
 def mdsInternal3 (p : Nat) (state : State) : State :=
   if state.size != 3 then state else
-  let s0 := state.get! 0
-  let s1 := state.get! 1
-  let s2 := state.get! 2
+  let s0 := state[0]!
+  let s1 := state[1]!
+  let s2 := state[2]!
   let sum := modAdd p (modAdd p s0 s1) s2
   #[modAdd p s0 sum,
     modAdd p s1 sum,
@@ -146,7 +146,7 @@ structure Params where
 
 /-- Add round constants to state -/
 def addRoundConstants (p : Nat) (rc : Array Nat) (state : State) : State :=
-  state.zipWith rc (modAdd p)
+  state.zipWith (modAdd p) rc
 
 /-- Apply S-box to ALL elements (full round) -/
 def sboxFull (p : Nat) (alpha : Nat) (state : State) : State :=
@@ -155,7 +155,7 @@ def sboxFull (p : Nat) (alpha : Nat) (state : State) : State :=
 /-- Apply S-box only to element 0 (partial round) -/
 def sboxPartial (p : Nat) (alpha : Nat) (state : State) : State :=
   if state.size > 0 then
-    state.set! 0 (sbox p alpha (state.get! 0))
+    state.set! 0 (sbox p alpha (state[0]!))
   else
     state
 
@@ -269,15 +269,15 @@ def bn254Params : Params := {
 /-! ## Test Execution -/
 
 -- Test with small prime (fast)
-#eval sbox5 testPrime 2  -- 2^5 = 32 mod 17 = 15
+#eval! sbox5 testPrime 2  -- 2^5 = 32 mod 17 = 15
 
-#eval mdsMultiply testPrime mds3 #[1, 2, 3]
+#eval! mdsMultiply testPrime mds3 #[1, 2, 3]
 -- [2*1+1*2+1*3, 1*1+2*2+1*3, 1*1+1*2+3*3] = [7, 8, 12]
 
-#eval fullRound testParams 0 #[1, 1, 1]
+#eval! fullRound testParams 0 #[1, 1, 1]
 
-#eval poseidon2Permutation testParams #[1, 2, 3]
+#eval! poseidon2Permutation testParams #[1, 2, 3]
 
-#eval poseidon2Hash testParams #[1, 2]
+#eval! poseidon2Hash testParams #[1, 2]
 
 end AmoLean.Protocols.Poseidon.Spec

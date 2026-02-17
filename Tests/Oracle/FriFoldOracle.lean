@@ -40,7 +40,7 @@ def generateArray (size : Nat) (seed : UInt64) : Array UInt64 := Id.run do
 
 /-- Reference FRI fold: out[i] = even[i] + alpha * odd[i] -/
 def friFoldRef (even odd : Array UInt64) (alpha : UInt64) : Array UInt64 :=
-  Array.zipWith even odd (fun e o => e + alpha * o)
+  even.zipWith (fun e o => e + alpha * o) odd
 
 /-! ## Part 3: Oracle Interface (Subprocess) -/
 

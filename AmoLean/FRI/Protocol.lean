@@ -375,7 +375,7 @@ def analyzeFlow (sigma : CryptoSigma) : List String :=
 def printFlow {F : Type} [FRIField F] (outputs : List (RoundOutput F)) : IO Unit := do
   IO.println "FRI Protocol Flow:"
   IO.println "=================="
-  for (i, out) in outputs.enum do
+  for (out, i) in outputs.zipIdx do
     IO.println s!"\n--- Round {i} ---"
     IO.println s!"State: domain={out.nextState.domain}, poly={out.nextState.poly}"
     let commitNat := out.nextState.commitment.map FRIField.toNat |>.getD 0

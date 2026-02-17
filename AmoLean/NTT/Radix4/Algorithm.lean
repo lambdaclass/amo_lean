@@ -196,25 +196,25 @@ theorem combineRadix4_outputs_exist (ω : F) (E0 E1 E2 E3 : List F)
     simp only [List.getElem?_map, List.length_range]
     have hlen : j < 4 * E0.length := by omega
     rw [List.getElem?_range hlen]
-    simp only [Option.map_some', Option.isSome_some]
+    simp only [Option.map_some, Option.isSome_some]
   · -- result[j + n4]?.isSome
     unfold combineRadix4
     simp only [List.getElem?_map, List.length_range]
     have hlen : j + E0.length < 4 * E0.length := by omega
     rw [List.getElem?_range hlen]
-    simp only [Option.map_some', Option.isSome_some]
+    simp only [Option.map_some, Option.isSome_some]
   · -- result[j + 2*n4]?.isSome
     unfold combineRadix4
     simp only [List.getElem?_map, List.length_range]
     have hlen : j + 2 * E0.length < 4 * E0.length := by omega
     rw [List.getElem?_range hlen]
-    simp only [Option.map_some', Option.isSome_some]
+    simp only [Option.map_some, Option.isSome_some]
   · -- result[j + 3*n4]?.isSome
     unfold combineRadix4
     simp only [List.getElem?_map, List.length_range]
     have hlen : j + 3 * E0.length < 4 * E0.length := by omega
     rw [List.getElem?_range hlen]
-    simp only [Option.map_some', Option.isSome_some]
+    simp only [Option.map_some, Option.isSome_some]
 
 end AmoLean.NTT.Radix4
 

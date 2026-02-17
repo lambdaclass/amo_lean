@@ -50,7 +50,7 @@ def write [Inhabited α] (mem : Memory α) (idx : Nat) (val : α) : Memory α :=
     { data := mem.data.set! idx val }
   else
     let newSize := idx + 1
-    let extended := mem.data ++ Array.mkArray (newSize - mem.data.size) default
+    let extended := mem.data ++ Array.replicate (newSize - mem.data.size) default
     { data := extended.set! idx val }
 
 /-- Create memory from a list -/
@@ -63,7 +63,7 @@ def toList (mem : Memory α) : List α := mem.data.toList
 def size (mem : Memory α) : Nat := mem.data.size
 
 /-- Create a zeroed memory of given size -/
-def zeros [Zero α] (size : Nat) : Memory α := { data := Array.mkArray size 0 }
+def zeros [Zero α] (size : Nat) : Memory α := { data := Array.replicate size 0 }
 
 /-- Array getElem! equals List getElem when in bounds.
     This bridges Array and List indexing via getElem!_toArray + getElem!_pos. -/
@@ -105,7 +105,7 @@ theorem toList_ofList (l : List α) : (ofList l).toList = l := by
 /-- Size of zeros equals the requested size -/
 @[simp]
 theorem zeros_size [Zero α] (n : Nat) : (zeros n : Memory α).size = n := by
-  simp only [zeros, size, Array.size_mkArray]
+  simp only [zeros, size, Array.size_replicate]
 
 /-- toList of zeros is replicate of 0 -/
 @[simp]
@@ -134,7 +134,7 @@ theorem write_size_ge [Inhabited α] (mem : Memory α) (i : Nat) (v : α) :
   unfold write size
   split_ifs with h
   · simp only [Array.set!, Array.size_setIfInBounds]; omega
-  · simp only [Array.set!, Array.size_setIfInBounds, Array.size_append, Array.size_mkArray]; omega
+  · simp only [Array.set!, Array.size_setIfInBounds, Array.size_append, Array.size_replicate]; omega
 
 /-- Two Memory values are equal iff their data arrays are equal.
     Since Memory is determined entirely by its data field, equality of
@@ -157,7 +157,7 @@ theorem write_read_self [Inhabited α] (mem : Memory α) (i : Nat) (hi : i < mem
 
 /-- zeros_size expressed as data.size -/
 theorem zeros_data_size [Zero α] (n : Nat) : (zeros n : Memory α).data.size = n := by
-  simp only [zeros, Array.size_mkArray]
+  simp only [zeros, Array.size_replicate]
 
 /-- Memory equality from toList, iff version -/
 @[simp]

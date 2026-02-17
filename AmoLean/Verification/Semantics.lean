@@ -53,7 +53,7 @@ def Memory.write [Inhabited α] (mem : Memory α) (idx : Nat) (val : α) : Memor
   else
     -- Extend memory with defaults, then write
     let newSize := idx + 1
-    let extended := mem.data ++ Array.mkArray (newSize - mem.data.size) default
+    let extended := mem.data ++ Array.replicate (newSize - mem.data.size) default
     { data := extended.set! idx val }
 
 /-- Create memory from a list -/
@@ -66,7 +66,7 @@ def Memory.toList (mem : Memory α) : List α := mem.data.toList
 def Memory.size (mem : Memory α) : Nat := mem.data.size
 
 /-- Create a zeroed memory of given size -/
-def Memory.zeros (size : Nat) : Memory Float := { data := Array.mkArray size 0.0 }
+def Memory.zeros (size : Nat) : Memory Float := { data := Array.replicate size 0.0 }
 
 /-- Copy a memory -/
 def Memory.copy (mem : Memory α) : Memory α := { data := mem.data }

@@ -43,7 +43,7 @@ def CodeGenState.freshTemp (s : CodeGenState) : (String × CodeGenState) :=
 /-! ## Part 2: C Code Primitives -/
 
 def indentStr (n : Nat) : String :=
-  String.mk (List.replicate (n * 2) ' ')
+  String.ofList (List.replicate (n * 2) ' ')
 
 def cType : String := "double"
 

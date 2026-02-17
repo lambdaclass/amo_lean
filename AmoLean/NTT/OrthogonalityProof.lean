@@ -13,7 +13,7 @@
 -/
 
 import AmoLean.NTT.RootsOfUnity
-import Mathlib.Algebra.BigOperators.Ring
+import Mathlib.Algebra.BigOperators.Ring.Finset
 
 namespace AmoLean.NTT
 
@@ -60,7 +60,7 @@ theorem sum_fin_eq_sum_range {n : ℕ} (f : ℕ → F) :
   apply Finset.sum_nbij (fun k => ⟨k.val, Finset.mem_range.mpr k.isLt⟩)
   · intro _ _; exact Finset.mem_univ _
   · intro a b _ _ hab; exact Fin.ext (Subtype.mk.inj hab)
-  · intro j _; exact ⟨⟨j.val, Finset.mem_range.mp j.property⟩, Finset.mem_univ _, rfl⟩
+  · intro j _; exact ⟨⟨j.val, Finset.mem_range.mp j.property⟩, Finset.mem_coe.mpr (Finset.mem_univ _), rfl⟩
   · intro _ _; rfl
 
 /-- d = (j + n - i) % n is positive when j ≠ i -/

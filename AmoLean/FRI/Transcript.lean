@@ -315,24 +315,24 @@ partial def extractIntrinsicSequence : CryptoSigma → List Intrinsic
 /-- Pretty print -/
 partial def toStringIndent (indent : Nat) : CryptoSigma → String
   | .compute k g s =>
-    let pad := String.mk (List.replicate indent ' ')
+    let pad := String.ofList (List.replicate indent ' ')
     s!"{pad}Compute {k}\n{pad}  gather: {g}\n{pad}  scatter: {s}"
   | .loop n v body =>
-    let pad := String.mk (List.replicate indent ' ')
+    let pad := String.ofList (List.replicate indent ' ')
     s!"{pad}Loop i{v} = 0 to {n-1}:\n{toStringIndent (indent + 2) body}"
   | .seq s1 s2 =>
     s!"{toStringIndent indent s1}\n{toStringIndent indent s2}"
   | .par s1 s2 =>
-    let pad := String.mk (List.replicate indent ' ')
+    let pad := String.ofList (List.replicate indent ' ')
     s!"{toStringIndent indent s1}\n{pad}||\n{toStringIndent indent s2}"
   | .temp size body =>
-    let pad := String.mk (List.replicate indent ' ')
+    let pad := String.ofList (List.replicate indent ' ')
     s!"{pad}Temp[{size}]:\n{toStringIndent (indent + 2) body}"
   | .nop =>
-    let pad := String.mk (List.replicate indent ' ')
+    let pad := String.ofList (List.replicate indent ' ')
     s!"{pad}Nop"
   | .intrinsic i g s =>
-    let pad := String.mk (List.replicate indent ' ')
+    let pad := String.ofList (List.replicate indent ' ')
     s!"{pad}[INTRINSIC] {i}\n{pad}  gather: {g}\n{pad}  scatter: {s}"
 
 def toString (e : CryptoSigma) : String := toStringIndent 0 e

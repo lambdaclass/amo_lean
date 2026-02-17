@@ -116,11 +116,11 @@ def numRounds (proof : FRIProof F) : Nat :=
 
 /-- Get commitment for a specific round -/
 def commitmentAt (proof : FRIProof F) (round : Nat) : Option F :=
-  proof.commitments.get? round
+  proof.commitments[round]?
 
 /-- Get challenge for a specific round -/
 def challengeAt (proof : FRIProof F) (round : Nat) : Option F :=
-  proof.challenges.get? round
+  proof.challenges[round]?
 
 end FRIProof
 

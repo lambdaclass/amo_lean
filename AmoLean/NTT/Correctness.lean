@@ -261,7 +261,7 @@ theorem ct_recursive_eq_spec (ω : F) (input : List F)
     · -- Case 1: k < half (upper part)
       rw [List.getElem?_append_left (by simp [List.length_map, List.length_range]; exact hk_lt_half)]
       rw [List.getElem?_map, List.getElem?_range hk_lt_half]
-      simp only [Option.map_some']
+      simp only [Option.map_some]
       -- Use cooley_tukey_upper_half
       have hn_pos : n > 0 := by omega
       have hk' : k < n / 2 := hk_lt_half
@@ -276,7 +276,7 @@ theorem ct_recursive_eq_spec (ω : F) (input : List F)
         simp only [List.length_map, List.length_range]
         have hk_sub_lt : k - half < half := by omega
         rw [List.getElem?_map, List.getElem?_range hk_sub_lt]
-        simp only [Option.map_some']
+        simp only [Option.map_some]
         -- Use cooley_tukey_lower_half (need n > 2)
         let j := k - half
         have hj : j < n / 2 := hk_sub_lt
@@ -472,7 +472,7 @@ private lemma list_foldl_eq_of_forall₂ {α β : Type*} (f g : β → α → β
   | nil => rfl
   | cons x xs ih =>
     simp only [List.foldl_cons]
-    have hx : x ∈ x :: xs := List.mem_cons_self x xs
+    have hx : x ∈ x :: xs := List.mem_cons_self
     rw [h init x hx]
     apply ih
     intro acc y hy
@@ -484,7 +484,7 @@ theorem intt_recursive_eq_spec' (ω n_inv : F) (X : List F)
     (hω : IsPrimitiveRoot ω X.length)
     (hne : X ≠ []) :
     INTT_recursive ω n_inv X = INTT_spec ω n_inv X := by
-  have hlen_pos : X.length > 0 := List.length_pos.mpr hne
+  have hlen_pos : X.length > 0 := List.length_pos_iff.mpr hne
   let n := X.length
   have hn_pos : n > 0 := hlen_pos
   unfold INTT_recursive

@@ -91,7 +91,7 @@ def CodeGenState.popDomain (s : CodeGenState) : CodeGenState :=
 /-! ## Part 3: C Code Primitives -/
 
 def indentStr (n : Nat) : String :=
-  String.mk (List.replicate (n * 4) ' ')
+  String.ofList (List.replicate (n * 4) ' ')
 
 def fieldType (config : CodeGenConfig) : String :=
   if config.fieldBits == 64 then "uint64_t" else "uint32_t"

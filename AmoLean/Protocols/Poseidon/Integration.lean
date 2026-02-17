@@ -59,7 +59,7 @@ This matches the standard sponge construction for Merkle trees.
 def poseidon2Hash2to1 (params : Params) (left right : Nat) : Nat :=
   let state := #[left % params.prime, right % params.prime, 0]
   let result := poseidon2Permutation params state
-  result.get! 0
+  result[0]!
 
 /-- HashFn adapter for Merkle trees using BN254 Poseidon2.
 
@@ -102,15 +102,15 @@ abbrev SpongeState := Array Nat
 
 /-- Initialize sponge state with zeros -/
 def initSponge (params : Params) : SpongeState :=
-  Array.mkArray params.t 0
+  Array.replicate params.t 0
 
 /-- XOR-add values into state (sponge absorption)
     Only modifies rate positions [0..t-2] -/
 def absorbIntoState (params : Params) (values : List Nat) (state : SpongeState) : SpongeState :=
   let rate := params.t - 1  -- Rate = t - 1
-  values.enum.foldl (fun s (i, v) =>
+  values.zipIdx.foldl (fun s (v, i) =>
     if i < rate && i < s.size then
-      s.set! i (modAdd params.prime (s.get! i) (v % params.prime))
+      s.set! i (modAdd params.prime s[i]! (v % params.prime))
     else s
   ) state
 
@@ -144,7 +144,7 @@ def poseidon2Squeeze (params : Params) (absorbed : List Nat) : Nat :=
     poseidon2Permutation params stateWithBlock
   ) state
 
-  finalState.get! 0
+  finalState[0]!
 
 /-- Transcript squeeze using BN254 Poseidon2.
 
@@ -176,7 +176,7 @@ def poseidon2MultipleSqueeze (params : Params) (absorbed : List Nat) (count : Na
 
   -- Squeeze count outputs
   (List.range count).foldl (fun (outputs, st) _ =>
-    let output := st.get! 0
+    let output := st[0]!
     let nextState := poseidon2Permutation params st
     (outputs ++ [output], nextState)
   ) ([], absorbedState) |>.1
@@ -226,14 +226,14 @@ def poseidon2HashWithDomainTag (params : Params) (tag : DomainTag) (left right :
   -- Inject domain into capacity (state[2]), inputs into rate (state[0,1])
   let state := #[left % params.prime, right % params.prime, domainVal % params.prime]
   let result := poseidon2Permutation params state
-  result.get! 0
+  result[0]!
 
 /-- Legacy string-based domain separation (for backwards compatibility) -/
 def poseidon2HashWithDomain (params : Params) (domain : String) (left right : Nat) : Nat :=
   let domainVal := domainTagToNat domain
   let state := #[left % params.prime, right % params.prime, domainVal % params.prime]
   let result := poseidon2Permutation params state
-  result.get! 0
+  result[0]!
 
 /-- Merkle hash with domain separation (using new DomainTag) -/
 def poseidon2MerkleHashWithDomainTag : Nat → Nat → Nat :=

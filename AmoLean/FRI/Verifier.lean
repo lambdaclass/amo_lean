@@ -139,7 +139,7 @@ def verifyQueryPathLayers {F : Type} [FRIField F] [CryptoHash F] [Add F] [Mul F]
       | [] =>
         -- Last layer: verify against final polynomial
         if query.position < finalLayer.length then
-          let finalValue := finalLayer.get! query.position
+          let finalValue := finalLayer[query.position]!
           if expectedFolded != finalValue then
             .error (.foldInconsistency round queryIdx query.position expectedFolded finalValue)
           else

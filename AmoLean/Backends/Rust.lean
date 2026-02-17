@@ -47,7 +47,7 @@ def RustCodeGenState.freshTemp (s : RustCodeGenState) : (String × RustCodeGenSt
 /-! ## Part 2: Rust Code Primitives -/
 
 def indentStr (n : Nat) : String :=
-  String.mk (List.replicate (n * 4) ' ')
+  String.ofList (List.replicate (n * 4) ' ')
 
 /-- The generic field type parameter name -/
 def fieldType : String := "F"

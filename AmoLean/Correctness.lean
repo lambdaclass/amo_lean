@@ -247,12 +247,12 @@ lemma applyFirst_sound {α : Type} [Add α] [Mul α] [Pow α Nat]
     simp only [applyFirst, List.findSome?] at h
     cases hr : rule e with
     | none =>
-      simp only [hr, Option.none_orElse] at h
+      simp only [hr, Option.or_none] at h
       exact ih (fun r hr' => h_rules_sound r (List.mem_cons_of_mem _ hr')) h
     | some result =>
-      simp only [hr, Option.some_orElse, Option.some.injEq] at h
+      simp only [hr, Option.or_some, Option.some.injEq] at h
       rw [← h]
-      exact h_rules_sound rule (List.mem_cons_self _ _) e result hr
+      exact h_rules_sound rule List.mem_cons_self e result hr
 
 /-- Lema auxiliar: rewriteAtRoot preserva semántica -/
 lemma rewriteAtRoot_sound {α : Type} [Add α] [Mul α] [Pow α Nat]

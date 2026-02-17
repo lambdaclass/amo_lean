@@ -311,7 +311,7 @@ namespace MatEClass
 
 /-- Create a class with a single node -/
 def singleton (node : MatENode) (cost : Nat := infiniteCost) : MatEClass :=
-  { nodes := Std.HashSet.empty.insert node
+  { nodes := ({} |>.insert node)
   , bestCost := cost
   , bestNode := some node
   , dims := node.dimensions }
@@ -410,10 +410,10 @@ namespace MatEGraph
 /-- Create empty matrix E-graph -/
 def empty : MatEGraph :=
   { unionFind := MatUnionFind.empty
-  , hashcons := Std.HashMap.empty
-  , classes := Std.HashMap.empty
+  , hashcons := {}
+  , classes := {}
   , worklist := []
-  , dirty := Std.HashSet.empty }
+  , dirty := {} }
 
 /-- Number of e-classes -/
 def numClasses (g : MatEGraph) : Nat := g.classes.size
@@ -520,7 +520,7 @@ partial def rebuild (g : MatEGraph) : MatEGraph :=
   if g.worklist.isEmpty && g.dirty.isEmpty then g
   else
     let toProcess := g.worklist ++ g.dirty.toList
-    let g1 := { g with worklist := [], dirty := Std.HashSet.empty }
+    let g1 := { g with worklist := [], dirty := {} }
     let (g2, pendingMerges) := toProcess.foldl (fun (acc, merges) classId =>
       let (acc', newMerges) := processClass acc classId
       (acc', newMerges ++ merges)

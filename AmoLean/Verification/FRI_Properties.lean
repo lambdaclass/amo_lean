@@ -35,7 +35,7 @@ def TranscriptState.init : TranscriptState :=
 /-- Absorb a value into transcript -/
 def TranscriptState.absorb (ts : TranscriptState) (data : UInt64) : TranscriptState :=
   let idx := ts.absorbCount % 4
-  let newState := ts.state.set! idx (ts.state.get! idx ^^^ data)
+  let newState := ts.state.set! idx (ts.state[idx]! ^^^ data)
   { ts with state := newState, absorbCount := ts.absorbCount + 1 }
 
 /-- Squeeze a challenge from transcript -/
@@ -65,8 +65,8 @@ PROOF_ANCHOR from fri_protocol.c (lines 117-133):
 def friFold (input : Array UInt64) (alpha : UInt64) : Array UInt64 :=
   let n := input.size / 2
   Array.ofFn (fun i : Fin n =>
-    let even := input.get! (2 * i.val)
-    let odd := input.get! (2 * i.val + 1)
+    let even := input[2 * i.val]!
+    let odd := input[2 * i.val + 1]!
     even + alpha * odd)
 
 /-- THEOREM: FRI fold halves the array size
@@ -85,16 +85,15 @@ This is the formal statement of the PROOF_ANCHOR postcondition:
 -/
 theorem friFold_spec (input : Array UInt64) (alpha : UInt64)
     (i : Nat) (hi : i < input.size / 2) :
-    (friFold input alpha).get! i = input.get! (2 * i) + alpha * input.get! (2 * i + 1) := by
+    (friFold input alpha)[i]! = input[2 * i]! + alpha * input[2 * i + 1]! := by
   unfold friFold
   -- Show that i is within bounds of the Array.ofFn
   have h_bound : i < (Array.ofFn fun j : Fin (input.size / 2) =>
-      input.get! (2 * j.val) + alpha * input.get! (2 * j.val + 1)).size := by
+      input[2 * j.val]! + alpha * input[2 * j.val + 1]!).size := by
     simp only [Array.size_ofFn]; exact hi
-  -- Rewrite get! using the bound
-  rw [Array.get!_eq_getElem!]
+  -- Rewrite getElem! using the bound
   rw [getElem!_pos (Array.ofFn fun j : Fin (input.size / 2) =>
-      input.get! (2 * j.val) + alpha * input.get! (2 * j.val + 1)) i h_bound]
+      input[2 * j.val]! + alpha * input[2 * j.val + 1]!) i h_bound]
   -- Access Array.ofFn at index i gives the function applied to ⟨i, _⟩
   rw [Array.getElem_ofFn]
 

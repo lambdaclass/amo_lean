@@ -20,7 +20,7 @@ import AmoLean.NTT.Spec
 import AmoLean.NTT.Goldilocks
 import AmoLean.NTT.OrthogonalityProof
 import Mathlib.Algebra.BigOperators.Group.Finset.Basic
-import Mathlib.Algebra.BigOperators.Ring
+import Mathlib.Algebra.BigOperators.Ring.Finset
 import Mathlib.Data.Fintype.BigOperators
 
 namespace AmoLean.NTT
@@ -244,7 +244,7 @@ theorem ntt_constant_nonzero {n : ℕ} (hn : n > 1) (ω : F) (hω : IsPrimitiveR
       simp only [Subtype.mk.injEq] at h
       exact Fin.ext h
     · intro j _
-      refine ⟨⟨j.val, Finset.mem_range.mp j.property⟩, Finset.mem_univ _, ?_⟩
+      refine ⟨⟨j.val, Finset.mem_range.mp j.property⟩, Finset.mem_coe.mpr (Finset.mem_univ _), ?_⟩
       simp
     · intro _ _; rfl
   rw [h_sum_eq]

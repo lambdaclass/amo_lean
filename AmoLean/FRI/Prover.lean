@@ -60,8 +60,8 @@ def foldLayer {F : Type} [FRIField F] [Add F] [Mul F] [Inhabited F]
     (layer : Array F) (alpha : F) : Array F :=
   let n := layer.size / 2
   Array.range n |>.map fun i =>
-    let even := layer.get! (2 * i)
-    let odd := layer.get! (2 * i + 1)
+    let even := layer[2 * i]!
+    let odd := layer[2 * i + 1]!
     foldPair even odd alpha
 
 /-! ## Part 3: Commit Phase (Iterative) -/
@@ -163,8 +163,8 @@ def generateLayerQuery {F : Type} [FRIField F] [CryptoHash F] [Inhabited F] [BEq
   let oddPos := evenPos + 1
 
   -- Get values
-  let evenValue := layer.get! evenPos
-  let oddValue := layer.get! oddPos
+  let evenValue := layer[evenPos]!
+  let oddValue := layer[oddPos]!
 
   -- Build Merkle tree for this layer to get proofs
   let tree ← buildTree layer merkleHashFn
@@ -191,7 +191,7 @@ def generateQueryPath {F : Type} [FRIField F] [CryptoHash F] [Inhabited F] [BEq 
   let mut failed := false
 
   -- For each layer (except the last which is the final constant)
-  for (layerIdx, layerData) in state.layerData.enum do
+  for (layerData, layerIdx) in state.layerData.zipIdx do
     if failed then break
     if layerIdx >= state.layerData.length - 1 then
       break  -- Skip final layer
@@ -221,7 +221,7 @@ def queryPhase {F : Type} [FRIField F] [CryptoHash F] [Inhabited F] [BEq F]
 
   -- Generate query path for each position
   let mut queryPaths : List (QueryPath F) := []
-  for (idx, pos) in positions.enum do
+  for (pos, idx) in positions.zipIdx do
     match generateQueryPath state pos with
     | none =>
       IO.eprintln s!"[Prover] Failed to generate query path {idx} at position {pos}"

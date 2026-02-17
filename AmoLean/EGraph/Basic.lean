@@ -116,13 +116,13 @@ namespace EClass
 /-- Crear una e-class con un solo nodo y costo inicial.
     El costo debe incluir el costo del nodo más el de sus hijos. -/
 def singleton (node : ENode) (cost : Nat) : EClass :=
-  { nodes := Std.HashSet.empty.insert node
+  { nodes := ({} : Std.HashSet ENode).insert node
   , bestCost := cost
   , bestNode := some node }
 
 /-- Crear una e-class con un solo nodo, costo pendiente de calcular -/
 def singletonPending (node : ENode) : EClass :=
-  { nodes := Std.HashSet.empty.insert node
+  { nodes := ({} : Std.HashSet ENode).insert node
   , bestCost := infiniteCost
   , bestNode := some node }
 
@@ -238,10 +238,10 @@ namespace EGraph
 /-- Crear E-graph vacío -/
 def empty : EGraph :=
   { unionFind := UnionFind.empty
-  , hashcons := Std.HashMap.empty
-  , classes := Std.HashMap.empty
+  , hashcons := {}
+  , classes := {}
   , worklist := []
-  , dirty := Std.HashSet.empty }
+  , dirty := {} }
 
 /-- Número de e-classes en el grafo -/
 def numClasses (g : EGraph) : Nat := g.classes.size
@@ -363,7 +363,7 @@ partial def rebuild (g : EGraph) : EGraph :=
     -- Obtener clases a procesar (dirty + worklist)
     let toProcess := g.worklist ++ g.dirty.toList
     -- Limpiar worklist y dirty
-    let g1 := { g with worklist := [], dirty := Std.HashSet.empty }
+    let g1 := { g with worklist := [], dirty := {} }
     -- Procesar cada clase y acumular merges pendientes
     let (g2, pendingMerges) := toProcess.foldl (fun (acc, merges) classId =>
       let (acc', newMerges) := processClass acc classId
@@ -498,7 +498,7 @@ section Tests
 open EGraph
 
 -- Test 1: Crear E-graph desde expresión simple
-#eval do
+#eval! do
   let expr : Expr Int := .add (.var 0) (.const 1)  -- x + 1
   let (rootId, g) := fromExpr expr
   IO.println s!"Test 1: x + 1"
@@ -507,7 +507,7 @@ open EGraph
   IO.println s!"  Nodos: {g.numNodes}"
 
 -- Test 2: Expresión con sharing (x + x)
-#eval do
+#eval! do
   let expr : Expr Int := .add (.var 0) (.var 0)  -- x + x
   let (rootId, g) := fromExpr expr
   IO.println s!"Test 2: x + x"
@@ -516,7 +516,7 @@ open EGraph
   IO.println s!"  Nodos: {g.numNodes}"
 
 -- Test 3: Merge y rebuild
-#eval do
+#eval! do
   let expr1 : Expr Int := .mul (.var 0) (.const 1)  -- x * 1
   let expr2 : Expr Int := .var 0                     -- x
   let (id1, g1) := fromExpr expr1
@@ -528,7 +528,7 @@ open EGraph
   IO.println s!"  Después del merge+rebuild: {g4.numClasses} clases"
 
 -- Test 4: Cálculo de costos y extracción
-#eval do
+#eval! do
   let expr : Expr Int := .add (.mul (.var 0) (.const 1)) (.const 0)  -- x*1 + 0
   let (rootId, g1) := fromExpr expr
   let g2 := g1.computeCosts
@@ -539,7 +539,7 @@ open EGraph
   | none => IO.println "  Error: no se pudo extraer"
 
 -- Test 5: Stats
-#eval do
+#eval! do
   let expr : Expr Int := .mul (.add (.var 0) (.var 1)) (.add (.var 0) (.var 1))  -- (x+y)*(x+y)
   let (_, g) := fromExpr expr
   let stats := g.stats

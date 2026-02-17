@@ -56,7 +56,7 @@ def fromParams (p : Params) : EvalCtx := {
 
 /-- Get round constants for a specific round -/
 def getRoundConst (ctx : EvalCtx) (round : Nat) : Array Nat :=
-  ctx.roundConstants.getD round (Array.mkArray ctx.stateSize 0)
+  ctx.roundConstants.getD round (Array.replicate ctx.stateSize 0)
 
 /-- BN254 t=3 context (placeholder round constants) -/
 def bn254_t3 : EvalCtx := {
@@ -85,7 +85,7 @@ We use Array Nat as the concrete state type, matching Spec.lean.
 abbrev PoseidonState := Array Nat
 
 /-- Create zero state -/
-def zeroState (t : Nat) : PoseidonState := Array.mkArray t 0
+def zeroState (t : Nat) : PoseidonState := Array.replicate t 0
 
 /-- Check if state has correct size -/
 def stateValid (ctx : EvalCtx) (s : PoseidonState) : Bool :=
@@ -108,7 +108,7 @@ def evalSboxFull (ctx : EvalCtx) (state : PoseidonState) : PoseidonState :=
 /-- Evaluate partial S-box (element 0 only) -/
 def evalSboxPartial (ctx : EvalCtx) (state : PoseidonState) : PoseidonState :=
   if state.size > 0 then
-    state.set! 0 (evalSbox ctx (state.get! 0))
+    state.set! 0 (evalSbox ctx state[0]!)
   else
     state
 
@@ -169,7 +169,7 @@ def evalMatExpr (ctx : EvalCtx) : MatExpr α m n → PoseidonState → PoseidonS
     match op with
     | .pow α =>
       if idx < innerResult.size then
-        innerResult.set! idx (sbox ctx.prime α (innerResult.get! idx))
+        innerResult.set! idx (sbox ctx.prime α innerResult[idx]!)
       else
         innerResult
     | .custom _ => innerResult
@@ -196,7 +196,7 @@ def evalMatExpr (ctx : EvalCtx) : MatExpr α m n → PoseidonState → PoseidonS
   | .add a b, state =>
     let aResult := evalMatExpr ctx a state
     let bResult := evalMatExpr ctx b state
-    aResult.zipWith bResult (modAdd ctx.prime)
+    aResult.zipWith (modAdd ctx.prime) bResult
 
   -- All other constructors: identity (not used in Poseidon2)
   | _, state => state
@@ -519,7 +519,7 @@ theorem addRoundConst_correct (e : MatExpr α t 1) (input : PoseidonState) (roun
 /-- Helper: sboxPartial applies sbox only at a specific index -/
 def sboxPartialAt (p : Nat) (exp : Nat) (idx : Nat) (state : PoseidonState) : PoseidonState :=
   if idx < state.size then
-    state.set! idx (sbox p exp (state.get! idx))
+    state.set! idx (sbox p exp state[idx]!)
   else
     state
 
@@ -989,12 +989,12 @@ theorem poseidon2_correct (state : PoseidonState) :
 theorem poseidon2_hash_correct (left right : Nat) :
     let state := #[0, left % ctx.prime, right % ctx.prime]
     let result := poseidon2ViaComponents ctx state
-    result.get! 0 =
+    result[0]! =
     (poseidon2Permutation
       { prime := ctx.prime, t := ctx.stateSize, alpha := ctx.alpha
         fullRounds := 8, partialRounds := 56
         mds := mds3, roundConstants := ctx.roundConstants }
-      state).get! 0 := by
+      state)[0]! := by
   sorry  -- Follows from poseidon2_correct
 
 end MainTheorem
@@ -1036,8 +1036,8 @@ def test_hash_correct : IO Unit := do
     mds := mds3, roundConstants := ctx.roundConstants
   }
 
-  let viaComponents := (poseidon2ViaComponents ctx state).get! 0
-  let viaSpec := (poseidon2Permutation params state).get! 0
+  let viaComponents := (poseidon2ViaComponents ctx state)[0]!
+  let viaSpec := (poseidon2Permutation params state)[0]!
 
   IO.println s!"Test D.2 (hash_correct):"
   IO.println s!"  Input: ({left}, {right})"

@@ -73,7 +73,7 @@ def applyKronIdentityRight (applyA : List Float → List Float) (m n : Nat) (x :
   -- For A ⊗ I_n where A is m×m:
   -- We have n "lanes", each lane has m elements at stride n
   -- Apply A to each lane
-  let result := Array.mkArray (m * n) 0.0
+  let result := Array.replicate (m * n) 0.0
   -- Process each of n lanes
   let result := List.range n |>.foldl (fun res lane =>
     -- Extract elements for this lane (at positions lane, lane+n, lane+2n, ...)

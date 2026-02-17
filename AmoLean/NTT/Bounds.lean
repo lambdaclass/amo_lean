@@ -76,7 +76,7 @@ namespace LazyGoldilocks
 def ofStrict (x : GoldilocksField) : LazyGoldilocks :=
   ⟨x.value.toNat, by
     -- Any UInt64 value < 2^64 < 4p (since 4p > 2^64)
-    have h1 : x.value.toNat < UInt64.size := x.value.val.isLt
+    have h1 : x.value.toNat < UInt64.size := UInt64.toNat_lt_size x.value
     have h2 : UInt64.size = 2^64 := rfl
     have h3 : (2 : Nat)^64 < BOUND_4P := by native_decide
     omega⟩

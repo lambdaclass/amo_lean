@@ -18,7 +18,7 @@ import AmoLean.NTT.Properties
 import AmoLean.NTT.OrthogonalityProof
 import AmoLean.NTT.Phase3Proof
 import Mathlib.Algebra.BigOperators.Group.Finset.Basic
-import Mathlib.Algebra.BigOperators.Ring
+import Mathlib.Algebra.BigOperators.Ring.Finset
 import Mathlib.Data.Fintype.BigOperators
 
 namespace AmoLean.NTT
@@ -98,7 +98,7 @@ private lemma list_foldl_eq_of_forall {α β : Type*} (f g : β → α → β) (
   | nil => rfl
   | cons x xs ih =>
     simp only [List.foldl_cons]
-    have hx : x ∈ x :: xs := List.mem_cons_self x xs
+    have hx : x ∈ x :: xs := List.mem_cons_self
     rw [h init x hx]
     apply ih
     intro acc y hy
@@ -119,7 +119,7 @@ variable {F : Type*} [CommRing F]
     This is the core conversion between the two sum representations.
 -/
 lemma range_sum_eq_univ_fin_sum {α : Type*} [AddCommMonoid α] (n : ℕ) (f : ℕ → α) :
-    ∑ i in Finset.range n, f i = ∑ i : Fin n, f i.val := by
+    ∑ i ∈ Finset.range n, f i = ∑ i : Fin n, f i.val := by
   -- Use Fin.sum_univ_eq from Mathlib
   rw [Finset.sum_fin_eq_sum_range]
   apply Finset.sum_congr rfl

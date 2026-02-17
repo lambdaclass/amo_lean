@@ -235,7 +235,7 @@ namespace VecEClass
 
 /-- Create a class with a single node -/
 def singleton (node : VecENode) (cost : Nat := infiniteCost) : VecEClass :=
-  { nodes := Std.HashSet.empty.insert node
+  { nodes := ({} |>.insert node)
   , bestCost := cost
   , bestNode := some node
   , dim := node.dimension }
@@ -333,10 +333,10 @@ namespace VecEGraph
 /-- Create empty vector E-graph -/
 def empty : VecEGraph :=
   { unionFind := VecUnionFind.empty
-  , hashcons := Std.HashMap.empty
-  , classes := Std.HashMap.empty
+  , hashcons := {}
+  , classes := {}
   , worklist := []
-  , dirty := Std.HashSet.empty
+  , dirty := {}
   , scalarEGraph := none }
 
 /-- Number of e-classes -/
@@ -397,7 +397,7 @@ def getClass (g : VecEGraph) (id : VecEClassId) : (Option VecEClass × VecEGraph
 partial def rebuild (g : VecEGraph) : VecEGraph :=
   if g.worklist.isEmpty && g.dirty.isEmpty then g
   else
-    let g' := { g with worklist := [], dirty := Std.HashSet.empty }
+    let g' := { g with worklist := [], dirty := {} }
     -- Simplified rebuild: just clear the lists
     -- Full implementation would re-canonicalize nodes
     g'

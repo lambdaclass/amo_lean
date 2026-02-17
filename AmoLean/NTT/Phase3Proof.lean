@@ -15,7 +15,7 @@ import AmoLean.NTT.Properties
 import AmoLean.NTT.ListUtils
 import Mathlib.Tactic
 import Mathlib.Algebra.BigOperators.Group.Finset.Basic
-import Mathlib.Algebra.BigOperators.Ring
+import Mathlib.Algebra.BigOperators.Ring.Finset
 
 namespace AmoLean.NTT.Phase3Proof
 
@@ -426,7 +426,7 @@ theorem mem_oddIndices_of_odd (n i : ℕ) (hi : i < n) (hodd : i % 2 = 1) :
 /-- evenIndices has no duplicates -/
 theorem evenIndices_nodup (n : ℕ) : (evenIndices n).Nodup := by
   simp only [evenIndices]
-  apply List.Nodup.map _ (List.nodup_range _)
+  apply List.Nodup.map _ (List.nodup_range)
   intro a b hab
   -- a * 2 = b * 2 implies a = b
   exact Nat.eq_of_mul_eq_mul_right (by decide : 0 < 2) hab
@@ -434,7 +434,7 @@ theorem evenIndices_nodup (n : ℕ) : (evenIndices n).Nodup := by
 /-- oddIndices has no duplicates -/
 theorem oddIndices_nodup (n : ℕ) : (oddIndices n).Nodup := by
   simp only [oddIndices]
-  apply List.Nodup.map _ (List.nodup_range _)
+  apply List.Nodup.map _ (List.nodup_range)
   intro a b hab
   -- a * 2 + 1 = b * 2 + 1 implies a = b
   exact Nat.eq_of_mul_eq_mul_right (by decide : 0 < 2) (Nat.add_right_cancel hab)
@@ -612,7 +612,7 @@ variable {F : Type*} [inst : NTTFieldLawful F] [IsDomain F]
     Uses List.getD for total function behavior (returns 0 for out-of-bounds).
 -/
 def ntt_coeff_sum (ω : F) (a : List F) (k : ℕ) : F :=
-  ∑ i in Finset.range a.length, (a.getD i 0) * HPow.hPow ω (i * k)
+  ∑ i ∈ Finset.range a.length, (a.getD i 0) * HPow.hPow ω (i * k)
 
 /-- getD returns the element when index is valid -/
 theorem getD_eq_get_of_lt {α : Type*} (a : List α) (i : ℕ) (d : α) (hi : i < a.length) :
@@ -637,7 +637,7 @@ This is the critical theorem that connects the foldl implementation to the Finse
 Once proven, we never need to reason about foldl again for algebraic manipulations.
 
 The proof requires showing that:
-  (List.range n).foldl (fun acc i => acc + f i) 0 = ∑ i in Finset.range n, f i
+  (List.range n).foldl (fun acc i => acc + f i) 0 = ∑ i ∈ Finset.range n, f i
 
 This is a standard result but requires careful handling of:
 1. Add.add vs + (definitionally equal for NTTFieldLawful + CommRing)
@@ -653,7 +653,7 @@ This is a standard result but requires careful handling of:
     so the typeclass diamond is resolved.
 -/
 theorem list_range_foldl_eq_finset_sum (n : ℕ) (f : ℕ → F) :
-    (List.range n).foldl (fun acc i => acc + f i) (0 : F) = ∑ i in Finset.range n, f i := by
+    (List.range n).foldl (fun acc i => acc + f i) (0 : F) = ∑ i ∈ Finset.range n, f i := by
   induction n with
   | zero => simp [Finset.sum_range_zero]
   | succ n ih =>
@@ -717,9 +717,9 @@ This is the Finset version of foldl_split_parity.
 
 /-- Finset.range n splits into even and odd indices -/
 theorem finset_sum_split_parity (n : ℕ) (f : ℕ → F) :
-    ∑ i in Finset.range n, f i =
-    ∑ m in Finset.range ((n + 1) / 2), f (2 * m) +
-    ∑ m in Finset.range (n / 2), f (2 * m + 1) := by
+    ∑ i ∈ Finset.range n, f i =
+    ∑ m ∈ Finset.range ((n + 1) / 2), f (2 * m) +
+    ∑ m ∈ Finset.range (n / 2), f (2 * m + 1) := by
   induction n with
   | zero => simp
   | succ n ih =>
@@ -739,7 +739,7 @@ theorem finset_sum_split_parity (n : ℕ) (f : ℕ → F) :
     · -- n is odd: n = 2k+1, so n+1 is even
       -- (n+1+1)/2 = (2k+3)/2 = k+1, (n+1)/2 = (2k+2)/2 = k+1
       -- The new term f(n) = f(2k+1) goes in the odds sum
-      have hodd : Odd n := Nat.odd_iff_not_even.mpr hn
+      have hodd : Odd n := Nat.not_even_iff_odd.mp hn
       obtain ⟨k, hk⟩ := hodd
       have ho1 : (n + 1 + 1) / 2 = k + 1 := by omega
       have ho2 : (n + 1) / 2 = k + 1 := by omega
@@ -762,7 +762,7 @@ with the logical Finset operations (reindexed sums).
 /-- Sum over even indices equals ntt_coeff_sum on evens list with ω² -/
 theorem sum_evens_eq_ntt_coeff_sum (ω : F) (a : List F) (k : ℕ)
     (heven : 2 ∣ a.length) :
-    ∑ m in Finset.range (a.length / 2), (a.getD (2 * m) 0) * HPow.hPow ω (2 * m * k) =
+    ∑ m ∈ Finset.range (a.length / 2), (a.getD (2 * m) 0) * HPow.hPow ω (2 * m * k) =
     ntt_coeff_sum (ω * ω) (evens a) k := by
   -- Unfold RHS
   unfold ntt_coeff_sum
@@ -789,7 +789,7 @@ theorem sum_evens_eq_ntt_coeff_sum (ω : F) (a : List F) (k : ℕ)
 
 /-- Sum over odd indices with twiddle equals ω^k times ntt_coeff_sum on odds list -/
 theorem sum_odds_eq_mul_ntt_coeff_sum (ω : F) (a : List F) (k : ℕ) :
-    ∑ m in Finset.range (a.length / 2), (a.getD (2 * m + 1) 0) * HPow.hPow ω ((2 * m + 1) * k) =
+    ∑ m ∈ Finset.range (a.length / 2), (a.getD (2 * m + 1) 0) * HPow.hPow ω ((2 * m + 1) * k) =
     HPow.hPow ω k * ntt_coeff_sum (ω * ω) (odds a) k := by
   -- Unfold RHS
   unfold ntt_coeff_sum
@@ -1062,9 +1062,9 @@ theorem ntt_coeff_lower_half_split (ω : F) (input : List F) (n : ℕ)
   -- For odds: ω^((2m+1) * (k + n/2)) = -ω^((2m+1)k) because ω^(n/2) = -1
 
   -- First, prove the evens sum matches
-  have h_evens_sum : ∑ m in Finset.range (n / 2), (input.getD (2 * m) 0) *
+  have h_evens_sum : ∑ m ∈ Finset.range (n / 2), (input.getD (2 * m) 0) *
       ω ^ ((2 * m) * (k + n / 2)) =
-      ∑ i in Finset.range (n / 2), (evens input).getD i 0 * (ω * ω) ^ (i * k) := by
+      ∑ i ∈ Finset.range (n / 2), (evens input).getD i 0 * (ω * ω) ^ (i * k) := by
     apply Finset.sum_congr rfl
     intro m hm
     rw [Finset.mem_range] at hm
@@ -1095,11 +1095,11 @@ theorem ntt_coeff_lower_half_split (ω : F) (input : List F) (n : ℕ)
     simp only [h_exp]
 
   -- Second, prove the odds sum transforms with sign flip
-  have h_odds_sum : ∑ m in Finset.range (n / 2), (input.getD (2 * m + 1) 0) *
+  have h_odds_sum : ∑ m ∈ Finset.range (n / 2), (input.getD (2 * m + 1) 0) *
       ω ^ ((2 * m + 1) * (k + n / 2)) =
-      -(ω ^ k * ∑ i in Finset.range (n / 2), (odds input).getD i 0 * (ω * ω) ^ (i * k)) := by
+      -(ω ^ k * ∑ i ∈ Finset.range (n / 2), (odds input).getD i 0 * (ω * ω) ^ (i * k)) := by
     -- Transform RHS: -(ω^k * Σᵢ fᵢ) = -(Σᵢ ω^k * fᵢ) = Σᵢ -(ω^k * fᵢ)
-    rw [Finset.mul_sum, Finset.sum_neg_distrib.symm]
+    rw [Finset.mul_sum, ← Finset.sum_neg_distrib]
     apply Finset.sum_congr rfl
     intro m hm
     rw [Finset.mem_range] at hm

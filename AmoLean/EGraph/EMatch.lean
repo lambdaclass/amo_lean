@@ -50,7 +50,7 @@ abbrev Substitution := Std.HashMap PatVarId EClassId
 namespace Substitution
 
 /-- Sustitución vacía -/
-def empty : Substitution := Std.HashMap.empty
+def empty : Substitution := {}
 
 /-- Intentar extender una sustitución con un nuevo binding.
     Falla si la variable ya está asignada a un ID diferente. -/
