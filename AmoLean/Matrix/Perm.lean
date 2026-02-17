@@ -326,12 +326,39 @@ theorem strideIndex_lt (m n : Nat) (i : Nat) (h : i < m * n) :
 
 namespace Perm
 
+/-- Apply inverse permutation to an index.
+    Extracted as a separate function to avoid nested pattern matching in `applyIndex`,
+    which would trigger a splitter generation failure in Lean 4's equation compiler
+    for the indexed inductive `Perm n`. The nested patterns `inverse swap`,
+    `inverse (stride m n)`, etc. create overlapping index obligations that the
+    splitter cannot resolve (e.g., proving `stride m n ≠ swap` when `m * n = 2`
+    through heterogeneous equality). -/
+def applyInverseIndex : {k : Nat} → Perm k → Fin k → Fin k
+  | _, identity, i => i
+  | _, swap, ⟨0, _⟩ => ⟨1, by omega⟩
+  | _, swap, ⟨1, _⟩ => ⟨0, by omega⟩
+  | _, swap, ⟨i + 2, h⟩ => ⟨i + 2, h⟩
+  | _, stride m n', i =>
+    let newIdx := strideIndexInv m n' i.val
+    ⟨newIdx % (m * n'), by
+      apply Nat.mod_lt
+      match m with
+      | 0 => simp at i; exact absurd i.isLt (Nat.not_lt_zero i.val)
+      | m' + 1 =>
+        match n' with
+        | 0 => simp at i; exact absurd i.isLt (Nat.not_lt_zero i.val)
+        | n'' + 1 => exact Nat.mul_pos (Nat.succ_pos m') (Nat.succ_pos n'')⟩
+  | _, bitRev k, i =>
+    let newIdx := bitReverse k i.val
+    ⟨newIdx % (2^k), Nat.mod_lt _ (Nat.two_pow_pos k)⟩
+  | _, _, i => i  -- Fallback for compose, tensor, inverse
+
 /-- Apply a permutation to an index, returning the new index.
     This is the concrete evaluation of a symbolic permutation.
 
-    KEY INSIGHT: Using pattern matching in the function signature instead of
-    `match p with` allows Lean to generate proper equation lemmas for indexed
-    inductives. The implicit {k : Nat} parameter is crucial. -/
+    The `inverse` case delegates to `applyInverseIndex` to avoid nested pattern
+    matching that would prevent equation lemma generation. See `applyInverseIndex`
+    for details on the splitter limitation. -/
 def applyIndex : {k : Nat} → Perm k → Fin k → Fin k
   -- Identity: return input unchanged
   | _, identity, i => i
@@ -361,26 +388,8 @@ def applyIndex : {k : Nat} → Perm k → Fin k → Fin k
     let newIdx := bitReverse k i.val
     ⟨newIdx % (2^k), Nat.mod_lt _ (Nat.two_pow_pos k)⟩
 
-  -- Inverse: compute inverse permutation
-  -- For self-inverse permutations (identity, swap, bitRev), apply the same permutation
-  -- For stride, use strideIndexInv
-  -- For others, fall back to identity (incomplete implementation)
-  | _, inverse identity, i => i
-  | _, inverse swap, i => applyIndex swap i
-  | _, inverse (stride m n'), i =>
-    let newIdx := strideIndexInv m n' i.val
-    ⟨newIdx % (m * n'), by
-      apply Nat.mod_lt
-      match m with
-      | 0 => simp at i; exact absurd i.isLt (Nat.not_lt_zero i.val)
-      | m' + 1 =>
-        match n' with
-        | 0 => simp at i; exact absurd i.isLt (Nat.not_lt_zero i.val)
-        | n'' + 1 => exact Nat.mul_pos (Nat.succ_pos m') (Nat.succ_pos n'')⟩
-  | _, inverse (bitRev k), i =>
-    let newIdx := bitReverse k i.val
-    ⟨newIdx % (2^k), Nat.mod_lt _ (Nat.two_pow_pos k)⟩
-  | _, inverse _, i => i  -- Fallback for compose, tensor, inverse
+  -- Inverse: delegate to separate function to avoid nested patterns
+  | _, inverse p, i => applyInverseIndex p i
 
   -- Tensor: (P ⊗ Q)(i) where i = outer * n + inner
   -- Apply P to outer index, Q to inner index
@@ -626,33 +635,26 @@ def applyTensorDirect {m n : Nat} (p : Perm m) (q : Perm n)
       _ ≤ m * n := Nat.mul_le_mul_right n h_no⟩
 
 /-- The key insight: applyIndex (tensor p q) i computes the same as applyTensorDirect.
-    We state this as an axiom because the proof requires unfolding applyIndex which
-    triggers the splitter limitation. However, both definitions are computationally
-    identical - this can be verified via #eval for any concrete values.
 
-    Session 13: After extensive consultation with QA and Lean expert, we determined
-    that this limitation is fundamental to Lean 4's handling of indexed inductives
-    with overlapping indices. The axiom is mathematically sound. -/
-axiom applyIndex_tensor_eq {m n : Nat} (p : Perm m) (q : Perm n)
+    Previously stated as an axiom because nested pattern matching on `inverse`
+    subcases (e.g., `inverse swap`, `inverse (stride m n)`) in the same match
+    as `tensor` triggered a splitter generation failure. The fix: extract inverse
+    handling into `applyInverseIndex`, eliminating the nested patterns that caused
+    overlapping index obligations the splitter couldn't resolve. -/
+theorem applyIndex_tensor_eq {m n : Nat} (p : Perm m) (q : Perm n)
     (i : Fin (m * n)) (hn : n ≠ 0) (hm : m ≠ 0) :
-    applyIndex (tensor p q) i = applyTensorDirect p q i hn hm
+    applyIndex (tensor p q) i = applyTensorDirect p q i hn hm := by
+  simp only [applyIndex, dif_neg hn, dif_neg hm, applyTensorDirect]
 
 /-- Tensor distributes over composition (pointwise).
     (p1 ⊗ q1) · (p2 ⊗ q2) = (p1 · p2) ⊗ (q1 · q2)
     This is a fundamental algebraic property of tensor products.
 
-    **PROOF STATUS**: ✓ FORMALLY VERIFIED (Session 13)
-
     **Proof Strategy**:
     - Edge cases m=0 or n=0: Handled via Fin.elim0 (empty type)
-    - Main case uses the `applyIndex_tensor_eq` axiom to bypass splitter limitation
-    - The axiom states that `applyIndex (tensor p q) i = applyTensorDirect p q i`
+    - Main case uses `applyIndex_tensor_eq` to rewrite tensor applications
     - With this, we prove both sides compute to p1(p2(i/n)) * n + q1(q2(i%n))
-    - Auxiliary lemmas `nat_mul_add_div_eq` and `nat_mul_add_mod_eq` handle the arithmetic
-
-    **Technical Note**:
-    Uses axiom `applyIndex_tensor_eq` which is computationally verifiable but cannot
-    be proven in Lean due to splitter generation limitation for indexed inductives. -/
+    - Auxiliary lemmas `nat_mul_add_div_eq` and `nat_mul_add_mod_eq` handle the arithmetic -/
 theorem tensor_compose_pointwise {m n : Nat} (p1 p2 : Perm m) (q1 q2 : Perm n) (i : Fin (m * n)) :
     applyIndex (compose (tensor p1 q1) (tensor p2 q2)) i =
     applyIndex (tensor (compose p1 p2) (compose q1 q2)) i := by
@@ -679,7 +681,7 @@ theorem tensor_compose_pointwise {m n : Nat} (p1 p2 : Perm m) (q1 q2 : Perm n) (
     exact Nat.div_lt_of_lt_mul h_i_lt
   have h_inner_i_bound : i.val % n < n := Nat.mod_lt i.val h_n_pos
 
-  -- Step 2: Apply the tensor axiom to rewrite all tensor applications
+  -- Step 2: Apply applyIndex_tensor_eq to rewrite all tensor applications
   -- j = applyTensorDirect p2 q2 i = ⟨p2(i/n) * n + q2(i%n), ...⟩
   let j := applyTensorDirect p2 q2 i hn hm
 
