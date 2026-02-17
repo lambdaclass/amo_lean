@@ -11,12 +11,10 @@ Biblioteca de optimización formal en Lean 4. Campos finitos verificados (Goldil
 
 ## Estado Actual
 
-- Bloque Central COMPLETADO (5/5 axiomas eliminados)
-- Fase 8 Onda 1 completada (BabyBear, Rust codegen, Kron: 0 sorry)
-- **Fase 9 (Migración 4.16→4.26)**: Subfases 1-6 completadas, `lake build` 0 errores
-- Branch activo: `feature/lean-4.26-upgrade`
+- **v2.1.0**: Lean 4.26.0, Mathlib v4.26.0
+- Fase 9 (Migración 4.16→4.26): COMPLETADA — Subfases 1-8, `lake build` 3134 jobs, 0 errores
+- Verified E-Graph engine: 13 archivos, 4,594 LOC, 121 teoremas, zero sorry
 - Roadmap migración: `amo-lean_v2.0.0.md`
-- Ver `docs/fase8_onda1_roadmap.md` y `Bloque_central_plan.md` para contexto anterior
 
 ## Recursos del Dominio
 

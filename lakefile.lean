@@ -2,7 +2,7 @@ import Lake
 open Lake DSL
 
 package «amo-lean» where
-  version := v!"1.0.0"
+  version := v!"2.1.0"
 
 require mathlib from git
   "https://github.com/leanprover-community/mathlib4.git" @ "v4.26.0"

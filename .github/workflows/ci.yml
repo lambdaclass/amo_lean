@@ -30,6 +30,9 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-lake-
 
+    - name: Fetch Mathlib cache
+      run: lake exe cache get
+
     - name: Build library
       run: lake build AmoLean
 

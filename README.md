@@ -1,50 +1,47 @@
 # AMO-Lean: Verified Optimizing Compiler for Cryptographic Primitives
 
-[![Lean 4](https://img.shields.io/badge/Lean-4.16.0-blue.svg)](https://leanprover.github.io/lean4/doc/)
+[![Lean 4](https://img.shields.io/badge/Lean-4.26.0-blue.svg)](https://leanprover.github.io/lean4/doc/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Tests](https://img.shields.io/badge/Tests-2850%2B-green.svg)](#testing)
-[![Build](https://img.shields.io/badge/Build-2647%20modules-brightgreen.svg)](#build)
+[![Build](https://img.shields.io/badge/Build-3134%20modules-brightgreen.svg)](#build)
 
 **AMO-Lean** is a verified optimizing compiler that transforms mathematical specifications written in Lean 4 into optimized C/Rust code with **formal correctness guarantees**. It targets cryptographic primitives used in STARK provers and zkVMs.
 
-## Release: v1.1.0 -- Verification Deepening
+## Release: v2.1.0 -- Lean 4.26 + Verified E-Graph Engine
 
-### What Changed Since v1.0.1
+### What Changed Since v1.1.0
 
-In 3 days (Feb 9-12, 2026), we eliminated **8 axioms** and **23 sorry** from the codebase:
-
-| Metric | v1.0.1 | v1.1.0 | Change |
+| Metric | v1.1.0 | v2.1.0 | Change |
 |--------|--------|--------|--------|
-| **Axioms** | 17 | **9** | **-47%** |
-| **Active sorry** | 30 | **12** | **-60%** |
-| Lines of Code | 32,650 | 36,326 | +11% |
-| Lean Modules | 2,647 | 2,647 | Same |
+| **Lean** | 4.16.0 | **4.26.0** | +10 minor versions |
+| **Lines of Code** | 36,326 | **~41,000** | +4,594 LOC (verified e-graph) |
+| **Verified E-Graph theorems** | 0 | **121** | +121 (zero sorry) |
+| **Axioms** | 9 | **9** | Same |
+| **Active sorry** | 12 | **12** | Same |
+| Lean Modules | 2,647 | **3,134** | +487 |
 | Tests | 2,850+ | 2,850+ | Same (0 failures) |
 
-### Verification Progress Timeline
+### Key Achievements (v1.1.0 -> v2.1.0)
+
+1. **Lean 4.26 migration** -- Full codebase migrated (28 API renames, 61 files, 0 regressions)
+2. **Verified e-graph engine** -- 13 files ported from vr1cs-lean with 121 theorems, zero sorry:
+   - UnionFind (43 theorems: path compression, root idempotence)
+   - CoreSpec (78 theorems: hashcons + merge invariants)
+   - ILP extraction (TENSAT-style branch-and-bound solver)
+   - Parallel e-matching and saturation (`IO.asTask`)
+3. **Bridge adapter** -- Transparent `Expr Int ↔ CircuitNodeOp` mapping, same API, verified backend
+4. **Cost model tiebreaker** -- Prefers simpler nodes at equal cost (const < var < add < mul)
+5. **100% op reduction** -- Verified optimizer achieves full simplification on all 9 benchmark cases
+
+### Version History
 
 ```
 v1.0.0 (Feb 6)    17 axioms    35 sorry    AlgebraicSemantics: 8 axioms eliminated
 v1.0.1 (Feb 9)    17 axioms    30 sorry    Benchmark audit, 2850+ tests
-  Feb 9-11         -------- Phase 8 Wave 1 --------
-    C1: lowering_kron_axiom PROVEN (19/19 cases, 0 sorry)
-    A1: BabyBear field implementation + NTTField instance
-    A2: Rust codegen backend
-    B1: Radix-4 C codegen
-    E3: Sorry cleanup (deprecated Theorems.lean)
-  Feb 11           12 axioms    14 sorry    Bloque Central: 5 Goldilocks axioms eliminated
-  Feb 12           12 axioms    12 sorry    BabyBear: 4 axioms + 4 sorry eliminated, Merkle 2 sorry closed
-v1.1.0 (Feb 12)    9 axioms    12 sorry    ListFinsetBridge: 3 NTT axioms proven
+v1.1.0 (Feb 12)    9 axioms    12 sorry    Goldilocks/BabyBear 0 axioms, Kron 0 sorry
+v2.0.0 (Feb 17)    9 axioms    12 sorry    Lean 4.16 → 4.26 migration complete
+v2.1.0 (Feb 17)    9 axioms    12 sorry    Verified e-graph engine (121 theorems, 0 sorry)
 ```
-
-### Key Achievements (v1.0.1 -> v1.1.0)
-
-1. **Goldilocks Field: 0 axioms** -- All 5 foundational axioms eliminated via Lucas primality test, subtype refactor (fixing a soundness issue), modular decomposition, strong induction, and Fermat's little theorem
-2. **BabyBear Field: 0 axioms, 0 sorry** -- All 4 axioms eliminated, 4 NTT/BabyBear sorry closed via `native_decide`
-3. **NTT Radix-2: 0 axioms** -- Complete Cooley-Tukey chain formally verified including INTT roundtrip. 3 bridge axioms proven via modular arithmetic (`pred_mul_mod`, `pred_mul_mod_general`)
-4. **Kron Verification: 0 sorry** -- `lowering_kron_axiom` fully proven (19/19 matrix operation cases)
-5. **Merkle: 0 sorry** -- 2 structural sorry eliminated via `foldl_preserves_array_size` and `Nat.log2` decidability
-6. **Rust codegen** -- New `expandedSigmaToRust` backend generates compilable Rust code
 
 ---
 
@@ -55,7 +52,7 @@ v1.1.0 (Feb 12)    9 axioms    12 sorry    ListFinsetBridge: 3 NTT axioms proven
 - **Goldilocks Field** -- Scalar + AVX2 arithmetic (p = 2^64 - 2^32 + 1), **0 axioms**
 - **BabyBear Field** -- Scalar arithmetic (p = 2^31 - 2^27 + 1), **0 axioms**
 - **FRI Protocol** -- Folding, Merkle commitments, Fiat-Shamir
-- **E-Graph Optimization** -- 19/20 rewrite rules formally verified
+- **E-Graph Optimization** -- Verified engine (121 theorems, 0 sorry) + 19/20 rewrite rules
 - **Algebraic Semantics** -- C-Lite++ lowering with verified scatter/gather (19/19 cases)
 - **Poseidon2 Hash** -- BN254 t=3 with HorizenLabs-compatible test vectors
 
@@ -171,7 +168,7 @@ ntt_context_destroy(ctx);
 
 ```
 amo-lean/
-├── AmoLean/                    # Lean source (36,326 LOC, 84 files)
+├── AmoLean/                    # Lean source (~41,000 LOC, 97 files)
 │   ├── NTT/                    # NTT specification + proofs
 │   │   ├── Spec.lean           # O(N^2) reference specification
 │   │   ├── CooleyTukey.lean    # O(N log N) verified algorithm
@@ -185,8 +182,14 @@ amo-lean/
 │   │   ├── Goldilocks.lean     # Goldilocks (p = 2^64 - 2^32 + 1)
 │   │   └── BabyBear.lean       # BabyBear (p = 2^31 - 2^27 + 1)
 │   ├── EGraph/                 # E-Graph optimization engine
-│   │   ├── Optimize.lean       # Equality saturation
-│   │   └── VerifiedRules.lean  # 19/20 rules with formal proofs
+│   │   ├── Optimize.lean       # Equality saturation (unverified, deprecated)
+│   │   ├── VerifiedRules.lean  # 19/20 rules with formal proofs
+│   │   └── Verified/           # **Verified e-graph engine (121 theorems, 0 sorry)**
+│   │       ├── UnionFind.lean  # Verified union-find (43 theorems)
+│   │       ├── CoreSpec.lean   # Hashcons + merge invariants (78 theorems)
+│   │       ├── Bridge.lean     # Expr Int ↔ CircuitNodeOp adapter
+│   │       ├── Rules.lean      # 10 verified rules wired to Bridge
+│   │       └── Optimize.lean   # Verified optimization pipeline
 │   ├── FRI/                    # FRI protocol components (0 sorry)
 │   ├── Sigma/                  # Sigma-SPL IR definitions
 │   ├── Matrix/                 # Matrix algebra + permutations
@@ -222,12 +225,13 @@ amo-lean/
 | FRI (Folding + Merkle) | **100%** | 0 | 0 | Fully proven |
 | Matrix/Perm | **100%** | 0 | 1 | Match splitter limitation |
 | E-Graph Rewrite Rules | **95%** | 0 | 0 | 19/20 rules verified |
+| **E-Graph Verified Engine** | **100%** | **0** | **0** | **121 theorems, 4,594 LOC** |
 | Goldilocks Field | **100%** | 0 | 0 | All 5 axioms eliminated |
 | BabyBear Field | **100%** | 0 | 0 | All 4 axioms eliminated |
 | AlgebraicSemantics | **100%** | 0 | 0 | 19/19 cases proven |
 | Poseidon2 | Computational | 12 | 0 | All backed by 21 test vectors |
 
-**Codebase**: 36,326 LOC | **9 axioms** (8 Radix-4 + 1 Perm) | **12 active sorry** (all Poseidon, match splitter limitation)
+**Codebase**: ~41,000 LOC | **9 axioms** (8 Radix-4 + 1 Perm) | **12 active sorry** (all Poseidon, match splitter limitation) | **121 verified e-graph theorems**
 
 ### Testing (2850+ tests, 0 failures)
 
@@ -240,7 +244,8 @@ amo-lean/
 | Poseidon2 (S-box + vectors + differential) | 10 | Pass |
 | E-Graph Optimizer | 4 | Pass |
 | Hardening (fuzz + FFI stress + ABI) | 120 | Pass |
-| Lean Build (modules) | 2,647 | Pass |
+| Verified E-Graph (121 theorems) | 121 | Pass |
+| Lean Build (modules) | 3,134 | Pass |
 | **Total** | **~2,850** | **0 failures** |
 
 ## Key Design Decisions
@@ -279,4 +284,4 @@ MIT License -- see [LICENSE](LICENSE) for details.
 
 ---
 
-**AMO-Lean v1.1.0** -- Formal verification meets practical performance.
+**AMO-Lean v2.1.0** -- Formal verification meets practical performance.
