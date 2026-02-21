@@ -41,3 +41,7 @@ Tests/Plonky3/Hardening/*.txt
 # Phase 6B build artifacts
 Tests/NTT/cached_benchmark
 generated/ntt_cached_test
+
+# Binary documents (keep in local biblioteca, not in git)
+*.pdf
+*.pptx
