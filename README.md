@@ -7,31 +7,36 @@
 
 **AMO-Lean** is a verified optimizing compiler that transforms mathematical specifications written in Lean 4 into optimized C/Rust code with **formal correctness guarantees**. It targets cryptographic primitives used in STARK provers and zkVMs.
 
-## Release: v2.1.0 -- Lean 4.26 + Verified E-Graph Engine
+## Release: v2.2.0 -- Trust-Lean Bridge with Verified Roundtrip + Injectivity
 
-### What Changed Since v1.1.0
+### What Changed Since v2.1.0
 
-| Metric | v1.1.0 | v2.1.0 | Change |
+| Metric | v2.1.0 | v2.2.0 | Change |
 |--------|--------|--------|--------|
-| **Lean** | 4.16.0 | **4.26.0** | +10 minor versions |
-| **Lines of Code** | 36,326 | **~41,000** | +4,594 LOC (verified e-graph) |
-| **Verified E-Graph theorems** | 0 | **121** | +121 (zero sorry) |
+| **Lines of Code** | ~41,000 | **~41,700** | +743 LOC (bridge + tests) |
+| **Bridge theorems** | 0 | **26** | +26 (zero sorry) |
+| **Total verified theorems** | 121 | **147** | +26 |
 | **Axioms** | 9 | **9** | Same |
 | **Active sorry** | 12 | **12** | Same |
-| Lean Modules | 2,647 | **3,134** | +487 |
-| Tests | 2,850+ | 2,850+ | Same (0 failures) |
+| Lean Modules | 3,134 | **3,134** | Same |
 
-### Key Achievements (v1.1.0 -> v2.1.0)
+### Key Achievements (v2.1.0 -> v2.2.0)
+
+1. **Trust-Lean integration** -- Trust-Lean v1.2.0 added as lake dependency for verified C code generation
+2. **Bridge module** (`AmoLean.Bridge.TrustLean`, 544 LOC) -- 21 conversion definitions, 26 theorems:
+   - 17 backward roundtrip theorems (TrustLean -> AmoLean -> TrustLean = id)
+   - 7 forward roundtrip theorems (AmoLean -> TrustLean -> AmoLean = id, conditional on `some`)
+   - Injectivity theorem (`convert_injective`) with some-witness formulation
+   - Zero sorry, admit, axiom, native_decide, simp[*]
+3. **Verified C pipeline** -- `verifiedCodeGen : ExpandedSigma -> Option String` chains conversion through Trust-Lean's CBackend
+4. **Integration tests** (199 LOC) -- All 6 constructors, DFT_4 end-to-end, stress test (>100 sub-expressions, 8261 chars of verified C)
+
+### Previous: v2.1.0 -- Lean 4.26 + Verified E-Graph Engine
 
 1. **Lean 4.26 migration** -- Full codebase migrated (28 API renames, 61 files, 0 regressions)
-2. **Verified e-graph engine** -- 13 files ported from vr1cs-lean with 121 theorems, zero sorry:
-   - UnionFind (43 theorems: path compression, root idempotence)
-   - CoreSpec (78 theorems: hashcons + merge invariants)
-   - ILP extraction (TENSAT-style branch-and-bound solver)
-   - Parallel e-matching and saturation (`IO.asTask`)
-3. **Bridge adapter** -- Transparent `Expr Int ↔ CircuitNodeOp` mapping, same API, verified backend
-4. **Cost model tiebreaker** -- Prefers simpler nodes at equal cost (const < var < add < mul)
-5. **100% op reduction** -- Verified optimizer achieves full simplification on all 9 benchmark cases
+2. **Verified e-graph engine** -- 13 files with 121 theorems, zero sorry (UnionFind, CoreSpec, ILP extraction)
+3. **Bridge adapter** -- Transparent `Expr Int <-> CircuitNodeOp` mapping
+4. **100% op reduction** -- Verified optimizer achieves full simplification on all 9 benchmark cases
 
 ### Version History
 
@@ -41,6 +46,7 @@ v1.0.1 (Feb 9)    17 axioms    30 sorry    Benchmark audit, 2850+ tests
 v1.1.0 (Feb 12)    9 axioms    12 sorry    Goldilocks/BabyBear 0 axioms, Kron 0 sorry
 v2.0.0 (Feb 17)    9 axioms    12 sorry    Lean 4.16 → 4.26 migration complete
 v2.1.0 (Feb 17)    9 axioms    12 sorry    Verified e-graph engine (121 theorems, 0 sorry)
+v2.2.0 (Feb 21)    9 axioms    12 sorry    Trust-Lean bridge (26 theorems, 0 sorry)
 ```
 
 ---
@@ -68,6 +74,10 @@ Mathematical Spec (Lean 4)
         v
   Algebraic Semantics (Sigma-SPL IR)
   (verified lowering for matrix operations)
+        |
+        v
+  Trust-Lean Bridge (verified roundtrip)
+  (ExpandedSigma -> TrustLean.Stmt conversion)
         |
         v
   Optimized C / Rust / SIMD Code
@@ -191,6 +201,8 @@ amo-lean/
 │   │       ├── Rules.lean      # 10 verified rules wired to Bridge
 │   │       └── Optimize.lean   # Verified optimization pipeline
 │   ├── FRI/                    # FRI protocol components (0 sorry)
+│   ├── Bridge/                 # **Trust-Lean bridge (26 theorems, 0 sorry)**
+│   │   └── TrustLean.lean      # Verified type conversion + roundtrip + pipeline
 │   ├── Sigma/                  # Sigma-SPL IR definitions
 │   ├── Matrix/                 # Matrix algebra + permutations
 │   ├── Verification/           # Correctness proofs
@@ -226,12 +238,13 @@ amo-lean/
 | Matrix/Perm | **100%** | 0 | 1 | Match splitter limitation |
 | E-Graph Rewrite Rules | **95%** | 0 | 0 | 19/20 rules verified |
 | **E-Graph Verified Engine** | **100%** | **0** | **0** | **121 theorems, 4,594 LOC** |
+| **Trust-Lean Bridge** | **100%** | **0** | **0** | **26 theorems, 544 LOC, roundtrip + injectivity** |
 | Goldilocks Field | **100%** | 0 | 0 | All 5 axioms eliminated |
 | BabyBear Field | **100%** | 0 | 0 | All 4 axioms eliminated |
 | AlgebraicSemantics | **100%** | 0 | 0 | 19/19 cases proven |
 | Poseidon2 | Computational | 12 | 0 | All backed by 21 test vectors |
 
-**Codebase**: ~41,000 LOC | **9 axioms** (8 Radix-4 + 1 Perm) | **12 active sorry** (all Poseidon, match splitter limitation) | **121 verified e-graph theorems**
+**Codebase**: ~41,700 LOC | **9 axioms** (8 Radix-4 + 1 Perm) | **12 active sorry** (all Poseidon, match splitter limitation) | **147 verified theorems** (121 e-graph + 26 bridge)
 
 ### Testing (2850+ tests, 0 failures)
 
@@ -284,4 +297,4 @@ MIT License -- see [LICENSE](LICENSE) for details.
 
 ---
 
-**AMO-Lean v2.1.0** -- Formal verification meets practical performance.
+**AMO-Lean v2.2.0** -- Formal verification meets practical performance.
