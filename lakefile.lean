@@ -2,10 +2,12 @@ import Lake
 open Lake DSL
 
 package «amo-lean» where
-  version := v!"2.1.0"
+  version := v!"2.2.0"
 
 require mathlib from git
   "https://github.com/leanprover-community/mathlib4.git" @ "v4.26.0"
+
+require TrustLean from "../Trust-Lean"
 
 @[default_target]
 lean_lib «AmoLean» where
@@ -15,7 +17,7 @@ lean_lib «Benchmarks» where
   roots := #[`Benchmarks.FRI_DiffTest, `Benchmarks.Phase0.FriFold, `Benchmarks.Phase2.Optimization]
 
 lean_lib «Tests» where
-  roots := #[`Tests.MigrationRegression, `Tests.AbstractionBenchmark, `Tests.FullStackCheck, `Tests.InfrastructureSanity, `Tests.ExtendedBenchmark, `Tests.E2EProverVerifier, `Tests.Phase3Audit, `Tests.Safety.CodeGenChecks, `Tests.Oracle.FriFoldOracle, `Tests.Optimization.QABenchmark]
+  roots := #[`Tests.MigrationRegression, `Tests.AbstractionBenchmark, `Tests.FullStackCheck, `Tests.InfrastructureSanity, `Tests.ExtendedBenchmark, `Tests.E2EProverVerifier, `Tests.Phase3Audit, `Tests.Safety.CodeGenChecks, `Tests.Oracle.FriFoldOracle, `Tests.Optimization.QABenchmark, `Tests.TrustLeanIntegration]
 
 -- Phase 0 test executables
 lean_exe «safety-checks» where
