@@ -2,6 +2,92 @@
 
 ## Current Version: v2.2.0
 
+## Project Structure (v2.2.0)
+
+```
+amo-lean/
+├── AmoLean/                    # Lean source (~41,700 LOC, 97 files)
+│   ├── NTT/                    # NTT specification + proofs
+│   │   ├── Spec.lean           # O(N^2) reference specification
+│   │   ├── CooleyTukey.lean    # O(N log N) verified algorithm
+│   │   ├── Butterfly.lean      # Butterfly operation proofs
+│   │   ├── LazyButterfly.lean  # Harvey optimization (lazy reduction)
+│   │   ├── Correctness.lean    # Main equivalence theorems + INTT roundtrip
+│   │   ├── ListFinsetBridge.lean # List<->Finset bridge (0 axioms)
+│   │   ├── BabyBear.lean       # BabyBear NTT (0 sorry)
+│   │   └── Radix4/             # Verified radix-4 implementation
+│   ├── Field/                  # Field implementations (0 axioms, 0 sorry)
+│   │   ├── Goldilocks.lean     # Goldilocks (p = 2^64 - 2^32 + 1)
+│   │   └── BabyBear.lean       # BabyBear (p = 2^31 - 2^27 + 1)
+│   ├── EGraph/                 # E-Graph optimization engine
+│   │   ├── Optimize.lean       # Equality saturation (unverified, deprecated)
+│   │   ├── VerifiedRules.lean  # 19/20 rules with formal proofs
+│   │   └── Verified/           # Verified e-graph engine (121 theorems, 0 sorry)
+│   │       ├── UnionFind.lean  # Verified union-find (43 theorems)
+│   │       ├── CoreSpec.lean   # Hashcons + merge invariants (78 theorems)
+│   │       ├── Bridge.lean     # Expr Int ↔ CircuitNodeOp adapter
+│   │       ├── Rules.lean      # 10 verified rules wired to Bridge
+│   │       └── Optimize.lean   # Verified optimization pipeline
+│   ├── FRI/                    # FRI protocol components (0 sorry)
+│   ├── Bridge/                 # Trust-Lean bridge (26 theorems, 0 sorry)
+│   │   └── TrustLean.lean      # Verified type conversion + roundtrip + pipeline
+│   ├── Sigma/                  # Sigma-SPL IR definitions
+│   ├── Matrix/                 # Matrix algebra + permutations
+│   ├── Verification/           # Correctness proofs
+│   │   ├── AlgebraicSemantics.lean  # Lowering correctness (~5,700 LOC, 0 sorry)
+│   │   ├── FRI_Properties.lean      # FRI folding proofs (0 sorry)
+│   │   └── Poseidon_Semantics.lean  # Poseidon2 verification (12 sorry, test-backed)
+│   └── Backends/               # Code generation (C, Rust)
+│
+├── generated/                  # Generated C code
+│   ├── field_goldilocks.h      # Goldilocks arithmetic (scalar)
+│   ├── field_goldilocks_avx2.h # Goldilocks arithmetic (AVX2)
+│   ├── ntt_kernel.h            # Lazy butterfly kernel
+│   ├── ntt_context.h           # NTT context with caching
+│   └── poseidon2_bn254_t3.h    # Poseidon2 hash
+│
+├── libamolean/                 # Distributable header-only C library
+├── verification/plonky3/       # Plonky3 verification suite (Rust FFI)
+├── Tests/                      # Test suites (2850+ tests)
+└── docs/                       # Documentation
+    ├── BENCHMARKS.md            # Full benchmark report
+    └── project/                 # Design decisions, progress logs
+```
+
+## Verification Status (v2.2.0)
+
+### Formal Proofs (Lean 4)
+
+| Component | Status | Sorry | Axioms | Detail |
+|-----------|--------|-------|--------|--------|
+| NTT Radix-2 (CooleyTukey + INTT roundtrip) | **100%** | 0 | 0 | Fully proven incl. bridge |
+| NTT Radix-4 | Interface | 0 | 8 | Opaque functions + properties |
+| FRI (Folding + Merkle) | **100%** | 0 | 0 | Fully proven |
+| Matrix/Perm | **100%** | 0 | 1 | Match splitter limitation |
+| E-Graph Rewrite Rules | **95%** | 0 | 0 | 19/20 rules verified |
+| **E-Graph Verified Engine** | **100%** | **0** | **0** | **121 theorems, 4,594 LOC** |
+| **Trust-Lean Bridge** | **100%** | **0** | **0** | **26 theorems, 544 LOC, roundtrip + injectivity** |
+| Goldilocks Field | **100%** | 0 | 0 | All 5 axioms eliminated |
+| BabyBear Field | **100%** | 0 | 0 | All 4 axioms eliminated |
+| AlgebraicSemantics | **100%** | 0 | 0 | 19/19 cases proven |
+| Poseidon2 | Computational | 12 | 0 | All backed by 21 test vectors |
+
+**Codebase**: ~41,700 LOC | **9 axioms** (8 Radix-4 + 1 Perm) | **12 active sorry** (all Poseidon, match splitter limitation) | **147 verified theorems** (121 e-graph + 26 bridge)
+
+## Key Design Decisions (v2.2.0)
+
+1. **Equality Saturation (E-Graphs)**: Optimization via verified rewrite rules rather than ad-hoc transformations. Every optimization is a theorem.
+2. **Sigma-SPL Algebraic IR**: Matrix expressions lowered through scatter/gather semantics. 19/19 operations formally verified.
+3. **Lazy Reduction (Harvey 2014)**: Defer modular reduction in butterfly operations for reduced modular arithmetic overhead.
+4. **Skeleton + Kernel Architecture**: Manual C loop structure (skeleton) with Lean-verified butterfly (kernel). Combines performance control with formal guarantees.
+5. **Twiddle Factor Caching**: Pre-computed twiddle factors for all NTT layers, stored in NttContext.
+6. **Nat in Lean Proofs**: Use arbitrary-precision naturals to avoid overflow reasoning during proofs. C code uses fixed-width integers with verified bounds.
+7. **Goldilocks Specialization**: Exploit p = 2^64 - 2^32 + 1 structure for efficient reduction without Barrett/Montgomery.
+
+For detailed rationale on each decision, see [docs/project/DESIGN_DECISIONS.md](docs/project/DESIGN_DECISIONS.md).
+
+---
+
 ### Fase 10: Trust-Lean Wiring
 
 **Goal**: Integrar Trust-Lean v1.2.0 como lake dependency de amo-lean. Crear módulo Bridge con conversión de tipos verificada (roundtrip) y pipeline end-to-end MatExpr → ExpandedSigma → TrustLean.Stmt → código C via CBackend industrial.

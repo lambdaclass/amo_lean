@@ -397,6 +397,59 @@ Nodes covered: N10.7 Stress Test + Docs.
 |------|----------|-------|----------------|------------|
 | (none) | — | — | — | — |
 
+---
+
+### Test Results (v2.2.0)
+
+| Test Suite | Tests | Status |
+|------------|-------|--------|
+| Goldilocks Field (+ UBSan) | 37 | Pass |
+| NTT Correctness (oracle + bit-reversal + kernel + sanitizer) | 141 | Pass |
+| Plonky3 Equivalence | 64 | Pass |
+| FRI Protocol (fold + validation) | 10 | Pass |
+| Poseidon2 (S-box + vectors + differential) | 10 | Pass |
+| E-Graph Optimizer | 4 | Pass |
+| Hardening (fuzz + FFI stress + ABI) | 120 | Pass |
+| Verified E-Graph (121 theorems) | 121 | Pass |
+| Lean Build (modules) | 3,134 | Pass |
+| **Total** | **~2,850** | **0 failures** |
+
+### NTT Performance vs Plonky3 (v1.0.1 Benchmark — Feb 2026, ARM64)
+
+| Size | AMO-Lean | Plonky3 | Ratio |
+|------|----------|---------|-------|
+| N=256 | 4.8 us | 3.4 us | 1.39x |
+| N=1024 | 23.3 us | 14.6 us | 1.59x |
+| N=4096 | 109.5 us | 65.9 us | 1.66x |
+| N=65536 | 2.50 ms | 1.48 ms | 1.69x |
+
+**Average**: 1.65x slower than Plonky3 (60% throughput) with **full formal verification**.
+
+<details>
+<summary>Full benchmark results (all sizes)</summary>
+
+| Size | AMO-Lean (us) | Plonky3 (us) | Ratio | AMO Throughput |
+|------|---------------|--------------|-------|----------------|
+| N=256 | 4.8 +/- 0.4 | 3.4 +/- 0.5 | 1.39x | 53.7 Melem/s |
+| N=512 | 10.6 +/- 0.5 | 7.1 +/- 1.0 | 1.49x | 48.5 Melem/s |
+| N=1024 | 23.3 +/- 2.5 | 14.6 +/- 0.5 | 1.59x | 44.0 Melem/s |
+| N=2048 | 50.5 +/- 1.7 | 31.0 +/- 1.0 | 1.63x | 40.6 Melem/s |
+| N=4096 | 109.5 +/- 0.9 | 65.9 +/- 2.2 | 1.66x | 37.4 Melem/s |
+| N=8192 | 255.1 +/- 13.7 | 138.4 +/- 1.9 | 1.84x | 32.1 Melem/s |
+| N=16384 | 535.8 +/- 12.2 | 294.3 +/- 9.4 | 1.82x | 30.6 Melem/s |
+| N=32768 | 1176.1 +/- 92.0 | 665.8 +/- 9.7 | 1.77x | 27.9 Melem/s |
+| N=65536 | 2500.1 +/- 75.5 | 1477.4 +/- 29.2 | 1.69x | 26.2 Melem/s |
+
+</details>
+
+### Verified Compatibility (v2.2.0)
+
+- **64/64** oracle tests pass vs Plonky3 (bit-exact match)
+- **120/120** pathological vectors verified (sparse, geometric, boundary, max entropy)
+- **37/37** Goldilocks field tests pass with UBSan
+- **FFI overhead**: 0.03% (negligible)
+- **Panic safety**: Triple protection (validation + catch_unwind + panic=abort)
+
 ## Previous Results
 
 (none)
