@@ -30,7 +30,7 @@ Biblioteca de optimización formal en Lean 4. Campos finitos verificados (Goldil
 
 **Firewall `_aux`**: (1) `theorem nombre_aux` flexible (2) probar sin tocar original (3) migrar cuando compile (4) `lake build` completo.
 
-**Escalación** (hooks enforzan): Directo (1-2) → `/ask-dojo` (3) → `/ask-lean` (4) → reformular.
+**Escalación** (hooks enforzan): Directo (1-2) → `solverCascade.py` (3) → `/ask-dojo` (4) → `/ask-lean` (5) → reformular.
 
 **Checkpoints** (hook cada 3 edits): HOJA `lake env lean {f}` | INTERMEDIO + dependientes | FUNDACIONAL `lake build`.
 
@@ -42,9 +42,13 @@ Biblioteca de optimización formal en Lean 4. Campos finitos verificados (Goldil
 
 **Patrones**: Fuel explícito (`Nat`), nunca well-founded sobre mutable. `Array.set` funcional. foldl con tipos explícitos en lambdas. Doc comments solo en `def`/`theorem`/`lemma`/`structure`.
 
-**Recursos**: Bibliografía `~/Documents/claudio/biblioteca/`, Lecciones `~/Documents/claudio/lecciones/lean4/` (INDEX.md → selectiva), Índices `~/Documents/claudio/biblioteca/indices/`.
+**Recursos**: Bibliografía `~/Documents/claudio/biblioteca/`, Lecciones `~/Documents/claudio/lecciones/lean4/` (usar `query_lessons.py --search/--lesson/--section`), Índices `~/Documents/claudio/biblioteca/indices/`.
 
 **Skills**: `/ask-lean`, `/ask-dojo`, `/lean4-theorem-proving`, `/lean-search`, `/lean-check`, `/lean-goal`, `/lean-diagnostics`. Plugins cameronfreer: proof-search, tactic, error-diagnosis, refactoring, documentation.
+
+**LSP MCP** (lean-lsp): `lean_goal` (proof state at cursor), `lean_diagnostic_messages` (compilation errors), `lean_search` (search Lean environment), `lean_completion` (autocomplete at position). Instant feedback (~30x faster than `lake build` for proof state).
+
+**Subagentes**: Delegar tareas mecánicas (search, análisis, verificación) a Explore subagents. Mantener estrategia de pruebas en conversación principal.
 
 ## Hooks (advisory pero de cumplimiento OBLIGATORIO)
 
@@ -54,7 +58,7 @@ Los hooks emiten advertencias o bloqueos. **Seguirlos es obligatorio, sin excepc
 |---|---|---|
 | `warn-large-read.sh` | Read de source/md >200 líneas sin offset | **BLOQUEADO**. Usar scout.py primero, luego Read con offset+limit |
 | `suggest-scout-on-grep.sh` | Grep en directorios source | Considerar scout.py para búsquedas estructurales |
-| `guard-block-close.sh` | Edit de ✓ en ARCHITECTURE.md | Ejecutar close_block.py + QA primero |
+| `edit-guards.sh` | Edit de source o ARCHITECTURE.md | Verificar branch, fan-out Lean, dirty tree, ✓ sin close_block |
 
 **Si un hook emite una advertencia o bloqueo, DETENER y seguir las instrucciones del hook antes de continuar.**
 
