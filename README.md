@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Tests](https://img.shields.io/badge/Tests-2850%2B-green.svg)](#testing)
 [![Build](https://img.shields.io/badge/Build-3134%20modules-brightgreen.svg)](#build)
-[![FRI Verified](https://img.shields.io/badge/FRI-123%20theorems%2C%200%20sorry-blue.svg)](#fri-formal-verification)
+[![FRI Verified](https://img.shields.io/badge/FRI-189%20theorems%2C%200%20sorry-blue.svg)](#fri-formal-verification)
 
 ## What is AMO-Lean?
 
@@ -12,7 +12,7 @@
 
 The core value proposition: **write your mathematical specification once in Lean 4, and get optimized C or Rust code that is correct by construction** — every optimization step is a formally proven theorem. This eliminates the traditional tradeoff between performance and correctness in cryptographic implementations.
 
-AMO-Lean currently covers the key building blocks of modern proof systems: NTT (Number Theoretic Transform), FRI (Fast Reed-Solomon IOP), field arithmetic (Goldilocks, BabyBear), Poseidon2 hashing, and a verified e-graph optimization engine. As of v2.4.0, the FRI protocol is formally verified end-to-end (123 theorems, 0 sorry, 0 custom axioms), including a **novel formalization of barycentric interpolation** — the first in any proof assistant. The generated code is Plonky3-compatible and achieves ~60% of hand-optimized Rust throughput with full formal verification.
+AMO-Lean currently covers the key building blocks of modern proof systems: NTT (Number Theoretic Transform), FRI (Fast Reed-Solomon IOP), field arithmetic (Goldilocks, BabyBear), Poseidon2 hashing, and a verified e-graph optimization engine. As of v2.4.1, the FRI protocol is formally verified end-to-end (189 theorems, 0 sorry, 0 custom axioms) with **operational-verified bridges** connecting 357 operational defs to algebraic specifications, including a **novel formalization of barycentric interpolation** — the first in any proof assistant. The generated code is Plonky3-compatible and achieves ~60% of hand-optimized Rust throughput with full formal verification.
 
 ## Ecosystem & Comparisons
 
@@ -81,7 +81,8 @@ This architecture is **portable and modular**: adding a new primitive means writ
 - **Radix-4 NTT** — 4-point butterfly (8 axioms pending formal implementation, v2.5.0)
 - **Goldilocks Field** — Scalar + AVX2 arithmetic (p = 2^64 - 2^32 + 1), **0 axioms**
 - **BabyBear Field** — Scalar arithmetic (p = 2^31 - 2^27 + 1), **0 axioms**
-- **FRI Formal Verification** — 9 verified modules (~2,840 LOC, 123 theorems, 0 sorry): fold soundness, Merkle integrity, Fiat-Shamir transcript, per-round soundness (Garreta 2025), verifier composition, pipeline integration
+- **FRI Formal Verification** — 16 verified modules (~4,450 LOC, 189 theorems, 0 sorry): fold soundness, Merkle integrity, Fiat-Shamir transcript, per-round soundness (Garreta 2025), verifier composition, pipeline integration, operational-verified bridges
+- **Operational-Verified FRI Bridges** — 7 bridge modules connecting 357 operational defs to algebraic specs: domain, fold, transcript, Merkle, plus integration capstone `operational_verified_bridge_complete`
 - **Barycentric Interpolation** — First formalization in any proof assistant: `barycentric_eq_lagrange` generic over `[Field F]`
 - **FRI Pipeline Integration** — `fri_pipeline_soundness` composes e-graph optimization (Level 1+2) with FRI algebraic guarantees (Level 3)
 - **E-Graph Optimization** — Verified engine (121 theorems, 0 sorry) + 19/20 rewrite rules
@@ -199,20 +200,29 @@ AMO-Lean NTT achieves **~60% of Plonky3 throughput** (1.65x slower on average) w
 
 See [BENCHMARKS.md](docs/BENCHMARKS.md) for full NTT benchmark tables, test suite results, and verification criteria.
 
-## What's New in v2.4.0
+## What's New in v2.4.1
 
-### Changes Since v2.3.0
+### Changes Since v2.4.0
 
-| Metric | v2.3.0 | v2.4.0 | Change |
+| Metric | v2.4.0 | v2.4.1 | Change |
 |--------|--------|--------|--------|
-| **Lines of Code** | ~43,100 | **~45,400** | +2,300 LOC (FRI verified modules) |
-| **FRI verified theorems** | 0 | **123** | +123 (9 new files, 0 sorry) |
-| **Total verified theorems** | 778 | **~905** | +127 |
-| **Axioms** | 8 | **11** | +3 crypto axioms (type True: proximity gap, collision resistance, ROM) |
+| **Lines of Code** | ~45,400 | **~47,000** | +1,606 LOC (bridge modules + property tests) |
+| **FRI verified theorems** | 123 | **189** | +66 (7 new files, 0 sorry) |
+| **Total verified theorems** | ~905 | **~971** | +66 |
+| **Property tests** | 0 | **19** | 14 properties + 5 smoke tests (Plausible framework) |
+| **Axioms** | 11 | **11** | No new axioms |
 | **Active sorry** | 12 | **12** | Same (Poseidon only) |
-| **Novel contributions** | 0 | **1** | Barycentric interpolation (first in any proof assistant) |
 
-### Key Achievements (v2.3.0 -> v2.4.0)
+### Key Achievements (v2.4.0 -> v2.4.1)
+
+1. **Operational-verified FRI bridges** (Fase 13) — 7 bridge modules connecting 357 operational FRI defs to the 123 verified algebraic theorems from Fase 12. Each bridge has a roundtrip or equivalence proof. 6 nodes, 1,606 LOC, ~66 theorems, 0 sorry, 0 new axioms.
+2. **Domain bridge** (N13.2) — `friParamsToDomain` converts operational `FRIParams` to verified `FRIEvalDomain`. `ValidFRIParams` ensures well-formedness. `squaredDomain` for folded domains. 337 LOC, 19 theorems.
+3. **Fold bridge** (N13.4) — `foldSpec` as universal interface: operational fold = polynomial evaluation on squared domain via `foldBridge_equivalence`. `EvenOddInterpretation` links array layout to polynomials. 272 LOC, 11 theorems.
+4. **Capstone theorem** — `operational_verified_bridge_complete` (N13.6) composes domain + fold bridges end-to-end: foldSpec = polynomial evaluation AND degree halving AND ConsistentWithDegree on D'.
+5. **Property testing** (N13.1 + N13.6) — First PBT framework in AMO-Lean. `PlausibleSetup` provides `SampleableExt` instances for FRI types. 14 property tests across 4 categories + 5 smoke tests. 272 LOC.
+6. **Definitional equality bridges** — Transcript bridge achieves gold standard: `toFormalTranscript`/`fromFormalTranscript` roundtrip, absorb/squeeze commutativity all proved by `rfl`.
+
+### Previous: v2.4.0 — FRI Formal Verification
 
 1. **FRI formal verification** (Fase 12) — Complete formal verification of FRI (Fast Reed-Solomon IOP of Proximity) for Plonky3 certification. 9 new files in `AmoLean/FRI/Verified/`, ~2,840 LOC, 123 theorems, 0 sorry, 0 custom axioms (3 crypto axioms are type `True`).
 2. **Barycentric interpolation** (N12.3) — First formalization in any proof assistant. `barycentric_eq_lagrange` proven generic over `[Field F]`, connecting to Mathlib's `Lagrange.interpolate`. 238 LOC.
@@ -255,23 +265,24 @@ v2.1.0 (Feb 17)    9 axioms    12 sorry    Verified e-graph engine (121 theorems
 v2.2.0 (Feb 21)    9 axioms    12 sorry    Trust-Lean bridge (26 theorems, 0 sorry)
 v2.3.0 (Feb 27)    8 axioms    12 sorry    Pipeline soundness + Perm axiom eliminated
 v2.4.0 (Feb 27)   11 axioms    12 sorry    FRI formal verification (123 theorems, barycentric interpolation)
+v2.4.1 (Feb 27)   11 axioms    12 sorry    Operational-verified FRI bridges (66 theorems, 19 property tests)
 ```
 
-Note: v2.4.0 adds 3 cryptographic axioms (type `True` — standard assumptions: proximity gap, collision resistance, Random Oracle Model). All pipeline theorems remain axiom-free.
+Note: v2.4.0 adds 3 cryptographic axioms (type `True` — standard assumptions: proximity gap, collision resistance, Random Oracle Model). v2.4.1 adds no new axioms. All pipeline theorems remain axiom-free.
 
 ## Future Work
 
 | Task | Relevance | Difficulty | Status |
 |------|-----------|------------|--------|
-| **Operational-Verified FRI bridge** | High — 357 operational defs, 123 verified theorems, no formal connection | Medium — bridge functions + roundtrip proofs | Planned (v2.4.1) |
-| **SlimCheck property testing** | Medium — 0 property tests in 45K LOC | Low — infrastructure exists in Mathlib | Planned (v2.4.1) |
 | **NTT Radix-4 axiom elimination** (8 axioms) | High — last remaining non-crypto axioms | High — requires function implementations | Pending (v2.5.0, N11.6-N11.9) |
 | **Poseidon formal proofs** (12 sorry) | Medium — currently validated computationally | Medium — Lean match splitter limitation | Tests pass; formal proofs deferred |
 | **Mersenne31 field** | High — enables SP1 verification | Medium — architecture supports it | Designed |
 | ~~**Perm axiom** (1)~~ | ~~Low~~ | ~~Very High~~ | **RESOLVED** (Corrección 1) |
 | ~~**FRI formal verification**~~ | ~~Critical~~ | ~~Very High~~ | **RESOLVED** (Fase 12, v2.4.0) |
+| ~~**Operational-Verified FRI bridge**~~ | ~~High~~ | ~~Medium~~ | **RESOLVED** (Fase 13, v2.4.1) |
+| ~~**Property testing**~~ | ~~Medium~~ | ~~Low~~ | **RESOLVED** (Fase 13, v2.4.1 — 19 tests via Plausible) |
 
-The 12 remaining sorry are isolated to Poseidon2 (Lean match splitter limitation), backed by 21 test vectors. The 8 NTT Radix-4 axioms are the only non-crypto axioms remaining (opaque interface, pending v2.5.0). The 3 FRI crypto axioms (proximity gap, collision resistance, ROM) are standard cryptographic assumptions declared as `True`. The entire e-graph pipeline, Perm algebra, translation validation, and FRI algebraic chain are **fully axiom-free**.
+The 12 remaining sorry are isolated to Poseidon2 (Lean match splitter limitation), backed by 21 test vectors. The 8 NTT Radix-4 axioms are the only non-crypto axioms remaining (opaque interface, pending v2.5.0). The 3 FRI crypto axioms (proximity gap, collision resistance, ROM) are standard cryptographic assumptions declared as `True`. The entire e-graph pipeline, Perm algebra, translation validation, FRI algebraic chain, and operational-verified bridges are **fully axiom-free**.
 
 ## References
 
