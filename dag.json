@@ -1,87 +1,159 @@
 {
-  "version": "v2.2.0",
+  "version": "v2.3.0",
   "project": "AMO-Lean",
   "phases": [
     {
-      "id": "fase10",
-      "name": "Trust-Lean Wiring",
-      "status": "completed",
+      "id": "fase11",
+      "name": "Verified Pipeline + Axiom Elimination",
+      "status": "in_progress",
       "nodes": [
         {
-          "id": "N10.1",
-          "name": "Lake Dependency Setup",
+          "id": "N11.1",
+          "name": "CryptoSemanticSpec",
           "type": "FUNDACIONAL",
           "status": "completed",
           "files": [
-            "lakefile.lean",
-            "AmoLean/Bridge/TrustLean.lean"
+            "AmoLean/EGraph/Verified/SemanticSpec.lean"
           ],
           "deps": [],
-          "blocks": [
-            "B24"
+          "blocks": [],
+          "metrics": {
+            "loc": 644,
+            "theorems": 21,
+            "lemmas": 0,
+            "defs": 5,
+            "sorry": 0,
+            "note": "shared file with N11.2"
+          },
+          "properties": {
+            "total": 3,
+            "passing": 3,
+            "failing": 0,
+            "not_runnable": 0
+          }
+        },
+        {
+          "id": "N11.2",
+          "name": "ConsistentValuation + Invariant Triple",
+          "type": "FUNDACIONAL",
+          "status": "completed",
+          "files": [
+            "AmoLean/EGraph/Verified/SemanticSpec.lean"
           ],
+          "deps": [
+            "N11.1"
+          ],
+          "blocks": [],
+          "metrics": {
+            "loc": 644,
+            "theorems": 21,
+            "lemmas": 0,
+            "defs": 5,
+            "sorry": 0,
+            "note": "shared file with N11.1"
+          },
+          "properties": {
+            "total": 3,
+            "passing": 3,
+            "failing": 0,
+            "not_runnable": 0
+          }
+        },
+        {
+          "id": "N11.3",
+          "name": "SoundRewriteRule + Saturation Soundness",
+          "type": "CRITICO",
+          "status": "completed",
+          "files": [
+            "AmoLean/EGraph/Verified/SoundRewriteRule.lean",
+            "AmoLean/EGraph/Verified/SaturationSpec.lean"
+          ],
+          "deps": [
+            "N11.2"
+          ],
+          "blocks": [],
+          "metrics": {
+            "loc": 508,
+            "theorems": 8,
+            "lemmas": 0,
+            "defs": 6,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 2,
+            "passing": 2,
+            "failing": 0,
+            "not_runnable": 0
+          }
+        },
+        {
+          "id": "N11.4",
+          "name": "Extraction Correctness",
+          "type": "CRITICO",
+          "status": "completed",
+          "files": [
+            "AmoLean/EGraph/Verified/ExtractSpec.lean"
+          ],
+          "deps": [
+            "N11.2"
+          ],
+          "blocks": [],
+          "metrics": {
+            "loc": 554,
+            "theorems": 13,
+            "lemmas": 0,
+            "defs": 13,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 2,
+            "passing": 2,
+            "failing": 0,
+            "not_runnable": 0
+          }
+        },
+        {
+          "id": "N11.5",
+          "name": "full_pipeline_soundness",
+          "type": "CRITICO",
+          "status": "completed",
+          "files": [
+            "AmoLean/EGraph/Verified/PipelineSoundness.lean"
+          ],
+          "deps": [
+            "N11.3",
+            "N11.4"
+          ],
+          "blocks": [],
+          "metrics": {
+            "loc": 285,
+            "theorems": 8,
+            "lemmas": 0,
+            "defs": 1,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 1,
+            "passing": 1,
+            "failing": 0,
+            "not_runnable": 0
+          }
+        },
+        {
+          "id": "N11.6",
+          "name": "Butterfly4 Foundation",
+          "type": "FUNDACIONAL",
+          "status": "pending",
+          "files": [
+            "AmoLean/NTT/Radix4/Butterfly4.lean"
+          ],
+          "deps": [],
+          "blocks": [],
           "metrics": {
             "loc": 0,
             "theorems": 0,
             "lemmas": 0,
             "defs": 0,
-            "sorry": 0
-          },
-          "properties": {
-            "total": 0,
-            "passing": 0,
-            "failing": 0,
-            "not_runnable": 0
-          }
-        },
-        {
-          "id": "N10.2",
-          "name": "Type Conversion + Roundtrip",
-          "type": "CRITICO",
-          "status": "completed",
-          "files": [
-            "AmoLean/Bridge/TrustLean.lean"
-          ],
-          "deps": [
-            "N10.1"
-          ],
-          "blocks": [
-            "B25"
-          ],
-          "metrics": {
-            "loc": 332,
-            "theorems": 17,
-            "lemmas": 0,
-            "defs": 20,
-            "sorry": 0
-          },
-          "properties": {
-            "total": 3,
-            "passing": 0,
-            "failing": 0,
-            "not_runnable": 0
-          }
-        },
-        {
-          "id": "N10.3",
-          "name": "Integration Tests + Pipeline",
-          "type": "PARALELO",
-          "status": "completed",
-          "files": [
-            "AmoLean/Bridge/TrustLean.lean",
-            "AmoLean/Tests/TrustLeanIntegration.lean"
-          ],
-          "deps": [
-            "N10.2"
-          ],
-          "blocks": [
-            "B26"
-          ],
-          "metrics": {
-            "loc": 134,
-            "theorems": 0,
-            "lemmas": 0,
-            "defs": 6,
             "sorry": 0
           },
           "properties": {
@@ -92,20 +164,17 @@
           }
         },
         {
-          "id": "N10.4",
-          "name": "Zero Sorry Audit",
-          "type": "HOJA",
-          "status": "completed",
+          "id": "N11.7",
+          "name": "NTT_radix4 + Spec Equivalence",
+          "type": "CRITICO",
+          "status": "pending",
           "files": [
-            "AmoLean/Bridge/TrustLean.lean",
-            "AmoLean/Tests/TrustLeanIntegration.lean"
+            "AmoLean/NTT/Radix4/Algorithm.lean"
           ],
           "deps": [
-            "N10.3"
+            "N11.6"
           ],
-          "blocks": [
-            "B27"
-          ],
+          "blocks": [],
           "metrics": {
             "loc": 0,
             "theorems": 0,
@@ -114,86 +183,138 @@
             "sorry": 0
           },
           "properties": {
-            "total": 0,
+            "total": 1,
             "passing": 0,
             "failing": 0,
             "not_runnable": 0
           }
         },
         {
-          "id": "N10.5",
-          "name": "Forward Roundtrips Intermedios",
+          "id": "N11.8",
+          "name": "INTT_radix4 + Roundtrip Identity",
           "type": "CRITICO",
-          "status": "completed",
+          "status": "pending",
           "files": [
-            "AmoLean/Bridge/TrustLean.lean"
+            "AmoLean/NTT/Radix4/Algorithm.lean"
           ],
           "deps": [
-            "N10.2"
+            "N11.6",
+            "N11.7"
           ],
-          "blocks": [
-            "B28"
-          ],
+          "blocks": [],
           "metrics": {
-            "loc": 544,
-            "theorems": 5,
+            "loc": 0,
+            "theorems": 0,
             "lemmas": 0,
             "defs": 0,
             "sorry": 0
           },
           "properties": {
-            "total": 2,
-            "passing": 2,
+            "total": 1,
+            "passing": 0,
             "failing": 0,
             "not_runnable": 0
           }
         },
         {
-          "id": "N10.6",
-          "name": "Forward Sigma + Injectivity",
-          "type": "CRITICO",
-          "status": "completed",
+          "id": "N11.9",
+          "name": "Equivalence Proofs",
+          "type": "PARALELO",
+          "status": "pending",
           "files": [
-            "AmoLean/Bridge/TrustLean.lean"
+            "AmoLean/NTT/Radix4/Equivalence.lean"
           ],
           "deps": [
-            "N10.5"
+            "N11.7",
+            "N11.8"
           ],
-          "blocks": [
-            "B29"
-          ],
+          "blocks": [],
           "metrics": {
-            "loc": 544,
-            "theorems": 2,
+            "loc": 0,
+            "theorems": 0,
             "lemmas": 0,
             "defs": 0,
             "sorry": 0
           },
           "properties": {
-            "total": 2,
-            "passing": 2,
+            "total": 1,
+            "passing": 0,
             "failing": 0,
             "not_runnable": 0
           }
         },
         {
-          "id": "N10.7",
-          "name": "Stress Test + Docs",
+          "id": "N11.10",
+          "name": "Perm Axiom Elimination",
           "type": "PARALELO",
           "status": "completed",
           "files": [
-            "Tests/TrustLeanIntegration.lean"
+            "AmoLean/Matrix/Perm.lean"
           ],
           "deps": [],
-          "blocks": [
-            "B30"
-          ],
+          "blocks": [],
           "metrics": {
-            "loc": 199,
-            "theorems": 0,
+            "loc": 828,
+            "theorems": 1,
             "lemmas": 0,
             "defs": 1,
-            "sorry": 0
+            "sorry": 0,
+            "note": "axiom eliminated — applyInverse extraction enables equation compiler splitter"
+          },
+          "properties": {
+            "total": 1,
+            "passing": 1,
+            "failing": 0,
+            "not_runnable": 0
+          }
+        },
+        {
+          "id": "N11.11",
+          "name": "Translation Validation Framework",
+          "type": "CRITICO",
+          "status": "completed",
+          "files": [
+            "AmoLean/EGraph/Verified/TranslationValidation.lean"
+          ],
+          "deps": [],
+          "blocks": [],
+          "metrics": {
+            "loc": 229,
+            "theorems": 11,
+            "lemmas": 0,
+            "defs": 3,
+            "sorry": 0,
+            "note": "0 axioms, 3 structures, 1 inductive"
+          },
+          "properties": {
+            "total": 1,
+            "passing": 1,
+            "failing": 0,
+            "not_runnable": 0
+          }
+        },
+        {
+          "id": "N11.12",
+          "name": "Integration + Zero-Axiom Audit",
+          "type": "HOJA",
+          "status": "completed",
+          "files": [
+            "Tests/PipelineSoundnessTest.lean"
+          ],
+          "deps": [
+            "N11.5",
+            "N11.9",
+            "N11.10",
+            "N11.11"
+          ],
+          "blocks": [],
+          "metrics": {
+            "loc": 190,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0,
+            "note": "13 examples, 25 #check, 4 #print axioms; pipeline = 0 custom axioms"
           },
           "properties": {
             "total": 1,
@@ -205,75 +326,96 @@
       ],
       "blocks": [
         {
-          "id": "B24",
-          "name": "Lake + Stub",
+          "id": "B31",
+          "name": "Semantic Foundation",
           "nodes": [
-            "N10.1"
+            "N11.1"
           ],
           "status": "completed",
-          "closed_at": "2026-02-21"
+          "closed_at": "2026-02-27"
         },
         {
-          "id": "B25",
-          "name": "Conversion Core",
+          "id": "B32",
+          "name": "ConsistentValuation",
           "nodes": [
-            "N10.2"
+            "N11.2"
           ],
           "status": "completed",
-          "closed_at": "2026-02-21"
+          "closed_at": "2026-02-27"
         },
         {
-          "id": "B26",
-          "name": "Integration + Pipeline",
+          "id": "B33",
+          "name": "Saturation + Extraction",
           "nodes": [
-            "N10.3"
+            "N11.3",
+            "N11.4"
           ],
           "status": "completed",
-          "closed_at": "2026-02-21"
+          "closed_at": "2026-02-27"
         },
         {
-          "id": "B27",
-          "name": "Final Audit",
+          "id": "B34",
+          "name": "Pipeline Composition",
           "nodes": [
-            "N10.4"
+            "N11.5"
           ],
           "status": "completed",
-          "closed_at": "2026-02-21"
+          "closed_at": "2026-02-27"
         },
         {
-          "id": "B28",
-          "name": "Forward Intermedios",
+          "id": "B35",
+          "name": "Butterfly4 Foundation",
           "nodes": [
-            "N10.5"
+            "N11.6"
           ],
-          "status": "completed",
-          "closed_at": "2026-02-21"
+          "status": "pending",
+          "closed_at": null
         },
         {
-          "id": "B29",
-          "name": "Forward Sigma + Injectivity",
+          "id": "B36",
+          "name": "NTT Radix-4",
           "nodes": [
-            "N10.6"
+            "N11.7"
           ],
-          "status": "completed",
-          "closed_at": "2026-02-21"
+          "status": "pending",
+          "closed_at": null
         },
         {
-          "id": "B30",
-          "name": "Stress + Docs",
+          "id": "B37",
+          "name": "INTT + Equivalence",
           "nodes": [
-            "N10.7"
+            "N11.8",
+            "N11.9"
+          ],
+          "status": "pending",
+          "closed_at": null
+        },
+        {
+          "id": "B38",
+          "name": "Perm + Translation Validation",
+          "nodes": [
+            "N11.10",
+            "N11.11"
           ],
           "status": "completed",
-          "closed_at": "2026-02-21"
+          "closed_at": "2026-02-27"
+        },
+        {
+          "id": "B39",
+          "name": "Integration + Audit",
+          "nodes": [
+            "N11.12"
+          ],
+          "status": "completed",
+          "closed_at": "2026-02-27"
         }
       ]
     }
   ],
   "meta": {
     "created": "2026-02-21T16:39:12Z",
-    "updated": "2026-02-21T17:39:31Z",
-    "total_nodes": 7,
-    "completed_nodes": 7
+    "updated": "2026-02-27T16:25:12Z",
+    "total_nodes": 12,
+    "completed_nodes": 8
   }
 }
