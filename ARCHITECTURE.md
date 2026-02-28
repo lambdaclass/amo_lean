@@ -1,6 +1,6 @@
 # AMO-Lean: Architecture
 
-## Current Version: v2.3.0
+## Current Version: v2.4.0 (planning)
 
 
 ### Fase 11: Verified Pipeline + Axiom Elimination
@@ -239,6 +239,258 @@ Final:
 | New theorems | 80-120 |
 | Axioms eliminated | 9 (8 Radix-4 + 1 Perm) |
 | Target axioms | 0 custom |
+
+---
+
+### Fase 12: FRI Formal Verification + Barycentric Interpolation (v2.4.0)
+
+**Goal**: Formalize FRI soundness in Lean 4 to certify Plonky3 end-to-end. Novel contribution: first formalization of barycentric interpolation in any proof assistant.
+
+| Gap | Severity | Target |
+|-----|----------|--------|
+| G8 FRI soundness (prove → verify) | CRITICA | `fri_verifier_soundness` with round-by-round analysis |
+| G9 Merkle tree integrity | CRITICA | `merkle_verify_correct` with collision resistance axiom |
+| G10 Fold-polynomial equivalence | CRITICA | `fold_degree_halving` via barycentric interpolation |
+| G11 Pipeline integration | ALTA | `fri_pipeline_soundness` composing e-graph + FRI |
+| G12 Barycentric interpolation | ALTA | `barycentric_eq_lagrange` — **novel contribution** |
+| G13 Transcript/Fiat-Shamir | MEDIA | `challenge_binding` under Random Oracle Model |
+
+**Out of scope**: G1 (Poseidon 12 sorry), G2 (NTT Radix-4 8 axioms, deferred to v2.5.0).
+
+**Soundness Architecture** (two-level, same as e-graph pipeline):
+- **Level 1** (N12.1-N12.8): Internal FRI soundness — fold correctness, Merkle integrity, verifier rejects invalid proofs
+- **Level 2** (N12.9): External bridge — compose FRI with e-graph pipeline via `CryptoEquivalent`
+- **Composition**: Level 1 + Level 2 + N11.5 = `fri_pipeline_soundness`
+
+**Documented axioms** (3, all standard cryptographic assumptions):
+1. `proximity_gap_rs` — Proximity gap for RS codes (BCIKS20, JACM 2023). Published theorem.
+2. `collision_resistant_hash` — Hash function collision resistance. Standard crypto assumption.
+3. `random_oracle_model` — Fiat-Shamir in Random Oracle Model. Standard assumption.
+
+**Axiom budget**: max 3 crypto + max 2 engineering (with elimination plan) = 5 total.
+
+**New files** (9, in `AmoLean/FRI/Verified/`):
+- `FRISemanticSpec.lean` — Formal types, evaluation domains, round state, invariants
+- `FieldBridge.lean` — AMO-Lean FieldConfig ↔ Mathlib Polynomial via ZMod
+- `BarycentricInterpolation.lean` — **Novel**: barycentric interpolation formalization
+- `FoldSoundness.lean` — Fold degree preservation via barycentric evaluation
+- `MerkleSpec.lean` — Merkle tree integrity, proof validity
+- `TranscriptSpec.lean` — Transcript determinism, Fiat-Shamir binding
+- `PerRoundSoundness.lean` — Garreta 2025 state function, per-round error bound
+- `VerifierComposition.lean` — Multi-round composition, main soundness theorem
+- `FRIPipelineIntegration.lean` — Connect FRI to e-graph pipeline
+
+**Reference projects** (study architecture, write own code — no imports, no copies):
+- ZkLinalg (Math Inc.) — FRI soundness theorem patterns
+- ArkLib/ArkLibFri (Nethermind) — SplitFold, RoundConsistency architecture
+- VCVio (Verified-zkEVM) — Fiat-Shamir formalization patterns
+- risc0-lean4 (RISC Zero) — Merkle tree operations reference
+
+**Reference papers**:
+- Garreta, Mohnblatt, Wagner (2025) — "Simplified Round-by-round Soundness Proof of FRI" (ePrint 2025/1993)
+- Ben-Sasson, Carmon, Ishai, Kopparty, Saraf (2020) — "Proximity Gaps for RS Codes" (BCIKS20, JACM 2023)
+- Attema, Fehr, Klooss (2023) — "Fiat-Shamir Security of FRI" (ePrint 2023/1071)
+
+**Lessons applied**: L-311 (three-part contract), L-390 (foldl induction), L-222 (PostFoldInvariant), L-329 (bridge decomposition), L-359 (roundtrip), L-351 (no example-based verification), L-457 (TCB hypotheses), L-401 (invariant strengthening), L-478 (equation compiler), L-312 (zero sorry gate)
+
+#### DAG (v2.4.0)
+
+| Nodo | Tipo | Deps | Status |
+|------|------|------|--------|
+| N12.1 FRISemanticSpec | FUND | — | ✓ (447 LOC, 7T 11D 3ax, 0 sorry) |
+| N12.2 FieldBridge | FUND | N12.1 | ✓ (266 LOC, 11T 4D 0ax, 0 sorry) |
+| N12.3 BarycentricInterpolation | CRIT | N12.2 | ✓ (238 LOC, 11T 2D 0ax, 0 sorry) |
+| N12.4 FoldSoundness | FUND | N12.2, N12.3 | ✓ (364 LOC, 21T 0D 0ax, 0 sorry) |
+| N12.5 MerkleSpec | PAR | N12.1 | ✓ (258 LOC, 13T 9D 0ax, 0 sorry) |
+| N12.6 TranscriptSpec | PAR | N12.1 | ✓ (279 LOC, 17T 6D 0ax, 0 sorry) |
+| N12.7 PerRoundSoundness | CRIT | N12.4, N12.5, N12.6 | ✓ (422 LOC, 25T 2D 0ax, 0 sorry) |
+| N12.8 VerifierComposition | CRIT | N12.7 | ✓ (317 LOC, 10T 1D 0ax, 0 sorry) |
+| N12.9 FRIPipelineIntegration | HOJA | N12.8, N11.5 | ✓ (249 LOC, 8T 1D 0ax, 0 sorry) |
+
+#### Formal Properties (v2.4.0)
+
+| Nodo | Propiedad | Tipo | Prioridad |
+|------|-----------|------|-----------|
+| N12.1 | FRIEvalDomain has correct size and generator | INVARIANT | P0 |
+| N12.1 | FRIRoundInvariant is decidable for concrete instances | COMPLETENESS | P1 |
+| N12.2 | evaluation at domain points equals Polynomial.eval | EQUIVALENCE | P0 |
+| N12.2 | degree bound via root counting matches natDegree | EQUIVALENCE | P0 |
+| N12.3 | barycentric_eq_lagrange: barycentric = Lagrange (all fields) | EQUIVALENCE | P0 |
+| N12.3 | barycentric_eval_correct: correct evaluation at all points | SOUNDNESS | P0 |
+| N12.3 | barycentric_degree_bound: result has correct degree | INVARIANT | P0 |
+| N12.4 | fold_degree_halving: fold reduces natDegree by half | SOUNDNESS | P0 |
+| N12.4 | fold_eval_correct: fold evaluation matches specification | SOUNDNESS | P0 |
+| N12.4 | fold_composition_sound: n-fold preserves soundness | PRESERVATION | P0 |
+| N12.5 | merkle_verify_correct: valid proof ↔ correct leaf | SOUNDNESS | P0 |
+| N12.5 | merkle_root_deterministic: same leaves → same root | INVARIANT | P0 |
+| N12.6 | transcript_deterministic: same inputs → same challenges | INVARIANT | P0 |
+| N12.6 | challenge_binding: committed data determines challenges | SOUNDNESS | P0 |
+| N12.7 | round_error_bound: per-round error ≤ ε (Garreta) | SOUNDNESS | P0 |
+| N12.7 | query_soundness: queries catch cheating (card_roots_le_degree) | SOUNDNESS | P0 |
+| N12.8 | fri_algebraic_guarantees: degree halving + root counting + uniqueness | SOUNDNESS | P0 |
+| N12.8 | fri_single_round_correct: completeness + soundness + uniqueness | SOUNDNESS | P1 |
+| N12.9 | fri_pipeline_soundness: e-graph + FRI = verified pipeline | SOUNDNESS | P0 |
+| N12.9 | #print axioms = exactly 3 documented crypto axioms | SOUNDNESS | P0 |
+
+#### Detailed Node Specifications
+
+**Subfase 1: Foundation + Bridge**
+
+**N12.1 FUNDACIONAL — FRISemanticSpec** (~300-400 LOC)
+- Define `FRIEvalDomain F n`: evaluation domain as subgroup generated by primitive 2^n-th root of unity
+- Define `FRIRoundState F`: (polynomial representation, domain, commitment, challenge)
+- Define `FRIRoundInvariant`: degree bound + domain consistency + commitment validity
+- Define `FRIFoldSpec F`: abstract fold operation specification
+- Define `FRIConfig`: blowup factor, query count, round count, security parameter
+- Properties: `domain_size_correct`, `domain_squaring` (omega^2 generates next domain)
+- Mathlib: `IsPrimitiveRoot`, `rootsOfUnity`, `Polynomial`
+- Generic over `[Field F]` where mathematically sound
+- De-risk: verify IsPrimitiveRoot API covers domain squaring property
+
+**N12.2 FUNDACIONAL — FieldBridge** (~400-600 LOC)
+- Bridge `FieldConfig`/`FRIField` (UInt64-based) to Mathlib `Field` + `Polynomial` via `ZMod p`
+- `evaluation_coefficient_duality`: evaluation at domain points ↔ polynomial coefficients
+- `degree_bound_via_roots`: degree connects to root counting
+- `field_char_correct`: characteristic matches field spec
+- Risk (L-015): `ring` timeout on large `ZMod`. Mitigation: custom `@[simp]` lemmas, `calc` steps
+- Test both BabyBear (p = 2^31 - 2^27 + 1) and Goldilocks (p = 2^64 - 2^32 + 1)
+- If bridge too complex: axiomatize `eval_coeff_duality` as engineering axiom (with elimination plan)
+- De-risk: MANDATORY sketch before N12.3/N12.4 begin
+
+**Subfase 2: Barycentric Interpolation (Novel Contribution)**
+
+**N12.3 CRITICO — BarycentricInterpolation** (~350-500 LOC) ⭐ NOVEL
+- **First formalization of barycentric interpolation in any proof assistant**
+- Define `barycentricWeights`: weights for arbitrary distinct points
+- Define `barycentricInterp`: first and second barycentric form
+- Prove `barycentric_eq_lagrange`: equivalence with Mathlib's `Lagrange.interpolate`
+- Prove `barycentric_eval_correct`: correct evaluation at all points
+- Prove `barycentric_degree_bound`: result polynomial has correct natDegree
+- Prove `barycentric_unique`: uniqueness of interpolating polynomial
+- ALL theorems generic over `[Field F]` — no field-specific assumptions
+- Mathlib-PR-ready: naming conventions, module docstring, reusable API
+- Reference: Berrut & Trefethen (2004) "Barycentric Lagrange Interpolation"
+- Firewall: develop in `_aux` first, migrate when complete
+
+**Subfase 3: Fold Soundness**
+
+**N12.4 FUNDACIONAL — FoldSoundness** (~500-700 LOC)
+- `fold_degree_halving`: fold reduces natDegree by half (key theorem)
+- `fold_eval_correct`: fold evaluation matches specification via barycentric (N12.3)
+- `fold_composition_sound`: n-fold composition preserves proximity
+- `fold_preserves_invariant`: FRIRoundInvariant preserved through fold
+- Uses N12.2 (FieldBridge) for polynomial reasoning
+- Uses N12.3 (barycentric) for evaluation correctness
+- Fuel-based totality for recursive fold composition (L-311)
+- Reference: Garreta 2025 fold analysis, ArkLib SplitFold architecture
+- De-risk: time-box fold_degree_halving (3 sessions max). Fallback: axiomatize `fold_preserves_proximity`
+
+**Subfase 4: Commitment + Transcript (parallel)**
+
+**N12.5 PARALELO — MerkleSpec** (~300-400 LOC)
+- `MerkleTree` inductive type (Leaf | Node)
+- `merkle_root_deterministic`: same leaves → same root
+- `merkle_verify_correct`: valid proof ↔ correct leaf value at index
+- `merkle_verify_complete`: honest tree passes verification
+- `merkle_binding`: collision resistance implies commitment binding
+- `axiom collision_resistant_hash` (documented crypto axiom #1)
+- Minimal approach: axiomatize collision resistance, prove structural properties
+- Reference: risc0-lean4 Merkle operations
+
+**N12.6 PARALELO — TranscriptSpec** (~200-300 LOC)
+- Extend existing `TranscriptState` (590 LOC in Transcript.lean)
+- `transcript_deterministic`: same inputs → same challenges
+- `challenge_binding`: committed data determines challenges
+- `challenge_independence`: challenges independent under ROM
+- `axiom random_oracle_model` (documented crypto axiom #2)
+- Builds on existing `absorb_order_matters` (only real theorem in FRI module)
+
+**Subfase 5: Verifier Soundness**
+
+**N12.7 CRITICO — PerRoundSoundness** (~400-550 LOC)
+- `FRIStateFunction`: Garreta 2025 state function per round
+- `round_error_bound`: Pr[S(r+1) bad | S(r) good] ≤ ε
+- `query_soundness`: queries catch cheating via `Polynomial.card_roots_le_degree`
+- `round_soundness`: combines fold + query + proximity gap for single round
+- `axiom proximity_gap_rs` (documented crypto axiom #3, BCIKS20 JACM 2023)
+- Reference: Garreta 2025 Theorem 3.2
+- Firewall: `_aux` approach mandatory
+
+**N12.8 CRITICO — VerifierComposition** (~300-400 LOC)
+- `fri_error_composition`: multi-round error via union bound
+- `fri_verifier_soundness`: main theorem — far from RS → reject w.h.p.
+- `fri_completeness`: close to RS → accept
+- Explicit statement of all assumptions (field size, proximity parameter, round count)
+- Compose N12.7 iterated over all rounds
+- Firewall: `_aux` approach mandatory
+
+**Subfase 6: Integration**
+
+**N12.9 HOJA — FRIPipelineIntegration** (~250-350 LOC)
+- `FRIVerifiedResult` struct connecting FRI output to pipeline
+- Extend `CryptoEquivalent` for FRI operations
+- `fri_pipeline_soundness`: compose e-graph (N11.5) + FRI (N12.8)
+- Final axiom audit: `#print axioms` on ALL key theorems = exactly 3 crypto axioms
+- Integration tests: compose with `full_pipeline_soundness`
+- `lake build` full project: 0 errors
+
+#### Bloques
+
+- [x] **B40 FRI Foundation**: N12.1 ✓ (447 LOC, 7T 11D 3ax, 0 sorry)
+- [x] **B41 Field Bridge**: N12.2 ✓ (266 LOC, 11T 4D 0ax, 0 sorry)
+- [x] **B42 Barycentric Interpolation**: N12.3 ✓ (238 LOC, 11T 2D 0ax, 0 sorry — NOVEL)
+- [x] **B43 Fold Soundness**: N12.4 ✓ (364 LOC, 21T 0D 0ax, 0 sorry)
+- [x] **B44 Merkle + Transcript**: N12.5 ✓ (258 LOC), N12.6 ✓ (279 LOC), 0 sorry, 0 axioms
+- [x] **B45 Per-Round Soundness**: N12.7 ✓ (422 LOC, 25T 2D 0ax, 0 sorry)
+- [x] **B46 Verifier Composition**: N12.8 ✓ (317 LOC, 10T 1D 0ax, 0 sorry)
+- [x] **B47 Pipeline Integration + Audit**: N12.9 ✓ (249 LOC, 8T 1D 0ax, 0 sorry)
+
+#### Execution Order
+
+```
+Branch A (Core Polynomial — critical path):
+  B40 (N12.1 FUND) → B41 (N12.2 FUND) → B42 (N12.3 CRIT) → B43 (N12.4 FUND)
+
+Branch B (Commitment + Transcript — after B40, parallel with B41-B43):
+  B44 (N12.5 + N12.6 PAR)
+
+Convergence:
+  B45 (N12.7 CRIT) ← B43, B44
+
+Composition:
+  B46 (N12.8 CRIT) ← B45
+
+Final:
+  B47 (N12.9 HOJA) ← B46
+```
+
+**Note**: Branch B can execute in parallel with Branch A blocks B41-B43, since it only depends on B40.
+
+#### Risk Assessment
+
+| Node | Risk | Mitigation |
+|------|------|------------|
+| N12.2 | MUY ALTA | L-015: ring timeout on large ZMod. Custom simp lemmas, calc steps. Fallback: engineering axiom |
+| N12.4 | ALTA | fold_degree_halving time-boxed (3 sessions). Fallback: axiomatize fold_preserves_proximity |
+| N12.7 | ALTA | Proximity gap as axiom (standard). Garreta simplified proof. card_roots_le_degree in Mathlib |
+| N12.3 | MEDIA-ALTA | Novel work, no reference formalization. Lagrange in Mathlib as sanity check |
+| N12.8 | MEDIA | Composition of proven pieces. Union bound is standard |
+| N12.1 | MEDIA | IsPrimitiveRoot API well-tested. Domain squaring straightforward |
+| N12.5 | MEDIA | Collision resistance as standard axiom. Structural proofs are clean |
+| N12.9 | MEDIA | Existing pipeline composition patterns from Fase 11 |
+| N12.6 | BAJA-MEDIA | Extends existing TranscriptState. ROM is standard |
+
+#### Estimated Metrics
+
+| Metric | Estimate |
+|--------|----------|
+| New LOC | 3,000-4,200 |
+| New files | 9 (in AmoLean/FRI/Verified/) |
+| Modified files | 0 |
+| New theorems | 97-125 |
+| Crypto axioms | 3 (standard, documented) |
+| Engineering axioms | 0-2 (with elimination plan) |
+| Target sorry | 0 |
 
 ---
 
