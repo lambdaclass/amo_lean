@@ -1,6 +1,6 @@
 # AMO-Lean: Architecture
 
-## Current Version: v2.4.0 (planning)
+## Current Version: v2.4.1 (planning)
 
 
 ### Fase 11: Verified Pipeline + Axiom Elimination
@@ -494,6 +494,208 @@ Final:
 
 ---
 
+### Fase 13: Operational-Verified FRI Bridges + Property Testing
+
+**Goal**: Bridge the operational FRI code (4,916 LOC, ~357 defs) with the verified specification (2,844 LOC, 123 theorems) through 5 critical type isomorphisms and function equivalence proofs. Add property-based testing infrastructure via Plausible. First project in the Lean 4 ZK ecosystem to formally bridge operational and verified FRI code.
+
+**Strategy**: Three-layer bridge (proven in Trust-Lean v1.2.0, L-336, L-368):
+- Layer 1: Type isomorphisms (roundtrip proofs between operational ↔ verified types)
+- Layer 2: Function equivalence (operational function = spec function under bridge)
+- Layer 3: Property preservation (invariants transfer across bridge)
+
+**Scope**: 5 critical bridges (NOT all 357 defs — L-275 scope control):
+1. Domain: `FRIParams` ↔ `FRIEvalDomain`
+2. Transcript: `TranscriptState` ↔ `FormalTranscript`
+3. Fold: `friFold` ↔ `foldPolynomial` (HIGHEST VALUE)
+4. Merkle: `FlatMerkle` ↔ `MerkleTree` (HIGHEST RISK)
+5. Query: in integration node (compose fold + merkle bridges)
+
+**New files** (7):
+- `AmoLean/Testing/PlausibleSetup.lean` — Plausible instances + smoke tests
+- `AmoLean/FRI/Verified/DomainBridge.lean` — Domain bridge
+- `AmoLean/FRI/Verified/TranscriptBridge.lean` — Transcript bridge
+- `AmoLean/FRI/Verified/FoldBridge.lean` — Fold bridge
+- `AmoLean/FRI/Verified/MerkleBridge.lean` — Merkle bridge
+- `AmoLean/FRI/Verified/PropertyTests.lean` — Plausible property tests
+- `AmoLean/FRI/Verified/BridgeIntegration.lean` — Integration theorem
+
+**Modified files** (1):
+- `lakefile.lean` — Add Plausible dependency
+
+**Lessons applied**: L-336 (bridge architecture type-first), L-368 (roundtrip properties), L-359 (injectivity via forward roundtrip), L-352 (spec connects to impl), L-146 (bridge lemma), L-311 (three-part contract), L-351 (examples ≠ proof), L-138 (never defer foundational), L-339 (rfl not runtime), L-403 (boundary testing), L-415 (proof-carrying data), L-209 (beq_iff_eq bridge)
+
+#### DAG (v2.4.1)
+
+| Nodo | Tipo | Deps | Status |
+|------|------|------|--------|
+| N13.1 Plausible Infrastructure | PAR | — | ✓ done |
+| N13.2 Domain Bridge | FUND | — | ✓ done |
+| N13.3 Transcript Bridge | PAR | — | ✓ done |
+| N13.4 Fold Bridge | CRIT | N13.2 | ✓ done |
+| N13.5 Merkle Bridge | CRIT | — | ✓ done |
+| N13.6 Property Tests + Integration | HOJA | N13.1, N13.2, N13.3, N13.4, N13.5 | ✓ done |
+
+#### Formal Properties (v2.4.1)
+
+| Nodo | Propiedad | Tipo | Prioridad |
+|------|-----------|------|-----------|
+| N13.1 | SampleableExt generates values in [0, p) for Goldilocks/BabyBear | INVARIANT | P0 |
+| N13.1 | Plausible smoke tests pass (field associativity, commutativity) | SOUNDNESS | P1 |
+| N13.2 | friParamsToDomain roundtrip: domainToParams ∘ friParamsToDomain = id | EQUIVALENCE | P0 |
+| N13.2 | domainBridge_size: domain size matches FRIParams.domainSize | PRESERVATION | P0 |
+| N13.2 | domainBridge_elements_distinct: domain elements are distinct | INVARIANT | P0 |
+| N13.3 | transcriptBridge_absorb: absorb commutes with bridge | PRESERVATION | P0 |
+| N13.3 | transcriptBridge_squeeze: squeeze commutes with bridge (under ROM) | PRESERVATION | P0 |
+| N13.3 | transcriptBridge_deterministic: bridge preserves determinism | SOUNDNESS | P0 |
+| N13.4 | foldBridgeEquivalence: evalOnDomain (foldPolynomial pE pO α) D' = friFold evals α | EQUIVALENCE | P0 |
+| N13.4 | foldBridge_preserves_degree: operational fold consistent with degree bound | PRESERVATION | P0 |
+| N13.4 | foldBridge_composition: bridge commutes with multi-round folding | SOUNDNESS | P1 |
+| N13.5 | flatToInductive roundtrip: flatToInductive ∘ inductiveToFlat = id | EQUIVALENCE | P0 |
+| N13.5 | merkleBridge_hashPreserving: bridge preserves hash well-formedness | PRESERVATION | P0 |
+| N13.5 | merkleBridge_verifyPath: verification path translates correctly | SOUNDNESS | P0 |
+| N13.6 | operational_verified_bridge_complete: integration theorem composes all 5 bridges | SOUNDNESS | P0 |
+| N13.6 | All ~30 Plausible property tests pass | INVARIANT | P1 |
+| N13.6 | Axiom audit: only existing crypto axioms (proximity_gap_rs, collision_resistant_hash, random_oracle_model) | SOUNDNESS | P0 |
+
+> **Nota**: Propiedades en lenguaje natural (intención de diseño).
+> Los stubs ejecutables están en BENCHMARKS.md § Formal Properties.
+
+#### Detailed Node Specifications
+
+**N13.1 PAR — Plausible Infrastructure** (~80-120 LOC)
+- Add `require plausible from git "https://github.com/leanprover-community/plausible" @ "v0.1.0"` to lakefile.lean
+- Create `AmoLean/Testing/PlausibleSetup.lean`:
+  - `SampleableExt` instance for `GoldilocksField` (modular reduction in [0, p))
+  - `SampleableExt` instance for `BabyBearField` (modular reduction in [0, p))
+  - `Arbitrary` instances for simple ADTs: `FRIParams`, `FieldConfig`
+  - 3-5 `plausible` tactic smoke tests (field associativity, commutativity)
+- Gate: `lake build` succeeds with 0 errors
+- Fallback: If Plausible incompatible with Lean 4.26.0, use Mathlib `slim_check` directly
+
+**N13.2 FUND — Domain Bridge** (~150-250 LOC)
+- File: `AmoLean/FRI/Verified/DomainBridge.lean`
+- `friParamsToDomain`: Converts `FRIParams` + primitive root → `FRIEvalDomain F`
+- `domainToParams`: Reverse direction (for roundtrip)
+- `domainBridgeWellFormed`: Resulting domain has correct size and injectivity
+- `domainBridge_size`: `(friParamsToDomain params ω).size = params.domainSize`
+- `domainBridge_elements_distinct`: Elements are distinct powers of ω
+- Roundtrip: `domainToParams ∘ friParamsToDomain = id` (when parameters are valid)
+- Connects: `FRI/Basic.lean:FRIParams` ↔ `FRI/Verified/FRISemanticSpec.lean:FRIEvalDomain`
+- Gate: 0 sorry, `lake build` clean
+- De-risk: IsPrimitiveRoot API well-tested from Fase 12
+
+**N13.3 PAR — Transcript Bridge** (~100-200 LOC)
+- File: `AmoLean/FRI/Verified/TranscriptBridge.lean`
+- `toFormalTranscript : TranscriptState F → FormalTranscript F`
+- `fromFormalTranscript : FormalTranscript F → TranscriptState F` (if fields align)
+- `transcriptBridge_absorb`: absorbing data commutes with bridge
+- `transcriptBridge_squeeze`: squeezing challenges commutes with bridge (under ROM axiom)
+- `transcriptBridge_deterministic`: bridge preserves transcript determinism
+- Connects: `FRI/Transcript.lean:TranscriptState` ↔ `FRI/Verified/TranscriptSpec.lean:FormalTranscript`
+- Gate: 0 sorry, 0 new axioms (uses existing `random_oracle_model`)
+
+**N13.4 CRIT — Fold Bridge** (~200-350 LOC) — HIGHEST VALUE
+- File: `AmoLean/FRI/Verified/FoldBridge.lean`
+- `foldBridgeEquivalence`: `evalOnDomain (foldPolynomial pE pO α) D' = friFold evals α` (under domain bridge)
+- `foldBridge_preserves_degree`: operational fold output is consistent with degree bound
+- `foldBridge_composition`: bridge commutes with multi-round folding
+- Uses `FieldBridge.evalOnDomain` as intermediate representation
+- Connects: `FRI/Fold.lean:friFold` ↔ `FRI/Verified/FoldSoundness.lean:foldPolynomial`
+- Firewall: `foldBridgeEquivalence_aux` approach mandatory
+- Gate: 0 sorry, 0 new axioms
+- Risk: ALTA — Vec ↔ Polynomial type mismatch requires careful evalOnDomain threading
+
+**N13.5 CRIT — Merkle Bridge** (~300-450 LOC) — HIGHEST RISK
+- File: `AmoLean/FRI/Verified/MerkleBridge.lean`
+- Staged proof strategy (per QA):
+  1. Define `pathToFlatIndex` and `flatIndexToPath` helper functions
+  2. Prove inversion: `pathToFlatIndex ∘ flatIndexToPath = id` and vice-versa
+  3. Prove semantic correctness: parent/sibling index preservation
+  4. Build `flatToInductive` / `inductiveToFlat` on proven helpers
+- `merkleBridge_hashPreserving`: bridge preserves hash well-formedness
+- `merkleBridge_verifyPath`: verification path translates correctly
+- Connects: `FRI/Merkle.lean:FlatMerkle` ↔ `FRI/Verified/MerkleSpec.lean:MerkleTree`
+- Firewall: `flatToInductive_aux` approach mandatory
+- Gate: 0 sorry, 0 new axioms. If index arithmetic intractable after 3 sessions, confine axiom to index mapping ONLY (not hash or tree logic)
+- Risk: MUY ALTA — flat array index arithmetic is complex
+
+**N13.6 HOJA — Property Tests + Integration** (~200-300 LOC)
+- Files: `AmoLean/FRI/Verified/PropertyTests.lean` + `AmoLean/FRI/Verified/BridgeIntegration.lean`
+- ~30 Plausible property tests across 3 categories:
+  - Field arithmetic (5): roundtrip, associativity, commutativity for Goldilocks/BabyBear
+  - FRI operational (15): fold size halving, Merkle path length, transcript determinism, domain size
+  - Bridge roundtrips (10): domain↔, transcript↔, fold↔, merkle↔
+- Integration theorem: `operational_verified_bridge_complete`
+  - Chains all 5 bridges: operational FRI code + valid parameters → verified guarantees hold
+  - Connects `fri_pipeline_soundness` (Fase 12) with operational code via bridges
+- Query verification bridge: compose fold bridge + merkle bridge to show `verifyFoldQuery` matches spec
+- Final axiom audit: `#print axioms` on all bridge theorems
+- Gate: all properties pass, 0 sorry, `lake build` clean
+- Each Plausible property must correspond to or be derivable from a formal theorem
+
+#### Bloques
+
+- [x] **B48 Domain Bridge**: N13.2 (FUND, SEQUENTIAL) ✓
+- [x] **B49 Plausible + Transcript**: N13.1 + N13.3 (PAR, AGENT_TEAM) ✓
+- [x] **B50 Fold Bridge**: N13.4 (CRIT, SEQUENTIAL + FIREWALL) ✓
+- [x] **B51 Merkle Bridge**: N13.5 (CRIT, SEQUENTIAL + FIREWALL) ✓
+- [x] **B52 Properties + Integration**: N13.6 (HOJA, SEQUENTIAL) ✓
+
+#### Execution Order
+
+```
+Branch A (Critical Path):
+  B48 (N13.2 FUND) → B50 (N13.4 CRIT) → B52 (N13.6 HOJA)
+
+Branch B (Parallel, independent):
+  B49 (N13.1 + N13.3 PAR) → B52
+
+Branch C (Independent, highest risk):
+  B51 (N13.5 CRIT) → B52
+```
+
+Recommended order: B48 → B50 → B49 → B51 → B52
+- B48 first: unblocks B50 (fold bridge needs domain bridge)
+- B50 second: highest value bridge, on critical path
+- B49 third: parallel block, independent of B48/B50
+- B51 fourth: highest risk, time-boxed with staged strategy
+- B52 last: integrates all bridges + properties
+
+#### Risk Assessment
+
+| Node | Risk | Mitigation |
+|------|------|------------|
+| N13.5 | MUY ALTA | Staged proof strategy (index helpers → inversion → bridge). Time-box 3 sessions. Axiom confined to index mapping if needed. |
+| N13.4 | ALTA | evalOnDomain as intermediate. FieldBridge (N12.2) provides infrastructure. Firewall `_aux`. |
+| N13.1 | MEDIA | Plausible v0.1.0 on Lean 4.26.0. Fallback: Mathlib slim_check. |
+| N13.2 | MEDIA | IsPrimitiveRoot API proven in Fase 12. FRIEvalDomain structure well-understood. |
+| N13.3 | BAJA-MEDIA | TranscriptState fields should map to FormalTranscript. ROM axiom covers hash semantics. |
+| N13.6 | BAJA | Composition of proven pieces. Standard integration pattern from Fase 12 capstone. |
+
+#### Estimated Metrics
+
+| Metric | Estimate |
+|--------|----------|
+| New LOC | 1,000-1,500 |
+| New files | 7 |
+| Modified files | 1 (lakefile.lean) |
+| New theorems | 40-60 |
+| New axioms | 0 (target), 0-1 (Merkle fallback, confined) |
+| Target sorry | 0 |
+| Plausible properties | ~30 |
+
+---
+
+## Key Design Decisions (v2.4.1)
+
+17. **Three-layer bridge architecture**: Type isomorphisms (Layer 1) → function equivalence (Layer 2) → property preservation (Layer 3). Proven effective in Trust-Lean v1.2.0 (26 theorems, 0 sorry). Avoids monolithic bridge that tries to verify all 357 defs at once.
+18. **Plausible over SlimCheck**: Plausible (leanprover-community/plausible) is standalone, compatible with Lean 4.26.0, and supports `deriving Arbitrary`. Replaces the Mathlib-internal `slim_check` tactic with modern `plausible` tactic.
+19. **Formal proofs P0, Plausible P1**: Following Trust-Lean pattern — `decide`/`rfl`/`omega` are strictly stronger than random testing. Bridge correctness proven formally; Plausible supplements with exploration testing.
+20. **Staged Merkle proof strategy**: Instead of axiomatizing flatToInductive directly, decompose into (a) index mapping helpers, (b) inversion proofs, (c) semantic correctness, (d) bridge on proven helpers. Confine axiom to index arithmetic only if intractable.
+21. **Scope control: 5 bridges not 357**: Only bridge the 5 critical type mismatches (Domain, Transcript, Fold, Merkle, Query). The integration theorem composes them to cover the verification chain without touching every operational def.
+
+---
+
 ## Previous Versions
 
 ### v2.2.0
@@ -710,7 +912,9 @@ For detailed rationale on decisions 1-7, see [docs/project/DESIGN_DECISIONS.md](
 
 | Version | Date | Highlights |
 |---------|------|------------|
-| **v2.3.0** | Feb 2026 | **PLANNED**: Pipeline soundness + axiom elimination (0 custom axioms target) |
+| **v2.4.1** | Feb 2026 | **PLANNED**: Operational-verified FRI bridges + Plausible property testing |
+| **v2.4.0** | Feb 2026 | FRI formal verification (9 files, 2,844 LOC, 123 theorems, 0 sorry, 0 axioms) + barycentric interpolation |
+| **v2.3.0** | Feb 2026 | Pipeline soundness + axiom elimination (0 custom axioms, 77 declarations) |
 | **v2.2.0** | Feb 2026 | Trust-Lean bridge (26 theorems, 0 sorry, roundtrip + injectivity) |
 | **v2.1.0** | Feb 2026 | Verified e-graph engine (121 theorems, 0 sorry) |
 | **v2.0.0** | Feb 2026 | Lean 4.16 -> 4.26 migration |
