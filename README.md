@@ -74,12 +74,15 @@ This architecture is **portable and modular**: adding a new primitive means writ
 
 ## Features
 
+- **Verified Pipeline Soundness** — End-to-end `full_pipeline_soundness` theorem: saturation + extraction preserves semantics, **0 custom axioms**
+- **Translation Validation** — Level 2 soundness via `cryptoEquivalent` relation with congruence closure
 - **NTT** (Number Theoretic Transform) — Verified, optimized, Plonky3-compatible
-- **Radix-4 NTT** — Verified 4-point butterfly with formal proofs
+- **Radix-4 NTT** — 4-point butterfly (8 axioms pending formal implementation)
 - **Goldilocks Field** — Scalar + AVX2 arithmetic (p = 2^64 - 2^32 + 1), **0 axioms**
 - **BabyBear Field** — Scalar arithmetic (p = 2^31 - 2^27 + 1), **0 axioms**
 - **FRI Protocol** — Folding, Merkle commitments, Fiat-Shamir
 - **E-Graph Optimization** — Verified engine (121 theorems, 0 sorry) + 19/20 rewrite rules
+- **Perm Algebra** — Tensor, stride, compose, inverse with **0 axioms** (equation compiler fix)
 - **Algebraic Semantics** — C-Lite++ lowering with verified scatter/gather (19/19 cases)
 - **Poseidon2 Hash** — BN254 t=3 with HorizenLabs-compatible test vectors
 - **Trust-Lean Bridge** — Verified type conversion with roundtrip proofs + injectivity (26 theorems, 0 sorry)
@@ -193,20 +196,27 @@ AMO-Lean NTT achieves **~60% of Plonky3 throughput** (1.65x slower on average) w
 
 See [BENCHMARKS.md](docs/BENCHMARKS.md) for full NTT benchmark tables, test suite results, and verification criteria.
 
-## What's New in v2.2.0
+## What's New in v2.3.0
 
-### Changes Since v2.1.0
+### Changes Since v2.2.0
 
-| Metric | v2.1.0 | v2.2.0 | Change |
+| Metric | v2.2.0 | v2.3.0 | Change |
 |--------|--------|--------|--------|
-| **Lines of Code** | ~41,000 | **~41,700** | +743 LOC (bridge + tests) |
-| **Bridge theorems** | 0 | **26** | +26 (zero sorry) |
-| **Total verified theorems** | 121 | **147** | +26 |
-| **Axioms** | 9 | **9** | Same |
-| **Active sorry** | 12 | **12** | Same |
+| **Lines of Code** | ~41,700 | **~43,100** | +1,400 LOC (pipeline + TV + tests) |
+| **Pipeline theorems** | 0 | **77** | +77 (verified pipeline, 0 sorry) |
+| **Total verified theorems** | 147 | **778** | +631 |
+| **Axioms** | 9 | **8** | -1 (Perm axiom eliminated) |
+| **Active sorry** | 12 | **12** | Same (Poseidon only) |
 | Lean Modules | 3,134 | **3,134** | Same |
 
-### Key Achievements (v2.1.0 -> v2.2.0)
+### Key Achievements (v2.2.0 -> v2.3.0)
+
+1. **Verified pipeline soundness** (Fase 11, Subfase 1) — `full_pipeline_soundness` and `full_pipeline_contract` proven end-to-end: saturation preserves `ConsistentValuation`, extraction is correct, 0 sorry, 0 custom axioms. 5 new files, 1,991 LOC, 77 declarations.
+2. **Translation validation framework** (N11.11) — Level 2 soundness via `cryptoEquivalent` relation (refl/symm/trans + congruence for add/mul/neg/smul). 229 LOC, 11 theorems, 0 axioms.
+3. **Perm axiom eliminated** (Corrección 1) — `applyIndex_tensor_eq` is now a theorem, not an axiom. Root cause: nested `inverse` sub-patterns blocked equation compiler splitter. Fix: `applyInverse` helper extraction (~20 LOC change).
+4. **Zero-axiom audit** (N11.12) — All 9 key pipeline theorems audited via `#print axioms` = 0 custom axioms. Integration test: 13 examples, 25 `#check`, 190 LOC.
+
+### Previous: v2.2.0 — Trust-Lean Bridge
 
 1. **Trust-Lean integration** — Trust-Lean v1.2.0 added as lake dependency for verified C code generation
 2. **Bridge module** (`AmoLean.Bridge.TrustLean`, 544 LOC) — 21 conversion definitions, 26 theorems (roundtrip + injectivity, zero sorry)
@@ -229,18 +239,20 @@ v1.1.0 (Feb 12)    9 axioms    12 sorry    Goldilocks/BabyBear 0 axioms, Kron 0 
 v2.0.0 (Feb 17)    9 axioms    12 sorry    Lean 4.16 → 4.26 migration complete
 v2.1.0 (Feb 17)    9 axioms    12 sorry    Verified e-graph engine (121 theorems, 0 sorry)
 v2.2.0 (Feb 21)    9 axioms    12 sorry    Trust-Lean bridge (26 theorems, 0 sorry)
+v2.3.0 (Feb 27)    8 axioms    12 sorry    Pipeline soundness + Perm axiom eliminated
 ```
 
 ## Future Work
 
 | Task | Relevance | Difficulty | Status |
 |------|-----------|------------|--------|
+| **NTT Radix-4 axiom elimination** (8 axioms) | High — last remaining axioms | High — requires function implementations | Pending (N11.6-N11.9) |
 | **Poseidon formal proofs** (12 sorry) | Medium — currently validated computationally | Medium — Lean match splitter limitation | Tests pass; formal proofs deferred |
 | **Mersenne31 field** | High — enables SP1 verification | Medium — architecture supports it | Designed |
-| **NTT Radix-4 axiom elimination** (8 axioms) | Medium — Radix-2 already proven | High — requires function implementations | Segmented |
-| **Perm axiom** (1) | Low — match splitter limitation | Very High — Lean compiler limitation | Documented |
+| **SlimCheck property testing** | Medium — 0 property tests in 43K LOC | Low — infrastructure exists in Mathlib | Not started |
+| ~~**Perm axiom** (1)~~ | ~~Low~~ | ~~Very High~~ | **RESOLVED** (Corrección 1) |
 
-The 12 remaining sorry are isolated to Poseidon2 (Lean match splitter limitation), backed by 21 test vectors. The 9 remaining axioms are in Radix-4 NTT (8, opaque interface) and Matrix/Perm (1, compiler limitation). None affect the Radix-2 NTT pipeline, which is fully verified end-to-end.
+The 12 remaining sorry are isolated to Poseidon2 (Lean match splitter limitation), backed by 21 test vectors. The 8 remaining axioms are all in Radix-4 NTT (opaque interface, pending B35-B37). The entire e-graph pipeline, Perm algebra, and translation validation are **fully axiom-free**.
 
 ## References
 
@@ -257,4 +269,4 @@ MIT License — see [LICENSE](LICENSE) for details.
 
 ---
 
-**AMO-Lean v2.2.0** — Formal verification meets practical performance.
+**AMO-Lean v2.3.0** — Verified pipeline soundness, zero custom axioms in the optimization engine.
