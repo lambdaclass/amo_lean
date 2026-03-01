@@ -1,6 +1,6 @@
 # AMO-Lean: Architecture
 
-## Current Version: v2.4.1 (planning)
+## Current Version: v2.4.2 (planning)
 
 
 ### Fase 11: Verified Pipeline + Axiom Elimination
@@ -684,9 +684,96 @@ Recommended order: B48 → B50 → B49 → B51 → B52
 | Target sorry | 0 |
 | Plausible properties | ~30 |
 
+### Fase 14: Bridge Correctness — Expr Int ↔ CircuitNodeOp Soundness (v2.4.2)
+
+**Goal**: Formalize that the translation from `Expr Int` patterns to `CircuitNodeOp` `RewriteRule`s (via `Bridge.mkRule`) preserves semantics. Create `SoundRewriteRule` instances for the 10 bridgeable rules (excluding 4 power rules — `CircuitNodeOp` has no `powGate`). Connect the 20 algebraic theorems in `VerifiedRules.lean` to the verified e-graph engine's `SoundRewriteRule` framework.
+
+**Strategy**: 4-level bridge (from insights investigation):
+1. **Level 0** (EXISTS): 20 algebraic theorems in `VerifiedRules.lean` (all proven, 0 sorry)
+2. **Level 1** (NEW): `exprCircuitEval` — bridge evaluator mapping `VerifiedRules.eval` to `CircuitEnv`-based evaluation
+3. **Level 2** (NEW): 10 `SoundRewriteRule (Expr Int) Int` instances with 1-line soundness proofs
+4. **Level 3** (NEW): Master theorem connecting all sound rules to the pipeline's `PreservesCV` framework
+
+**Scope**: 10 of 20 rules bridgeable (the 10 in `Rules.lean`). 4 power rules excluded by design (`CircuitNodeOp` has no `powGate` — circuits use repeated multiplication). 6 structural rules (assoc/comm/const-fold) excluded by design (not in `Rules.lean`).
+
+#### DAG
+
+```
+N14.1 (FUND) ─→ N14.2 (CRIT) ─→ N14.3 (HOJA)
+```
+
+**N14.1 FUNDACIONAL — ExprCircuitEval Bridge Evaluator** (~60 LOC)
+- `exprCircuitEval : Expr Int → CircuitEnv Int → Int` = `VerifiedRules.eval (fun v => env.witnessVal v) e`
+- Unfolding lemmas: `exprCircuitEval_const`, `exprCircuitEval_var`, `exprCircuitEval_add`, `exprCircuitEval_mul`
+- Key insight: `witnessVal` maps variable indices to field values, bridging `VarId → Int` and `CircuitEnv Int`
+- File: `AmoLean/EGraph/Verified/BridgeCorrectness.lean`
+
+**N14.2 CRÍTICO — SoundRewriteRule Instances** (~120 LOC)
+- 10 instances: `addZeroRight_sound`, `addZeroLeft_sound`, `mulOneRight_sound`, `mulOneLeft_sound`, `mulZeroRight_sound`, `mulZeroLeft_sound`, `distribLeft_sound`, `distribRight_sound`, `factorRight_sound`, `factorLeft_sound`
+- Each soundness proof is a 1-line application of existing `*_correct` theorem from `VerifiedRules.lean`
+- Pattern: `fun env vars => theorem_correct (fun v => env.witnessVal v) (vars 0) ...`
+- Reuses `exprCircuitEval` as the `eval` field and `mkRule` patterns as the `rule` field
+
+**N14.3 HOJA — Pipeline Integration + Master Theorem** (~70 LOC)
+- `allSoundRules : List (SoundRewriteRule (Expr Int) Int)` — collection of all 10 sound rules
+- `allSoundRules_sound`: every rule in the collection satisfies `soundness`
+- 10 individual `*_rule_eq` theorems: each `sound.rule = Rules.namedRule` (7 by `rfl`, 3 by `unfold+rfl`)
+- `bridge_complete`: `Rules.allRules.length = allSoundRules.length := rfl`
+- Axiom census: 0 custom axioms in entire module
+- Note: single `bridge_rules_match` theorem replaced by decomposed individual proofs (simpler, kernel reduction limits on complex patterns)
+
+#### Formal Properties (v2.4.2)
+
+| Nodo | Propiedad | Tipo | Prioridad |
+|------|-----------|------|-----------|
+| N14.1 | exprCircuitEval preserves evaluation: `exprCircuitEval e env = VerifiedRules.eval (fun v => env.witnessVal v) e` | EQUIVALENCE | P0 |
+| N14.1 | Unfolding for add: `exprCircuitEval (.add a b) env = exprCircuitEval a env + exprCircuitEval b env` | PRESERVATION | P0 |
+| N14.2 | Each SoundRewriteRule has eval = exprCircuitEval | INVARIANT | P0 |
+| N14.2 | Each soundness proof follows from *_correct theorem | SOUNDNESS | P0 |
+| N14.3 | allSoundRules.length = 10 | INVARIANT | P1 |
+| N14.3 | allSoundRules rules = Rules.allRules | EQUIVALENCE | P0 |
+| N14.3 | Zero custom axioms in BridgeCorrectness.lean | SOUNDNESS | P0 |
+
+#### Bloques
+
+- [x] **B53 ExprCircuitEval**: N14.1 (SECUENCIAL, FUNDACIONAL) ✓
+- [x] **B54 SoundRewriteRule Instances**: N14.2 (SECUENCIAL, CRÍTICO) ✓
+- [x] **B55 Integration + Master**: N14.3 (SECUENCIAL, HOJA) ✓
+
+#### Execution Order
+
+```
+B53 (N14.1 FUND) → B54 (N14.2 CRIT) → B55 (N14.3 HOJA)
+```
+
+All sequential: N14.2 depends on `exprCircuitEval`, N14.3 depends on all instances.
+
+#### Risk Assessment
+
+| Node | Risk | Mitigation |
+|------|------|------------|
+| N14.1 | BAJA | Thin wrapper over existing `VerifiedRules.eval`. Definitional equality. |
+| N14.2 | MEDIA | Each proof is 1 line, but 10 instances need consistent pattern. Template from SuperTensor `TranslationValidation.lean`. |
+| N14.3 | BAJA | Composition of proven pieces. Standard collection + list operations. |
+
+#### Estimated Metrics
+
+| Metric | Estimate |
+|--------|----------|
+| New LOC | 200-300 |
+| New files | 1 |
+| Modified files | 0 |
+| New theorems | ~25 |
+| New axioms | 0 |
+| Target sorry | 0 |
+
 ---
 
-## Key Design Decisions (v2.4.1)
+## Key Design Decisions (v2.4.2)
+
+22. **Witness-variable bridge**: `exprCircuitEval` maps `Expr Int` evaluation to `CircuitEnv` by routing variable lookups through `witnessVal`. This is sound because in the e-graph engine, pattern variables bind to witness nodes (user-supplied values), not constants or public inputs.
+23. **1-line soundness proofs**: Each `SoundRewriteRule` soundness proof is a single application of the existing `*_correct` theorem composed with the witness-variable bridge. This is possible because `exprCircuitEval` is definitionally equal to `VerifiedRules.eval` with the appropriate environment substitution.
+24. **10 of 20 rules bridgeable**: Power rules (4) excluded because `CircuitNodeOp` has no `powGate`; structural rules (assoc/comm, 4) and constant folding (2) excluded because they are not wired in `Rules.lean`. This is by design, not a gap.
 
 17. **Three-layer bridge architecture**: Type isomorphisms (Layer 1) → function equivalence (Layer 2) → property preservation (Layer 3). Proven effective in Trust-Lean v1.2.0 (26 theorems, 0 sorry). Avoids monolithic bridge that tries to verify all 357 defs at once.
 18. **Plausible over SlimCheck**: Plausible (leanprover-community/plausible) is standalone, compatible with Lean 4.26.0, and supports `deriving Arbitrary`. Replaces the Mathlib-internal `slim_check` tactic with modern `plausible` tactic.
@@ -896,7 +983,7 @@ For detailed rationale on decisions 1-7, see [docs/project/DESIGN_DECISIONS.md](
 | NTT Radix-4 | Interface | 0 | 8 | Opaque functions + properties |
 | FRI (Folding + Merkle) | **100%** | 0 | 0 | Fully proven |
 | Matrix/Perm | **100%** | 0 | 1 | Match splitter limitation |
-| E-Graph Rewrite Rules | **95%** | 0 | 0 | 19/20 rules verified |
+| E-Graph Rewrite Rules | **100%** | 0 | 0 | 20/20 rules verified, 10 SoundRewriteRule instances |
 | **E-Graph Verified Engine** | **100%** | **0** | **0** | **121 theorems, 4,594 LOC** |
 | **Trust-Lean Bridge** | **100%** | **0** | **0** | **26 theorems, 544 LOC, roundtrip + injectivity** |
 | Goldilocks Field | **100%** | 0 | 0 | All 5 axioms eliminated |
@@ -912,7 +999,8 @@ For detailed rationale on decisions 1-7, see [docs/project/DESIGN_DECISIONS.md](
 
 | Version | Date | Highlights |
 |---------|------|------------|
-| **v2.4.1** | Feb 2026 | **PLANNED**: Operational-verified FRI bridges + Plausible property testing |
+| **v2.4.2** | Feb 2026 | Bridge Correctness — 10 SoundRewriteRule instances, 0 sorry, 0 axioms |
+| **v2.4.1** | Feb 2026 | Operational-verified FRI bridges + Plausible property testing |
 | **v2.4.0** | Feb 2026 | FRI formal verification (9 files, 2,844 LOC, 123 theorems, 0 sorry, 0 axioms) + barycentric interpolation |
 | **v2.3.0** | Feb 2026 | Pipeline soundness + axiom elimination (0 custom axioms, 77 declarations) |
 | **v2.2.0** | Feb 2026 | Trust-Lean bridge (26 theorems, 0 sorry, roundtrip + injectivity) |

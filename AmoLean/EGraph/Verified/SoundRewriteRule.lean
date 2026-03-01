@@ -12,6 +12,7 @@
   - `sound_rule_preserves_consistency`: merging after a sound rule preserves CV
 -/
 import AmoLean.EGraph.Verified.SemanticSpec
+import AmoLean.EGraph.Verified.EMatch
 
 namespace AmoLean.EGraph.Verified
 

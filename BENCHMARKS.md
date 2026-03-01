@@ -1,4 +1,4 @@
-# AMO-Lean Benchmarks (v2.4.1)
+# AMO-Lean Benchmarks (v2.4.2)
 
 ## Criteria
 
@@ -39,6 +39,71 @@ This section is written ONCE and not modified during execution.
 - Elaboration time <10s per theorem
 - Doc comments on all public defs/theorems
 - Consistent naming with OptiSat/SuperTensor conventions
+
+## Verification Criteria by Node (v2.4.2 — Fase 14)
+
+### Mechanical Health (Fase 14 — Bridge Correctness)
+<!-- CHECK:f14_zero_sorry --> Zero sorry/admit in BridgeCorrectness.lean
+<!-- CHECK:f14_zero_axiom --> #print axioms shows ONLY standard Lean/Mathlib axioms. Zero custom axioms.
+<!-- CHECK:f14_build --> `lake build AmoLean.EGraph.Verified.BridgeCorrectness` succeeds with 0 errors
+<!-- CHECK:f14_no_simp_star --> No `simp [*]` in Fase 14 code
+<!-- CHECK:f14_no_native --> No `native_decide` in Fase 14 code
+<!-- CHECK:f14_scoped_simp --> All `simp` calls are `simp only [...]` in FUND/CRIT nodes
+
+### Correctness (Fase 14)
+<!-- CHECK:f14_eval_bridge --> `exprCircuitEval` defined as wrapper over `VerifiedRules.eval` with `witnessVal` routing
+<!-- CHECK:f14_10_instances --> Exactly 10 `SoundRewriteRule (Expr Int) Int` instances created
+<!-- CHECK:f14_soundness_proofs --> All 10 soundness proofs use existing `*_correct` theorems (no new axioms)
+<!-- CHECK:f14_rules_match --> `allSoundRules.map (·.rule) = Rules.allRules` proven
+<!-- CHECK:f14_master_theorem --> `allSoundRules_sound` theorem proven (all rules satisfy soundness)
+
+### Quality (Fase 14)
+<!-- CHECK:f14_doc_comments --> Doc comments on all public defs/theorems
+<!-- CHECK:f14_consistent_naming --> Naming follows `{ruleName}_sound` convention
+<!-- CHECK:f14_loc_budget --> Total LOC < 300
+
+## Results (v2.4.2 — Fase 14)
+
+### B53 (N14.1 ExprCircuitEval) — PASS
+- `exprCircuitEval` defined: `VerifiedRules.eval (fun v => env.witnessVal v) e`
+- 4 `@[simp]` unfolding lemmas: const, var, add, mul (all `rfl`)
+- 0 sorry, 0 axioms
+
+### B54 (N14.2 SoundRewriteRule Instances) — PASS
+- 10 `SoundRewriteRule (Expr Int) Int` instances created
+- 6 identity (addZeroRight/Left, mulOneRight/Left, mulZeroRight/Left)
+- 2 factorization (factorLeft, factorRight)
+- 2 distributivity (distribLeft, distribRight)
+- All soundness proofs are 1-line applications of existing *_correct theorems
+- 0 sorry, 0 axioms
+
+### B55 (N14.3 Integration + Master) — PASS
+- `allSoundRules`: collection of 10 rules
+- `allSoundRules_length = 10` by `rfl`
+- `allSoundRules_sound`: master soundness theorem (∀ r ∈ allSoundRules, lhs.eval = rhs.eval)
+- 10 individual `rule_eq` theorems (7 by `rfl`, 3 by `unfold+rfl`)
+- `bridge_complete`: `Rules.allRules.length = allSoundRules.length` by `rfl`
+- 0 sorry, 0 axioms
+
+### Fase 14 Summary
+| Metric | Result |
+|--------|--------|
+| LOC | 236 (new) + 1 line (modified import in SoundRewriteRule.lean) |
+| New file | 1 (BridgeCorrectness.lean) |
+| Modified file | 1 (SoundRewriteRule.lean — added EMatch import) |
+| Theorems/proofs | 25 |
+| Definitions | 12 (1 evaluator + 10 instances + 1 collection) |
+| Sorry | 0 |
+| Custom axioms | 0 |
+| lake build | 3134 jobs, 0 errors |
+| QA verdict | PASS (all 3 nodes) |
+
+### QA Findings (advisory)
+1. `bridge_rules_match` (single list-equality theorem) replaced by 10 individual `rule_eq` theorems — equivalent coverage, simpler proofs
+2. `_hr` in `allSoundRules_sound` is unused — conventional but noted
+3. 3/10 `rule_eq` proofs need `unfold+rfl` (kernel reduction depth for complex patterns)
+
+---
 
 ## Verification Criteria by Node (v2.4.1 — Fase 13)
 
