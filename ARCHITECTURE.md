@@ -1,6 +1,6 @@
 # AMO-Lean: Architecture
 
-## Current Version: v2.4.2 (planning)
+## Current Version: v2.5.0 (planning)
 
 
 ### Fase 11: Verified Pipeline + Axiom Elimination
@@ -767,7 +767,138 @@ All sequential: N14.2 depends on `exprCircuitEval`, N14.3 depends on all instanc
 | New axioms | 0 |
 | Target sorry | 0 |
 
+### Fase 15: VerifiedExtraction Integration — Generic Greedy Extraction (v2.5.0)
+
+**Goal**: Integrate VerifiedExtraction's generic greedy extraction framework into AMO-Lean. Replace the circuit-specific extraction typeclasses with a parametric framework where `CircuitNodeOp` is an adaptor instance. This gives: (1) generic `extractF_correct` theorem for free, (2) typeclass-based API for future Op types, (3) pathway to ILP/Treewidth DP extraction in future versions.
+
+**Source**: `~/Documents/claudio/VerifiedExtraction/` — 11 files, ~2,756 LOC, 0 sorry, 0 axioms. Core framework: `Core.lean` (352 LOC, NodeOps/NodeSemantics/EGraph/ConsistentValuation) + `Greedy.lean` (213 LOC, Extractable/EvalExpr/ExtractableSound/extractF/extractF_correct).
+
+**Strategy** (5 levels from user spec):
+1. **Copy foundation**: Core.lean + Greedy.lean as `AmoLean/EGraph/VerifiedExtraction/{Core,Greedy}.lean`
+2. **NodeOps instance**: `children`, `mapChildren`, `replaceChildren` (NEW), `localCost` + 4 laws for `CircuitNodeOp`
+3. **NodeSemantics instance**: Reuse existing `evalOp` from `SemanticSpec.lean`
+4. **CircuitExpr + Extractable + EvalExpr**: Expression type matching all 7 `CircuitNodeOp` constructors
+5. **ExtractableSound proof**: 7-case proof following `arith_extractable_sound` pattern from `Integration.lean`
+
+**Adaptor template**: `VerifiedExtraction/Integration.lean` — `ArithOp` adaptor (3 constructors, ~150 LOC). `CircuitNodeOp` has 7 constructors, so ~2.3x the proof surface.
+
+**Key insight**: AMO-Lean's `ENode.children`, `ENode.mapChildren`, `ENode.localCost` already implement the operations — just need to unwrap from `ENode` to `CircuitNodeOp`. Only `replaceChildren` is truly new.
+
+#### DAG
+
+```
+N15.1 (FUND) → N15.2 (CRIT) → N15.3 (CRIT) → N15.4 (HOJA)
+```
+
+**N15.1 FUNDACIONAL — Library Foundation** (~550 LOC, 2 new files)
+- Copy + namespace-adapt VerifiedExtraction `Core.lean` → `AmoLean/EGraph/VerifiedExtraction/Core.lean`
+- Copy + namespace-adapt VerifiedExtraction `Greedy.lean` → `AmoLean/EGraph/VerifiedExtraction/Greedy.lean`
+- Namespace: `VerifiedExtraction` → `AmoLean.EGraph.VerifiedExtraction`
+- Import adjustments: `VerifiedExtraction.Core` → `AmoLean.EGraph.VerifiedExtraction.Core`
+- Generic framework: `NodeOps`, `NodeSemantics`, `EGraph Op`, `ConsistentValuation`, `BestNodeInv`, `Extractable`, `EvalExpr`, `ExtractableSound`, `extractF`, `extractF_correct`
+- Must compile: `lake build AmoLean.EGraph.VerifiedExtraction.Greedy`
+
+**N15.2 CRÍTICO — NodeOps + NodeSemantics for CircuitNodeOp** (~250 LOC)
+- Define `circuitReplaceChildren : CircuitNodeOp → List EClassId → CircuitNodeOp` (7-case match)
+- Instance `NodeOps CircuitNodeOp` with:
+  - `children` (from existing `ENode.children` unwrapped)
+  - `mapChildren` (from existing `ENode.mapChildren` unwrapped)
+  - `replaceChildren` = `circuitReplaceChildren`
+  - `localCost` (from existing `ENode.localCost` unwrapped)
+  - 4 laws: `mapChildren_children` (7 cases by `cases op <;> simp`), `mapChildren_id` (7 cases), `replaceChildren_children` (7 cases, needs `list_length_N` helpers), `replaceChildren_sameShape` (7 cases)
+- Instance `NodeSemantics CircuitNodeOp (CircuitEnv Val) Val` with:
+  - `evalOp` = existing `SemanticSpec.evalOp`
+  - `evalOp_ext` = adapt from existing `evalOp_ext` (change from `ENode` to `CircuitNodeOp`)
+- Helper lemmas: `list_length_one`, `list_length_two`
+- File: `AmoLean/EGraph/VerifiedExtraction/CircuitAdaptor.lean`
+
+**N15.3 CRÍTICO — CircuitExpr + Extractable + ExtractableSound** (~250 LOC)
+- Define `CircuitExpr` inductive:
+  - `const (n : Nat)` | `witness (n : Nat)` | `pubInput (n : Nat)` | `add (a b : CircuitExpr)` | `mul (a b : CircuitExpr)` | `neg (a : CircuitExpr)` | `smul (c : Nat) (a : CircuitExpr)`
+- Define `CircuitExpr.eval : CircuitExpr → CircuitEnv Val → Val`
+- Instance `Extractable CircuitNodeOp CircuitExpr` (7-case `reconstruct`)
+- Instance `EvalExpr CircuitExpr (CircuitEnv Val) Val`
+- Prove `circuit_extractable_sound : ExtractableSound CircuitNodeOp CircuitExpr (CircuitEnv Val) Val`
+  - 7 cases following `arith_extractable_sound` pattern:
+    - `constGate`: 0 children, reconstruct to `CircuitExpr.const`, eval = `env.constVal`
+    - `witness`: 0 children, reconstruct to `CircuitExpr.witness`, eval = `env.witnessVal`
+    - `pubInput`: 0 children, reconstruct to `CircuitExpr.pubInput`, eval = `env.pubInputVal`
+    - `addGate`: 2 children, `list_length_two`, eval = `v a + v b`
+    - `mulGate`: 2 children, `list_length_two`, eval = `v a * v b`
+    - `negGate`: 1 child, `list_length_one`, eval = `-(v a)`
+    - `smulGate`: 1 child, `list_length_one`, eval = `env.constVal c * v a`
+- File: `AmoLean/EGraph/VerifiedExtraction/CircuitAdaptor.lean` (same file as N15.2)
+
+**N15.4 HOJA — Integration + End-to-End** (~200 LOC)
+- Instantiate `extractF_correct` for `CircuitNodeOp` / `CircuitExpr` / `CircuitEnv Val` / `Val`
+- Structured test suite:
+  1. **Unit**: smoke test per constructor (empty graph, single-node per op type)
+  2. **Edge cases**: `smulGate` with scalar 0/1, `addGate` with `constGate 0`, `negGate` chain
+  3. **DAG sharing**: 2 nodes sharing a child → extraction handles deduplication
+  4. **Evaluation equivalence**: `CircuitExpr.eval` matches `evalOp` for constructed examples
+- `#print axioms` audit on `circuit_extractable_sound` and `extractF_correct` instantiation
+- Namespace safety: verify `open AmoLean.EGraph.VerifiedExtraction` and `open AmoLean.EGraph.Verified` coexist without collision
+- File: `AmoLean/EGraph/VerifiedExtraction/Integration.lean`
+
+#### Formal Properties (v2.5.0)
+
+| Nodo | Propiedad | Tipo | Prioridad |
+|------|-----------|------|-----------|
+| N15.1 | Core.lean + Greedy.lean compile with 0 errors, 0 sorry | INVARIANT | P0 |
+| N15.1 | extractF_correct theorem available for any Op satisfying typeclasses | SOUNDNESS | P0 |
+| N15.2 | NodeOps CircuitNodeOp satisfies all 4 laws | SOUNDNESS | P0 |
+| N15.2 | NodeSemantics.evalOp = existing SemanticSpec.evalOp | EQUIVALENCE | P0 |
+| N15.2 | evalOp_ext proven for CircuitNodeOp (7 constructors) | PRESERVATION | P0 |
+| N15.3 | CircuitExpr.eval covers all 7 constructors | COMPLETENESS | P0 |
+| N15.3 | ExtractableSound for CircuitNodeOp proven (7 cases, 0 sorry) | SOUNDNESS | P0 |
+| N15.4 | extractF_correct instantiates for CircuitNodeOp with 0 axioms | SOUNDNESS | P0 |
+| N15.4 | Generic extraction compatible with existing pipeline | EQUIVALENCE | P1 |
+
+#### Bloques
+
+- [x] **B56 Library Foundation**: N15.1 (SECUENCIAL, FUNDACIONAL) ✓
+- [x] **B57 NodeOps + NodeSemantics**: N15.2 (SECUENCIAL, CRÍTICO) ✓
+- [x] **B58 CircuitExpr + ExtractableSound**: N15.3 (SECUENCIAL, CRÍTICO) ✓
+- [x] **B59 Integration**: N15.4 (SECUENCIAL, HOJA) ✓
+
+#### Execution Order
+
+```
+B56 (N15.1 FUND) → B57 (N15.2 CRIT) → B58 (N15.3 CRIT) → B59 (N15.4 HOJA)
+```
+
+All sequential: each block depends on the previous.
+
+#### Risk Assessment
+
+| Node | Risk | Mitigation |
+|------|------|------------|
+| N15.1 | BAJA | Mechanical copy + namespace rename. Source compiles in VerifiedExtraction. |
+| N15.2 | MEDIA | 7 constructors × 4 laws = 28 proof obligations. Follow ArithOp pattern. Use `cases op <;> simp` cascade. |
+| N15.3 | MEDIA | `smulGate` mixes scalar constant + child value (unique among constructors). Test this case first. |
+| N15.4 | BAJA | Composition of proven pieces. Standard instantiation. |
+
+#### Actual Metrics
+
+| Metric | Result |
+|--------|--------|
+| New LOC | 914 |
+| New files | 4 |
+| Modified files | 0 |
+| Theorems | 17 |
+| Definitions | 33 |
+| Instances | 6 |
+| Axioms | 0 |
+| Sorry | 0 |
+| Warnings (new files) | 0 |
+
 ---
+
+## Key Design Decisions (v2.5.0)
+
+25. **Generic + Adaptor pattern**: Instead of replacing AMO-Lean's existing circuit-specific extraction (ExtractSpec.lean), add the generic VerifiedExtraction framework alongside it. The `CircuitAdaptor` instantiates the generic typeclasses for `CircuitNodeOp`, getting `extractF_correct` for free. Existing code untouched — zero regression risk.
+26. **Copy, don't import**: Following project convention (L-134), VerifiedExtraction files are copied and adapted, not added as a `require` dependency. This keeps AMO-Lean self-contained and allows namespace-specific modifications.
+27. **CircuitExpr vs Expr Int**: New `CircuitExpr` type with 7 constructors matching ALL `CircuitNodeOp` variants (including `witness`, `pubInput`, `smulGate` which are absent from `Expr Int`). This ensures complete extraction coverage.
 
 ## Key Design Decisions (v2.4.2)
 

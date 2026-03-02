@@ -40,6 +40,59 @@ This section is written ONCE and not modified during execution.
 - Doc comments on all public defs/theorems
 - Consistent naming with OptiSat/SuperTensor conventions
 
+## Verification Criteria by Node (v2.5.0 — Fase 15)
+
+### Mechanical Health (Fase 15 — VerifiedExtraction Integration)
+<!-- CHECK:f15_zero_sorry --> Zero sorry/admit in ALL Fase 15 files
+<!-- CHECK:f15_zero_axiom --> #print axioms shows ONLY standard Lean/Mathlib axioms. Zero custom axioms.
+<!-- CHECK:f15_build --> `lake build AmoLean.EGraph.VerifiedExtraction.Integration` succeeds with 0 errors
+<!-- CHECK:f15_no_simp_star --> No `simp [*]` in Fase 15 code
+<!-- CHECK:f15_no_native --> No `native_decide` in Fase 15 code
+<!-- CHECK:f15_scoped_simp --> All `simp` calls are `simp only [...]` in FUND/CRIT nodes
+<!-- CHECK:f15_no_regression --> Existing `AmoLean.EGraph.Verified.ExtractSpec` continues to compile unchanged
+
+### Correctness (Fase 15)
+<!-- CHECK:f15_core_compiles --> Core.lean compiles with all 43 declarations and 0 errors
+<!-- CHECK:f15_greedy_compiles --> Greedy.lean compiles with extractF_correct theorem and 0 errors
+<!-- CHECK:f15_nodeops_4laws --> NodeOps CircuitNodeOp instance with all 4 laws proven
+<!-- CHECK:f15_nodesemantics --> NodeSemantics CircuitNodeOp matches existing SemanticSpec.evalOp
+<!-- CHECK:f15_evalop_ext --> evalOp_ext proven for all 7 CircuitNodeOp constructors
+<!-- CHECK:f15_circuitexpr_7 --> CircuitExpr covers all 7 CircuitNodeOp constructors
+<!-- CHECK:f15_extractable_sound --> ExtractableSound proven for CircuitNodeOp (7 cases, 0 sorry)
+<!-- CHECK:f15_e2e --> extractF_correct instantiates for CircuitNodeOp with 0 axioms
+
+### Quality (Fase 15)
+<!-- CHECK:f15_doc_comments --> Doc comments on all public defs/theorems
+<!-- CHECK:f15_consistent_naming --> Naming follows `circuit*` convention for adaptor definitions
+<!-- CHECK:f15_loc_budget --> Total NEW LOC < 1,300 (incl. copied framework)
+<!-- CHECK:f15_replacechildren --> replaceChildren defined for all 7 constructors with fallback
+
+### Results (v2.5.0 — Fase 15)
+
+| Check | Status |
+|-------|--------|
+| f15_zero_sorry | PASS (0 sorry) |
+| f15_zero_axiom | PASS (0 axioms) |
+| f15_build | PASS (3134 jobs, 0 errors) |
+| f15_no_simp_star | PASS |
+| f15_no_native | PASS |
+| f15_scoped_simp | PASS |
+| f15_no_regression | PASS (ExtractSpec.lean unchanged, compiles) |
+| f15_core_compiles | PASS (349 LOC, 43 declarations) |
+| f15_greedy_compiles | PASS (213 LOC, extractF_correct proven) |
+| f15_nodeops_4laws | PASS (all 4 laws: cases + simp) |
+| f15_nodesemantics | PASS (circuitEvalOp matches SemanticSpec.evalOp) |
+| f15_evalop_ext | PASS (7 cases, congr pattern) |
+| f15_circuitexpr_7 | PASS (constE, witnessE, pubInputE, addE, mulE, negE, smulE) |
+| f15_extractable_sound | PASS (7 cases, 0 sorry, 0 axioms) |
+| f15_e2e | PASS (circuit_extractF_correct, 0 axioms) |
+| f15_doc_comments | PASS |
+| f15_consistent_naming | PASS (circuit* convention) |
+| f15_loc_budget | PASS (914 LOC < 1,300) |
+| f15_replacechildren | PASS (7 constructors with fallback) |
+
+**Summary**: 19/19 checks PASS. 914 LOC, 17 theorems, 0 sorry, 0 axioms.
+
 ## Verification Criteria by Node (v2.4.2 — Fase 14)
 
 ### Mechanical Health (Fase 14 — Bridge Correctness)
