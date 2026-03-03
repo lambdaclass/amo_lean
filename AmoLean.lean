@@ -49,6 +49,12 @@ import AmoLean.EGraph.Verified.ParallelSaturate
 import AmoLean.EGraph.Verified.Bridge
 import AmoLean.EGraph.Verified.Rules
 import AmoLean.EGraph.Verified.Optimize
+-- VerifiedExtraction: E-graph extraction with completeness proofs
+import AmoLean.EGraph.VerifiedExtraction.Core
+import AmoLean.EGraph.VerifiedExtraction.Greedy
+import AmoLean.EGraph.VerifiedExtraction.CircuitAdaptor
+import AmoLean.EGraph.VerifiedExtraction.Integration
+import AmoLean.EGraph.VerifiedExtraction.CompletenessSpec
 import AmoLean.FRI.Basic
 import AmoLean.FRI.Fold
 import AmoLean.FRI.Hash

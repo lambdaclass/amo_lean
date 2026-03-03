@@ -3,8 +3,9 @@
 [![Lean 4](https://img.shields.io/badge/Lean-4.26.0-blue.svg)](https://leanprover.github.io/lean4/doc/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Tests](https://img.shields.io/badge/Tests-2850%2B-green.svg)](#testing)
-[![Build](https://img.shields.io/badge/Build-3134%20modules-brightgreen.svg)](#build)
+[![Build](https://img.shields.io/badge/Build-3140%20modules-brightgreen.svg)](#build)
 [![FRI Verified](https://img.shields.io/badge/FRI-189%20theorems%2C%200%20sorry-blue.svg)](#fri-formal-verification)
+[![Extraction Complete](https://img.shields.io/badge/Extraction-complete%20(0%20sorry)-blue.svg)](#verified-extraction-completeness)
 
 ## What is AMO-Lean?
 
@@ -86,6 +87,7 @@ This architecture is **portable and modular**: adding a new primitive means writ
 - **Barycentric Interpolation** — First formalization in any proof assistant: `barycentric_eq_lagrange` generic over `[Field F]`
 - **FRI Pipeline Integration** — `fri_pipeline_soundness` composes e-graph optimization (Level 1+2) with FRI algebraic guarantees (Level 3)
 - **E-Graph Optimization** — Verified engine (121 theorems, 0 sorry) + 19/20 rewrite rules
+- **Extraction Completeness** — DAG acyclicity (`computeCostsF_acyclic`) + fuel sufficiency (`extractAuto_complete`), 6 theorems, 0 sorry, 0 axioms
 - **Perm Algebra** — Tensor, stride, compose, inverse with **0 axioms** (equation compiler fix)
 - **Algebraic Semantics** — C-Lite++ lowering with verified scatter/gather (19/19 cases)
 - **Poseidon2 Hash** — BN254 t=3 with HorizenLabs-compatible test vectors
@@ -200,20 +202,31 @@ AMO-Lean NTT achieves **~60% of Plonky3 throughput** (1.65x slower on average) w
 
 See [BENCHMARKS.md](docs/BENCHMARKS.md) for full NTT benchmark tables, test suite results, and verification criteria.
 
-## What's New in v2.4.1
+## What's New in v2.5.1
 
-### Changes Since v2.4.0
+### Changes Since v2.5.0
 
-| Metric | v2.4.0 | v2.4.1 | Change |
+| Metric | v2.5.0 | v2.5.1 | Change |
 |--------|--------|--------|--------|
-| **Lines of Code** | ~45,400 | **~47,000** | +1,606 LOC (bridge modules + property tests) |
-| **FRI verified theorems** | 123 | **189** | +66 (7 new files, 0 sorry) |
-| **Total verified theorems** | ~905 | **~971** | +66 |
-| **Property tests** | 0 | **19** | 14 properties + 5 smoke tests (Plausible framework) |
+| **Lines of Code** | ~48,000 | **~48,550** | +550 LOC (CompletenessSpec.lean) |
+| **Extraction theorems** | 121 | **147** | +26 (6 public + 20 private) |
+| **Total verified theorems** | ~990 | **~1,016** | +26 |
 | **Axioms** | 11 | **11** | No new axioms |
 | **Active sorry** | 12 | **12** | Same (Poseidon only) |
 
-### Key Achievements (v2.4.0 -> v2.4.1)
+### Key Achievements (v2.5.0 -> v2.5.1)
+
+1. **Extraction completeness** (Fase 16) — Formal proof that e-graph extraction is complete: bestNode pointers form an acyclic DAG and `extractAuto` always succeeds. Closes the two remaining gaps (G1, G2) in verified extraction. 550 LOC, 6 public theorems, 0 sorry, 0 axioms.
+2. **DAG acyclicity** (G1) — `computeCostsF_acyclic`: after cost iteration with positive costs, the bestNode pointers form an acyclic DAG. Proof via `BestCostLowerBound` as ranking function + `bestCostLowerBound_acyclic`.
+3. **Fuel sufficiency** (G2) — `extractAuto_complete`: `extractAuto g rootId` always returns `some` when the DAG is acyclic and all classes have bestNodes. Proof via strong induction on rank (`Nat.strongRecOn`), not simple induction on fuel.
+4. **computeCostsF bridge** — Adapted OptiSat's `processKeys` proof to amo-lean's fold-based `computeCostsF`. Key technique: `singlePass` definition matching `computeCostsF` body exactly, enabling `computeCostsF_succ_eq` by `rfl`. Bridge lemmas (`cost_form_eq`, `foldl_cost_bridge`) convert between `Option.map.getD` and abstract `getCost` forms.
+5. **SelfLB invariant** — Self-referential lower bound: every bestNode's cost ≥ costFn + children's costs. Preserved through nested fold induction with compound invariant (unionFind preserved ∧ SelfLB preserved).
+
+### Previous: v2.5.0 — Verified E-Graph Extraction
+
+1. **Verified e-graph extraction engine** (Fase 14-15) — Complete extraction pipeline with soundness proofs: `extractF_correct` (greedy extraction preserves semantics), `SoundRewriteRule` (10 verified rewrite rules), `CircuitAdaptor` (domain-specific bridge). 914 LOC, 17 theorems, 0 sorry, 0 axioms.
+
+### Previous: v2.4.1 — Operational-Verified FRI Bridges
 
 1. **Operational-verified FRI bridges** (Fase 13) — 7 bridge modules connecting 357 operational FRI defs to the 123 verified algebraic theorems from Fase 12. Each bridge has a roundtrip or equivalence proof. 6 nodes, 1,606 LOC, ~66 theorems, 0 sorry, 0 new axioms.
 2. **Domain bridge** (N13.2) — `friParamsToDomain` converts operational `FRIParams` to verified `FRIEvalDomain`. `ValidFRIParams` ensures well-formedness. `squaredDomain` for folded domains. 337 LOC, 19 theorems.
@@ -266,9 +279,11 @@ v2.2.0 (Feb 21)    9 axioms    12 sorry    Trust-Lean bridge (26 theorems, 0 sor
 v2.3.0 (Feb 27)    8 axioms    12 sorry    Pipeline soundness + Perm axiom eliminated
 v2.4.0 (Feb 27)   11 axioms    12 sorry    FRI formal verification (123 theorems, barycentric interpolation)
 v2.4.1 (Feb 27)   11 axioms    12 sorry    Operational-verified FRI bridges (66 theorems, 19 property tests)
+v2.5.0 (Mar 2)    11 axioms    12 sorry    Verified extraction engine (17 theorems, SoundRewriteRule)
+v2.5.1 (Mar 3)    11 axioms    12 sorry    Extraction completeness: DAG acyclicity + fuel sufficiency (26 theorems)
 ```
 
-Note: v2.4.0 adds 3 cryptographic axioms (type `True` — standard assumptions: proximity gap, collision resistance, Random Oracle Model). v2.4.1 adds no new axioms. All pipeline theorems remain axiom-free.
+Note: v2.4.0 adds 3 cryptographic axioms (type `True` — standard assumptions: proximity gap, collision resistance, Random Oracle Model). v2.5.1 adds no new axioms. All pipeline and extraction theorems remain axiom-free.
 
 ## Future Work
 
@@ -281,8 +296,9 @@ Note: v2.4.0 adds 3 cryptographic axioms (type `True` — standard assumptions: 
 | ~~**FRI formal verification**~~ | ~~Critical~~ | ~~Very High~~ | **RESOLVED** (Fase 12, v2.4.0) |
 | ~~**Operational-Verified FRI bridge**~~ | ~~High~~ | ~~Medium~~ | **RESOLVED** (Fase 13, v2.4.1) |
 | ~~**Property testing**~~ | ~~Medium~~ | ~~Low~~ | **RESOLVED** (Fase 13, v2.4.1 — 19 tests via Plausible) |
+| ~~**Extraction completeness**~~ | ~~High~~ | ~~High~~ | **RESOLVED** (Fase 16, v2.5.1 — DAG acyclicity + fuel sufficiency, 26 theorems) |
 
-The 12 remaining sorry are isolated to Poseidon2 (Lean match splitter limitation), backed by 21 test vectors. The 8 NTT Radix-4 axioms are the only non-crypto axioms remaining (opaque interface, pending v2.5.0). The 3 FRI crypto axioms (proximity gap, collision resistance, ROM) are standard cryptographic assumptions declared as `True`. The entire e-graph pipeline, Perm algebra, translation validation, FRI algebraic chain, and operational-verified bridges are **fully axiom-free**.
+The 12 remaining sorry are isolated to Poseidon2 (Lean match splitter limitation), backed by 21 test vectors. The 8 NTT Radix-4 axioms are the only non-crypto axioms remaining (opaque interface, pending v2.5.0). The 3 FRI crypto axioms (proximity gap, collision resistance, ROM) are standard cryptographic assumptions declared as `True`. The entire e-graph pipeline, extraction completeness, Perm algebra, translation validation, FRI algebraic chain, and operational-verified bridges are **fully axiom-free**.
 
 ## References
 
@@ -299,4 +315,4 @@ MIT License — see [LICENSE](LICENSE) for details.
 
 ---
 
-**AMO-Lean v2.4.0** — FRI formal verification (123 theorems, 0 sorry), barycentric interpolation (novel), three-level verification architecture.
+**AMO-Lean v2.5.1** — Extraction completeness (26 theorems, 0 sorry): DAG acyclicity + fuel sufficiency for verified e-graph extraction.

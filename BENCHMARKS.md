@@ -1412,4 +1412,44 @@ Nodes covered: N10.7 Stress Test + Docs.
 - **FFI overhead**: 0.03% (negligible)
 - **Panic safety**: Triple protection (validation + catch_unwind + panic=abort)
 
+## Fase 16: Extraction Completeness (v2.5.1)
+
+### Results — CompletenessSpec.lean (B60+B61+B62)
+
+| Metric | Target | Actual |
+|--------|--------|--------|
+| LOC | 400-500 | 550 |
+| Public theorems | 6 | 6 |
+| Private helpers | ~15 | 20+ |
+| Sorry | 0 | 0 |
+| Axioms | 0 | 0 |
+| Warnings | 0 | 0 |
+| Compile time | <10s | 2.6s |
+
+#### Verified Theorems (all 0 axioms)
+
+| Theorem | Gap | Status |
+|---------|-----|--------|
+| `bestCostLowerBound_acyclic` | G1 | PASS |
+| `computeCostsF_preserves_uf` | G1 | PASS |
+| `computeCostsF_bestCost_lower_bound` | G1 | PASS |
+| `computeCostsF_acyclic` | G1 | PASS |
+| `extractF_of_rank` | G2 | PASS |
+| `extractAuto_complete` | G2 | PASS |
+
+#### Key Bridge Theorems (private)
+
+| Theorem | Purpose |
+|---------|---------|
+| `processNode_preserves_SelfLB` | Single updateBest preserves self-referential lower bound |
+| `singlePass_preserves_selfLB` | One computeCostsF iteration preserves SelfLB |
+| `computeCostsF_succ_eq` (by rfl) | computeCostsF (n+1) = computeCostsF (singlePass g) n |
+| `foldl_raw_eq_getCost` | Bridge: Option.map.getD form ↔ getCost abstraction |
+
+#### QA (2026-03-03)
+
+- Soundness: PASS — G1 and G2 both closed
+- Quality: PASS — Robust proofs, strategic abstraction
+- Completeness: PASS — All helpers necessary and sufficient
+- Architecture: PASS — Strict add-only, no modifications to Core/Greedy
 

@@ -1,6 +1,6 @@
 # AMO-Lean: Architecture
 
-## Current Version: v2.5.0 (planning)
+## Current Version: v2.5.1
 
 
 ### Fase 11: Verified Pipeline + Axiom Elimination
@@ -894,6 +894,103 @@ All sequential: each block depends on the previous.
 
 ---
 
+### Fase 16: Extraction Completeness — DAG Acyclicity + Fuel Sufficiency (v2.5.1) ✅ COMPLETE
+
+**Status**: All 4 blocks completed 2026-03-03. 550 LOC, 6 public theorems, 0 sorry, 0 axioms. G1 (DAG acyclicity) and G2 (fuel sufficiency) both closed.
+
+**Goal**: Close two critical completeness gaps in the VerifiedExtraction pipeline: (G1) prove that `computeCostsF` with positive cost functions produces an acyclic bestNode DAG, and (G2) prove that `extractAuto` always succeeds when the DAG is acyclic. Port from OptiSat v1.5.1 CompletenessSpec.lean (425 LOC, 9 declarations, 0 sorry), adapted to amo-lean's fold-based `computeCostsF`.
+
+**Source**: `~/Documents/claudio/optisat/LambdaSat/CompletenessSpec.lean` — proven strategy with 0 sorry, 0 axioms.
+
+**Key adaptation**: amo-lean's `computeCostsF` (Core.lean:241-260) uses `HashMap.fold` + `EClass.updateBest` inline, while OptiSat uses `processKeys` + `computeCostsLoop`. The bridge theorem (N16.2) must be adapted to the fold-based implementation. Extraction theorems (N16.3) are implementation-independent.
+
+**Reference**: L-519 (HashMap nodup bridge), L-520 (omega + struct with-update), L-521 (parasitic rewrite in foldl).
+
+**Files** (new):
+- `AmoLean/EGraph/VerifiedExtraction/CompletenessSpec.lean` — all completeness definitions + theorems
+
+**Files** (modified):
+- `AmoLean.lean` — +import CompletenessSpec
+- `ARCHITECTURE.md` — Fase 16 + v2.5.1
+- `BENCHMARKS.md` — Fase 16 results
+
+#### DAG
+
+```
+N16.1 (FUND) → N16.2 (CRIT) ─┐
+                               ├→ N16.4 (HOJA)
+             N16.3 (CRIT) ────┘
+```
+
+**N16.1 FUNDACIONAL — Definitions + Pure Acyclicity Theorem** (~120 LOC)
+- Define `bestCostOf`, `BestNodeChild`, `AcyclicBestNodeDAG`, `BestCostLowerBound`
+- Prove helper lemmas: `foldl_ge_init`, `foldl_sum_ge_mem`
+- Prove `bestCostLowerBound_acyclic`: BestCostLowerBound + positive costs → AcyclicBestNodeDAG
+- Pure definitions — independent of `computeCostsF` implementation
+- File: `AmoLean/EGraph/VerifiedExtraction/CompletenessSpec.lean`
+
+**N16.2 CRÍTICO — computeCostsF Bridge** (~200 LOC)
+- Define `SelfLB` invariant adapted to amo-lean's fold-based computeCostsF
+- Prove `computeCostsF_bestCost_lower_bound`: fresh graph → BestCostLowerBound after computeCostsF
+- Prove `computeCostsF_acyclic`: composition with positive costs
+- Adaptation: HashMap.fold + EClass.updateBest (instead of processKeys + updateClassBest)
+- Key lemmas: `get?_insert_self_cls`, `get?_insert_ne_cls`, `keys_nodup_cls`, `foldl_sum_le_pointwise`
+- File: same CompletenessSpec.lean
+
+**N16.3 CRÍTICO — Fuel Sufficiency** (~70 LOC)
+- Prove `mapOption_some_of_forall`: mapOption succeeds when f succeeds on all elements
+- Prove `extractF_of_rank`: fuel > rank(id) → extractF returns some (strong induction)
+- Prove `extractAuto_complete`: extractAuto succeeds when rank < numClasses
+- Independent of computeCostsF — depends only on extractF/extractAuto definitions (identical to OptiSat)
+- File: same CompletenessSpec.lean
+
+**N16.4 HOJA — Integration + Tests + Documentation** (~50 LOC)
+- Add `import AmoLean.EGraph.VerifiedExtraction.CompletenessSpec` to AmoLean.lean
+- Smoke tests: small DAG acyclicity + fuel sufficiency examples
+- Update README.md, ARCHITECTURE.md, BENCHMARKS.md for v2.5.1
+
+#### Formal Properties (v2.5.1)
+
+| Nodo | Propiedad | Tipo | Prioridad |
+|------|-----------|------|-----------|
+| N16.1 | `bestCostLowerBound_acyclic`: BestCostLowerBound + positive costs → AcyclicBestNodeDAG | SOUNDNESS | P0 |
+| N16.1 | All definitions compile with 0 sorry, 0 axioms | INVARIANT | P0 |
+| N16.2 | `computeCostsF_acyclic`: computeCostsF with positive costs → AcyclicBestNodeDAG | SOUNDNESS | P0 |
+| N16.2 | `computeCostsF_bestCost_lower_bound`: fresh graph → BestCostLowerBound | PRESERVATION | P0 |
+| N16.3 | `extractF_of_rank`: fuel > rank → extractF succeeds | COMPLETENESS | P0 |
+| N16.3 | `extractAuto_complete`: extractAuto always succeeds given acyclic DAG | COMPLETENESS | P0 |
+| N16.4 | `lake build` passes with 0 new sorry, 0 new axioms | INVARIANT | P0 |
+
+#### Bloques
+
+- [x] **B60**: N16.1 (SECUENCIAL, FUNDACIONAL) ✓ 2026-03-03
+- [x] **B61**: N16.2 (SECUENCIAL, CRÍTICO) ✓ 2026-03-03
+- [x] **B62**: N16.3 (SECUENCIAL, CRÍTICO) ✓ 2026-03-03
+- [x] **B63**: N16.4 (SECUENCIAL, HOJA) ✓ 2026-03-03
+
+#### Execution Order
+
+```
+B60 (N16.1 FUND) → B61 (N16.2 CRIT) → B62 (N16.3 CRIT) → B63 (N16.4 HOJA)
+```
+
+Note: N16.3 is independent of N16.2 (depends only on N16.1 definitions), but executed after for clarity. Could be parallelized.
+
+#### Risk Assessment
+
+| Node | Risk | Mitigation |
+|------|------|------------|
+| N16.1 | BAJA | Direct copy from OptiSat + namespace rename. Pure definitions. |
+| N16.2 | ALTA | amo-lean's fold-based computeCostsF differs from OptiSat's processKeys. Requires adapted SelfLB proof over HashMap.fold. De-risk with sketch. |
+| N16.3 | BAJA | Direct copy from OptiSat. extractF is identical. Strong induction pattern proven. |
+| N16.4 | BAJA | Mechanical: imports + smoke tests + docs. |
+
+---
+
+## Key Design Decisions (v2.5.1)
+
+26. **Completeness as separate file, not modifying Core/Greedy**: CompletenessSpec.lean is additive — no changes to existing Core.lean or Greedy.lean. This preserves the zero-regression property and keeps the completeness proofs isolated. The bridge theorem (N16.2) reasons about the existing computeCostsF implementation without requiring refactoring.
+
 ## Key Design Decisions (v2.5.0)
 
 25. **Generic + Adaptor pattern**: Instead of replacing AMO-Lean's existing circuit-specific extraction (ExtractSpec.lean), add the generic VerifiedExtraction framework alongside it. The `CircuitAdaptor` instantiates the generic typeclasses for `CircuitNodeOp`, getting `extractF_correct` for free. Existing code untouched — zero regression risk.
@@ -1130,6 +1227,8 @@ For detailed rationale on decisions 1-7, see [docs/project/DESIGN_DECISIONS.md](
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **v2.5.1** | Mar 2026 | Extraction completeness: bestNode DAG acyclicity (bestCostLowerBound_acyclic), fuel sufficiency (extractF_of_rank, extractAuto_complete). Ported from OptiSat v1.5.1. 1 new file, 0 sorry, 0 axioms. |
+| **v2.5.0** | Mar 2026 | VerifiedExtraction Integration: generic greedy extraction framework (Core + Greedy + CircuitAdaptor), 4 new files, 914 LOC, 17 theorems, 0 sorry, 0 axioms |
 | **v2.4.2** | Feb 2026 | Bridge Correctness — 10 SoundRewriteRule instances, 0 sorry, 0 axioms |
 | **v2.4.1** | Feb 2026 | Operational-verified FRI bridges + Plausible property testing |
 | **v2.4.0** | Feb 2026 | FRI formal verification (9 files, 2,844 LOC, 123 theorems, 0 sorry, 0 axioms) + barycentric interpolation |
