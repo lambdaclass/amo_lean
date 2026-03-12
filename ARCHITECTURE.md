@@ -1141,6 +1141,7 @@ amo-lean/
 - Generador programático: `buildLargeSigma : Nat -> ExpandedSigma` usando `.seq` y `.loop` anidados.
 - Verificación: `#eval` confirma `(convertExpandedSigma (buildLargeSigma 120)).isSome = true` + roundtrip check.
 - **Note**: The `require TrustLean from "../Trust-Lean"` path dependency is intentional for co-development within the `claudio/` monorepo. For external distribution, convert to git dependency with pinned hash.
+- **Trust-Lean v3.0 integration**: Added `verifiedCodeGenMicroC` pipeline (ExpandedSigma → MicroCStmt → C text) with formal evaluation semantics, full inductive roundtrip (`master_roundtrip`), Int64 overflow model, and call semantics. Both CBackend (`verifiedCodeGen`) and MicroC (`verifiedCodeGenMicroC`) paths coexist.
 
 ### Formal Properties (v2.2.0)
 
@@ -1213,7 +1214,7 @@ For detailed rationale on decisions 1-7, see [docs/project/DESIGN_DECISIONS.md](
 | Matrix/Perm | **100%** | 0 | 1 | Match splitter limitation |
 | E-Graph Rewrite Rules | **100%** | 0 | 0 | 20/20 rules verified, 10 SoundRewriteRule instances |
 | **E-Graph Verified Engine** | **100%** | **0** | **0** | **121 theorems, 4,594 LOC** |
-| **Trust-Lean Bridge** | **100%** | **0** | **0** | **26 theorems, 544 LOC, roundtrip + injectivity** |
+| **Trust-Lean Bridge** | **100%** | **0** | **0** | **26 theorems + v3.0 MicroC pipeline, roundtrip + injectivity** |
 | Goldilocks Field | **100%** | 0 | 0 | All 5 axioms eliminated |
 | BabyBear Field | **100%** | 0 | 0 | All 4 axioms eliminated |
 | AlgebraicSemantics | **100%** | 0 | 0 | 19/19 cases proven |

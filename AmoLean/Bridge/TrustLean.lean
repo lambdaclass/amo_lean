@@ -4,6 +4,7 @@
 
   N10.1 (v2.2.0): Lake dependency + import verification.
   N10.2 (v2.2.0): Type conversion functions + roundtrip proofs.
+  v3.0 integration: MicroC pipeline (stmtToMicroC + microCToString + roundtrip).
 
   This is the ONLY module that directly imports Trust-Lean.
   All other AmoLean modules access Trust-Lean types through this bridge.
@@ -11,10 +12,18 @@
   Design: convertScalarVar returns Option because AmoLean uses String names
   (infinite domain) but only {"x","y","t"} are valid for ExpandedSigma.
   All other conversions (IdxExpr, Gather, Scatter) are total isomorphisms.
+
+  Two code generation paths:
+  - verifiedCodeGen: ExpandedSigma → Stmt → stmtToC (CBackend, industrial C)
+  - verifiedCodeGenMicroC: ExpandedSigma → Stmt → MicroCStmt → microCToString
+    (formal C semantics + roundtrip guarantee from Trust-Lean v3.0)
 -/
 
 import TrustLean.Bridge
 import TrustLean.Backend.CBackend
+import TrustLean.MicroC.Translation
+import TrustLean.MicroC.PrettyPrint
+import TrustLean.MicroC.RoundtripMaster
 import AmoLean.Sigma.Expand
 
 set_option autoImplicit false
@@ -540,5 +549,37 @@ theorem convert_injective (a b : ExpandedSigma)
 def verifiedCodeGen (s : ExpandedSigma) : Option String :=
   (convertExpandedSigma s).map fun ts =>
     _root_.TrustLean.stmtToC 0 (_root_.TrustLean.Bridge.expandedSigmaToStmt ts)
+
+/-! ## MicroC Pipeline (Trust-Lean v3.0)
+
+  The MicroC path provides formal C semantics: `stmtToMicroC_correct` proves
+  that Core IR evaluation matches MicroC evaluation, and `master_roundtrip`
+  proves that `parseMicroC(microCToString s) = some s` for all well-formed
+  statements. This gives a stronger guarantee than the CBackend path above.
+-/
+
+/-- Convert an AmoLean ExpandedSigma to a Trust-Lean MicroCStmt.
+    Chains: convertExpandedSigma → expandedSigmaToStmt → stmtToMicroC.
+    Returns `none` if conversion fails (non-standard variable names).
+    The intermediate MicroCStmt has formal evaluation semantics
+    (`evalMicroC`) and a verified roundtrip with `parseMicroC`. -/
+def expandedSigmaToMicroCStmt (s : ExpandedSigma) :
+    Option _root_.TrustLean.MicroCStmt :=
+  (convertExpandedSigma s).map fun ts =>
+    _root_.TrustLean.stmtToMicroC (_root_.TrustLean.Bridge.expandedSigmaToStmt ts)
+
+/-- Generate verified C code from an AmoLean ExpandedSigma via MicroC.
+    Chains: convertExpandedSigma → expandedSigmaToStmt → stmtToMicroC → microCToString.
+    Returns `none` if conversion fails (non-standard variable names).
+
+    Unlike `verifiedCodeGen` (which uses CBackend's `stmtToC`), this path
+    goes through the MicroC AST layer that has:
+    - Formal evaluation semantics (`evalMicroC`)
+    - Simulation proof (`stmtToMicroC_correct`)
+    - Full roundtrip guarantee (`master_roundtrip`)
+    - Int64 overflow model (`evalMicroC_int64`)
+    - Call semantics (`evalMicroC_withCalls`) -/
+def verifiedCodeGenMicroC (s : ExpandedSigma) : Option String :=
+  (expandedSigmaToMicroCStmt s).map _root_.TrustLean.microCToString
 
 end AmoLean.Bridge.TrustLean

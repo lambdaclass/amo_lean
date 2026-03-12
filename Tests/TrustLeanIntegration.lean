@@ -196,4 +196,53 @@ example : convertExpandedSigma (convertBackExpandedSigma
     some (convertExpandedSigma (buildLargeSigma 5)).get! :=
   roundtrip_expandedSigma_backward _
 
+/-! ## TC-10.3.14: MicroC Pipeline -/
+
+-- MicroC pipeline produces output for all constructors
+#eval verifiedCodeGenMicroC dft2Sigma
+#eval verifiedCodeGenMicroC .nop
+#eval verifiedCodeGenMicroC loopSigma
+#eval verifiedCodeGenMicroC seqSigma
+
+-- Conversion succeeds (verified examples)
+example : (verifiedCodeGenMicroC dft2Sigma).isSome = true := rfl
+example : (verifiedCodeGenMicroC .nop).isSome = true := rfl
+example : (verifiedCodeGenMicroC loopSigma).isSome = true := rfl
+example : (verifiedCodeGenMicroC seqSigma).isSome = true := rfl
+example : (verifiedCodeGenMicroC parSigma).isSome = true := rfl
+example : (verifiedCodeGenMicroC tempSigma).isSome = true := rfl
+
+/-! ## TC-10.3.15: MicroC vs CBackend Agreement -/
+
+-- Both pipelines produce `some` on the same inputs
+example : (verifiedCodeGen dft2Sigma).isSome = true ∧
+          (verifiedCodeGenMicroC dft2Sigma).isSome = true := ⟨rfl, rfl⟩
+example : (verifiedCodeGen .nop).isSome = true ∧
+          (verifiedCodeGenMicroC .nop).isSome = true := ⟨rfl, rfl⟩
+example : (verifiedCodeGen loopSigma).isSome = true ∧
+          (verifiedCodeGenMicroC loopSigma).isSome = true := ⟨rfl, rfl⟩
+
+/-! ## TC-10.3.16: Roundtrip on Generated MicroC -/
+
+-- The MicroCStmt produced by expandedSigmaToMicroCStmt roundtrips through
+-- microCToString ∘ parseMicroC (uses Trust-Lean's master_roundtrip guarantee)
+#eval do
+  let some mc := expandedSigmaToMicroCStmt dft2Sigma | return "FAIL: conversion"
+  let text := _root_.TrustLean.microCToString mc
+  match _root_.TrustLean.parseMicroC text with
+  | some _ => return s!"Roundtrip PASS: parseMicroC returned some on {text.length} chars"
+  | none => return "Roundtrip FAIL: parse returned none"
+
+/-! ## TC-10.3.17: Stress Test via MicroC Pipeline -/
+
+-- Large sigma via MicroC pipeline
+#eval do
+  let large := buildLargeSigma 5
+  match verifiedCodeGenMicroC large with
+  | some code => return s!"MicroC stress PASS: {code.length} chars generated"
+  | none => return "MicroC stress FAIL: conversion returned none"
+
+-- Conversion succeeds for large sigma via MicroC
+example : (verifiedCodeGenMicroC (buildLargeSigma 5)).isSome = true := rfl
+
 end AmoLean.Tests.TrustLeanIntegration
