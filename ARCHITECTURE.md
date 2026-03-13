@@ -987,6 +987,234 @@ Note: N16.3 is independent of N16.2 (depends only on N16.1 definitions), but exe
 
 ---
 
+### Fase 17: Plonky3 Translation Validation (Camino 2) — v2.6.0
+
+**Goal**: Per-function refinement bridge proving Plonky3's field arithmetic implementations are correct. For each Plonky3 field operation: `plonky3_impl(machine_ints) = field_spec(ZMod p)`. End-to-end: Plonky3 prover computation → FRI algebraic guarantees.
+
+**Novel contributions**:
+- First formalization of Mersenne31 field in Lean 4 (or any proof assistant)
+- First formal Montgomery reduction in Lean 4
+- First per-function translation validation of a STARK prover library
+
+**Architecture**:
+```
+Plonky3 Rust (untrusted)           [verification/plonky3/plonky3_source/]
+    | [manual formalization — mirrors exact Rust algorithms]
+Plonky3.*Ops (Lean on UInt32/UInt64)     [NEW: AmoLean/Field/Plonky3/]
+    | [per-function refinement theorems with explicit overflow preconditions]
+AMO-Lean Field.* (Mersenne31, BabyBear, Goldilocks)   [NEW + EXISTING]
+    | [toZMod_* homomorphism theorems]
+ZMod p (Mathlib)                   [abstract field algebra]
+    | [existing fri_pipeline_soundness]
+FRI Algebraic Guarantees           [3 crypto axioms]
+```
+
+**Trust boundary**: Manual per-function Lean formalization of Plonky3 Rust (verified by inspection against `verification/plonky3/plonky3_source/`). Follows CertiPlonk/Jasmin methodology. Direct Lean refinement (not MicroC) because Trust-Lean's MicroC only has Int64 evaluator.
+
+**Strategy**: Vertical Slice First — complete Mersenne31 end-to-end before expanding.
+
+**Reference projects** (study, not import): CertiPlonk (Nethermind), Jasmin/Kyber Episode IV (Almeida et al. TCHES 2023), Affeldt et al. Montgomery Verified (ITP 2018), Trieu NTT Verified (2025 Rocq), Fiat-Crypto (Erbsen et al. S&P 2019).
+
+**Lessons applied**: L-019 (Injective.commRing/field), L-016 (two-level proof: Nat then ZMod), L-201 (native_decide for 31-bit), L-202 (80% mechanical replication), L-512 (three-tier bridge), L-573 (ZMod Mathlib patterns), L-566 (Bool-to-Prop bridge), L-567 (native_decide limit), L-311 (three-part contract), L-478 (equation compiler), L-532 (trust boundary = hypothesis).
+
+**New files** (7-9, in `AmoLean/Field/` and `AmoLean/Field/Plonky3/`):
+- `AmoLean/Field/Mersenne31.lean` — Mersenne31 field type + ops + toZMod + Field instance
+- `AmoLean/Field/Montgomery.lean` — Generic Montgomery reduction (R=2^32)
+- `AmoLean/Field/Plonky3Field.lean` — PlonkyField typeclass + instances
+- `AmoLean/Field/Plonky3/Mersenne31TV.lean` — Mersenne31 Plonky3 refinement
+- `AmoLean/Field/Plonky3/BabyBearTV.lean` — BabyBear Montgomery refinement
+- `AmoLean/Field/Plonky3/GoldilocksTV.lean` — Goldilocks verification
+- `AmoLean/NTT/Plonky3/ButterflyTV.lean` — NTT butterfly TV
+- `AmoLean/FRI/Plonky3/FoldTV.lean` — FRI fold TV
+- `AmoLean/Plonky3/TVPipeline.lean` — End-to-end pipeline
+
+#### DAG (v2.6.0)
+
+| Nodo | Tipo | Deps | Status |
+|------|------|------|--------|
+| N17.1 Mersenne31Field | FUND | — | ✓ (889 LOC, 0 sorry) |
+| N17.2 Mersenne31 Refinement | CRIT | N17.1 | ✓ (286 LOC, 0 sorry) |
+| N17.3 Montgomery Reduction | FUND | — | ✓ (337 LOC, 0 sorry) |
+| N17.4 BabyBear Monty Refinement | CRIT | N17.3 | ✓ (353 LOC, 0 sorry) |
+| N17.5 Goldilocks Plonky3 Verification | PAR | — | ✓ (219 LOC, 0 sorry) |
+| N17.6 Plonky3Field Typeclass | FUND | N17.1, N17.4, N17.5 | ✓ (180 LOC, 0 sorry) |
+| N17.7 NTT Butterfly TV | PAR | N17.6 | ✓ (215 LOC, 0 sorry) |
+| N17.8 FRI Fold TV | PAR | N17.6 | ✓ (174 LOC, 0 sorry) |
+| N17.9 Plonky3 TV Pipeline | HOJA | N17.7, N17.8 | ✓ (213 LOC, 0 sorry) |
+
+#### Formal Properties (v2.6.0)
+
+| Nodo | Propiedad | Tipo | Prioridad |
+|------|-----------|------|-----------|
+| N17.1 | mersenne31_prime_is_prime : Nat.Prime (2^31 - 1) | INVARIANT | P0 |
+| N17.1 | from_u62_correct : from_u62 x % p = x % p for x < 2^62 | SOUNDNESS | P0 |
+| N17.1 | toZMod is ring homomorphism (add, mul, neg, sub) | PRESERVATION | P0 |
+| N17.1 | Field Mersenne31Field instance | SOUNDNESS | P0 |
+| N17.2 | mersenne31_add_refines : toZMod (add a b) = toZMod a + toZMod b | EQUIVALENCE | P0 |
+| N17.2 | Non-vacuity: concrete values satisfy all hypotheses | INVARIANT | P0 |
+| N17.3 | monty_reduce_correct : monty_reduce x % p = x * R_inv % p | SOUNDNESS | P0 |
+| N17.3 | monty_reduce_range : x < R*p → monty_reduce x < p | INVARIANT | P0 |
+| N17.3 | monty_mul_correct : from_monty(a_M * b_M) = from_monty(a_M) * from_monty(b_M) mod p | SOUNDNESS | P0 |
+| N17.4 | babybear_mu_correct : MU * p % 2^32 = 1 | INVARIANT | P0 |
+| N17.4 | babybear_plonky3_mul_zmod : Plonky3 monty mul = ZMod mul | EQUIVALENCE | P0 |
+| N17.5 | goldilocks_plonky3_eq : Plonky3 reduce128 = AMO-Lean reduce128 | EQUIVALENCE | P0 |
+| N17.6 | All 3 fields instantiate Plonky3Field | COMPLETENESS | P0 |
+| N17.7 | dit_butterfly_correct : butterfly preserves ZMod semantics | SOUNDNESS | P0 |
+| N17.7 | butterfly_invertible : DIT o DIF = id over ZMod p | EQUIVALENCE | P1 |
+| N17.8 | fri_fold_tv : fold_impl = foldPolynomial over ZMod p | EQUIVALENCE | P0 |
+| N17.9 | plonky3_tv_pipeline_soundness : end-to-end composition | SOUNDNESS | P0 |
+| N17.9 | #print axioms = exactly 3 existing crypto axioms | SOUNDNESS | P0 |
+
+#### Detailed Node Specifications
+
+**Subfase 1: Mersenne31 Vertical Slice**
+
+**N17.1 FUNDACIONAL — Mersenne31Field** (~600 LOC)
+- `Mersenne31Field` structure: `val : UInt32`, `val_lt : val.toNat < ORDER_NAT`
+- p = 2^31 - 1 (Mersenne prime), `mersenne31_prime_is_prime` via `native_decide` (31-bit, L-201)
+- Operations matching Plonky3's exact algorithms from `mersenne_31.rs`:
+  - `add`: i32 overflow detection → conditional correction (Plonky3 lines 467-481)
+  - `sub`: wrapping sub → `sub &= P` bitmask (Plonky3 lines 488-496)
+  - `mul`: u64 intermediate → `from_u62` split 31-bit halves (2^31 ≡ 1 mod p) (Plonky3 lines 514-517, 540-545)
+  - `neg`: `P - value` (Plonky3 lines 503-506)
+  - `halve`: `shr + conditional HALF_P_PLUS_1` (utils.rs lines 92-97)
+  - `inv`: Fermat `a^{p-2}`
+- `toZMod` homomorphisms, `CommRing` + `Field` via `Function.Injective.commRing/field` (L-019)
+- Proof strategy (L-016): prove at Nat level first (split_ifs, omega), lift via val_cast_of_lt
+- Explicit overflow preconditions: `val.toNat < 2^31` maintained through all ops
+- De-risk: primality proof + from_u62_correct sketch BEFORE full file
+- Pattern: ~80% mechanical from BabyBear.lean (L-202)
+- File: `AmoLean/Field/Mersenne31.lean`
+
+**N17.2 CRITICO — Mersenne31 Plonky3 Refinement** (~200 LOC)
+- Per-function refinement theorems: `toZMod (op a b) = toZMod a ⊕ toZMod b` for all ops
+- Non-vacuity example: concrete values (a=1000000, b=1500000000)
+- Smoke tests: `#eval` for 10+ test vectors from Plonky3 test suite
+- Firewall `_aux` pattern
+- File: `AmoLean/Field/Plonky3/Mersenne31TV.lean`
+
+**Subfase 2: Montgomery + BabyBear**
+
+**N17.3 FUNDACIONAL — Montgomery Reduction** (~400 LOC)
+- Generic Montgomery theory (R = 2^32):
+  - `MontgomeryConfig`: p, p_prime, p_lt_2_31, MONTY_BITS=32, MONTY_MU, mu_correct
+  - `monty_reduce`: mirrors `monty-31/src/utils.rs` lines 105-125
+  - Core theorems: `monty_reduce_correct`, `monty_reduce_range`, `to_monty_from_monty`, `monty_mul_correct`, `monty_add_preserves`
+- Overflow preconditions explicit and proven
+- **Proof spike mandatory** before full file (~50 LOC sketch for `monty_reduce_correct`)
+- File: `AmoLean/Field/Montgomery.lean`
+
+**N17.4 CRITICO — BabyBear Montgomery Refinement** (~250 LOC)
+- Instantiate MontgomeryConfig: p=2013265921, MONTY_BITS=32, MONTY_MU=2281701377
+- `mu_babybear_correct` via `native_decide`
+- Mirror Plonky3 MontyField31 operations, refinement theorems composing with existing `toZMod_mul`
+- Non-vacuity example with concrete BabyBear values
+- File: `AmoLean/Field/Plonky3/BabyBearTV.lean`
+
+**Subfase 3: Goldilocks + Unified Interface**
+
+**N17.5 PAR — Goldilocks Plonky3 Verification** (~120 LOC)
+- Verify Plonky3's Goldilocks algorithms match AMO-Lean's existing `Goldilocks.lean`
+- Expected near-identity (same reduce128 algorithm per insights analysis)
+- File: `AmoLean/Field/Plonky3/GoldilocksTV.lean`
+
+**N17.6 FUND — Plonky3Field Typeclass** (~200 LOC)
+- Typeclass parameterized over repr type (UInt32/UInt64), extension-field-ready:
+  ```
+  class Plonky3Field (F : Type) extends Field F where
+    char : Nat; char_prime : Nat.Prime char
+    toZMod : F → ZMod char; toZMod_injective; toZMod_ringHom
+    toNat : F → Nat; toNat_lt : ∀ a, toNat a < char
+  ```
+- Instances: Mersenne31Field, BabyBearField, GoldilocksField
+- File: `AmoLean/Field/Plonky3Field.lean`
+
+**Subfase 4: Higher-Level Operations**
+
+**N17.7 PAR — NTT Butterfly TV** (~200 LOC)
+- DIT/DIF butterfly over `[Plonky3Field F]`
+- Prove: butterfly preserves ZMod semantics, invertibility
+- File: `AmoLean/NTT/Plonky3/ButterflyTV.lean`
+
+**N17.8 PAR — FRI Fold TV** (~250 LOC)
+- FRI fold over PlonkyField, compose with existing FoldBridge
+- Three-layer bridge: Plonky3 array-fold → AMO-Lean friFold → foldPolynomial
+- File: `AmoLean/FRI/Plonky3/FoldTV.lean`
+
+**Subfase 5: End-to-End**
+
+**N17.9 HOJA — Plonky3 TV Pipeline** (~200 LOC)
+- Master theorem composing all, non-vacuity example, axiom audit (= 3 crypto only)
+- File: `AmoLean/Plonky3/TVPipeline.lean`
+
+#### Bloques
+
+- [x] **B64 Mersenne31 Foundation**: N17.1 (SECUENCIAL, FUNDACIONAL) ✓
+- [x] **B65 Mersenne31 Refinement**: N17.2 (SECUENCIAL, CRITICO) ✓
+- [x] **B66 Montgomery Foundation**: N17.3 (SECUENCIAL, FUNDACIONAL) ✓
+- [x] **B67 BabyBear Monty Refinement**: N17.4 (SECUENCIAL, CRITICO) ✓
+- [x] **B68 Goldilocks + PlonkyField**: N17.5 + N17.6 (AGENT_TEAM) ✓
+- [x] **B69 NTT Butterfly + FRI Fold TV**: N17.7 + N17.8 (AGENT_TEAM) ✓
+- [x] **B70 Pipeline Integration**: N17.9 (SECUENCIAL, HOJA) ✓
+
+#### Execution Order
+
+```
+VERTICAL SLICE (Mersenne31):
+  B64 (N17.1 FUND) → B65 (N17.2 CRIT)
+
+MONTGOMERY EXPANSION:
+  B66 (N17.3 FUND) → B67 (N17.4 CRIT)
+
+PARALLEL (after B65, independent of B66-B67):
+  B68 (N17.5 + N17.6)
+
+CONVERGENCE (after B67 + B68):
+  B69 (N17.7 + N17.8)
+
+FINAL:
+  B70 (N17.9 HOJA) ← B69
+```
+
+Critical path: B64 → B65 → B66 → B67 → B69 → B70
+Parallel: B68 alongside B66-B67
+
+#### Risk Assessment
+
+| Node | Risk | Mitigation |
+|------|------|------------|
+| N17.1 | MEDIA | 31-bit native_decide OK (L-201). ~80% mechanical from BabyBear (L-202). De-risk: from_u62 + primality sketch. |
+| N17.2 | MEDIA | Simple ops (no Montgomery). UInt32 overflow bounded (val < 2^31). |
+| N17.3 | ALTA | ~96 lemmas in literature. Proof spike mandatory. Time-box 3 sessions. Fallback: axiomatize monty_reduce_correct. |
+| N17.4 | ALTA | Concrete MU via native_decide. Depends on N17.3 solidity. |
+| N17.5 | BAJA | Near-identity with existing Goldilocks.lean. May be mostly rfl. |
+| N17.6 | MEDIA | Typeclass design. De-risk with sketch. Extension-field-ready. |
+| N17.7 | MEDIA | 2 add + 1 mul, generic over PlonkyField. |
+| N17.8 | MEDIA | Composes with existing FoldBridge. Array ↔ polynomial bridge. |
+| N17.9 | BAJA | Mechanical composition. Standard capstone. |
+
+#### Estimated Metrics
+
+| Metric | Estimate |
+|--------|----------|
+| New LOC | 2,400-3,000 |
+| New files | 7-9 |
+| Modified files | 0-1 |
+| New theorems | 65-95 |
+| New axioms | 0 |
+| Target sorry | 0 |
+| Non-vacuity examples | 3+ |
+
+---
+
+## Key Design Decisions (v2.6.0)
+
+27. **Direct Lean refinement, not MicroC path**: Trust-Lean's MicroC only has Int64 evaluator (no UInt32/UInt64). Direct Lean refinement gives same mathematical guarantee. MicroC path deferred to v2.7.0.
+28. **Plonky3 source as reference, not import**: Plonky3 Rust in `verification/plonky3/plonky3_source/` as reference. Lean functions mirror exact algorithms (line-by-line correspondence).
+29. **Montgomery as separate generic module**: Reusable for any 31-bit field with Montgomery form (BabyBear, KoalaBear). Not coupled to BabyBear.
+30. **Plonky3Field typeclass over repr type**: Per QA — parameterized, extension-field-ready. No assumption on char < 2^32.
+31. **Overflow preconditions explicit**: Every refinement theorem carries explicit bounds on inputs, proven maintained by Plonky3 algorithms.
+
 ## Key Design Decisions (v2.5.1)
 
 26. **Completeness as separate file, not modifying Core/Greedy**: CompletenessSpec.lean is additive — no changes to existing Core.lean or Greedy.lean. This preserves the zero-regression property and keeps the completeness proofs isolated. The bridge theorem (N16.2) reasons about the existing computeCostsF implementation without requiring refactoring.

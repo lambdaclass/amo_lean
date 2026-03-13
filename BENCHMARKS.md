@@ -1453,3 +1453,78 @@ Nodes covered: N10.7 Stress Test + Docs.
 - Completeness: PASS — All helpers necessary and sufficient
 - Architecture: PASS — Strict add-only, no modifications to Core/Greedy
 
+---
+
+## Fase 17: Plonky3 Translation Validation (v2.6.0)
+
+### Criterios de Verificacion
+
+<!-- CHECK:f17_zero_sorry --> Zero sorry/admit in ALL Fase 17 files
+<!-- CHECK:f17_zero_axiom --> Zero new axioms (only existing 3 crypto from FRI)
+<!-- CHECK:f17_build --> `lake build` 0 errors
+<!-- CHECK:f17_no_simp_star --> No `simp [*]` in Fase 17 code
+<!-- CHECK:f17_no_native_64bit --> No `native_decide` on types >32-bit
+<!-- CHECK:f17_no_identity_pass --> No `:= id` or `fun x => x` in pipeline structures
+<!-- CHECK:f17_overflow_explicit --> All refinement theorems carry explicit overflow preconditions
+<!-- CHECK:f17_nonvacuity --> Non-vacuity examples for N17.2, N17.4, N17.9
+
+#### FUNDACIONAL Nodes (N17.1, N17.3, N17.6)
+
+**N17.1 Mersenne31Field:**
+<!-- CHECK:f17_m31_field --> `Field Mersenne31Field` instance synthesizes
+<!-- CHECK:f17_m31_prime --> `mersenne31_prime_is_prime` proven
+<!-- CHECK:f17_m31_toZMod --> All toZMod_* homomorphism proofs (add, mul, neg, sub, pow, inv)
+<!-- CHECK:f17_m31_canonical --> Representation invariant: val < p preserved by all ops
+- Stress: (p-1)+(p-1), (p-1)*(p-1), inv(0)=0, inv(p-1)
+- Edge: 0, 1, p, UInt32.maxVal, (p-1)+1=0, (p-1)*(p-1)=1
+
+**N17.3 Montgomery:**
+<!-- CHECK:f17_monty_reduce --> `monty_reduce_correct` proven generically
+<!-- CHECK:f17_monty_range --> `monty_reduce_range` proven: x < R*p → result < p
+<!-- CHECK:f17_monty_roundtrip --> `to_monty_from_monty` roundtrip proven
+<!-- CHECK:f17_monty_mul --> `monty_mul_correct` proven
+- Stress: a=R-1, b=p-1, a*b just below R*p, a=1 b=1 (R mod p)
+- Edge: toMont(0)=0, montMul(toMont(0),x)=0, montMul(toMont(1),toMont(a))=toMont(a)
+
+**N17.6 PlonkyField:**
+<!-- CHECK:f17_pf_instances --> All 3 fields instantiate PlonkyField
+<!-- CHECK:f17_pf_minimal --> Typeclass is minimal (no redundant fields)
+- All instances compile, generic lemmas work over any PlonkyField
+
+#### CRITICO Nodes (N17.2, N17.4)
+
+**N17.2 Mersenne31 Refinement:**
+<!-- CHECK:f17_m31_refine_add --> `mersenne31_add_refines` proven
+<!-- CHECK:f17_m31_refine_mul --> `mersenne31_mul_refines` proven
+<!-- CHECK:f17_m31_nonvac --> Non-vacuity example with concrete values
+- 10+ `#eval` smoke tests from Plonky3 test vectors
+
+**N17.4 BabyBear Monty:**
+<!-- CHECK:f17_bb_mu --> `mu_babybear_correct` via native_decide
+<!-- CHECK:f17_bb_monty_mul --> BabyBear Plonky3 mul refines ZMod mul
+<!-- CHECK:f17_bb_nonvac --> Non-vacuity example with concrete values
+- Reuses N17.3 generic Montgomery (instantiation, not copy-paste)
+
+#### PARALELO Nodes (N17.5, N17.7, N17.8)
+
+**N17.5 Goldilocks:**
+<!-- CHECK:f17_gl_match --> Plonky3 Goldilocks ops match existing AMO-Lean ops
+- Expected near-identity; bridge theorems or rfl
+
+**N17.7 NTT Butterfly:**
+<!-- CHECK:f17_butterfly_correct --> dit_butterfly_correct proven over PlonkyField
+<!-- CHECK:f17_butterfly_inv --> Butterfly invertibility proven
+- butterfly(a,b,w) = (a+w*b, a-w*b) preserves ZMod semantics
+
+**N17.8 FRI Fold:**
+<!-- CHECK:f17_fold_tv --> fri_fold_impl = foldPolynomial composition proven
+<!-- CHECK:f17_fold_bridge --> Composes with existing FoldBridge
+- Degree reduction preserved, fold semantics match
+
+#### HOJA Node (N17.9)
+
+<!-- CHECK:f17_pipeline --> Master theorem plonky3_tv_pipeline_soundness proven
+<!-- CHECK:f17_axiom_audit --> `#print axioms` = exactly 3 existing crypto axioms
+<!-- CHECK:f17_e2e_nonvac --> End-to-end non-vacuity example (Mersenne31)
+- `lake build` clean, no island modules, all nodes referenced
+
