@@ -26,6 +26,12 @@ import AmoLean.NTT.Field
 import AmoLean.NTT.RootsOfUnity
 import AmoLean.NTT.Goldilocks  -- Para tests con valores concretos
 
+/-! **DEPRECATED (v2.9.0)**: This module uses axioms for NTT Radix-4.
+    All axioms are superseded by the axiom-free generic NTT implementation:
+    - `AmoLean.NTT.GenericNTT` — generic Cooley-Tukey DIT over [Field F]
+    - `AmoLean.NTT.GenericCorrectness` — `ntt_generic_eq_spec` (0 axioms)
+    Retained for backward compatibility. Do NOT use for new development. -/
+
 namespace AmoLean.NTT.Radix4
 
 variable {F : Type*} [inst : NTTField F]

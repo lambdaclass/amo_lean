@@ -178,21 +178,12 @@ theorem operational_verified_bridge_complete {F : Type*} [Field F] [IsDomain F]
 
 Axiom and sorry audit for all bridge modules. -/
 
-/-- Census: domain bridge has no axioms -/
-theorem domainBridge_axiom_free :
-    True := trivial  -- Verified by #print axioms domainBridge_size
-
-/-- Census: fold bridge has no axioms -/
-theorem foldBridge_axiom_free :
-    True := trivial  -- Verified by #print axioms foldBridge_equivalence
-
-/-- Census: transcript bridge has no axioms -/
-theorem transcriptBridge_axiom_free :
-    True := trivial  -- Verified by #print axioms transcriptBridge_squeeze
-
-/-- Census: merkle bridge has no axioms -/
-theorem merkleBridge_axiom_free :
-    True := trivial  -- Verified by #print axioms merkleBridge_verify_iff
+-- Axiom census (v2.9.0): T1 vacuous theorems removed.
+-- Axiom-freedom verified mechanically via `#print axioms`:
+--   #print axioms domainBridge_size         → no axioms
+--   #print axioms foldBridge_equivalence    → no axioms
+--   #print axioms transcriptBridge_squeeze  → no axioms
+--   #print axioms merkleBridge_verify_iff   → no axioms
 
 /-! ## Part 7: Bridge Summary
 
@@ -204,7 +195,7 @@ BridgeIntegration provides:
 4. `fold_bridge_consistent_output`: ConsistentWithDegree output
 5. `transcript_bridge_preserves_fiat_shamir`: determinism preservation
 6. `operational_verified_bridge_complete`: THE integration theorem
-7. Bridge census theorems (axiom audit)
+7. Axiom census documented via `#print axioms` comments (v2.9.0)
 
 Upstream (all Fase 13 bridges):
 - DomainBridge.lean (N13.2): friParamsToDomain, ValidFRIParams

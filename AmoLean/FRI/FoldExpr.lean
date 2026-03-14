@@ -88,17 +88,7 @@ def FoldEnv.lookupScalar (env : FoldEnv α n) : VarId → α
 def foldDirect {α : Type} [Add α] [Mul α] (even odd : Vec α n) (alpha : α) : Vec α n :=
   Vec.zipWith (fun e o => e + alpha * o) even odd
 
-/-- Specification matches reference (statement).
-    This theorem would prove that evaluating foldSpec gives the same
-    result as foldDirect. Currently stated without proof for Phase 0 PoC.
-
-    In a full implementation, this would be proven by unfolding definitions
-    and using properties of VecExpr.eval.
--/
-theorem foldSpec_eq_foldDirect {α : Type} [Add α] [Mul α] [Inhabited α]
-    (even odd : Vec α n) (alpha : α) :
-    True := by
-  trivial
+-- foldSpec_eq_foldDirect: removed in v2.9.0 (was T1 vacuity, proved True)
 
 /-! ## Part 4: Code Generation Interface -/
 
