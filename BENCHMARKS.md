@@ -115,6 +115,64 @@ This section is written ONCE and not modified during execution.
 <!-- CHECK:f14_consistent_naming --> Naming follows `{ruleName}_sound` convention
 <!-- CHECK:f14_loc_budget --> Total LOC < 300
 
+### Mechanical Health (Fase 21 — Bitwise Verification)
+<!-- CHECK:f21_zero_sorry --> Zero sorry/admit in ALL Fase 21 files
+<!-- CHECK:f21_zero_axiom --> Zero custom axioms
+<!-- CHECK:f21_build --> `lake build` 0 errors, 0 warnings on all Fase 21 modules
+<!-- CHECK:f21_no_simp_star --> No `simp [*]` in Fase 21 code
+<!-- CHECK:f21_scoped_simp --> All `simp` calls are `simp only [...]` in FUND/CRIT nodes
+<!-- CHECK:f21_no_native_in_proofs --> No `native_decide` in theorem proofs (OK in tests/examples)
+<!-- CHECK:f21_flat_patterns --> No nested pattern matching in inductive match (L-478)
+
+### Correctness (Fase 21)
+<!-- CHECK:f21_embedding_sound --> toMixed embedding preserves evalOp: evalMixedOp (toMixed op) env v = evalOp op env v
+<!-- CHECK:f21_cv_preservation --> MixedConsistentValuation preserved through merge, find, canonicalize, processClass
+<!-- CHECK:f21_rules_sound --> Every SoundRewriteRule instance has compiled soundness proof
+<!-- CHECK:f21_conditional_rules_sound --> Every ConditionalSoundRewriteRule has valid sideCond
+<!-- CHECK:f21_extract_correct --> mixed_extractF_correct: extraction preserves semantics
+<!-- CHECK:f21_pipeline_sound --> mixed_pipeline_soundness: saturateF + extractF → correct result
+<!-- CHECK:f21_mersenne_fold --> mersenne31_fold_rule matches BitwiseLean.mersenne31_fold_correct
+<!-- CHECK:f21_babybear_fold --> babybear_fold_rule matches BitwiseLean.babybear_fold_step
+<!-- CHECK:f21_goldilocks_fold --> goldilocks_fold_rule matches BitwiseLean.goldilocks_fold_128
+<!-- CHECK:f21_monty_reduce --> monty_reduce_rule matches BitwiseLean.monty_reduce_spec
+
+### Non-vacuity (Fase 21)
+<!-- CHECK:f21_nonvacuity_pipeline --> Non-vacuity example for mixed_pipeline_soundness with concrete inputs
+<!-- CHECK:f21_nonvacuity_embedding --> Non-vacuity example showing toMixed embedding works for all 7 CircuitNodeOp constructors
+<!-- CHECK:f21_nonvacuity_fold --> Non-vacuity examples for each field fold rule with concrete field elements
+
+### Integration (Fase 21)
+<!-- CHECK:f21_eval_smoke --> #eval smoke tests: bitwise reduction via E-graph = direct computation (≥10 tests)
+<!-- CHECK:f21_property_tests --> Plausible property tests for fold equivalence (≥5 properties)
+<!-- CHECK:f21_backward_compat --> Existing `lake build` (3140 jobs) passes unchanged — zero regressions
+<!-- CHECK:f21_loc_budget --> Total new LOC ≤ 2,500
+
+### Mechanical Health (Fase 22 — Synthesis)
+<!-- CHECK:f22_zero_sorry --> Zero sorry/admit in ALL Fase 22 files
+<!-- CHECK:f22_zero_axiom --> Zero custom axioms
+<!-- CHECK:f22_build --> `lake build` 0 errors on all Fase 22 modules
+<!-- CHECK:f22_no_simp_star --> No `simp [*]` in Fase 22 code
+<!-- CHECK:f22_flat_patterns --> No nested pattern matching in inductive match
+
+### Correctness (Fase 22)
+<!-- CHECK:f22_cost_nonneg --> mixedOpCost hw op >= 0 for all hw, op
+<!-- CHECK:f22_cost_const_zero --> mixedOpCost hw (.constGate n) = 0 for all hw
+<!-- CHECK:f22_solinas_sound --> deriveFieldFoldRule_sound: generated rules preserve mod equivalence
+<!-- CHECK:f22_phased_consistent --> phasedSaturateF_preserves_consistent: both phases maintain CV
+<!-- CHECK:f22_cost_extract_correct --> mixed_extractILP_correct: ILP extraction with cost model preserves semantics
+<!-- CHECK:f22_compose_sound --> compose_sound: composed reductions preserve mod equivalence (transitivity)
+<!-- CHECK:f22_synthesis_correct --> synthesis_correct: synthesized expression ≡ x (mod p)
+<!-- CHECK:f22_synthesis_egraph_optimal --> synthesis_egraph_optimal: cost minimal among E-graph extractions
+
+### Coverage (Fase 22)
+<!-- CHECK:f22_4_primes --> Mersenne31, BabyBear, KoalaBear, Goldilocks all covered by SolinasConfig
+<!-- CHECK:f22_3_targets --> ARM, RISC-V, FPGA cost models all instantiated
+<!-- CHECK:f22_cost_differs --> Different targets produce different optimal extractions (shown by #eval)
+<!-- CHECK:f22_nonvacuity --> Non-vacuity examples for pipeline with concrete prime + hardware
+<!-- CHECK:f22_smoke_tests --> #eval smoke tests for all 4 primes × 3 targets (12 combinations)
+<!-- CHECK:f22_backward_compat --> Existing `lake build` passes unchanged
+<!-- CHECK:f22_loc_budget --> Total new LOC ≤ 2,500
+
 ## Results (v2.4.2 — Fase 14)
 
 ### B53 (N14.1 ExprCircuitEval) — PASS

@@ -1452,6 +1452,318 @@ For detailed rationale on decisions 1-7, see [docs/project/DESIGN_DECISIONS.md](
 
 ---
 
+### Fase 21: Bitwise Verification of Field Arithmetic via E-graphs — v3.1.0
+
+**Goal**: Extend the verified E-graph engine to verify that bitwise implementations (shifts, AND, masks) of modular reduction are semantically equivalent to algebraic specifications for Mersenne31, BabyBear, and Goldilocks.
+
+**Approach**: "E-graph as verifier" (Alternativa A from bitwise analysis). NO optimization discovery — verification of KNOWN implementations.
+
+**Key Architectural Decisions**:
+1. **MixedNodeOp** as SEPARATE inductive from CircuitNodeOp → preserves all 121 existing theorems
+2. **evalMixedOp on Nat** (concrete, no typeclass for bitwise) → field bridge via toZMod AFTER extraction
+3. **ConditionalSoundRewriteRule** for field-specific rules → sideCond carries explicit Nat bounds
+4. **Bounded saturation** (fuel=10) → Herbie research: 3 iterations sufficient
+5. **BitwiseLean library** (~/Documents/claudio/bitwiselean/) copied/adapted, never imported
+
+**New files** (8):
+- `AmoLean/EGraph/Verified/Bitwise/MixedNodeOp.lean` — MixedNodeOp inductive + evalMixedOp + NodeOps/NodeSemantics
+- `AmoLean/EGraph/Verified/Bitwise/BitwiseBridge.lean` — Bridge theorems + ConsistentValuation preservation
+- `AmoLean/EGraph/Verified/Bitwise/BitwiseRules.lean` — Generic bitwise SoundRewriteRule instances
+- `AmoLean/EGraph/Verified/Bitwise/FieldFoldRules.lean` — Mersenne31/BabyBear/Goldilocks fold rules
+- `AmoLean/EGraph/Verified/Bitwise/MixedExtract.lean` — MixedExpr + extractF_correct for MixedNodeOp
+- `AmoLean/EGraph/Verified/Bitwise/MixedPipeline.lean` — Pipeline soundness + TV extension
+- `AmoLean/EGraph/Verified/Bitwise/Tests.lean` — Smoke tests
+- `Tests/NonVacuity/Bitwise.lean` — Non-vacuity examples
+
+**Source adaptations**: BitwiseLean (40 thms) → Bridge, MersenneFold, PseudoMersenneFold, Montgomery
+
+**Lessons applied**: L-458 (concrete evalOp), L-516 (mirror inductive), L-016 (two-level Nat+ZMod), L-019 (injective bootstrap), L-546 (ConditionalRewriteRule extension), L-478 (flat patterns), L-311 (three-part contract)
+
+#### DAG (v3.1.0)
+
+```
+N21.1 MixedNodeOp (FUND) ──→ N21.2 BitwiseBridge (FUND) ──→ N21.3 BitwiseRules (CRIT)
+                                                           ──→ N21.4 FieldFoldRules (CRIT)
+                                                           ──→ N21.5 MixedExtract (PAR)
+N21.3 + N21.4 + N21.5 ──→ N21.6 MixedPipeline (HOJA)
+N21.6 ──→ N21.7 IntegrationTests (HOJA)
+```
+
+| Node | Name | Type | Files | LOC | Theorems | Deps |
+|------|------|------|-------|-----|----------|------|
+| N21.1 | MixedNodeOp | FUND | Bitwise/MixedNodeOp.lean | ~350 | 15 | — |
+| N21.2 | BitwiseBridge | FUND | Bitwise/BitwiseBridge.lean | ~300 | 10 | N21.1 |
+| N21.3 | BitwiseRules | CRIT | Bitwise/BitwiseRules.lean | ~250 | 12 | N21.2 |
+| N21.4 | FieldFoldRules | CRIT | Bitwise/FieldFoldRules.lean | ~350 | 8 | N21.2 |
+| N21.5 | MixedExtract | PAR | Bitwise/MixedExtract.lean | ~300 | 10 | N21.2 |
+| N21.6 | MixedPipeline | HOJA | Bitwise/MixedPipeline.lean | ~250 | 5 | N21.3, N21.4, N21.5 |
+| N21.7 | IntegrationTests | HOJA | Tests + NonVacuity | ~200 | 3 | N21.6 |
+| **Total** | | | **8 files** | **~2,000** | **~63** | |
+
+#### Blocks (topological order)
+
+| Block | Nodes | Type | Execution |
+|-------|-------|------|-----------|
+| B71 | N21.1 | FUND | Sequential (de-risk sketch first) |
+| B72 | N21.2 | FUND | Sequential (de-risk bridge theorem first) |
+| B73 | N21.3, N21.4, N21.5 | CRIT+PAR | Agent Team (3 parallel after B72) |
+| B74 | N21.6 | HOJA | Sequential |
+| B75 | N21.7 | HOJA | Sequential |
+
+#### Node Details
+
+**N21.1 MixedNodeOp** (FUND, ~350 LOC)
+- `inductive MixedNodeOp` with 13 constructors:
+  - 7 algebraic (mirror CircuitNodeOp): constGate, witness, pubInput, addGate, mulGate, negGate, smulGate
+  - 6 bitwise: shiftLeft(EClassId, Nat), shiftRight(EClassId, Nat), bitAnd(EClassId, EClassId), bitXor(EClassId, EClassId), bitOr(EClassId, EClassId), constMask(Nat)
+- `evalMixedOp : MixedNodeOp → (Nat → Nat) → (Nat → Nat) → (EClassId → Nat) → Nat` (on Nat, concrete)
+- `children`, `mapChildren`, `replaceChildren`, `localCost` (shift/and/or/xor = 0, mul = 1)
+- `NodeOps MixedNodeOp` instance with 4 law proofs
+- `NodeSemantics MixedNodeOp` instance with evalOp_ext
+- `toMixed : CircuitNodeOp → MixedNodeOp` (embedding)
+- `toMixed_children_eq` : children preservation theorem
+
+**N21.2 BitwiseBridge** (FUND, ~300 LOC)
+- Bridge theorems adapted from BitwiseLean: mask_eq_mod, shiftRight_eq_div_pow, mod_from_split
+- `evalMixed_toMixed_eq` : evalMixedOp (toMixed op) = evalOp op (key bridge)
+- `MixedConsistentValuation` + preservation: merge, find, canonicalize, processClass
+- QA-mandated: formal proof that each new rewrite rule preserves ConsistentValuation
+
+**N21.3 BitwiseRules** (CRIT, ~250 LOC)
+- ~10 SoundRewriteRule instances for generic bitwise identities
+- shift_shift_compose, and_mask_idem, and_comm, and_assoc, or_comm, or_assoc, xor_comm, xor_self_zero
+- mask_mod_bridge, shift_mul_bridge (as rewrite rules)
+- `allBitwiseRules` collection + `allBitwiseRules_sound` master theorem
+
+**N21.4 FieldFoldRules** (CRIT, ~350 LOC)
+- ~4 ConditionalSoundRewriteRule instances:
+  - mersenne31_fold_rule (sideCond: input < 2^62)
+  - babybear_fold_rule (sideCond: input < 2^62)
+  - goldilocks_fold_rule (sideCond: input < 2^128)
+  - monty_reduce_rule (sideCond: x < R*p, prime p, valid mu_neg)
+- Adapts BitwiseLean: MersenneFold, PseudoMersenneFold, Montgomery
+- `allFieldFoldRules` collection
+
+**N21.5 MixedExtract** (PAR, ~300 LOC)
+- `inductive MixedExpr` (13 constructors mirroring MixedNodeOp)
+- `MixedExpr.eval : MixedExpr → (Nat → Nat) → Nat`
+- `Extractable MixedNodeOp MixedExpr`, `EvalExpr MixedExpr Nat Nat`
+- `mixed_extractable_sound : ExtractableSound MixedNodeOp MixedExpr Nat Nat`
+- `mixed_extractF_correct` : extractF produces semantically correct expressions
+
+**N21.6 MixedPipeline** (HOJA, ~250 LOC)
+- `mixed_pipeline_soundness` : saturateF + extractF → correct for bitwise+field rules
+- `mixed_tv_extension` : cryptoEquivalent extended for MixedExpr
+- Composition: allBitwiseRules ++ allFieldFoldRules → verified optimization
+
+**N21.7 IntegrationTests** (HOJA, ~200 LOC)
+- #eval smoke tests: monty_reduce via E-graph = direct, mersenne31 fold via E-graph = direct
+- Non-vacuity examples: concrete inputs for mixed_pipeline_soundness (all hypotheses satisfiable)
+- Property tests (Plausible): fold equivalence for random field elements
+
+#### Progress Tree
+
+- [x] B71: N21.1 MixedNodeOp (343 LOC, 6T 12D 4I, 0 sorry)
+- [x] B72: N21.2 BitwiseBridge (163 LOC, 10 bridge thms + 12 simp, 0 sorry)
+- [x] B73: N21.3 BitwiseRules (237 LOC) | N21.4 FieldFoldRules (274 LOC) | N21.5 MixedExtract (220 LOC) — all 0 sorry
+- [x] B74: N21.6 MixedPipeline (238 LOC, 17 thms + 3 examples, 0 sorry)
+- [x] B75: N21.7 IntegrationTests (269 LOC, 37 #eval + 29 examples, 0 sorry)
+
+---
+
+### Fase 22: Cost-Model-Driven Synthesis of Verified Modular Reduction — v3.2.0
+
+**Goal**: Given a prime `p` and a hardware target (ARM/RISC-V/FPGA), synthesize the optimal verified modular reduction via E-graph equality saturation with parametric cost model.
+
+**Approach**: Alternativa B — E-graph as SYNTHESIZER (not just verifier). Extends Fase 21 infrastructure.
+
+**Key Architectural Decisions**:
+1. **HardwareCost as structure** (not typeclass) — only 3 targets, per L-418
+2. **SolinasConfig** unifies 4 ZK primes (Mersenne31, BabyBear, KoalaBear, Goldilocks) via ONE parametric fold rule
+3. **PhasedSaturation wraps** saturateF (no modification to existing verified code) — heuristic, not confluent
+4. **CostExtraction** reuses encodeEGraph by passing `costFn = mixedOpCost hw`
+5. **synthesis_egraph_optimal** — cost minimal among extractions of the final E-graph (not globally optimal)
+6. **detectSolinasForm** returns `Except String SolinasConfig` with `configOverride` escape hatch
+
+**New files** (7):
+- `AmoLean/EGraph/Verified/Bitwise/CostModelDef.lean` — HardwareCost + ARM/RISC-V/FPGA + parametric cost
+- `AmoLean/EGraph/Verified/Bitwise/SolinasRuleGen.lean` — SolinasConfig → FieldFoldRule generator
+- `AmoLean/EGraph/Verified/Bitwise/PhasedSaturation.lean` — Two-phase wrapper (algebraic→bitwise)
+- `AmoLean/EGraph/Verified/Bitwise/CostExtraction.lean` — ILP extraction with HardwareCost objective
+- `AmoLean/EGraph/Verified/Bitwise/ReductionComposition.lean` — Compose reduction steps
+- `AmoLean/EGraph/Verified/Bitwise/SynthesisPipeline.lean` — End-to-end synthesis
+- `AmoLean/EGraph/Verified/Bitwise/SynthesisTests.lean` + `Tests/NonVacuity/Synthesis.lean`
+
+**Source adaptations**: BitwiseLean (CostModel, SolinasFold, KoalaBearFold)
+
+**Lessons applied**: L-513 (compositional pipelines), L-527 (non-recursive ILP), L-311 (three-part contract), L-517 (unified dispatch), L-418 (concrete defs before typeclasses), L-478 (flat patterns)
+
+#### DAG (v3.2.0)
+
+```
+N22.1 CostModelDef (FUND) ──→ N22.3 PhasedSaturation (CRIT) ──→ N22.6 SynthesisPipeline (HOJA)
+                           ──→ N22.4 CostExtraction (CRIT) ────→
+N22.2 SolinasRuleGen (FUND) ──→ N22.3
+                             ──→ N22.5 ReductionComposition (PAR) → N22.6
+N22.6 ──→ N22.7 IntegrationTests (HOJA)
+```
+
+| Node | Name | Type | Files | LOC | Theorems | Deps |
+|------|------|------|-------|-----|----------|------|
+| N22.1 | CostModelDef | FUND | Bitwise/CostModelDef.lean | ~250 | 8 | — |
+| N22.2 | SolinasRuleGen | FUND | Bitwise/SolinasRuleGen.lean | ~300 | 10 | — |
+| N22.3 | PhasedSaturation | CRIT | Bitwise/PhasedSaturation.lean | ~300 | 6 | N22.1, N22.2 |
+| N22.4 | CostExtraction | CRIT | Bitwise/CostExtraction.lean | ~440 | 8 | N22.1 |
+| N22.5 | ReductionComposition | PAR | Bitwise/ReductionComposition.lean | ~200 | 5 | N22.2 |
+| N22.6 | SynthesisPipeline | HOJA | Bitwise/SynthesisPipeline.lean | ~300 | 6 | N22.3, N22.4, N22.5 |
+| N22.7 | IntegrationTests | HOJA | SynthesisTests + NonVacuity | ~200 | 3 | N22.6 |
+| **Total** | | | **8 files** | **~2,000** | **~46** | |
+
+#### Blocks (topological order)
+
+| Block | Nodes | Type | Execution |
+|-------|-------|------|-----------|
+| B76 | N22.1 | FUND | Sequential (de-risk sketch) |
+| B77 | N22.2 | FUND | Sequential (de-risk sketch) |
+| B78 | N22.3 | CRIT | Sequential (after B76+B77) |
+| B79 | N22.4 | CRIT | Sequential (after B76) |
+| B80 | N22.5 | PAR | Sequential (after B77, parallel with B79) |
+| B81 | N22.6 | HOJA | Sequential (after B78+B79+B80) |
+| B82 | N22.7 | HOJA | Sequential |
+
+#### Progress Tree
+
+- [x] B76: N22.1 CostModelDef (188 LOC, 7 thms, 0 sorry)
+- [x] B77: N22.2 SolinasRuleGen (344 LOC, 25 decls, 0 sorry)
+- [x] B78: N22.3 PhasedSaturation (379 LOC, 15 thms, 0 sorry)
+- [x] B79: N22.4 CostExtraction (425 LOC, 17 thms, 0 sorry)
+- [x] B80: N22.5 ReductionComposition (254 LOC, 12 thms, 0 sorry)
+- [x] B81: N22.6 SynthesisPipeline (333 LOC, 13 thms, 0 sorry)
+- [x] B82: N22.7 IntegrationTests (184 LOC, 13 examples, 0 sorry)
+
+---
+
+### Fase 23: Verified C Codegen Pipeline + Enhanced Cost Model — v3.2.4
+
+**Goal**: Complete end-to-end pipeline from prime specification to verified C code via Trust-Lean MicroC, with register-pressure-aware cost model and BitVec dual representation.
+
+**Pipeline**: `synthesizeReduction(p, hw)` → `toTrustLeanExpr` → `stmtToMicroC` → `microCToString` → verified C code
+
+**Key Decisions** (from QA):
+1. negE → `binOp .sub (litInt 0) expr` (unsigned wrapping, NOT unaryOp.neg)
+2. constE → `litInt (env.constVal n)` (inline at translation time)
+3. tempCount via max-live-variables (post-order traversal)
+4. Master theorem: `∀ e env, MixedExpr.eval e env = wrapUInt w (evalExpr trustEnv (toTrustLeanExpr e))`
+5. Trust-Lean bridges (N23.4/N23.5) in Trust-Lean project
+
+#### DAG (v3.2.4)
+
+```
+N23.1 EnhancedCostModel (FUND) ──→ N23.3 MixedExprToStmt (CRIT) ──→ N23.6 SynthesisToC (CRIT)
+N23.2 BitVecBridge (FUND)                                        ──→
+N23.4 KoalaBearBridge (PAR)  ──→ N23.6
+N23.5 GoldilocksBridge (PAR) ──→ N23.6
+N23.6 ──→ N23.7 BenchmarkTests (HOJA)
+N23.6 ──→ N23.8 CostIntegration (HOJA)
+```
+
+| Node | Name | Type | LOC | Deps |
+|------|------|------|-----|------|
+| N23.1 | EnhancedCostModel | FUND | ~200 | — |
+| N23.2 | BitVecBridge | FUND | ~500 | — |
+| N23.3 | MixedExprToStmt | CRIT | ~350 | N23.1 |
+| N23.4 | KoalaBearBridge | PAR | ~150 | — (Trust-Lean) |
+| N23.5 | GoldilocksBridge | PAR | ~200 | — (Trust-Lean) |
+| N23.6 | SynthesisToC | CRIT | ~300 | N23.3, N23.4, N23.5 |
+| N23.7 | BenchmarkTests | HOJA | ~200 | N23.6 |
+| N23.8 | CostIntegration | HOJA | ~150 | N23.1, N23.6 |
+
+#### Progress Tree
+
+- [x] B83: N23.1 EnhancedCostModel (238 LOC, 4 thms, 0 sorry)
+- [x] B84: N23.2 BitVecBridge (592 LOC, 33 thms, 0 sorry)
+- [x] B85: N23.3 MixedExprToStmt (316 LOC, 7 thms + soundness, 0 sorry)
+- [x] B86: N23.4 KoalaBearBridge (230 LOC) | N23.5 GoldilocksBridge (208 LOC) — Trust-Lean, 0 sorry
+- [x] B87: N23.6 SynthesisToC (255 LOC, 6 thms, 0 sorry)
+- [x] B88: N23.7 CostIntegration (207 LOC) | N23.8 CodegenTests (244 LOC) — 0 sorry
+
+---
+
+### Fase 24: E-Graph Discovery Engine — v3.3.0
+
+**Goal**: Enable the E-graph to DISCOVER optimal bitwise reductions by generating 80+ rules programmatically, controlling explosion via guided saturation + shadow graph, and extracting with polynomial-time DP when possible.
+
+**Key Innovation**: Guided Saturation (single unified E-graph with phased rule activation) replaces Cascade E-graph. Later-phase rules see earlier equivalences.
+
+**Anti-Explosion Architecture** (4 layers, from QA):
+1. **PREDICT**: Growth bound prediction (VR1CS maxNodesBound) → decide fuel/budget
+2. **GENERATE**: Shift-Add (CSD), Congruence, Lazy Reduction rules → 80+ rules automatically
+3. **SATURATE**: Guided Saturation + Shadow Graph + Rule Scoring (UCB1-lite)
+4. **EXTRACT**: Treewidth DP (tw≤15) → ILP → Greedy fallback
+
+**Synthesis-by-Verification**: Rule generator proposes candidates → Lean tactic proves LHS=RHS → only verified rules enter ruleset.
+
+**Key Decisions** (from QA):
+1. Guided Saturation (NOT Cascade): single E-graph, phased rule activation (fuel 0-10 algebraic, 10-40 bitwise, 40-50 scheduling)
+2. CSD decomposition for shift-add (optimal non-zero bits)
+3. Congruence bounded: k ∈ [bitWidth-2..2*bitWidth+2] (~10 rules, not 128)
+4. Lazy Reduction with verified `maxAbsValue` interval analysis
+5. Shadow Graph operational (outside TCB) — extraction still verified via extractF_correct
+
+#### DAG (v3.3.0)
+
+```
+N24.1 ShiftAddGen (FUND) ──→ N24.5 GuidedSaturation (CRIT)
+N24.2 CongruenceGen (FUND) ──→
+N24.3 LazyReduction (PAR) ──→
+N24.4 ShadowGraph (FUND) ──→ N24.5
+N24.6 RuleScoring (PAR) ──→ N24.5
+N24.7 GrowthPrediction (PAR) ──→ N24.5
+N24.8 TreewidthDP (CRIT) ──→ N24.9 DiscoveryPipeline (HOJA)
+N24.5 ──→ N24.9
+N24.9 ──→ N24.10 DiscoveryTests (HOJA)
+```
+
+| Node | Name | Type | LOC | Deps |
+|------|------|------|-----|------|
+| N24.1 | ShiftAddGen | FUND | ~300 | — |
+| N24.2 | CongruenceGen | FUND | ~250 | — |
+| N24.3 | LazyReduction | PAR | ~250 | — |
+| N24.4 | ShadowGraph | FUND | ~250 | — |
+| N24.5 | GuidedSaturation | CRIT | ~400 | N24.1-N24.4, N24.6, N24.7 |
+| N24.6 | RuleScoring | PAR | ~200 | — |
+| N24.7 | GrowthPrediction | PAR | ~200 | — |
+| N24.8 | TreewidthDP | CRIT | ~500 | — |
+| N24.9 | DiscoveryPipeline | HOJA | ~300 | N24.5, N24.8 |
+| N24.10 | DiscoveryTests | HOJA | ~250 | N24.9 |
+| **Total** | | | **~2,900** | |
+
+#### Blocks
+
+| Block | Nodes | Execution |
+|-------|-------|-----------|
+| B89 | N24.1 | FUND sequential |
+| B90 | N24.2 | FUND sequential |
+| B91 | N24.3, N24.6, N24.7 | PAR parallel |
+| B92 | N24.4 | FUND sequential |
+| B93 | N24.5 | CRIT sequential (after all B89-B92) |
+| B94 | N24.8 | CRIT sequential (independent) |
+| B95 | N24.9 | HOJA sequential (after B93+B94) |
+| B96 | N24.10 | HOJA sequential |
+
+#### Progress Tree
+
+- [ ] B89: N24.1 ShiftAddGen
+- [ ] B90: N24.2 CongruenceGen
+- [ ] B91: N24.3 LazyReduction | N24.6 RuleScoring | N24.7 GrowthPrediction
+- [ ] B92: N24.4 ShadowGraph
+- [ ] B93: N24.5 GuidedSaturation
+- [ ] B94: N24.8 TreewidthDP
+- [ ] B95: N24.9 DiscoveryPipeline
+- [ ] B96: N24.10 DiscoveryTests
+
+---
+
 ## Version History
 
 | Version | Date | Highlights |
