@@ -32,11 +32,8 @@ import AmoLean.NTT.CooleyTukey
 import AmoLean.NTT.Butterfly
 import AmoLean.NTT.Correctness
 
--- Layer 2b: Radix-4 Algorithm (more efficient for N = 4^k)
-import AmoLean.NTT.Radix4.Butterfly4
-import AmoLean.NTT.Radix4.Stride4
-import AmoLean.NTT.Radix4.Algorithm
-import AmoLean.NTT.Radix4.Equivalence
+-- Layer 2b: Radix-4 (ARCHIVED v3.1.0 — superseded by GenericNTT, 0 axioms)
+-- Original 8 axioms moved to archive/NTT_Radix4/
 
 -- Layer 3: Implementation with Bounds
 import AmoLean.NTT.Bounds
