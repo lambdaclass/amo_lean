@@ -123,21 +123,24 @@ def optimizeMixedF (ematchFuel maxIter rebuildFuel costFuel : Nat)
 -- Section 4: Full pipeline with C emission
 -- ══════════════════════════════════════════════════════════════════
 
+/-- Identity constLookup: constGate(n) emits literal n.
+    In the Solinas pipeline, constGate values ARE the literal constants
+    (e.g., constGate(134217727) = the BabyBear correction constant 2^27-1). -/
+private def identityConstLookup : Nat → Int := fun n => ↑n
+
 /-- Full pipeline: prime + hardware → optimized C code.
     Uses 3-phase guided saturation with Solinas fold seed. -/
 def synthesizeViaEGraph (p : Nat) (hw : HardwareCost)
     (cfg : GuidedMixedConfig := .default)
     (seed : Option MixedExpr := none) : String :=
-  -- Choose seed: user-provided, or Solinas fold if detectable, or witness(0)
   let inputExpr := match seed with
     | some e => e
     | none => mkCanonicalInput
   match guidedOptimizeMixedF p hw cfg inputExpr with
   | some optExpr =>
-    emitCFunction s!"reduce_mod_{p}" "x" optExpr (fun _ => 0)
+    emitCFunction s!"reduce_mod_{p}" "x" optExpr identityConstLookup
   | none =>
-    -- Fallback: emit C for the original expression
-    emitCFunction s!"reduce_mod_{p}" "x" inputExpr (fun _ => 0)
+    emitCFunction s!"reduce_mod_{p}" "x" inputExpr identityConstLookup
 
 /-- Multi-target synthesis: emit C for all 3 hardware targets. -/
 def synthesizeMultiTarget (p : Nat) (cfg : GuidedMixedConfig := .default)
