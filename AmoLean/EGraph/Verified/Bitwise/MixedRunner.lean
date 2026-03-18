@@ -9,6 +9,7 @@
   Pipeline: build → 3-phase saturate → cost-aware extract → emit C
 -/
 import AmoLean.EGraph.Verified.Bitwise.MixedSaturation
+import AmoLean.EGraph.Verified.Bitwise.GuidedMixedSaturation
 import AmoLean.EGraph.Verified.Bitwise.MixedPatternRules
 import AmoLean.EGraph.Verified.Bitwise.FieldFoldPatternRules
 import AmoLean.EGraph.Verified.Bitwise.MixedEGraphBuilder
@@ -49,6 +50,12 @@ structure GuidedMixedConfig where
   phase3Rebuild : Nat := 3
   /-- Cost extraction fuel -/
   costFuel : Nat := 50
+  /-- UCB1 scoring: select top-K rules per iteration -/
+  useScoring : Bool := false
+  topK : Nat := 5
+  /-- Growth prediction: max nodes budget -/
+  maxNodes : Nat := 10000
+  useGrowthPrediction : Bool := true
   deriving Repr, Inhabited
 
 /-- Default: balanced for BabyBear/Mersenne31 (small word size). -/
@@ -89,27 +96,33 @@ def mkSolinasFoldSeed (k c : Nat) : MixedExpr :=
 -- Section 3: 3-phase guided optimization pipeline
 -- ══════════════════════════════════════════════════════════════════
 
+/-- Helper: run one saturation phase with optional growth prediction. -/
+private def runPhase (cfg : GuidedMixedConfig) (iters rebuild : Nat)
+    (g : EGraph MixedNodeOp) (rules : List (RewriteRule MixedNodeOp)) : EGraph MixedNodeOp :=
+  if cfg.useGrowthPrediction then
+    GuidedMixedSaturation.saturateMixedF_bounded cfg.ematchFuel iters rebuild g rules cfg.maxNodes
+  else
+    saturateMixedF cfg.ematchFuel iters rebuild g rules
+
 /-- Core 3-phase guided optimization pipeline.
     Phase 1: Apply algebraic/bitwise identities (simplification)
     Phase 2: Apply field-specific fold rules (the key optimization)
     Phase 3: Apply additional rules (extensible)
-    Then: cost-aware extraction. -/
+    Then: multi-candidate extraction.
+    Optionally uses growth prediction to limit e-graph explosion. -/
 def guidedOptimizeMixedF (p : Nat) (hw : HardwareCost)
     (cfg : GuidedMixedConfig := .default)
     (expr : MixedExpr)
     (extraRules : List (RewriteRule MixedNodeOp) := []) : Option MixedExpr :=
   let (g, rootId) := buildEGraph expr
   -- Phase 1: algebraic/bitwise identities (10 rules with bridges)
-  let g1 := saturateMixedF cfg.ematchFuel cfg.phase1Iters cfg.phase1Rebuild g
-    allBitwisePatternRulesWithBridges
+  let g1 := runPhase cfg cfg.phase1Iters cfg.phase1Rebuild g allBitwisePatternRulesWithBridges
   -- Phase 2: field-specific fold rules
-  let g2 := saturateMixedF cfg.ematchFuel cfg.phase2Iters cfg.phase2Rebuild g1
-    (fieldFoldPatternRules p)
+  let g2 := runPhase cfg cfg.phase2Iters cfg.phase2Rebuild g1 (fieldFoldPatternRules p)
   -- Phase 3: extra rules (shift-add, user-provided, etc.)
   let g3 := if extraRules.isEmpty then g2
-    else saturateMixedF cfg.ematchFuel cfg.phase3Iters cfg.phase3Rebuild g2 extraRules
-  -- Multi-candidate extraction: if root's bestNode is identity (witness/pubInput),
-  -- tries each non-identity node in the root class as extraction starting point
+    else runPhase cfg cfg.phase3Iters cfg.phase3Rebuild g2 extraRules
+  -- Multi-candidate extraction: prefers non-identity nodes at root
   multiCandidateExtract hw g3 rootId cfg.costFuel
 
 /-- Legacy single-phase pipeline (backward compat). -/

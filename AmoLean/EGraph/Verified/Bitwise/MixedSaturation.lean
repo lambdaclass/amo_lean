@@ -118,7 +118,44 @@ def saturateMixedF (ematchFuel maxIter rebuildFuel : Nat)
     else saturateMixedF ematchFuel n rebuildFuel g'' rules
 
 -- ══════════════════════════════════════════════════════════════════
--- Section 4: Smoke tests
+-- Section 4: Counted variants (for UCB1 scoring feedback)
+-- ══════════════════════════════════════════════════════════════════
+
+/-- Apply a rule at a class and count how many merges occurred. -/
+def applyRuleAtF_counted (fuel : Nat) (g : EGraph Op) (rule : RewriteRule Op)
+    (classId : EClassId) : (EGraph Op × Nat) :=
+  let results := ematchF fuel g rule.lhs classId
+  results.foldl (fun (acc, count) subst =>
+    let condMet := match rule.sideCondCheck with
+      | some check => check acc subst
+      | none => true
+    if !condMet then (acc, count)
+    else
+      match instantiateF fuel acc rule.rhs subst with
+      | none => (acc, count)
+      | some (rhsId, acc') =>
+        let canonLhs := UnionFind.root acc'.unionFind classId
+        let canonRhs := UnionFind.root acc'.unionFind rhsId
+        if canonLhs == canonRhs then (acc', count)
+        else (acc'.merge classId rhsId, count + 1)) (g, 0)
+
+/-- Apply a rule to all classes and count total merges. -/
+def applyRuleF_counted (fuel : Nat) (g : EGraph Op) (rule : RewriteRule Op) :
+    (EGraph Op × Nat) :=
+  let allClasses := g.classes.toList.map (·.1)
+  allClasses.foldl (fun (acc, count) classId =>
+    let (acc', c) := applyRuleAtF_counted fuel acc rule classId
+    (acc', count + c)) (g, 0)
+
+/-- Apply a list of rules and collect per-rule merge counts. -/
+def applyRulesF_counted (fuel : Nat) (g : EGraph Op)
+    (rules : List (RewriteRule Op)) : (EGraph Op × List (String × Nat)) :=
+  rules.foldl (fun (acc, stats) rule =>
+    let (acc', count) := applyRuleF_counted fuel acc rule
+    (acc', (rule.name, count) :: stats)) (g, [])
+
+-- ══════════════════════════════════════════════════════════════════
+-- Section 5: Smoke tests
 -- ══════════════════════════════════════════════════════════════════
 
 section SmokeTests
