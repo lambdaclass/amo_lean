@@ -23,7 +23,7 @@ open AmoLean.EGraph.Verified.Bitwise
   (MixedNodeOp HardwareCost arm_cortex_a76 riscv_sifive_u74 fpga_dsp48e2
    mersenne31_prime babybear_prime goldilocks_prime emitCFunction)
 open AmoLean.EGraph.Verified.Bitwise.MixedExtract (MixedExpr)
-open CostExtraction (costAwareExtractAuto reductionAwareExtract hwCostFn)
+open CostExtraction (costAwareExtractAuto multiCandidateExtract hwCostFn)
 open MixedEMatch (RewriteRule)
 open MixedSaturation (saturateMixedF rebuildF)
 open MixedEGraphBuilder (addMixedExpr buildEGraph)
@@ -108,9 +108,9 @@ def guidedOptimizeMixedF (p : Nat) (hw : HardwareCost)
   -- Phase 3: extra rules (shift-add, user-provided, etc.)
   let g3 := if extraRules.isEmpty then g2
     else saturateMixedF cfg.ematchFuel cfg.phase3Iters cfg.phase3Rebuild g2 extraRules
-  -- Reduction-aware extraction: penalizes identity nodes (witness/pubInput)
-  -- so the extractor prefers actual reductions over the trivial input
-  reductionAwareExtract hw g3 rootId cfg.costFuel
+  -- Multi-candidate extraction: if root's bestNode is identity (witness/pubInput),
+  -- tries each non-identity node in the root class as extraction starting point
+  multiCandidateExtract hw g3 rootId cfg.costFuel
 
 /-- Legacy single-phase pipeline (backward compat). -/
 def optimizeMixedF (ematchFuel maxIter rebuildFuel costFuel : Nat)
