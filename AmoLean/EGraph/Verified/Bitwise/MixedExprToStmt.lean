@@ -77,6 +77,7 @@ def toCodegenExpr (e : MixedExpr) (constLookup : Nat → Int) : CodegenExpr :=
   | .bitXorE a b     => .binOp .bxor (toCodegenExpr a constLookup) (toCodegenExpr b constLookup)
   | .bitOrE a b      => .binOp .bor  (toCodegenExpr a constLookup) (toCodegenExpr b constLookup)
   | .constMaskE n    => .litInt (↑(2 ^ n - 1 : Nat))
+  | .subE a b        => .binOp .sub (toCodegenExpr a constLookup) (toCodegenExpr b constLookup)
 
 /-! ## Evaluation of CodegenExpr on Int -/
 

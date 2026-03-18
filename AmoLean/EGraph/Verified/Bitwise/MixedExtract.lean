@@ -50,6 +50,7 @@ inductive MixedExpr where
   | bitXorE     (a b : MixedExpr)
   | bitOrE      (a b : MixedExpr)
   | constMaskE  (n : Nat)
+  | subE        (a b : MixedExpr)
 
 /-! ## Extractable Instance -/
 
@@ -70,6 +71,7 @@ inductive MixedExpr where
   | .bitXor _ _, [a, b]    => some (.bitXorE a b)
   | .bitOr _ _, [a, b]     => some (.bitOrE a b)
   | .constMask n, []       => some (.constMaskE n)
+  | .subGate _ _, [a, b]   => some (.subE a b)
   | _, _                   => none
 
 instance : Extractable MixedNodeOp MixedExpr where
@@ -93,6 +95,7 @@ instance : Extractable MixedNodeOp MixedExpr where
   | .bitXorE a b    => Nat.xor (a.eval env) (b.eval env)
   | .bitOrE a b     => Nat.lor (a.eval env) (b.eval env)
   | .constMaskE n   => 2 ^ n - 1
+  | .subE a b       => a.eval env - b.eval env
 
 instance : EvalExpr MixedExpr MixedEnv Nat where
   evalExpr e env := e.eval env
@@ -216,5 +219,16 @@ theorem mixed_extractable_sound :
     simp [Extractable.reconstruct, mixedReconstruct] at hrec
     subst hrec
     rfl
+  | subGate a b =>
+    simp [NodeOps.children, mixedChildren] at hlen
+    obtain ⟨x, y, rfl⟩ := list_length_two hlen
+    simp [Extractable.reconstruct, mixedReconstruct] at hrec
+    subst hrec
+    simp only [EvalExpr.evalExpr, MixedExpr.eval, NodeSemantics.evalOp, evalMixedOp]
+    have h0 : x.eval env = v a :=
+      hchildren 0 (by omega) (by simp [NodeOps.children, mixedChildren])
+    have h1 : y.eval env = v b :=
+      hchildren 1 (by omega) (by simp [NodeOps.children, mixedChildren])
+    rw [h0, h1]
 
 end AmoLean.EGraph.Verified.Bitwise.MixedExtract

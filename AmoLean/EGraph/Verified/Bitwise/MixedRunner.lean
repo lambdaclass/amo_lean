@@ -28,7 +28,7 @@ open CostExtraction (costAwareExtractAuto multiCandidateExtract hwCostFn)
 open MixedEMatch (RewriteRule)
 open MixedSaturation (saturateMixedF rebuildF)
 open MixedEGraphBuilder (addMixedExpr buildEGraph)
-open MixedPatternRules (allBitwisePatternRules allBitwisePatternRulesWithBridges)
+open MixedPatternRules (allBitwisePatternRules allBitwisePatternRulesWithBridges shiftAddPatternRules)
 open FieldFoldPatternRules (fieldFoldPatternRules allFieldFoldPatternRules)
 
 -- ══════════════════════════════════════════════════════════════════
@@ -119,9 +119,10 @@ def guidedOptimizeMixedF (p : Nat) (hw : HardwareCost)
   let g1 := runPhase cfg cfg.phase1Iters cfg.phase1Rebuild g allBitwisePatternRulesWithBridges
   -- Phase 2: field-specific fold rules
   let g2 := runPhase cfg cfg.phase2Iters cfg.phase2Rebuild g1 (fieldFoldPatternRules p)
-  -- Phase 3: extra rules (shift-add, user-provided, etc.)
-  let g3 := if extraRules.isEmpty then g2
-    else runPhase cfg cfg.phase3Iters cfg.phase3Rebuild g2 extraRules
+  -- Phase 3: shift-add decomposition + extra rules
+  let phase3Rules := shiftAddPatternRules ++ extraRules
+  let g3 := if phase3Rules.isEmpty then g2
+    else runPhase cfg cfg.phase3Iters cfg.phase3Rebuild g2 phase3Rules
   -- Multi-candidate extraction: prefers non-identity nodes at root
   multiCandidateExtract hw g3 rootId cfg.costFuel
 
@@ -230,9 +231,8 @@ example : mkCanonicalInput = MixedExpr.witnessE 0 := rfl
 /-- Smoke: fieldFoldPatternRules returns 1 rule for Mersenne31. -/
 example : (fieldFoldPatternRules mersenne31_prime).length = 1 := by native_decide
 
-/-- Smoke: full pattern rules list is non-empty. -/
-example : (allBitwisePatternRulesWithBridges ++ fieldFoldPatternRules mersenne31_prime).length = 11
-    := by native_decide
+/-- Smoke: bitwise pattern rules are non-empty. -/
+example : allBitwisePatternRulesWithBridges.length = 10 := rfl
 
 /-- Smoke: Solinas fold seed for BabyBear builds a 7-class e-graph. -/
 example : (buildEGraph (mkSolinasFoldSeed 31 134217727)).1.numClasses = 7 := by native_decide

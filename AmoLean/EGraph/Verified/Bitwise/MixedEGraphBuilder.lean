@@ -104,6 +104,10 @@ def addMixedExpr (g : EGraph MixedNodeOp) (expr : MixedExpr)
     let (aId, g1) := addMixedExpr g a
     let (bId, g2) := addMixedExpr g1 b
     addBinaryOp g2 .bitOr aId bId
+  | .subE a b =>
+    let (aId, g1) := addMixedExpr g a
+    let (bId, g2) := addMixedExpr g1 b
+    addBinaryOp g2 .subGate aId bId
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 4: Convenience — build from scratch

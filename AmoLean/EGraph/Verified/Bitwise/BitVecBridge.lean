@@ -76,6 +76,7 @@ def evalMixedBV (w : Nat) (op : MixedNodeOp) (env : MixedEnv)
   | .bitXor a b     => v a ^^^ v b
   | .bitOr a b      => v a ||| v b
   | .constMask n    => BitVec.ofNat w (2 ^ n - 1)
+  | .subGate a b    => v a - v b
 
 /-! ## Boundedness predicates -/
 
@@ -97,6 +98,7 @@ def ArithNoOverflow (w : Nat) (op : MixedNodeOp) (env : MixedEnv)
   | .mulGate a b    => v a * v b < 2 ^ w
   | .smulGate n a   => env.constVal n * v a < 2 ^ w
   | .shiftLeft a n  => Nat.shiftLeft (v a) n < 2 ^ w
+  | .subGate a b    => v b ≤ v a
   | _               => True
 
 /-! ## Lifting: Nat valuation → BitVec valuation -/
@@ -276,6 +278,28 @@ theorem bridge_addGate (w : Nat) (env : MixedEnv) (v : EClassId → Nat)
       Nat.mod_eq_of_lt (hb a), Nat.mod_eq_of_lt (hb b),
       Nat.mod_eq_of_lt hno]
 
+/-- subGate bridge: conditional on no underflow (Nat subtraction agrees with BitVec subtraction).
+    When `v b ≤ v a`, the Nat subtraction `v a - v b` equals `(liftBV a - liftBV b).toNat`.
+    Note: requires both no-underflow (v b ≤ v a) and result in bounds. -/
+theorem bridge_subGate (w : Nat) (env : MixedEnv) (v : EClassId → Nat)
+    (hb : InBounds w v) (a b : EClassId)
+    (hle : v b ≤ v a) :
+    evalMixedOp (.subGate a b) env v =
+    (evalMixedBV w (.subGate a b) env (liftBV w v)).toNat := by
+  simp only [evalMixedOp, evalMixedBV, liftBV]
+  rw [BitVec.toNat_sub, BitVec.toNat_ofNat, BitVec.toNat_ofNat,
+      Nat.mod_eq_of_lt (hb a), Nat.mod_eq_of_lt (hb b)]
+  -- Goal: v a - v b = (2 ^ w - v b + v a) % 2 ^ w
+  have ha := hb a
+  have hb' := hb b
+  have hsub_lt : v a - v b < 2 ^ w := Nat.lt_of_le_of_lt (Nat.sub_le _ _) ha
+  -- Rewrite: 2^w - v b + v a = (v a - v b) + 2^w
+  have key : 2 ^ w - v b + v a = v a - v b + 2 ^ w := by
+    have h1 : v b ≤ 2 ^ w := Nat.le_of_lt hb'
+    have h2 : v b ≤ v a := hle
+    omega
+  rw [key, Nat.add_mod_right, Nat.mod_eq_of_lt hsub_lt]
+
 /-- mulGate bridge: conditional on no overflow. -/
 theorem bridge_mulGate (w : Nat) (env : MixedEnv) (v : EClassId → Nat)
     (hb : InBounds w v) (a b : EClassId) (hno : v a * v b < 2 ^ w) :
@@ -427,6 +451,18 @@ theorem evalMixed_bv_agree_arith (op : MixedNodeOp) (env : MixedEnv)
     rw [BitVec.toNat_mul, BitVec.toNat_ofNat, BitVec.toNat_ofNat,
         Nat.mod_eq_of_lt (henv.1 n), Nat.mod_eq_of_lt (hb a),
         Nat.mod_eq_of_lt h]
+  case subGate a b =>
+    have hle : v b ≤ v a := hno
+    rw [BitVec.toNat_sub, BitVec.toNat_ofNat, BitVec.toNat_ofNat,
+        Nat.mod_eq_of_lt (hb a), Nat.mod_eq_of_lt (hb b)]
+    have hsub_lt : v a - v b < 2 ^ w := Nat.lt_of_le_of_lt (Nat.sub_le _ _) (hb a)
+    have hbw : v b ≤ 2 ^ w := Nat.le_of_lt (hb b)
+    have key : 2 ^ w - v b + v a = v a - v b + 2 ^ w := by
+      calc 2 ^ w - v b + v a
+          = 2 ^ w + v a - v b := by rw [Nat.sub_add_comm hbw]
+        _ = 2 ^ w + (v a - v b) := by rw [Nat.add_sub_assoc hle]
+        _ = v a - v b + 2 ^ w := by rw [Nat.add_comm]
+    rw [key, Nat.add_mod_right, Nat.mod_eq_of_lt hsub_lt]
 
 /-! ## Full bridge (all ops) -/
 
@@ -446,6 +482,7 @@ def OpInBounds (w : Nat) (op : MixedNodeOp) (env : MixedEnv)
   | .mulGate a b    => v a * v b < 2 ^ w
   | .smulGate n a   => env.constVal n * v a < 2 ^ w
   | .shiftLeft a n  => Nat.shiftLeft (v a) n < 2 ^ w
+  | .subGate a b    => v b ≤ v a
   | .constMask n    => n ≤ w
   | _               => True
 
@@ -486,6 +523,18 @@ theorem evalMixed_bv_agree (op : MixedNodeOp) (env : MixedEnv)
     rw [BitVec.toNat_mul, BitVec.toNat_ofNat, BitVec.toNat_ofNat,
         Nat.mod_eq_of_lt (henv.1 n), Nat.mod_eq_of_lt (hb a),
         Nat.mod_eq_of_lt hno]
+  case subGate a b =>
+    have hle : v b ≤ v a := hop
+    rw [BitVec.toNat_sub, BitVec.toNat_ofNat, BitVec.toNat_ofNat,
+        Nat.mod_eq_of_lt (hb a), Nat.mod_eq_of_lt (hb b)]
+    have hsub_lt : v a - v b < 2 ^ w := Nat.lt_of_le_of_lt (Nat.sub_le _ _) (hb a)
+    have hbw : v b ≤ 2 ^ w := Nat.le_of_lt (hb b)
+    have key : 2 ^ w - v b + v a = v a - v b + 2 ^ w := by
+      calc 2 ^ w - v b + v a
+          = 2 ^ w + v a - v b := by rw [Nat.sub_add_comm hbw]
+        _ = 2 ^ w + (v a - v b) := by rw [Nat.add_sub_assoc hle]
+        _ = v a - v b + 2 ^ w := by rw [Nat.add_comm]
+    rw [key, Nat.add_mod_right, Nat.mod_eq_of_lt hsub_lt]
   case shiftLeft a n =>
     have hno : Nat.shiftLeft (v a) n < 2 ^ w := hop
     rw [BitVec.toNat_shiftLeft, BitVec.toNat_ofNat, Nat.mod_eq_of_lt (hb a)]
@@ -555,7 +604,8 @@ example : ∃ (w : Nat) (env : MixedEnv) (v : EClassId → Nat) (op : MixedNodeO
 theorem evalMixed_bv_agree_mod (op : MixedNodeOp) (env : MixedEnv)
     (v : EClassId → Nat) (w : Nat)
     (hb : InBounds w v) (henv : EnvInBounds w env)
-    (hcm : ∀ (n : Nat), op = .constMask n → n ≤ w) :
+    (hcm : ∀ (n : Nat), op = .constMask n → n ≤ w)
+    (hsub : ∀ (a b : EClassId), op = .subGate a b → v b ≤ v a) :
     evalMixedOp op env v % 2 ^ w =
     (evalMixedBV w op env (liftBV w v)).toNat := by
   cases op <;> simp only [evalMixedOp, evalMixedBV, liftBV]
@@ -572,6 +622,20 @@ theorem evalMixed_bv_agree_mod (op : MixedNodeOp) (env : MixedEnv)
   case smulGate n a =>
     rw [BitVec.toNat_mul, BitVec.toNat_ofNat, BitVec.toNat_ofNat,
         Nat.mod_eq_of_lt (henv.1 n), Nat.mod_eq_of_lt (hb a)]
+  case subGate a b =>
+    have hle := hsub a b rfl
+    rw [BitVec.toNat_sub, BitVec.toNat_ofNat, BitVec.toNat_ofNat,
+        Nat.mod_eq_of_lt (hb a), Nat.mod_eq_of_lt (hb b)]
+    -- Goal: (v a - v b) % 2^w = (2^w - v b + v a) % 2^w
+    have hbw : v b ≤ 2 ^ w := Nat.le_of_lt (hb b)
+    have hba : v b ≤ v a := hle
+    -- Rewrite RHS: 2^w - v b + v a = (v a - v b) + 2^w
+    have key : 2 ^ w - v b + v a = v a - v b + 2 ^ w := by
+      calc 2 ^ w - v b + v a
+          = 2 ^ w + v a - v b := by rw [Nat.sub_add_comm hbw]
+        _ = 2 ^ w + (v a - v b) := by rw [Nat.add_sub_assoc hba]
+        _ = v a - v b + 2 ^ w := by rw [Nat.add_comm]
+    rw [key, Nat.add_mod_right]
   case shiftLeft a n =>
     rw [BitVec.toNat_shiftLeft, BitVec.toNat_ofNat, Nat.mod_eq_of_lt (hb a)]
     rfl

@@ -116,6 +116,51 @@ def patShiftRightDivBridge (n : Nat) : RewriteRule MixedNodeOp where
   rhs := .node (skelShiftRight n) [.patVar 0]
 
 -- ══════════════════════════════════════════════════════════════════
+-- Section 4b: Shift-add decomposition rules (uses subGate)
+-- ══════════════════════════════════════════════════════════════════
+
+def skelSubGate : MixedNodeOp := .subGate 0 1
+
+/-- `x * (2^k - 1) → (x << k) - x` — shift-sub decomposition.
+    Replaces multiplication by Mersenne-1 constant with shifts.
+    Valid for any k. On ARM, saves 2 cycles (shift+sub=2 vs mul=3). -/
+def patMulMersenneSub (k : Nat) : RewriteRule MixedNodeOp where
+  name := s!"mul_{2^k-1}_to_shift_sub"
+  lhs := .node skelMulGate [.patVar 0, .node (.constGate (2^k - 1)) []]
+  rhs := .node skelSubGate [.node (skelShiftLeft k) [.patVar 0], .patVar 0]
+
+/-- Concrete instances for Plonky3 correction constants. -/
+def patMulBabyBearCorrSub : RewriteRule MixedNodeOp := patMulMersenneSub 27   -- 2^27-1 = 134217727
+def patMulKoalaBearCorrSub : RewriteRule MixedNodeOp := patMulMersenneSub 24  -- 2^24-1 = 16777215
+def patMulGoldilocksCorrSub : RewriteRule MixedNodeOp := patMulMersenneSub 32 -- 2^32-1 = 4294967295
+
+/-- Also commuted: `(2^k - 1) * x → (x << k) - x` -/
+def patMulMersenneSubComm (k : Nat) : RewriteRule MixedNodeOp where
+  name := s!"mul_{2^k-1}_to_shift_sub_comm"
+  lhs := .node skelMulGate [.node (.constGate (2^k - 1)) [], .patVar 0]
+  rhs := .node skelSubGate [.node (skelShiftLeft k) [.patVar 0], .patVar 0]
+
+/-- `smulGate(2^k - 1, x) → (x << k) - x` — shift-sub for scalar multiply.
+    This is the form the field fold rules actually produce in the e-graph. -/
+def patSmulMersenneSub (k : Nat) : RewriteRule MixedNodeOp where
+  name := s!"smul_{2^k-1}_to_shift_sub"
+  lhs := .node (.smulGate (2^k - 1) 0) [.patVar 0]
+  rhs := .node skelSubGate [.node (skelShiftLeft k) [.patVar 0], .patVar 0]
+
+/-- All shift-add decomposition rules for Phase 3.
+    Includes both mulGate and smulGate variants. -/
+def shiftAddPatternRules : List (RewriteRule MixedNodeOp) :=
+  [ -- mulGate variants (for explicit multiplication nodes)
+    patMulMersenneSub 27,  patMulMersenneSubComm 27   -- BabyBear
+  , patMulMersenneSub 24,  patMulMersenneSubComm 24   -- KoalaBear
+  , patMulMersenneSub 32,  patMulMersenneSubComm 32   -- Goldilocks
+    -- smulGate variants (the form field fold rules actually produce)
+  , patSmulMersenneSub 27                              -- BabyBear
+  , patSmulMersenneSub 24                              -- KoalaBear
+  , patSmulMersenneSub 32                              -- Goldilocks
+  ]
+
+-- ══════════════════════════════════════════════════════════════════
 -- Section 5: Rule collections
 -- ══════════════════════════════════════════════════════════════════
 

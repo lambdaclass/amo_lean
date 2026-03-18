@@ -70,6 +70,7 @@ def IsBitwiseOnly : MixedExpr → Bool
   | .bitXorE a b     => IsBitwiseOnly a && IsBitwiseOnly b
   | .bitOrE a b      => IsBitwiseOnly a && IsBitwiseOnly b
   | .constMaskE _    => false
+  | .subE _ _        => false
 
 /-- All environment values bounded at width w. -/
 def BoundedEnv (env : MixedEnv) (w : Nat) : Prop :=
@@ -107,6 +108,7 @@ theorem evalMixed_bitwise_bounded (e : MixedExpr) (env : MixedEnv) (w : Nat)
     simp [IsBitwiseOnly, Bool.and_eq_true] at hbw
     simp only [MixedExpr.eval]
     exact val_lor_bounded _ _ w (iha hbw.1) (ihb hbw.2)
+  | subE _ _ _ _ => simp [IsBitwiseOnly] at hbw
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 3: Smoke tests

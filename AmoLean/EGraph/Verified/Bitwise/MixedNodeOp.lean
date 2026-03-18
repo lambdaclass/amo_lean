@@ -60,6 +60,8 @@ inductive MixedNodeOp where
   | bitOr      : EClassId → EClassId → MixedNodeOp
   /-- Constant mask: 2^n - 1 (no children, used for AND masking) -/
   | constMask  : Nat → MixedNodeOp
+  /-- Subtraction gate: a - b (Nat truncated: 0 if a < b) -/
+  | subGate    : EClassId → EClassId → MixedNodeOp
   deriving Repr, DecidableEq
 
 instance : BEq MixedNodeOp := instBEqOfDecidableEq
@@ -83,6 +85,7 @@ instance : Inhabited MixedNodeOp := ⟨.constGate 0⟩
   | .bitXor a b     => [a, b]
   | .bitOr a b      => [a, b]
   | .constMask _    => []
+  | .subGate a b    => [a, b]
 
 /-- Apply a function to all e-class children. -/
 @[simp] def mixedMapChildren (f : EClassId → EClassId) : MixedNodeOp → MixedNodeOp
@@ -99,6 +102,7 @@ instance : Inhabited MixedNodeOp := ⟨.constGate 0⟩
   | .bitXor a b     => .bitXor (f a) (f b)
   | .bitOr a b      => .bitOr (f a) (f b)
   | .constMask n    => .constMask n
+  | .subGate a b    => .subGate (f a) (f b)
 
 /-- Positionally replace children with new e-class IDs. -/
 @[simp] def mixedReplaceChildren (op : MixedNodeOp) (ids : List EClassId) : MixedNodeOp :=
@@ -112,6 +116,7 @@ instance : Inhabited MixedNodeOp := ⟨.constGate 0⟩
   | .bitAnd _ _, a :: b :: _     => .bitAnd a b
   | .bitXor _ _, a :: b :: _     => .bitXor a b
   | .bitOr _ _, a :: b :: _      => .bitOr a b
+  | .subGate _ _, a :: b :: _     => .subGate a b
   | op, _                        => op
 
 /-- Cost model: mul = 1, all others = 0. Extensible for hardware-specific models. -/
@@ -132,8 +137,9 @@ def mixedSimplicity : MixedNodeOp → Nat
   | .bitXor _ _    => 8
   | .bitOr _ _     => 9
   | .addGate _ _   => 10
-  | .smulGate _ _  => 11
-  | .mulGate _ _   => 12
+  | .subGate _ _   => 11
+  | .smulGate _ _  => 12
+  | .mulGate _ _   => 13
 
 /-! ## List length helpers -/
 
@@ -171,6 +177,7 @@ instance : NodeOps MixedNodeOp where
     | bitXor a b => simp at hlen; obtain ⟨x, y, rfl⟩ := list_length_two hlen; rfl
     | bitOr a b => simp at hlen; obtain ⟨x, y, rfl⟩ := list_length_two hlen; rfl
     | constMask _ => simp at hlen; subst hlen; rfl
+    | subGate a b => simp at hlen; obtain ⟨x, y, rfl⟩ := list_length_two hlen; rfl
   replaceChildren_sameShape op ids hlen := by
     cases op with
     | constGate _ => simp at hlen; subst hlen; rfl
@@ -186,6 +193,7 @@ instance : NodeOps MixedNodeOp where
     | bitXor a b => simp at hlen; obtain ⟨x, y, rfl⟩ := list_length_two hlen; rfl
     | bitOr a b => simp at hlen; obtain ⟨x, y, rfl⟩ := list_length_two hlen; rfl
     | constMask _ => simp at hlen; subst hlen; rfl
+    | subGate a b => simp at hlen; obtain ⟨x, y, rfl⟩ := list_length_two hlen; rfl
 
 /-! ## Semantics: Evaluation on Nat -/
 
@@ -216,6 +224,8 @@ abbrev MixedEnv := CircuitEnv Nat
   | .bitXor a b     => Nat.xor (v a) (v b)
   | .bitOr a b      => Nat.lor (v a) (v b)
   | .constMask n    => 2 ^ n - 1
+  -- Subtraction (Nat truncated: a - b = 0 if a < b)
+  | .subGate a b    => v a - v b
 
 /-! ## NodeSemantics Instance -/
 
@@ -265,6 +275,11 @@ instance : NodeSemantics MixedNodeOp MixedEnv Nat where
       · exact h a (by simp [NodeOps.children, mixedChildren])
       · exact h b (by simp [NodeOps.children, mixedChildren])
     | constMask _ => rfl
+    | subGate a b =>
+      simp only [evalMixedOp]
+      congr 1
+      · exact h a (by simp [NodeOps.children, mixedChildren])
+      · exact h b (by simp [NodeOps.children, mixedChildren])
 
 /-! ## Embedding: CircuitNodeOp → MixedNodeOp -/
 
@@ -323,6 +338,7 @@ def isBitwise : MixedNodeOp → Bool
   | .bitXor _ _     => true
   | .bitOr _ _      => true
   | .constMask _    => true
+  | .subGate _ _    => false  -- subtraction is algebraic, not bitwise
   | _               => false
 
 /-- Returns true if the operation is algebraic (mirrors CircuitNodeOp). -/
@@ -334,6 +350,7 @@ def isAlgebraic : MixedNodeOp → Bool
   | .mulGate _ _  => true
   | .negGate _    => true
   | .smulGate _ _ => true
+  | .subGate _ _  => true
   | _             => false
 
 /-- Every MixedNodeOp is either algebraic or bitwise. -/

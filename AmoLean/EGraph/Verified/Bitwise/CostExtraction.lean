@@ -459,7 +459,7 @@ example : costComputeF arm_cortex_a76 (EGraph.empty (Op := MixedNodeOp)) 0 =
     (EGraph.empty (Op := MixedNodeOp)) := rfl
 
 /-- Non-vacuity: hwCostFn computes correct costs for ARM. -/
-example : hwCostFn arm_cortex_a76 ⟨.mulGate 0 1⟩ = 2 := by native_decide
+example : hwCostFn arm_cortex_a76 ⟨.mulGate 0 1⟩ = 3 := by native_decide
 example : hwCostFn arm_cortex_a76 ⟨.addGate 0 1⟩ = 1 := by native_decide
 example : hwCostFn arm_cortex_a76 ⟨.shiftLeft 0 5⟩ = 1 := by native_decide
 example : hwCostFn arm_cortex_a76 ⟨.constGate 42⟩ = 0 := by native_decide

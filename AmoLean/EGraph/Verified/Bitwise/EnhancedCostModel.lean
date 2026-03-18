@@ -77,6 +77,7 @@ def tempCount : MixedExpr → Nat
   | .bitAndE a b => max (tempCount a + 1) (tempCount b + 1)
   | .bitXorE a b => max (tempCount a + 1) (tempCount b + 1)
   | .bitOrE a b  => max (tempCount a + 1) (tempCount b + 1)
+  | .subE a b    => max (tempCount a + 1) (tempCount b + 1)
 
 /-! ## Expression-level operation cost (recursive) -/
 
@@ -96,6 +97,7 @@ def exprOpCost (hw : HardwareCost) : MixedExpr → Nat
   | .bitAndE a b => hw.bitAnd + exprOpCost hw a + exprOpCost hw b
   | .bitXorE a b => hw.bitXor + exprOpCost hw a + exprOpCost hw b
   | .bitOrE a b  => hw.bitOr + exprOpCost hw a + exprOpCost hw b
+  | .subE a b    => hw.sub + exprOpCost hw a + exprOpCost hw b
 
 /-! ## Spill penalty and enhanced cost -/
 

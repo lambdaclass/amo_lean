@@ -50,12 +50,12 @@ structure HardwareCost where
 
 /-- ARM Cortex-A76 cost model (from optimization guide v8.0). -/
 def arm_cortex_a76 : HardwareCost :=
-  { mul32 := 2, mul64 := 4, add := 1, sub := 1,
+  { mul32 := 3, mul64 := 5, add := 1, sub := 1,
     shift := 1, bitAnd := 1, bitXor := 1, bitOr := 1 }
 
 /-- RISC-V SiFive U74 cost model (from core complex manual 21G1). -/
 def riscv_sifive_u74 : HardwareCost :=
-  { mul32 := 3, mul64 := 3, add := 1, sub := 1,
+  { mul32 := 5, mul64 := 5, add := 1, sub := 1,
     shift := 1, bitAnd := 1, bitXor := 1, bitOr := 1 }
 
 /-- FPGA Xilinx DSP48E2 cost model (DSP-based multiply, free shifts). -/
@@ -82,6 +82,7 @@ def mixedOpCost (hw : HardwareCost) : MixedNodeOp → Nat
   | .bitXor _ _     => hw.bitXor
   | .bitOr _ _      => hw.bitOr
   | .constMask _    => 0
+  | .subGate _ _    => hw.sub
 
 /-! ## Zero-cost theorems -/
 
@@ -148,16 +149,16 @@ theorem pseudo_mersenne_le_montgomery (hw : HardwareCost) :
 example : mersenneFoldCost arm_cortex_a76 = 3 := by native_decide
 
 /-- Non-vacuity: ARM Cortex-A76 pseudo-Mersenne fold costs 5 cycles. -/
-example : pseudoMersenneFoldCost arm_cortex_a76 = 5 := by native_decide
+example : pseudoMersenneFoldCost arm_cortex_a76 = 6 := by native_decide
 
 /-- Non-vacuity: ARM Cortex-A76 Montgomery costs 6 cycles. -/
-example : montgomeryCost arm_cortex_a76 = 6 := by native_decide
+example : montgomeryCost arm_cortex_a76 = 7 := by native_decide
 
 /-- Non-vacuity: FPGA shift is free, so Mersenne fold costs only 2 cycles. -/
 example : mersenneFoldCost fpga_dsp48e2 = 2 := by native_decide
 
 /-- Non-vacuity: RISC-V multiply is 3 cycles, making Montgomery cost 7. -/
-example : montgomeryCost riscv_sifive_u74 = 7 := by native_decide
+example : montgomeryCost riscv_sifive_u74 = 9 := by native_decide
 
 /-- Non-vacuity: shift_le_mul hypothesis is satisfiable on all three targets. -/
 example : arm_cortex_a76.shift ≤ arm_cortex_a76.mul32 := by native_decide
@@ -165,7 +166,7 @@ example : riscv_sifive_u74.shift ≤ riscv_sifive_u74.mul32 := by native_decide
 example : fpga_dsp48e2.shift ≤ fpga_dsp48e2.mul32 := by native_decide
 
 /-- Non-vacuity: mixedOpCost produces non-trivial values on ARM. -/
-example : mixedOpCost arm_cortex_a76 (.mulGate 0 1) = 2 := by native_decide
+example : mixedOpCost arm_cortex_a76 (.mulGate 0 1) = 3 := by native_decide
 example : mixedOpCost arm_cortex_a76 (.addGate 0 1) = 1 := by native_decide
 example : mixedOpCost arm_cortex_a76 (.shiftLeft 0 5) = 1 := by native_decide
 

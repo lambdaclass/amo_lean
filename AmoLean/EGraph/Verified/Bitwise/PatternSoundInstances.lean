@@ -132,7 +132,8 @@ def patShiftLeftMulBridge_sound (n : Nat) : PatternSoundRule where
   envPrecond := fun env => env.constVal (2 ^ n) = 2 ^ n
   soundness := fun _ σ h => by
     simp only [patShiftLeftMulBridge, Pattern.eval, List.map, NodeOps.children,
-      mixedChildren, skelShiftLeft, skelMulGate, evalMixedOp, List.zip, Nat.shiftLeft_eq, h]
+      mixedChildren, skelShiftLeft, skelMulGate, List.zip, Nat.shiftLeft_eq, h]
+    unfold evalMixedOp; simp [h, List.lookup, List.zipWith, Nat.shiftLeft_eq]
   lhs_wf := by unfold patShiftLeftMulBridge AllDistinctChildren; simp only [skelShiftLeft, NodeOps.children, mixedChildren]; exact ⟨by decide, rfl, fun p hp => by simp at hp; subst hp; unfold AllDistinctChildren; trivial⟩
   rhs_wf := by
     unfold patShiftLeftMulBridge AllDistinctChildren

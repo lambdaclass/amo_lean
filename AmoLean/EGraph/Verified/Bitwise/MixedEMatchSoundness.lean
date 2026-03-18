@@ -185,6 +185,19 @@ theorem sameShapeSemantics_holds : SameShapeSemantics := by
     simp only [ndCh, NodeOps.children, AmoLean.EGraph.Verified.Bitwise.mixedChildren,
       List.getElem_cons_zero] at h0
     rw [h0]
+  -- subGate: binary op, two children (follows addGate pattern)
+  | subGate a₁ b₁ =>
+    simp only [ndMapCh, NodeOps.mapChildren, AmoLean.EGraph.Verified.Bitwise.mixedMapChildren] at heq
+    cases op₂ <;> simp at heq
+    rename_i a₂ b₂
+    simp only [evalMixedOp]
+    have h0 := hchildren 0 (by simp [ndCh, NodeOps.children, AmoLean.EGraph.Verified.Bitwise.mixedChildren])
+      (by simp [ndCh, NodeOps.children, AmoLean.EGraph.Verified.Bitwise.mixedChildren])
+    have h1 := hchildren 1 (by simp [ndCh, NodeOps.children, AmoLean.EGraph.Verified.Bitwise.mixedChildren])
+      (by simp [ndCh, NodeOps.children, AmoLean.EGraph.Verified.Bitwise.mixedChildren])
+    simp only [ndCh, NodeOps.children, AmoLean.EGraph.Verified.Bitwise.mixedChildren,
+      List.getElem_cons_zero, List.getElem_cons_succ] at h0 h1
+    rw [h0, h1]
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 2: PatternSoundRule
@@ -196,9 +209,7 @@ theorem sameShapeSemantics_holds : SameShapeSemantics := by
     Uses Pattern.eval from MixedEMatchSpec. -/
 structure PatternSoundRule where
   rule : RewriteRule MixedNodeOp
-  envPrecond : MixedEnv → Prop := fun _ => True
-  soundness : ∀ (env : MixedEnv) (σ : PatVarId → Nat),
-    envPrecond env →
+  soundness : ∀ (env : Nat → Nat) (σ : PatVarId → Nat),
     MixedEMatchSpec.Pattern.eval rule.lhs env σ =
     MixedEMatchSpec.Pattern.eval rule.rhs env σ
 
