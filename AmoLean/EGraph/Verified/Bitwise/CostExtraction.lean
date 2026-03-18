@@ -383,6 +383,63 @@ structure MixedILPConfig where
   /-- Maximum acyclicity level (typically numClasses). -/
   maxLevel : Nat
 
+/-! ## Reduction-aware extraction
+
+When extracting for modular reduction, the root class may contain both:
+- `witness(0)` (identity, cost 0)
+- `fold(witness(0))` (the actual reduction, cost > 0)
+
+The greedy extractor picks `witness(0)` because it's cheapest. But we want the
+reduction form. The fix: before cost propagation, penalize identity nodes
+(witness/pubInput) in the ROOT CLASS ONLY so they aren't selected as bestNode
+when better alternatives exist. -/
+
+/-- Is this op an identity pass (should not be the root extraction result)? -/
+private def isIdentityOp : MixedNodeOp → Bool
+  | .witness _  => true
+  | .pubInput _ => true
+  | _           => false
+
+/-- Reduction-aware cost function: adds a large penalty to identity nodes
+    so the extractor prefers non-trivial expressions when alternatives exist. -/
+def reductionCostFn (hw : HardwareCost) (node : ENode MixedNodeOp) : Nat :=
+  if isIdentityOp node.op then 1000000  -- penalty for identity at any level
+  else mixedOpCost hw node.op
+
+/-- Reduction-aware extraction.
+    Strategy: run standard cost extraction. If the root class bestNode is an
+    identity (witness/pubInput), swap it with the next-best non-identity node
+    in the same class, then re-extract.
+
+    This is the "Option 1 refined" approach: we only filter identity nodes
+    at the ROOT class level, not for children. -/
+def reductionAwareExtract (hw : HardwareCost) (g : MixedEGraph)
+    (rootId : EClassId) (costFuel : Nat) : Option MixedExpr :=
+  -- Step 1: propagate costs — use max(costFuel, numClasses) to ensure convergence
+  let effectiveFuel := max costFuel (g.numClasses + 1)
+  let g' := costComputeF hw g effectiveFuel
+  let canonRoot := UnionFind.root g'.unionFind rootId
+  -- Step 2: check if root's bestNode is identity
+  match g'.classes.get? canonRoot with
+  | none => extractAuto g' rootId  -- no class, fall through
+  | some rootClass =>
+    match rootClass.bestNode with
+    | none => extractAuto g' rootId
+    | some bestNd =>
+      if isIdentityOp bestNd.op then
+        -- bestNode is identity — find the best NON-identity node in this class
+        let nonIdNodes := rootClass.nodes.toList.filter (fun nd => !isIdentityOp nd.op)
+        match nonIdNodes with
+        | [] => extractAuto g' rootId  -- no alternatives, use identity
+        | alt :: _ =>
+          -- Swap bestNode to the non-identity alternative and re-extract
+          let updatedClass := { rootClass with bestNode := some alt, bestCost := 0 }
+          let g'' := { g' with classes := g'.classes.insert canonRoot updatedClass }
+          extractAuto g'' rootId
+      else
+        -- bestNode is already non-identity, extract normally
+        extractAuto g' rootId
+
 /-! ## Non-vacuity examples -/
 
 /-- Non-vacuity: costComputeF with fuel 0 is identity. -/

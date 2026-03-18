@@ -23,7 +23,7 @@ open AmoLean.EGraph.Verified.Bitwise
   (MixedNodeOp HardwareCost arm_cortex_a76 riscv_sifive_u74 fpga_dsp48e2
    mersenne31_prime babybear_prime goldilocks_prime emitCFunction)
 open AmoLean.EGraph.Verified.Bitwise.MixedExtract (MixedExpr)
-open CostExtraction (costAwareExtractAuto hwCostFn)
+open CostExtraction (costAwareExtractAuto reductionAwareExtract hwCostFn)
 open MixedEMatch (RewriteRule)
 open MixedSaturation (saturateMixedF rebuildF)
 open MixedEGraphBuilder (addMixedExpr buildEGraph)
@@ -108,8 +108,9 @@ def guidedOptimizeMixedF (p : Nat) (hw : HardwareCost)
   -- Phase 3: extra rules (shift-add, user-provided, etc.)
   let g3 := if extraRules.isEmpty then g2
     else saturateMixedF cfg.ematchFuel cfg.phase3Iters cfg.phase3Rebuild g2 extraRules
-  -- Cost-aware extraction
-  costAwareExtractAuto hw g3 rootId cfg.costFuel
+  -- Reduction-aware extraction: penalizes identity nodes (witness/pubInput)
+  -- so the extractor prefers actual reductions over the trivial input
+  reductionAwareExtract hw g3 rootId cfg.costFuel
 
 /-- Legacy single-phase pipeline (backward compat). -/
 def optimizeMixedF (ematchFuel maxIter rebuildFuel costFuel : Nat)
@@ -128,14 +129,26 @@ def optimizeMixedF (ematchFuel maxIter rebuildFuel costFuel : Nat)
     (e.g., constGate(134217727) = the BabyBear correction constant 2^27-1). -/
 private def identityConstLookup : Nat → Int := fun n => ↑n
 
+/-- Auto-detect Solinas form and generate appropriate seed.
+    For 2^a - c primes, seeds with the fold expression.
+    For unknown primes, falls back to witness(0). -/
+private def autoSeed (p : Nat) : MixedExpr :=
+  -- Known Solinas forms: 2^a - c where c = 2^b - 1
+  if p == 2^31 - 1 then mkSolinasFoldSeed 31 1                -- Mersenne31
+  else if p == 2^31 - 2^27 + 1 then mkSolinasFoldSeed 31 (2^27 - 1)  -- BabyBear
+  else if p == 2^31 - 2^24 + 1 then mkSolinasFoldSeed 31 (2^24 - 1)  -- KoalaBear
+  else if p == 2^64 - 2^32 + 1 then mkSolinasFoldSeed 64 (2^32 - 1)  -- Goldilocks
+  else mkCanonicalInput  -- Unknown prime: just witness(0)
+
 /-- Full pipeline: prime + hardware → optimized C code.
-    Uses 3-phase guided saturation with Solinas fold seed. -/
+    Auto-detects Solinas form and seeds with the fold expression.
+    Uses 3-phase guided saturation. -/
 def synthesizeViaEGraph (p : Nat) (hw : HardwareCost)
     (cfg : GuidedMixedConfig := .default)
     (seed : Option MixedExpr := none) : String :=
   let inputExpr := match seed with
     | some e => e
-    | none => mkCanonicalInput
+    | none => autoSeed p
   match guidedOptimizeMixedF p hw cfg inputExpr with
   | some optExpr =>
     emitCFunction s!"reduce_mod_{p}" "x" optExpr identityConstLookup
