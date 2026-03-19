@@ -62,6 +62,14 @@ inductive MixedNodeOp where
   | constMask  : Nat → MixedNodeOp
   /-- Subtraction gate: a - b (Nat truncated: 0 if a < b) -/
   | subGate    : EClassId → EClassId → MixedNodeOp
+  /-- Modular reduction: child % p -/
+  | reduceGate : EClassId → Nat → MixedNodeOp
+  /-- Kronecker pack: a + b * 2^w (pack two field elements in one word) -/
+  | kronPack   : EClassId → EClassId → Nat → MixedNodeOp
+  /-- Kronecker unpack low: child % 2^w (extract low element) -/
+  | kronUnpackLo : EClassId → Nat → MixedNodeOp
+  /-- Kronecker unpack high: child / 2^w (extract high element) -/
+  | kronUnpackHi : EClassId → Nat → MixedNodeOp
   deriving Repr, DecidableEq
 
 instance : BEq MixedNodeOp := instBEqOfDecidableEq
@@ -85,7 +93,11 @@ instance : Inhabited MixedNodeOp := ⟨.constGate 0⟩
   | .bitXor a b     => [a, b]
   | .bitOr a b      => [a, b]
   | .constMask _    => []
-  | .subGate a b    => [a, b]
+  | .subGate a b       => [a, b]
+  | .reduceGate a _    => [a]
+  | .kronPack a b _    => [a, b]
+  | .kronUnpackLo a _  => [a]
+  | .kronUnpackHi a _  => [a]
 
 /-- Apply a function to all e-class children. -/
 @[simp] def mixedMapChildren (f : EClassId → EClassId) : MixedNodeOp → MixedNodeOp
@@ -102,7 +114,11 @@ instance : Inhabited MixedNodeOp := ⟨.constGate 0⟩
   | .bitXor a b     => .bitXor (f a) (f b)
   | .bitOr a b      => .bitOr (f a) (f b)
   | .constMask n    => .constMask n
-  | .subGate a b    => .subGate (f a) (f b)
+  | .subGate a b       => .subGate (f a) (f b)
+  | .reduceGate a p    => .reduceGate (f a) p
+  | .kronPack a b w    => .kronPack (f a) (f b) w
+  | .kronUnpackLo a w  => .kronUnpackLo (f a) w
+  | .kronUnpackHi a w  => .kronUnpackHi (f a) w
 
 /-- Positionally replace children with new e-class IDs. -/
 @[simp] def mixedReplaceChildren (op : MixedNodeOp) (ids : List EClassId) : MixedNodeOp :=
@@ -116,8 +132,12 @@ instance : Inhabited MixedNodeOp := ⟨.constGate 0⟩
   | .bitAnd _ _, a :: b :: _     => .bitAnd a b
   | .bitXor _ _, a :: b :: _     => .bitXor a b
   | .bitOr _ _, a :: b :: _      => .bitOr a b
-  | .subGate _ _, a :: b :: _     => .subGate a b
-  | op, _                        => op
+  | .subGate _ _, a :: b :: _        => .subGate a b
+  | .reduceGate _ p, a :: _         => .reduceGate a p
+  | .kronPack _ _ w, a :: b :: _    => .kronPack a b w
+  | .kronUnpackLo _ w, a :: _       => .kronUnpackLo a w
+  | .kronUnpackHi _ w, a :: _       => .kronUnpackHi a w
+  | op, _                           => op
 
 /-- Cost model: mul = 1, all others = 0. Extensible for hardware-specific models. -/
 def mixedLocalCost : MixedNodeOp → Nat
@@ -137,9 +157,13 @@ def mixedSimplicity : MixedNodeOp → Nat
   | .bitXor _ _    => 8
   | .bitOr _ _     => 9
   | .addGate _ _   => 10
-  | .subGate _ _   => 11
-  | .smulGate _ _  => 12
-  | .mulGate _ _   => 13
+  | .subGate _ _      => 11
+  | .kronUnpackLo _ _ => 12
+  | .kronUnpackHi _ _ => 13
+  | .reduceGate _ _   => 14
+  | .kronPack _ _ _   => 15
+  | .smulGate _ _     => 16
+  | .mulGate _ _      => 17
 
 /-! ## List length helpers -/
 
@@ -178,6 +202,10 @@ instance : NodeOps MixedNodeOp where
     | bitOr a b => simp at hlen; obtain ⟨x, y, rfl⟩ := list_length_two hlen; rfl
     | constMask _ => simp at hlen; subst hlen; rfl
     | subGate a b => simp at hlen; obtain ⟨x, y, rfl⟩ := list_length_two hlen; rfl
+    | reduceGate a p => simp at hlen; obtain ⟨x, rfl⟩ := list_length_one hlen; rfl
+    | kronPack a b w => simp at hlen; obtain ⟨x, y, rfl⟩ := list_length_two hlen; rfl
+    | kronUnpackLo a w => simp at hlen; obtain ⟨x, rfl⟩ := list_length_one hlen; rfl
+    | kronUnpackHi a w => simp at hlen; obtain ⟨x, rfl⟩ := list_length_one hlen; rfl
   replaceChildren_sameShape op ids hlen := by
     cases op with
     | constGate _ => simp at hlen; subst hlen; rfl
@@ -194,6 +222,10 @@ instance : NodeOps MixedNodeOp where
     | bitOr a b => simp at hlen; obtain ⟨x, y, rfl⟩ := list_length_two hlen; rfl
     | constMask _ => simp at hlen; subst hlen; rfl
     | subGate a b => simp at hlen; obtain ⟨x, y, rfl⟩ := list_length_two hlen; rfl
+    | reduceGate a p => simp at hlen; obtain ⟨x, rfl⟩ := list_length_one hlen; rfl
+    | kronPack a b w => simp at hlen; obtain ⟨x, y, rfl⟩ := list_length_two hlen; rfl
+    | kronUnpackLo a w => simp at hlen; obtain ⟨x, rfl⟩ := list_length_one hlen; rfl
+    | kronUnpackHi a w => simp at hlen; obtain ⟨x, rfl⟩ := list_length_one hlen; rfl
 
 /-! ## Semantics: Evaluation on Nat -/
 
@@ -225,7 +257,15 @@ abbrev MixedEnv := CircuitEnv Nat
   | .bitOr a b      => Nat.lor (v a) (v b)
   | .constMask n    => 2 ^ n - 1
   -- Subtraction (Nat truncated: a - b = 0 if a < b)
-  | .subGate a b    => v a - v b
+  | .subGate a b       => v a - v b
+  -- Modular reduction: child % p
+  | .reduceGate a p    => v a % p
+  -- Kronecker: pack two values
+  | .kronPack a b w    => v a + v b * 2 ^ w
+  -- Kronecker: extract low bits
+  | .kronUnpackLo a w  => v a % 2 ^ w
+  -- Kronecker: extract high bits
+  | .kronUnpackHi a w  => v a / 2 ^ w
 
 /-! ## NodeSemantics Instance -/
 
@@ -280,6 +320,23 @@ instance : NodeSemantics MixedNodeOp MixedEnv Nat where
       congr 1
       · exact h a (by simp [NodeOps.children, mixedChildren])
       · exact h b (by simp [NodeOps.children, mixedChildren])
+    | reduceGate a p =>
+      simp only [evalMixedOp]
+      congr 1
+      exact h a (by simp [NodeOps.children, mixedChildren])
+    | kronPack a b w =>
+      simp only [evalMixedOp]
+      congr 1
+      · exact h a (by simp [NodeOps.children, mixedChildren])
+      · congr 1; exact h b (by simp [NodeOps.children, mixedChildren])
+    | kronUnpackLo a w =>
+      simp only [evalMixedOp]
+      congr 1
+      exact h a (by simp [NodeOps.children, mixedChildren])
+    | kronUnpackHi a w =>
+      simp only [evalMixedOp]
+      congr 1
+      exact h a (by simp [NodeOps.children, mixedChildren])
 
 /-! ## Embedding: CircuitNodeOp → MixedNodeOp -/
 
@@ -350,8 +407,12 @@ def isAlgebraic : MixedNodeOp → Bool
   | .mulGate _ _  => true
   | .negGate _    => true
   | .smulGate _ _ => true
-  | .subGate _ _  => true
-  | _             => false
+  | .subGate _ _      => true
+  | .reduceGate _ _   => true
+  | .kronPack _ _ _   => true
+  | .kronUnpackLo _ _ => true
+  | .kronUnpackHi _ _ => true
+  | _                 => false
 
 /-- Every MixedNodeOp is either algebraic or bitwise. -/
 theorem algebraic_or_bitwise (op : MixedNodeOp) : isAlgebraic op = true ∨ isBitwise op = true := by

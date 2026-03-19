@@ -49,6 +49,10 @@ instance : Hashable MixedNodeOp where
     | .bitOr a b      => mixHash 11 (mixHash (hash a) (hash b))
     | .constMask n    => mixHash 12 (hash n)
     | .subGate a b    => mixHash 13 (mixHash (hash a) (hash b))
+    | .reduceGate a p   => mixHash 14 (mixHash (hash a) (hash p))
+    | .kronPack a b w   => mixHash 15 (mixHash (mixHash (hash a) (hash b)) (hash w))
+    | .kronUnpackLo a w => mixHash 16 (mixHash (hash a) (hash w))
+    | .kronUnpackHi a w => mixHash 17 (mixHash (hash a) (hash w))
 
 /-- Alias for the generic EGraph type specialized to MixedNodeOp. -/
 abbrev MixedEGraph := EGraph MixedNodeOp

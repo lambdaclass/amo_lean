@@ -51,6 +51,10 @@ inductive MixedExpr where
   | bitOrE      (a b : MixedExpr)
   | constMaskE  (n : Nat)
   | subE        (a b : MixedExpr)
+  | reduceE     (a : MixedExpr) (p : Nat)
+  | kronPackE   (a b : MixedExpr) (w : Nat)
+  | kronUnpackLoE (a : MixedExpr) (w : Nat)
+  | kronUnpackHiE (a : MixedExpr) (w : Nat)
 
 /-! ## Extractable Instance -/
 
@@ -72,6 +76,10 @@ inductive MixedExpr where
   | .bitOr _ _, [a, b]     => some (.bitOrE a b)
   | .constMask n, []       => some (.constMaskE n)
   | .subGate _ _, [a, b]   => some (.subE a b)
+  | .reduceGate _ p, [a]   => some (.reduceE a p)
+  | .kronPack _ _ w, [a, b] => some (.kronPackE a b w)
+  | .kronUnpackLo _ w, [a] => some (.kronUnpackLoE a w)
+  | .kronUnpackHi _ w, [a] => some (.kronUnpackHiE a w)
   | _, _                   => none
 
 instance : Extractable MixedNodeOp MixedExpr where
@@ -96,6 +104,10 @@ instance : Extractable MixedNodeOp MixedExpr where
   | .bitOrE a b     => Nat.lor (a.eval env) (b.eval env)
   | .constMaskE n   => 2 ^ n - 1
   | .subE a b       => a.eval env - b.eval env
+  | .reduceE a p    => a.eval env % p
+  | .kronPackE a b w => a.eval env + b.eval env * 2 ^ w
+  | .kronUnpackLoE a w => a.eval env % 2 ^ w
+  | .kronUnpackHiE a w => a.eval env / 2 ^ w
 
 instance : EvalExpr MixedExpr MixedEnv Nat where
   evalExpr e env := e.eval env
@@ -230,5 +242,43 @@ theorem mixed_extractable_sound :
     have h1 : y.eval env = v b :=
       hchildren 1 (by omega) (by simp [NodeOps.children, mixedChildren])
     rw [h0, h1]
+  | reduceGate a p =>
+    simp [NodeOps.children, mixedChildren] at hlen
+    obtain ⟨x, rfl⟩ := list_length_one hlen
+    simp [Extractable.reconstruct, mixedReconstruct] at hrec
+    subst hrec
+    simp only [EvalExpr.evalExpr, MixedExpr.eval, NodeSemantics.evalOp, evalMixedOp]
+    have h0 : x.eval env = v a :=
+      hchildren 0 (by omega) (by simp [NodeOps.children, mixedChildren])
+    rw [h0]
+  | kronPack a b w =>
+    simp [NodeOps.children, mixedChildren] at hlen
+    obtain ⟨x, y, rfl⟩ := list_length_two hlen
+    simp [Extractable.reconstruct, mixedReconstruct] at hrec
+    subst hrec
+    simp only [EvalExpr.evalExpr, MixedExpr.eval, NodeSemantics.evalOp, evalMixedOp]
+    have h0 : x.eval env = v a :=
+      hchildren 0 (by omega) (by simp [NodeOps.children, mixedChildren])
+    have h1 : y.eval env = v b :=
+      hchildren 1 (by omega) (by simp [NodeOps.children, mixedChildren])
+    rw [h0, h1]
+  | kronUnpackLo a w =>
+    simp [NodeOps.children, mixedChildren] at hlen
+    obtain ⟨x, rfl⟩ := list_length_one hlen
+    simp [Extractable.reconstruct, mixedReconstruct] at hrec
+    subst hrec
+    simp only [EvalExpr.evalExpr, MixedExpr.eval, NodeSemantics.evalOp, evalMixedOp]
+    have h0 : x.eval env = v a :=
+      hchildren 0 (by omega) (by simp [NodeOps.children, mixedChildren])
+    rw [h0]
+  | kronUnpackHi a w =>
+    simp [NodeOps.children, mixedChildren] at hlen
+    obtain ⟨x, rfl⟩ := list_length_one hlen
+    simp [Extractable.reconstruct, mixedReconstruct] at hrec
+    subst hrec
+    simp only [EvalExpr.evalExpr, MixedExpr.eval, NodeSemantics.evalOp, evalMixedOp]
+    have h0 : x.eval env = v a :=
+      hchildren 0 (by omega) (by simp [NodeOps.children, mixedChildren])
+    rw [h0]
 
 end AmoLean.EGraph.Verified.Bitwise.MixedExtract

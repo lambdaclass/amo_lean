@@ -198,6 +198,56 @@ theorem sameShapeSemantics_holds : SameShapeSemantics := by
     simp only [ndCh, NodeOps.children, AmoLean.EGraph.Verified.Bitwise.mixedChildren,
       List.getElem_cons_zero, List.getElem_cons_succ] at h0 h1
     rw [h0, h1]
+  -- reduceGate: unary op with Nat payload (follows smulGate pattern)
+  | reduceGate a₁ p₁ =>
+    simp only [ndMapCh, NodeOps.mapChildren, AmoLean.EGraph.Verified.Bitwise.mixedMapChildren] at heq
+    cases op₂ <;> simp at heq
+    rename_i a₂ p₂
+    subst heq
+    simp only [evalMixedOp]
+    have h0 := hchildren 0 (by simp [ndCh, NodeOps.children, AmoLean.EGraph.Verified.Bitwise.mixedChildren])
+      (by simp [ndCh, NodeOps.children, AmoLean.EGraph.Verified.Bitwise.mixedChildren])
+    simp only [ndCh, NodeOps.children, AmoLean.EGraph.Verified.Bitwise.mixedChildren,
+      List.getElem_cons_zero] at h0
+    rw [h0]
+  -- kronPack: binary op with Nat payload (follows addGate pattern)
+  | kronPack a₁ b₁ w₁ =>
+    simp only [ndMapCh, NodeOps.mapChildren, AmoLean.EGraph.Verified.Bitwise.mixedMapChildren] at heq
+    cases op₂ <;> simp at heq
+    rename_i a₂ b₂ w₂
+    obtain ⟨rfl⟩ := heq
+    simp only [evalMixedOp]
+    have h0 := hchildren 0 (by simp [ndCh, NodeOps.children, AmoLean.EGraph.Verified.Bitwise.mixedChildren])
+      (by simp [ndCh, NodeOps.children, AmoLean.EGraph.Verified.Bitwise.mixedChildren])
+    have h1 := hchildren 1 (by simp [ndCh, NodeOps.children, AmoLean.EGraph.Verified.Bitwise.mixedChildren])
+      (by simp [ndCh, NodeOps.children, AmoLean.EGraph.Verified.Bitwise.mixedChildren])
+    simp only [ndCh, NodeOps.children, AmoLean.EGraph.Verified.Bitwise.mixedChildren,
+      List.getElem_cons_zero, List.getElem_cons_succ] at h0 h1
+    rw [h0, h1]
+  -- kronUnpackLo: unary op with Nat payload (follows shiftRight pattern)
+  | kronUnpackLo a₁ w₁ =>
+    simp only [ndMapCh, NodeOps.mapChildren, AmoLean.EGraph.Verified.Bitwise.mixedMapChildren] at heq
+    cases op₂ <;> simp at heq
+    rename_i a₂ w₂
+    subst heq
+    simp only [evalMixedOp]
+    have h0 := hchildren 0 (by simp [ndCh, NodeOps.children, AmoLean.EGraph.Verified.Bitwise.mixedChildren])
+      (by simp [ndCh, NodeOps.children, AmoLean.EGraph.Verified.Bitwise.mixedChildren])
+    simp only [ndCh, NodeOps.children, AmoLean.EGraph.Verified.Bitwise.mixedChildren,
+      List.getElem_cons_zero] at h0
+    rw [h0]
+  -- kronUnpackHi: unary op with Nat payload (follows shiftRight pattern)
+  | kronUnpackHi a₁ w₁ =>
+    simp only [ndMapCh, NodeOps.mapChildren, AmoLean.EGraph.Verified.Bitwise.mixedMapChildren] at heq
+    cases op₂ <;> simp at heq
+    rename_i a₂ w₂
+    subst heq
+    simp only [evalMixedOp]
+    have h0 := hchildren 0 (by simp [ndCh, NodeOps.children, AmoLean.EGraph.Verified.Bitwise.mixedChildren])
+      (by simp [ndCh, NodeOps.children, AmoLean.EGraph.Verified.Bitwise.mixedChildren])
+    simp only [ndCh, NodeOps.children, AmoLean.EGraph.Verified.Bitwise.mixedChildren,
+      List.getElem_cons_zero] at h0
+    rw [h0]
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 2: PatternSoundRule

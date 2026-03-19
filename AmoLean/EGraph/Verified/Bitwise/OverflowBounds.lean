@@ -71,6 +71,10 @@ def IsBitwiseOnly : MixedExpr → Bool
   | .bitOrE a b      => IsBitwiseOnly a && IsBitwiseOnly b
   | .constMaskE _    => false
   | .subE _ _        => false
+  | .reduceE _ _     => false
+  | .kronPackE _ _ _ => false
+  | .kronUnpackLoE _ _ => false
+  | .kronUnpackHiE _ _ => false
 
 /-- All environment values bounded at width w. -/
 def BoundedEnv (env : MixedEnv) (w : Nat) : Prop :=
@@ -109,6 +113,10 @@ theorem evalMixed_bitwise_bounded (e : MixedExpr) (env : MixedEnv) (w : Nat)
     simp only [MixedExpr.eval]
     exact val_lor_bounded _ _ w (iha hbw.1) (ihb hbw.2)
   | subE _ _ _ _ => simp [IsBitwiseOnly] at hbw
+  | reduceE _ _ _ => simp [IsBitwiseOnly] at hbw
+  | kronPackE _ _ _ _ _ => simp [IsBitwiseOnly] at hbw
+  | kronUnpackLoE _ _ _ => simp [IsBitwiseOnly] at hbw
+  | kronUnpackHiE _ _ _ => simp [IsBitwiseOnly] at hbw
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 3: Smoke tests
@@ -125,6 +133,6 @@ example : (256 >>> 4) < 2 ^ 9 :=
 example : 2 ^ 8 - 1 < 2 ^ 8 := val_constMask_bounded 8
 
 /-- Smoke: bitwise expression bounded. -/
-example : IsBitwiseOnly (.bitAndE (.witnessE 0) (.witnessE 1)) = true := rfl
+example : IsBitwiseOnly (.bitAndE (.witnessE 0) (.witnessE 1)) = true := by native_decide
 
 end AmoLean.EGraph.Verified.Bitwise.OverflowBounds

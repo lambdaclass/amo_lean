@@ -77,6 +77,10 @@ def evalMixedBV (w : Nat) (op : MixedNodeOp) (env : MixedEnv)
   | .bitOr a b      => v a ||| v b
   | .constMask n    => BitVec.ofNat w (2 ^ n - 1)
   | .subGate a b    => v a - v b
+  | .reduceGate a p   => BitVec.ofNat w ((v a).toNat % p)
+  | .kronPack a b ww  => BitVec.ofNat w ((v a).toNat + (v b).toNat * 2 ^ ww)
+  | .kronUnpackLo a ww => BitVec.ofNat w ((v a).toNat % 2 ^ ww)
+  | .kronUnpackHi a ww => BitVec.ofNat w ((v a).toNat / 2 ^ ww)
 
 /-! ## Boundedness predicates -/
 
@@ -99,6 +103,10 @@ def ArithNoOverflow (w : Nat) (op : MixedNodeOp) (env : MixedEnv)
   | .smulGate n a   => env.constVal n * v a < 2 ^ w
   | .shiftLeft a n  => Nat.shiftLeft (v a) n < 2 ^ w
   | .subGate a b    => v b ≤ v a
+  | .reduceGate a p   => v a % p < 2 ^ w
+  | .kronPack a b ww  => v a + v b * 2 ^ ww < 2 ^ w
+  | .kronUnpackLo a ww => v a % 2 ^ ww < 2 ^ w
+  | .kronUnpackHi a ww => v a / 2 ^ ww < 2 ^ w
   | _               => True
 
 /-! ## Lifting: Nat valuation → BitVec valuation -/
@@ -463,6 +471,23 @@ theorem evalMixed_bv_agree_arith (op : MixedNodeOp) (env : MixedEnv)
         _ = 2 ^ w + (v a - v b) := by rw [Nat.add_sub_assoc hle]
         _ = v a - v b + 2 ^ w := by rw [Nat.add_comm]
     rw [key, Nat.add_mod_right, Nat.mod_eq_of_lt hsub_lt]
+  case reduceGate a p =>
+    have h : v a % p < 2 ^ w := hno
+    rw [BitVec.toNat_ofNat, BitVec.toNat_ofNat, Nat.mod_eq_of_lt (hb a),
+        Nat.mod_eq_of_lt h]
+  case kronPack a b ww =>
+    have h : v a + v b * 2 ^ ww < 2 ^ w := hno
+    rw [BitVec.toNat_ofNat, BitVec.toNat_ofNat, BitVec.toNat_ofNat,
+        Nat.mod_eq_of_lt (hb a), Nat.mod_eq_of_lt (hb b),
+        Nat.mod_eq_of_lt h]
+  case kronUnpackLo a ww =>
+    have h : v a % 2 ^ ww < 2 ^ w := hno
+    rw [BitVec.toNat_ofNat, BitVec.toNat_ofNat, Nat.mod_eq_of_lt (hb a),
+        Nat.mod_eq_of_lt h]
+  case kronUnpackHi a ww =>
+    have h : v a / 2 ^ ww < 2 ^ w := hno
+    rw [BitVec.toNat_ofNat, BitVec.toNat_ofNat, Nat.mod_eq_of_lt (hb a),
+        Nat.mod_eq_of_lt h]
 
 /-! ## Full bridge (all ops) -/
 
@@ -484,6 +509,10 @@ def OpInBounds (w : Nat) (op : MixedNodeOp) (env : MixedEnv)
   | .shiftLeft a n  => Nat.shiftLeft (v a) n < 2 ^ w
   | .subGate a b    => v b ≤ v a
   | .constMask n    => n ≤ w
+  | .reduceGate a p   => v a % p < 2 ^ w
+  | .kronPack a b ww  => v a + v b * 2 ^ ww < 2 ^ w
+  | .kronUnpackLo a ww => v a % 2 ^ ww < 2 ^ w
+  | .kronUnpackHi a ww => v a / 2 ^ ww < 2 ^ w
   | _               => True
 
 /-- **Full bridge**: for ANY MixedNodeOp, if values and environment are in bounds
@@ -558,6 +587,23 @@ theorem evalMixed_bv_agree (op : MixedNodeOp) (env : MixedEnv)
     have hn : n ≤ w := hop
     rw [BitVec.toNat_ofNat]
     exact (Nat.mod_eq_of_lt (constMask_lt_two_pow n w hn)).symm
+  case reduceGate a p =>
+    have h : v a % p < 2 ^ w := hop
+    rw [BitVec.toNat_ofNat, BitVec.toNat_ofNat, Nat.mod_eq_of_lt (hb a),
+        Nat.mod_eq_of_lt h]
+  case kronPack a b ww =>
+    have h : v a + v b * 2 ^ ww < 2 ^ w := hop
+    rw [BitVec.toNat_ofNat, BitVec.toNat_ofNat, BitVec.toNat_ofNat,
+        Nat.mod_eq_of_lt (hb a), Nat.mod_eq_of_lt (hb b),
+        Nat.mod_eq_of_lt h]
+  case kronUnpackLo a ww =>
+    have h : v a % 2 ^ ww < 2 ^ w := hop
+    rw [BitVec.toNat_ofNat, BitVec.toNat_ofNat, Nat.mod_eq_of_lt (hb a),
+        Nat.mod_eq_of_lt h]
+  case kronUnpackHi a ww =>
+    have h : v a / 2 ^ ww < 2 ^ w := hop
+    rw [BitVec.toNat_ofNat, BitVec.toNat_ofNat, Nat.mod_eq_of_lt (hb a),
+        Nat.mod_eq_of_lt h]
 
 /-! ## Non-vacuity: concrete instantiation of the master bridge -/
 
@@ -659,5 +705,14 @@ theorem evalMixed_bv_agree_mod (op : MixedNodeOp) (env : MixedEnv)
     rw [Nat.mod_eq_of_lt (lor_lt_two_pow (v a) (v b) w (hb a) (hb b))]
     rfl
   case constMask n => rw [BitVec.toNat_ofNat]
+  case reduceGate a p =>
+    rw [BitVec.toNat_ofNat, BitVec.toNat_ofNat, Nat.mod_eq_of_lt (hb a)]
+  case kronPack a b ww =>
+    rw [BitVec.toNat_ofNat, BitVec.toNat_ofNat, BitVec.toNat_ofNat,
+        Nat.mod_eq_of_lt (hb a), Nat.mod_eq_of_lt (hb b)]
+  case kronUnpackLo a ww =>
+    rw [BitVec.toNat_ofNat, BitVec.toNat_ofNat, Nat.mod_eq_of_lt (hb a)]
+  case kronUnpackHi a ww =>
+    rw [BitVec.toNat_ofNat, BitVec.toNat_ofNat, Nat.mod_eq_of_lt (hb a)]
 
 end AmoLean.EGraph.Verified.Bitwise

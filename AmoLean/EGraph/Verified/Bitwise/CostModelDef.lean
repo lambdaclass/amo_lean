@@ -83,6 +83,10 @@ def mixedOpCost (hw : HardwareCost) : MixedNodeOp → Nat
   | .bitOr _ _      => hw.bitOr
   | .constMask _    => 0
   | .subGate _ _    => hw.sub
+  | .reduceGate _ _   => hw.bitAnd   -- mod p costs ~1 cycle (like AND)
+  | .kronPack _ _ _   => 0           -- pack is free (add + shift, handled separately)
+  | .kronUnpackLo _ _ => hw.shift    -- mod 2^w costs ~1 cycle (like shift)
+  | .kronUnpackHi _ _ => hw.shift    -- div 2^w costs ~1 cycle (like shift)
 
 /-! ## Zero-cost theorems -/
 
