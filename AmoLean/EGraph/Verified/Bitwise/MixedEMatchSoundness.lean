@@ -307,26 +307,24 @@ theorem instantiateF_sound (fuel : Nat) (g : MGraph) (pat : MixedEMatch.Pattern 
       (∀ i, i < g.unionFind.parent.size → v' i = v i) ∧
       v' (AmoLean.EGraph.VerifiedExtraction.UnionFind.root g'.unionFind id) =
         MixedEMatchSpec.Pattern.eval pat (fun n => env.constVal n) (substVal v g.unionFind σ) := by
-  -- Induction on fuel
-  match fuel, pat with
-  | 0, _ => simp [MixedEMatch.instantiateF] at hinst
-  | fuel + 1, .patVar pv =>
-    -- patVar: σ.lookup pv = some id → graph unchanged
-    simp [MixedEMatch.instantiateF, MixedEMatch.Substitution.lookup] at hinst
-    split at hinst
-    · -- lookup = some existingId → (id, g') = (existingId, g)
-      obtain ⟨rfl, rfl⟩ := Prod.mk.inj (Option.some.inj hinst)
-      exact ⟨v, hcv, hpmi, hshi, Nat.le_refl _, fun _ _ => rfl, by
-        simp_all [MixedEMatchSpec.Pattern.eval, substVal, MixedEMatch.Substitution.lookup]⟩
-    · -- lookup = none → contradiction (hinst : none = some _)
-      exact absurd hinst (by simp)
-  | fuel + 1, .node skelOp subpats =>
-    sorry /- PATNODE: recursive case. Needs:
-      1. Prove go preserves CV by induction on subpats list
-      2. After go: g' has CV, each childId's value = Pattern.eval(subpat_i)
-      3. Apply add_node_consistent to g'.add(replaceChildren skelOp childIds)
-      4. Show new node's value = Pattern.eval(.node skelOp subpats, ...)
-      ~80 LOC. cf. OptiSat EMatchSpec.lean:700-757. -/
+  sorry /- INSTANTIATE-SOUND: full version with value property.
+    Requires induction on fuel, go helper lemma, add_node_consistent.
+    cf. OptiSat EMatchSpec.lean:680-757. -/
+
+/-- Simpler version: instantiateF just preserves CV+VPMI (no value property).
+    Used in applyRuleAtF where we only need CV preservation for the non-merge cases. -/
+private theorem instantiateF_preserves (fuel : Nat) (g : MGraph)
+    (pat : MixedEMatch.Pattern MixedNodeOp) (σ : MixedEMatch.Substitution)
+    (v : CId → Nat) (env : MixedEnv)
+    (hcv : CV g env v) (hpmi : VPMI g)
+    (hshi : AmoLean.EGraph.Verified.Bitwise.MixedAddNodeTriple.ShapeHashconsInv g)
+    (hbnd_σ : ∀ pv id, σ.get? pv = some id → id < g.unionFind.parent.size)
+    (id : CId) (g' : MGraph)
+    (hinst : MixedEMatch.instantiateF fuel g pat σ = some (id, g')) :
+    ∃ v', CV g' env v' ∧ VPMI g' := by
+  -- Derive from the full version
+  obtain ⟨v', hcv', hpmi', _, _, _, _⟩ := instantiateF_sound fuel g pat σ v env hcv hpmi hshi hbnd_σ id g' hinst
+  exact ⟨v', hcv', hpmi'⟩
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 4: Composition layer (applyRuleAtF_preserves_cv)
@@ -374,10 +372,10 @@ theorem applyRuleAtF_preserves_cv (fuel : Nat) (psrule : PatternSoundRule)
     intro g₀ v₀ hcv₀ hpmi₀
     simp only [List.foldl]
     -- Single step preserves CV, then apply IH
-    sorry /- FOLDL-STEP: prove this step preserves CV, then IH for rest.
-      Step: condMet → instantiateF → maybe merge.
-      Uses instantiateF_sound + ematch_value_chain + merge_consistent.
-      Then ih for the remaining substitutions. -/
+    sorry /- FOLDL-STEP: each step preserves CV, then IH.
+      Case analysis on sideCondCheck + instantiateF + root equality.
+      Unchanged cases: trivial. InstantiateF cases: instantiateF_sound.
+      Merge case: ematch_value_chain + merge_consistent. -/
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 4: applyRulesF_preserves_cv
