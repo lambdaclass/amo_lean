@@ -44,24 +44,40 @@ structure HardwareCost where
   bitAnd : Nat    -- bitwise AND (cycles)
   bitXor : Nat    -- bitwise XOR (cycles)
   bitOr  : Nat    -- bitwise OR (cycles)
+  -- v4.0: fused instruction costs
+  fusedShiftSub : Nat := 2  -- ARM barrel shifter: SUB rd, xn, xm, LSL #k (1 on ARM, 2 on RISC-V)
+  fusedMulAdd : Nat := 4    -- fused multiply-accumulate: MADD (ARM), MUL+ADD (others)
+  condSub : Nat := 1        -- conditional subtraction for Harvey butterfly
+  modReduce : Nat := 1      -- cost of a modular reduction (conditional sub or mask+shift)
   deriving Repr, DecidableEq
 
 /-! ## Concrete hardware targets -/
 
-/-- ARM Cortex-A76 cost model (from optimization guide v8.0). -/
+/-- ARM Cortex-A76 cost model (from optimization guide v8.0).
+    ARM has a barrel shifter: SUB rd, xn, xm, LSL #k is 1 instruction/1 cycle. -/
 def arm_cortex_a76 : HardwareCost :=
   { mul32 := 3, mul64 := 5, add := 1, sub := 1,
-    shift := 1, bitAnd := 1, bitXor := 1, bitOr := 1 }
+    shift := 1, bitAnd := 1, bitXor := 1, bitOr := 1,
+    fusedShiftSub := 1, fusedMulAdd := 3, condSub := 1, modReduce := 1 }
 
-/-- RISC-V SiFive U74 cost model (from core complex manual 21G1). -/
+/-- RISC-V SiFive U74 cost model (from core complex manual 21G1).
+    No barrel shifter — shift+sub = 2 separate instructions. -/
 def riscv_sifive_u74 : HardwareCost :=
   { mul32 := 5, mul64 := 5, add := 1, sub := 1,
-    shift := 1, bitAnd := 1, bitXor := 1, bitOr := 1 }
+    shift := 1, bitAnd := 1, bitXor := 1, bitOr := 1,
+    fusedShiftSub := 2, fusedMulAdd := 6, condSub := 1, modReduce := 1 }
 
 /-- FPGA Xilinx DSP48E2 cost model (DSP-based multiply, free shifts). -/
 def fpga_dsp48e2 : HardwareCost :=
   { mul32 := 1, mul64 := 3, add := 1, sub := 1,
-    shift := 0, bitAnd := 1, bitXor := 1, bitOr := 1 }
+    shift := 0, bitAnd := 1, bitXor := 1, bitOr := 1,
+    fusedShiftSub := 1, fusedMulAdd := 2, condSub := 1, modReduce := 1 }
+
+/-- x86 Intel Skylake cost model. MULX = 4 cycles, ADD = 1. -/
+def x86_skylake : HardwareCost :=
+  { mul32 := 3, mul64 := 4, add := 1, sub := 1,
+    shift := 1, bitAnd := 1, bitXor := 1, bitOr := 1,
+    fusedShiftSub := 2, fusedMulAdd := 4, condSub := 1, modReduce := 1 }
 
 /-! ## Parametric cost function -/
 
