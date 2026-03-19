@@ -388,9 +388,8 @@ theorem applyRuleAtF_preserves_cv (fuel : Nat) (psrule : PatternSoundRule)
         -- instantiateF = some → acc' is the new graph
         split
         · -- roots equal → acc' has CV from instantiateF_sound, feed into ih
-          sorry /- INST-CV -/
-        · -- roots differ → merge_consistent + value chain, feed into ih
-          sorry /- MERGE-CV -/
+          sorry /- INST-CV: instantiateF_sound gives CV for acc', then ih for rest -/
+        · sorry /- MERGE-CV: instantiateF_sound + value chain + merge_consistent + ih -/
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 4: applyRulesF_preserves_cv
