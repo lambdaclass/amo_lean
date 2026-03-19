@@ -26,15 +26,21 @@ theorem val_land_bounded (a b w : Nat) (hb : b < 2 ^ w) :
     Nat.land a b < 2 ^ w :=
   Nat.lt_of_le_of_lt Nat.and_le_right hb
 
-/-- OR result is bounded when both operands are bounded (via Nat.lor_lt_two_pow). -/
+/-- OR result is bounded when both operands are bounded. -/
 theorem val_lor_bounded (a b w : Nat) (ha : a < 2 ^ w) (hb : b < 2 ^ w) :
     Nat.lor a b < 2 ^ w := by
-  exact Nat.lor_lt_two_pow ha hb
+  have h := (BitVec.ofNat w a ||| BitVec.ofNat w b).isLt
+  rw [BitVec.toNat_or, BitVec.toNat_ofNat, BitVec.toNat_ofNat,
+      Nat.mod_eq_of_lt ha, Nat.mod_eq_of_lt hb] at h
+  exact h
 
 /-- XOR result is bounded when both operands are bounded. -/
 theorem val_xor_bounded (a b w : Nat) (ha : a < 2 ^ w) (hb : b < 2 ^ w) :
     Nat.xor a b < 2 ^ w := by
-  exact Nat.xor_lt_two_pow ha hb
+  have h := (BitVec.ofNat w a ^^^ BitVec.ofNat w b).isLt
+  rw [BitVec.toNat_xor, BitVec.toNat_ofNat, BitVec.toNat_ofNat,
+      Nat.mod_eq_of_lt ha, Nat.mod_eq_of_lt hb] at h
+  exact h
 
 /-- Right shift always reduces the value. -/
 theorem val_shiftRight_bounded (a n w : Nat) (ha : a < 2 ^ w) :
@@ -133,6 +139,7 @@ example : (256 >>> 4) < 2 ^ 9 :=
 example : 2 ^ 8 - 1 < 2 ^ 8 := val_constMask_bounded 8
 
 /-- Smoke: bitwise expression bounded. -/
-example : IsBitwiseOnly (.bitAndE (.witnessE 0) (.witnessE 1)) = true := by native_decide
+example : IsBitwiseOnly (.bitAndE (.witnessE 0) (.witnessE 1)) = true := by
+  simp [IsBitwiseOnly]
 
 end AmoLean.EGraph.Verified.Bitwise.OverflowBounds

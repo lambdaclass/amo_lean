@@ -78,6 +78,10 @@ def tempCount : MixedExpr → Nat
   | .bitXorE a b => max (tempCount a + 1) (tempCount b + 1)
   | .bitOrE a b  => max (tempCount a + 1) (tempCount b + 1)
   | .subE a b    => max (tempCount a + 1) (tempCount b + 1)
+  | .reduceE a _     => tempCount a
+  | .kronPackE a b _ => max (tempCount a + 1) (tempCount b + 1)
+  | .kronUnpackLoE a _ => tempCount a
+  | .kronUnpackHiE a _ => tempCount a
 
 /-! ## Expression-level operation cost (recursive) -/
 
@@ -98,6 +102,10 @@ def exprOpCost (hw : HardwareCost) : MixedExpr → Nat
   | .bitXorE a b => hw.bitXor + exprOpCost hw a + exprOpCost hw b
   | .bitOrE a b  => hw.bitOr + exprOpCost hw a + exprOpCost hw b
   | .subE a b    => hw.sub + exprOpCost hw a + exprOpCost hw b
+  | .reduceE a _     => hw.bitAnd + exprOpCost hw a
+  | .kronPackE a b _ => 0 + exprOpCost hw a + exprOpCost hw b
+  | .kronUnpackLoE a _ => hw.shift + exprOpCost hw a
+  | .kronUnpackHiE a _ => hw.shift + exprOpCost hw a
 
 /-! ## Spill penalty and enhanced cost -/
 
