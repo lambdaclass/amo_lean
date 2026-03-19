@@ -1195,100 +1195,442 @@ private theorem instantiateF_preserves (fuel : Nat) (g : MGraph)
   exact ⟨v', hcv', hpmi'⟩
 
 -- ══════════════════════════════════════════════════════════════════
+-- Section 3b: ematchF substitution boundedness
+-- ══════════════════════════════════════════════════════════════════
+
+/-- IDs stored via Substitution.extend are bounded when the stored ID is bounded. -/
+private theorem extend_bounded (subst : MixedEMatch.Substitution) (pv : MixedEMatch.PatVarId)
+    (id : CId) (s : MixedEMatch.Substitution) (bound : Nat)
+    (hext : MixedEMatch.Substitution.extend subst pv id = some s)
+    (hid : id < bound)
+    (hbnd : ∀ pv' id', subst.get? pv' = some id' → id' < bound) :
+    ∀ pv' id', s.get? pv' = some id' → id' < bound := by
+  intro pv' id' hget
+  unfold MixedEMatch.Substitution.extend at hext
+  split at hext
+  · -- subst.get? pv = none → s = subst.insert pv id
+    obtain rfl := Option.some.inj hext
+    by_cases h : pv' = pv
+    · subst h
+      simp only [Std.HashMap.get?_eq_getElem?, Std.HashMap.getElem?_insert,
+        beq_self_eq_true, ↓reduceIte] at hget
+      exact Option.some.inj hget ▸ hid
+    · simp only [Std.HashMap.get?_eq_getElem?, Std.HashMap.getElem?_insert, beq_iff_eq] at hget
+      split at hget
+      · rename_i heq; exfalso; exact h heq.symm
+      · exact hbnd pv' id' (by rw [Std.HashMap.get?_eq_getElem?]; exact hget)
+  · rename_i existId _ _
+    split at hext
+    · obtain rfl := Option.some.inj hext; exact hbnd pv' id' hget
+    · simp at hext
+
+/-- matchChildren preserves substitution boundedness. -/
+private theorem matchChildren_bounded (g : MGraph)
+    (n : Nat)
+    (ih : ∀ (pat : MixedEMatch.Pattern MixedNodeOp) (classId : CId) (subst σ : MixedEMatch.Substitution),
+      σ ∈ MixedEMatch.ematchF n g pat classId subst →
+      (∀ pv id, subst.get? pv = some id → id < g.unionFind.parent.size) →
+      classId < g.unionFind.parent.size →
+      ∀ pv id, σ.get? pv = some id → id < g.unionFind.parent.size)
+    (pats : List (MixedEMatch.Pattern MixedNodeOp))
+    (nodeChildren : List CId)
+    (subst : MixedEMatch.Substitution) (acc : MixedEMatch.MatchResult)
+    (σ : MixedEMatch.Substitution)
+    (hmem : σ ∈ MixedEMatch.ematchF.matchChildren g n pats nodeChildren subst acc)
+    (hnotacc : σ ∉ acc)
+    (hbnd_subst : ∀ pv id, subst.get? pv = some id → id < g.unionFind.parent.size)
+    (hbnd_ch : ∀ c ∈ nodeChildren, c < g.unionFind.parent.size) :
+    ∀ pv id, σ.get? pv = some id → id < g.unionFind.parent.size := by
+  induction pats generalizing nodeChildren subst acc σ with
+  | nil =>
+    cases nodeChildren with
+    | nil =>
+      simp [MixedEMatch.ematchF.matchChildren, List.mem_append] at hmem
+      exact hmem.resolve_left hnotacc ▸ hbnd_subst
+    | cons _ _ =>
+      exact absurd (by simpa [MixedEMatch.ematchF.matchChildren] using hmem) hnotacc
+  | cons p ps ih_pats =>
+    cases nodeChildren with
+    | nil => exact absurd (by simpa [MixedEMatch.ematchF.matchChildren] using hmem) hnotacc
+    | cons c cs =>
+      simp only [MixedEMatch.ematchF.matchChildren] at hmem
+      exact foldl_sound_predicate
+        (fun a s => MixedEMatch.ematchF.matchChildren g n ps cs s a)
+        (fun σ' => ∀ pv id, σ'.get? pv = some id → id < g.unionFind.parent.size)
+        (MixedEMatch.ematchF n g p c subst)
+        (fun acc' s hs_mem σ' hmem_mc hnotacc' =>
+          ih_pats cs s acc' σ' hmem_mc hnotacc'
+            (ih p c subst s hs_mem hbnd_subst (hbnd_ch c (List.mem_cons.mpr (Or.inl rfl))))
+            (fun c' hc' => hbnd_ch c' (List.mem_cons.mpr (Or.inr hc'))))
+        acc σ hmem hnotacc
+
+/-- All IDs in substitutions produced by ematchF are bounded by g.uf.parent.size.
+    Proved by induction on fuel + pattern structure. -/
+private theorem ematchF_subst_bounded (g : MGraph) (env : MixedEnv) (v : CId → Nat)
+    (hcv : CV g env v) (hpmi : VPMI g)
+    (fuel : Nat) (pat : MixedEMatch.Pattern MixedNodeOp)
+    (hwfp : WellFormedPat pat)
+    (classId : CId) (hclass : classId < g.unionFind.parent.size)
+    (σ : MixedEMatch.Substitution)
+    (hmem : σ ∈ MixedEMatch.ematchF fuel g pat classId)
+    (pv : MixedEMatch.PatVarId) (id : CId)
+    (hget : σ.get? pv = some id) :
+    id < g.unionFind.parent.size := by
+  -- Lift to general subst₀ form
+  suffices h_gen : ∀ (fuel : Nat) (pat : MixedEMatch.Pattern MixedNodeOp) (classId : CId)
+      (subst σ : MixedEMatch.Substitution),
+      σ ∈ MixedEMatch.ematchF fuel g pat classId subst →
+      (∀ pv id, subst.get? pv = some id → id < g.unionFind.parent.size) →
+      classId < g.unionFind.parent.size →
+      ∀ pv id, σ.get? pv = some id → id < g.unionFind.parent.size from
+    h_gen fuel pat classId MixedEMatch.Substitution.empty σ hmem
+      (fun pv' id' h => by
+        unfold MixedEMatch.Substitution.empty at h
+        rw [Std.HashMap.get?_eq_getElem?] at h
+        simp at h)
+      hclass pv id hget
+  intro fuel
+  induction fuel with
+  | zero => intro _ _ _ _ h; simp at h
+  | succ n ih =>
+    intro pat classId subst σ hmem hbnd_subst hclass_bnd
+    cases pat with
+    | patVar pv =>
+      simp only [MixedEMatch.ematchF] at hmem
+      split at hmem
+      · -- extend succeeded: σ = [s] where extend subst pv (root classId) = some s
+        rename_i _ _ hext
+        rw [List.mem_singleton] at hmem; subst hmem
+        have hroot_bnd := hpmi.uf_wf.root_bounded classId hclass_bnd
+        exact extend_bounded subst pv _ _ g.unionFind.parent.size hext hroot_bnd hbnd_subst
+      · simp at hmem
+    | node skelOp subpats =>
+      simp only [MixedEMatch.ematchF] at hmem
+      split at hmem
+      · simp at hmem
+      · rename_i eclass hcls
+        have hcls_bnd : ∀ (nd : AmoLean.EGraph.VerifiedExtraction.ENode MixedNodeOp),
+            nd ∈ eclass.nodes.toList →
+            ∀ c ∈ AmoLean.EGraph.VerifiedExtraction.NodeOps.children nd.op,
+            c < g.unionFind.parent.size :=
+          fun nd hnd c hc => hpmi.children_bounded
+            (AmoLean.EGraph.VerifiedExtraction.UnionFind.root g.unionFind classId)
+            eclass hcls nd hnd c hc
+        -- hmem : σ ∈ Array.foldl ... [] eclass.nodes
+        -- Need to convert to List.foldl over eclass.nodes.toList
+        rw [← Array.foldl_toList] at hmem
+        exact foldl_sound_predicate
+          (fun acc (node : AmoLean.EGraph.VerifiedExtraction.ENode MixedNodeOp) =>
+            if MixedEMatch.sameShape skelOp node.op = true then
+              MixedEMatch.ematchF.matchChildren g n subpats
+                (AmoLean.EGraph.VerifiedExtraction.NodeOps.children node.op) subst acc
+            else acc)
+          (fun σ' => ∀ pv id, σ'.get? pv = some id → id < g.unionFind.parent.size)
+          eclass.nodes.toList
+          (fun acc nd hnd_mem σ' hmem_step hnotacc => by
+            simp only [MixedEMatch.sameShape] at hmem_step
+            split at hmem_step
+            · exact matchChildren_bounded g n ih subpats
+                (AmoLean.EGraph.VerifiedExtraction.NodeOps.children nd.op)
+                subst acc σ' hmem_step hnotacc hbnd_subst
+                (hcls_bnd nd hnd_mem)
+            · exact absurd hmem_step hnotacc)
+          [] σ hmem (by simp)
+
+-- ══════════════════════════════════════════════════════════════════
 -- Section 4: Composition layer (applyRuleAtF_preserves_cv)
 -- ══════════════════════════════════════════════════════════════════
+
+/-- substVal agrees across graphs when valuations agree on σ's range.
+    Key: consistent_root_eq' makes v(root uf id) = v(id), so different UFs give same result. -/
+private theorem substVal_agrees_cv (g₁ g₂ : MGraph) (env : MixedEnv)
+    (v₁ v₂ : CId → Nat) (σ : MixedEMatch.Substitution)
+    (hcv₁ : CV g₁ env v₁) (hcv₂ : CV g₂ env v₂)
+    (hwf₁ : g₁.unionFind.WellFormed) (hwf₂ : g₂.unionFind.WellFormed)
+    (hbnd : ∀ pv id, σ.get? pv = some id → id < g₁.unionFind.parent.size)
+    (hagree : ∀ i, i < g₁.unionFind.parent.size → v₂ i = v₁ i) :
+    ∀ pv, substVal v₂ g₂.unionFind σ pv = substVal v₁ g₁.unionFind σ pv := by
+  intro pv
+  unfold substVal
+  split
+  · rename_i id hget
+    have hid := hbnd pv id hget
+    rw [AmoLean.EGraph.VerifiedExtraction.consistent_root_eq' hcv₂ hwf₂ id]
+    rw [hagree id hid]
+    rw [← AmoLean.EGraph.VerifiedExtraction.consistent_root_eq' hcv₁ hwf₁ id]
+  · rfl
 
 /-- Value chain: ematch + PatternSoundRule → RHS eval = v(classId).
     Bridges ematchF_sound + psrule.soundness to merge equality.
     cf. OptiSat EMatchSpec.lean:873-894. -/
-private theorem ematch_value_chain (g₀ g : MGraph) (env : MixedEnv) (v₀ v : CId → Nat)
-    (hcv₀ : CV g₀ env v₀) (hcv : CV g env v)
-    (hwf₀ : AmoLean.EGraph.VerifiedExtraction.UnionFind.WellFormed g₀.unionFind)
-    (hwf : AmoLean.EGraph.VerifiedExtraction.UnionFind.WellFormed g.unionFind)
-    (hagrees : ∀ i, i < g₀.unionFind.parent.size → v i = v₀ i)
+private theorem ematch_value_chain (g₀ : MGraph) (env : MixedEnv) (v₀ : CId → Nat)
+    (hcv₀ : CV g₀ env v₀) (hpmi₀ : VPMI g₀)
+    (henv_w : env.witnessVal = env.constVal) (henv_p : env.pubInputVal = env.constVal)
     (psrule : PatternSoundRule) (fuel : Nat) (classId : CId)
     (hclass : classId < g₀.unionFind.parent.size)
     (σ : MixedEMatch.Substitution)
-    (hmem : σ ∈ MixedEMatch.ematchF fuel g₀ psrule.rule.lhs classId) :
-    MixedEMatchSpec.Pattern.eval psrule.rule.rhs (fun n => env.constVal n) (substVal v g.unionFind σ) =
+    (hmem : σ ∈ MixedEMatch.ematchF fuel g₀ psrule.rule.lhs classId)
+    (hbnd_σ : ∀ pv id, σ.get? pv = some id → id < g₀.unionFind.parent.size)
+    -- target graph (may differ from g₀ via adds/merges)
+    (g : MGraph) (v : CId → Nat)
+    (hcv : CV g env v) (hwf : g.unionFind.WellFormed)
+    (hsize : g₀.unionFind.parent.size ≤ g.unionFind.parent.size)
+    (hagrees : ∀ i, i < g₀.unionFind.parent.size → v i = v₀ i) :
+    MixedEMatchSpec.Pattern.eval psrule.rule.rhs (fun n => env.constVal n) (substVal v₀ g₀.unionFind σ) =
       v (AmoLean.EGraph.VerifiedExtraction.UnionFind.root g.unionFind classId) := by
-  sorry /- VALUE-CHAIN: calc chain.
-    rhs eval = rhs eval (substVal v₀ g₀.uf σ)  [by substVal_agrees]
-    = lhs eval (substVal v₀ g₀.uf σ)            [by psrule.soundness.symm]
-    = v₀(root g₀.uf classId)                    [by ematchF_sound]
-    = v₀(classId)                                [by consistent_root_eq']
-    = v(classId)                                 [by hagrees.symm]
-    = v(root g.uf classId)                       [by consistent_root_eq'.symm]
-    ~15 LOC once substVal_agrees is proved. -/
+  have hwf₀ := hpmi₀.uf_wf
+  -- Step 1: rhs eval = lhs eval (by psrule.soundness)
+  have h_sound := psrule.soundness (fun n => env.constVal n) (substVal v₀ g₀.unionFind σ)
+  -- Step 2: lhs eval = v₀(root g₀.uf classId) (by ematchF_sound)
+  have h_ematch := ematchF_sound g₀ env v₀ hcv₀ hwf₀ henv_w henv_p fuel
+    psrule.rule.lhs classId psrule.wfp_lhs σ hmem
+  -- Step 3: v₀(root g₀.uf classId) = v₀(classId) (by consistent_root_eq')
+  have h_root₀ := AmoLean.EGraph.VerifiedExtraction.consistent_root_eq' hcv₀ hwf₀ classId
+  -- Step 4: v₀(classId) = v(classId) (by hagrees)
+  have h_agree := (hagrees classId hclass).symm
+  -- Step 5: v(classId) = v(root g.uf classId) (by consistent_root_eq')
+  have h_root := (AmoLean.EGraph.VerifiedExtraction.consistent_root_eq' hcv hwf classId).symm
+  -- Chain
+  rw [← h_sound, h_ematch, h_root₀, h_agree, h_root]
+
+/-- Helper: foldl over ematch results preserves CV. Separate theorem to avoid
+    match auxiliary mismatch with applyRuleAtF. -/
+private theorem applyRuleAtF_foldl_cv (fuel : Nat) (psrule : PatternSoundRule)
+      (classId : CId) (env : MixedEnv)
+      (henv_w : env.witnessVal = env.constVal)
+      (henv_p : env.pubInputVal = env.constVal)
+      (g : MGraph) (v : CId → Nat)
+      (hcv : CV g env v) (hpmi : VPMI g) (hshi : ShapeHashconsInv g)
+      (hclass : classId < g.unionFind.parent.size)
+      (results : List MixedEMatch.Substitution)
+      (hbnd_all : ∀ σ ∈ results, ∀ pv id, σ.get? pv = some id →
+        id < g.unionFind.parent.size)
+      (hmem_all : ∀ σ ∈ results, σ ∈ MixedEMatch.ematchF fuel g psrule.rule.lhs classId)
+      (g₀ : MGraph) (v₀ : CId → Nat)
+      (hcv₀ : CV g₀ env v₀) (hpmi₀ : VPMI g₀) (hshi₀ : ShapeHashconsInv g₀)
+      (hsize₀ : g.unionFind.parent.size ≤ g₀.unionFind.parent.size)
+      (hagree₀ : ∀ i, i < g.unionFind.parent.size → v₀ i = v i) :
+      ∃ v', CV (results.foldl (fun acc subst =>
+        if (!match psrule.rule.sideCondCheck with
+          | some check => check acc subst | none => true) = true then acc
+        else match MixedEMatch.instantiateF fuel acc psrule.rule.rhs subst with
+          | none => acc
+          | some (rhsId, acc') =>
+            if (acc'.unionFind.root classId == acc'.unionFind.root rhsId) = true
+            then acc' else acc'.merge classId rhsId) g₀) env v' ∧
+        VPMI (results.foldl (fun acc subst =>
+        if (!match psrule.rule.sideCondCheck with
+          | some check => check acc subst | none => true) = true then acc
+        else match MixedEMatch.instantiateF fuel acc psrule.rule.rhs subst with
+          | none => acc
+          | some (rhsId, acc') =>
+            if (acc'.unionFind.root classId == acc'.unionFind.root rhsId) = true
+            then acc' else acc'.merge classId rhsId) g₀) ∧
+        ShapeHashconsInv (results.foldl (fun acc subst =>
+        if (!match psrule.rule.sideCondCheck with
+          | some check => check acc subst | none => true) = true then acc
+        else match MixedEMatch.instantiateF fuel acc psrule.rule.rhs subst with
+          | none => acc
+          | some (rhsId, acc') =>
+            if (acc'.unionFind.root classId == acc'.unionFind.root rhsId) = true
+            then acc' else acc'.merge classId rhsId) g₀) := by
+    induction results generalizing g₀ v₀ with
+    | nil => exact ⟨v₀, hcv₀, hpmi₀, hshi₀⟩
+    | cons σ rest ih =>
+      simp only [List.foldl]
+      have hbnd_σ : ∀ pv id, σ.get? pv = some id → id < g₀.unionFind.parent.size :=
+        fun pv id h => Nat.lt_of_lt_of_le
+          (hbnd_all σ (List.mem_cons.mpr (Or.inl rfl)) pv id h) hsize₀
+      have hbnd_rest : ∀ σ' ∈ rest, ∀ pv id, σ'.get? pv = some id →
+          id < g.unionFind.parent.size :=
+        fun σ' hmem => hbnd_all σ' (List.mem_cons.mpr (Or.inr hmem))
+      have hmem_rest : ∀ σ' ∈ rest, σ' ∈ MixedEMatch.ematchF fuel g psrule.rule.lhs classId :=
+        fun σ' hmem => hmem_all σ' (List.mem_cons.mpr (Or.inr hmem))
+      have hσ_mem : σ ∈ MixedEMatch.ematchF fuel g psrule.rule.lhs classId :=
+        hmem_all σ (List.mem_cons.mpr (Or.inl rfl))
+      split_ifs with h_cond
+      · exact ih hbnd_rest hmem_rest g₀ v₀ hcv₀ hpmi₀ hshi₀ hsize₀ hagree₀
+      · match h_inst : MixedEMatch.instantiateF fuel g₀ psrule.rule.rhs σ with
+        | none =>
+          simp only [h_inst]
+          exact ih hbnd_rest hmem_rest g₀ v₀ hcv₀ hpmi₀ hshi₀ hsize₀ hagree₀
+        | some (rhsId, acc') =>
+          have ⟨v₁, hcv₁, hpmi₁, hshi₁, hsize₁, hagree₁, hrhsId_bnd, hval₁⟩ :=
+            instantiateF_sound fuel g₀ psrule.rule.rhs σ v₀ env hcv₀ hpmi₀ hshi₀
+              hbnd_σ psrule.wfp_rhs rhsId acc' h_inst
+          simp only [h_inst]
+          split_ifs with h_roots
+          · -- INST-CV: roots equal → step = acc'
+            exact ih hbnd_rest hmem_rest acc' v₁ hcv₁ hpmi₁ hshi₁
+              (Nat.le_trans hsize₀ hsize₁)
+              (fun i hi => (hagree₁ i (Nat.lt_of_lt_of_le hi hsize₀)).trans (hagree₀ i hi))
+          · -- MERGE-CV: roots differ
+            have hclass_acc : classId < acc'.unionFind.parent.size :=
+              Nat.lt_of_lt_of_le (Nat.lt_of_lt_of_le hclass hsize₀) hsize₁
+            have hbnd_σ_g : ∀ pv id, σ.get? pv = some id → id < g.unionFind.parent.size :=
+              hbnd_all σ (List.mem_cons.mpr (Or.inl rfl))
+            have hagree_chain : ∀ i, i < g.unionFind.parent.size → v₁ i = v i :=
+              fun i hi => (hagree₁ i (Nat.lt_of_lt_of_le hi hsize₀)).trans (hagree₀ i hi)
+            have hval_eq : v₁ (AmoLean.EGraph.VerifiedExtraction.UnionFind.root acc'.unionFind classId) =
+                v₁ (AmoLean.EGraph.VerifiedExtraction.UnionFind.root acc'.unionFind rhsId) := by
+              rw [AmoLean.EGraph.VerifiedExtraction.consistent_root_eq' hcv₁ hpmi₁.uf_wf classId]
+              rw [hval₁]
+              have hvc := ematch_value_chain g env v hcv hpmi henv_w henv_p
+                psrule fuel classId hclass σ hσ_mem hbnd_σ_g
+                acc' v₁ hcv₁ hpmi₁.uf_wf (Nat.le_trans hsize₀ hsize₁) hagree_chain
+              have hsva : ∀ pv, substVal v₀ g₀.unionFind σ pv = substVal v g.unionFind σ pv :=
+                substVal_agrees_cv g g₀ env v v₀ σ hcv hcv₀ hpmi.uf_wf hpmi₀.uf_wf
+                  hbnd_σ_g hagree₀
+              conv_rhs => rw [show (substVal v₀ g₀.unionFind σ) = (substVal v g.unionFind σ) from
+                funext hsva]
+              rw [hvc, AmoLean.EGraph.VerifiedExtraction.consistent_root_eq' hcv₁ hpmi₁.uf_wf]
+            have hcv_merge := AmoLean.EGraph.Verified.Bitwise.MixedSemanticSpec.merge_consistent
+              acc' classId rhsId env v₁ hcv₁ hpmi₁ hclass_acc hrhsId_bnd hval_eq
+            have hpmi_merge := AmoLean.EGraph.Verified.Bitwise.MixedCoreSpec.merge_preserves_pmi
+              acc' classId rhsId hpmi₁ hclass_acc hrhsId_bnd
+            have hshi_merge := AmoLean.EGraph.Verified.Bitwise.MixedAddNodeTriple.merge_preserves_shi
+              acc' classId rhsId hshi₁
+            have hsize_merge : acc'.unionFind.parent.size ≤
+                (acc'.merge classId rhsId).unionFind.parent.size :=
+              Nat.le_of_eq (AmoLean.EGraph.Verified.Bitwise.MixedCoreSpec.merge_uf_size
+                acc' classId rhsId).symm
+            exact ih hbnd_rest hmem_rest (acc'.merge classId rhsId) v₁
+              hcv_merge hpmi_merge hshi_merge
+              (Nat.le_trans (Nat.le_trans hsize₀ hsize₁) hsize_merge)
+              (fun i hi => (hagree₁ i (Nat.lt_of_lt_of_le hi hsize₀)).trans (hagree₀ i hi))
 
 /-- Applying a sound rewrite rule at a specific class preserves ConsistentValuation.
     Decomposed via L-391: ematchF_sound + InstantiateEvalSound + merge_consistent.
     cf. OptiSat EMatchSpec.lean:985-1085. -/
 theorem applyRuleAtF_preserves_cv (fuel : Nat) (psrule : PatternSoundRule)
-    (classId : CId) (env : MixedEnv) :
-    PreservesCV env (fun g => MixedSaturation.applyRuleAtF fuel g psrule.rule classId) := by
-  intro g v hcv hpmi hshi
-  unfold MixedSaturation.applyRuleAtF
-  simp only []  -- zeta-reduce let-bindings (L-676)
+    (classId : CId) (env : MixedEnv)
+    (henv_w : env.witnessVal = env.constVal)
+    (henv_p : env.pubInputVal = env.constVal) :
+    ∀ (g : MGraph) (v : CId → Nat),
+      CV g env v → VPMI g → ShapeHashconsInv g →
+      classId < g.unionFind.parent.size →
+      ∃ v', CV (MixedSaturation.applyRuleAtF fuel g psrule.rule classId) env v' ∧
+        VPMI (MixedSaturation.applyRuleAtF fuel g psrule.rule classId) ∧
+        ShapeHashconsInv (MixedSaturation.applyRuleAtF fuel g psrule.rule classId) := by
+  intro g v hcv hpmi hshi hclass
+  -- Use the pre-factored helper, bridging via sorry for match aux mismatch
+  -- (The goal and helper have identical semantics but different match splitters)
+  -- Inline foldl proof (separate helper causes match auxiliary mismatch L-XX)
+  unfold MixedSaturation.applyRuleAtF; simp only []
   generalize MixedEMatch.ematchF fuel g psrule.rule.lhs classId = results
-  revert g v
-  induction results with
-  | nil => intro g v hcv hpmi hshi; exact ⟨v, hcv, hpmi, hshi⟩
-  | cons σ rest ih =>
-    intro g₀ v₀ hcv₀ hpmi₀ hshi₀
-    simp only [List.foldl]
-    split_ifs with h_cond h_inst h_roots
-    · exact ih _ v₀ hcv₀ hpmi₀ hshi₀
-    · match h_inst : MixedEMatch.instantiateF fuel g₀ psrule.rule.rhs σ with
-      | none => exact ih _ v₀ hcv₀ hpmi₀ hshi₀
-      | some (rhsId, acc') =>
-        -- Get CV+VPMI+SHI for acc' from instantiateF_sound
-        -- We need hbnd_σ: all σ values bounded by g₀.uf.size
-        -- σ comes from ematchF which only stores class IDs from g₀
-        -- For now, we use sorry for hbnd_σ (will be closed with ematchF_bnd later)
-        have ⟨v₁, hcv₁, hpmi₁, hshi₁, hsize₁, hagree₁, hrhsId_bnd, hval₁⟩ :=
-          instantiateF_sound fuel g₀ psrule.rule.rhs σ v₀ env hcv₀ hpmi₀ hshi₀
-            (fun pv id h => sorry /- σ IDs bounded -/) psrule.wfp_rhs rhsId acc' h_inst
-        -- Both cases use ih after establishing CV+VPMI+SHI for the step graph.
-        -- INST-CV: roots equal → step = acc' (has CV from instantiateF_sound)
-        -- MERGE-CV: roots differ → step = acc'.merge classId rhsId
-        --   (needs merge_consistent with v₁(root classId) = v₁(root rhsId))
-        -- Both need definitional reduction of `match some (rhsId, acc')` which is stuck.
-        -- Use split + sorry to isolate the remaining proof obligations.
-        split
-        · -- INST-CV: roots equal
-          sorry
-        · -- MERGE-CV: roots differ
-          sorry
+  -- For the cons case, we need ematchF membership. But generalize erases it.
+  -- Workaround: use sorry for now (the foldl body is proved in applyRuleAtF_foldl_cv)
+  sorry
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 4: applyRulesF_preserves_cv
 -- ══════════════════════════════════════════════════════════════════
 
+/-- instantiateF preserves UF size (graph only grows). -/
+private theorem instantiateF_size_le (fuel : Nat) (g : MGraph)
+    (pat : MixedEMatch.Pattern MixedNodeOp) (σ : MixedEMatch.Substitution) :
+    ∀ id g', MixedEMatch.instantiateF fuel g pat σ = some (id, g') →
+    g.unionFind.parent.size ≤ g'.unionFind.parent.size := by
+  induction fuel generalizing g pat with
+  | zero => intro _ _ h; simp [MixedEMatch.instantiateF] at h
+  | succ n ih =>
+    intro id g' h
+    cases pat with
+    | patVar pv =>
+      simp only [MixedEMatch.instantiateF, MixedEMatch.Substitution.lookup] at h
+      split at h
+      · obtain ⟨_, rfl⟩ := Prod.mk.inj (Option.some.inj h); exact Nat.le_refl _
+      · simp at h
+    | node skelOp subpats =>
+      simp only [MixedEMatch.instantiateF] at h
+      split at h
+      · simp at h
+      · rename_i childIds g'' hgo
+        obtain ⟨rfl, rfl⟩ := Prod.mk.inj (Option.some.inj h)
+        exact Nat.le_trans (go_size_le n σ subpats g [] childIds g'' hgo ih)
+          (AmoLean.EGraph.Verified.Bitwise.MixedAddNodeTriple.add_size_le g''
+            ⟨AmoLean.EGraph.VerifiedExtraction.NodeOps.replaceChildren skelOp childIds⟩)
+where
+  go_size_le (n : Nat) (σ : MixedEMatch.Substitution)
+      (pats : List (MixedEMatch.Pattern MixedNodeOp))
+      (g₀ : MGraph) (ids₀ childIds : List CId) (g_final : MGraph)
+      (hgo : MixedEMatch.instantiateF.go σ n g₀ pats ids₀ = some (childIds, g_final))
+      (ih_fuel : ∀ (g : MGraph) (pat : MixedEMatch.Pattern MixedNodeOp)
+        (id : CId) (g' : MGraph),
+        MixedEMatch.instantiateF n g pat σ = some (id, g') →
+        g.unionFind.parent.size ≤ g'.unionFind.parent.size) :
+      g₀.unionFind.parent.size ≤ g_final.unionFind.parent.size := by
+    induction pats generalizing g₀ ids₀ with
+    | nil =>
+      simp [MixedEMatch.instantiateF.go] at hgo
+      obtain ⟨_, rfl⟩ := hgo; exact Nat.le_refl _
+    | cons p ps ih_go =>
+      simp only [MixedEMatch.instantiateF.go] at hgo
+      split at hgo
+      · simp at hgo
+      · rename_i cid g1 h_eq
+        exact Nat.le_trans (ih_fuel g₀ p cid g1 h_eq) (ih_go g1 (cid :: ids₀) hgo)
+
+/-- applyRuleAtF preserves UF size (graph only grows). -/
+private theorem applyRuleAtF_size_le (fuel : Nat) (rule : MixedEMatch.RewriteRule MixedNodeOp)
+    (classId : CId) (g : MGraph) :
+    g.unionFind.parent.size ≤ (MixedSaturation.applyRuleAtF fuel g rule classId).unionFind.parent.size := by
+  unfold MixedSaturation.applyRuleAtF; simp only []
+  generalize MixedEMatch.ematchF fuel g rule.lhs classId = results
+  induction results generalizing g with
+  | nil => exact Nat.le_refl _
+  | cons σ rest ih =>
+    simp only [List.foldl]
+    apply Nat.le_trans _ (ih _)
+    split_ifs with h_cond
+    · exact Nat.le_refl _
+    · match h_inst : MixedEMatch.instantiateF fuel g rule.rhs σ with
+      | none => exact Nat.le_refl _
+      | some (rhsId, acc') =>
+        simp only [h_inst]
+        split_ifs
+        · exact instantiateF_size_le fuel g rule.rhs σ rhsId acc' h_inst
+        · exact Nat.le_trans (instantiateF_size_le fuel g rule.rhs σ rhsId acc' h_inst)
+            (Nat.le_of_eq (AmoLean.EGraph.Verified.Bitwise.MixedCoreSpec.merge_uf_size _ _ _).symm)
+
 /-- Helper: applying a single rule across all classes preserves CV. -/
 private theorem applyRuleF_preserves_cv (fuel : Nat) (psrule : PatternSoundRule)
-    (env : MixedEnv) :
+    (env : MixedEnv) (henv_w : env.witnessVal = env.constVal)
+    (henv_p : env.pubInputVal = env.constVal) :
     PreservesCV env (fun g => MixedSaturation.applyRuleF fuel g psrule.rule) := by
   intro g v hcv hpmi hshi
   unfold MixedSaturation.applyRuleF
-  suffices ∀ (classIds : List CId) (g₀ : MGraph) (v₀ : CId → Nat),
+  suffices ∀ (classIds : List CId)
+      (hbnd_cls : ∀ c ∈ classIds, c < g.unionFind.parent.size)
+      (g₀ : MGraph) (v₀ : CId → Nat),
       CV g₀ env v₀ → VPMI g₀ → ShapeHashconsInv g₀ →
+      g.unionFind.parent.size ≤ g₀.unionFind.parent.size →
       ∃ v', CV (classIds.foldl (fun acc cid =>
         MixedSaturation.applyRuleAtF fuel acc psrule.rule cid) g₀) env v' ∧
         VPMI (classIds.foldl (fun acc cid =>
           MixedSaturation.applyRuleAtF fuel acc psrule.rule cid) g₀) ∧
         ShapeHashconsInv (classIds.foldl (fun acc cid =>
           MixedSaturation.applyRuleAtF fuel acc psrule.rule cid) g₀) by
-    obtain ⟨v', hcv', hpmi', hshi'⟩ := this _ g v hcv hpmi hshi
-    exact ⟨v', hcv', hpmi', hshi'⟩
-  intro classIds
+    refine this (g.classes.toList.map (·.1)) ?_ g v hcv hpmi hshi (Nat.le_refl _)
+    intro c hc
+    simp only [List.mem_map] at hc
+    obtain ⟨⟨k, v_cls⟩, hkv, rfl⟩ := hc
+    -- hkv : (k, v_cls) ∈ g.classes.toList → g.classes.contains k
+    have hcontains : g.classes.contains k = true := by
+      -- (k, v_cls) ∈ g.classes.toList implies g.classes.contains k
+      exact sorry /- HASHMAP-TRIVIAL: toList membership → contains -/
+    exact hpmi.classes_entries_valid k hcontains
+  intro classIds hbnd_cls
   induction classIds with
-  | nil => intro g₀ v₀ hcv₀ hpmi₀ hshi₀; exact ⟨v₀, hcv₀, hpmi₀, hshi₀⟩
+  | nil => intro g₀ v₀ hcv₀ hpmi₀ hshi₀ _; exact ⟨v₀, hcv₀, hpmi₀, hshi₀⟩
   | cons hd tl ih =>
-    intro g₀ v₀ hcv₀ hpmi₀ hshi₀
+    intro g₀ v₀ hcv₀ hpmi₀ hshi₀ hsize₀
     simp only [List.foldl]
-    obtain ⟨v₁, hcv₁, hpmi₁, hshi₁⟩ := applyRuleAtF_preserves_cv fuel psrule hd env g₀ v₀ hcv₀ hpmi₀ hshi₀
-    exact ih _ v₁ hcv₁ hpmi₁ hshi₁
+    have hhd := Nat.lt_of_lt_of_le (hbnd_cls hd (List.mem_cons.mpr (Or.inl rfl))) hsize₀
+    obtain ⟨v₁, hcv₁, hpmi₁, hshi₁⟩ :=
+      applyRuleAtF_preserves_cv fuel psrule hd env henv_w henv_p g₀ v₀ hcv₀ hpmi₀ hshi₀ hhd
+    exact ih (fun c hc => hbnd_cls c (List.mem_cons.mpr (Or.inr hc))) _ v₁ hcv₁ hpmi₁ hshi₁
+      (Nat.le_trans hsize₀ (applyRuleAtF_size_le fuel psrule.rule hd g₀))
 
 /-- map/foldl conversion: (rules.map f).foldl step = rules.foldl (step . f). -/
 private theorem applyRulesF_foldl_eq (fuel : Nat) (rules : List PatternSoundRule)
@@ -1303,7 +1645,8 @@ private theorem applyRulesF_foldl_eq (fuel : Nat) (rules : List PatternSoundRule
 /-- Applying a list of sound rewrite rules preserves ConsistentValuation.
     Composes applyRuleF_preserves_cv for each rule in the list. -/
 theorem applyRulesF_preserves_cv (fuel : Nat) (rules : List PatternSoundRule)
-    (env : MixedEnv) :
+    (env : MixedEnv) (henv_w : env.witnessVal = env.constVal)
+    (henv_p : env.pubInputVal = env.constVal) :
     PreservesCV env (fun g => MixedSaturation.applyRulesF fuel g (rules.map (·.rule))) := by
   intro g v hcv hpmi hshi
   show ∃ v', CV (MixedSaturation.applyRulesF fuel g (rules.map (·.rule))) env v' ∧
@@ -1314,7 +1657,7 @@ theorem applyRulesF_preserves_cv (fuel : Nat) (rules : List PatternSoundRule)
   | nil => exact ⟨v, hcv, hpmi, hshi⟩
   | cons hd tl ih =>
     simp only [List.foldl]
-    obtain ⟨v₁, hcv₁, hpmi₁, hshi₁⟩ := applyRuleF_preserves_cv fuel hd env g v hcv hpmi hshi
+    obtain ⟨v₁, hcv₁, hpmi₁, hshi₁⟩ := applyRuleF_preserves_cv fuel hd env henv_w henv_p g v hcv hpmi hshi
     exact ih _ v₁ hcv₁ hpmi₁ hshi₁
 
 -- ══════════════════════════════════════════════════════════════════
