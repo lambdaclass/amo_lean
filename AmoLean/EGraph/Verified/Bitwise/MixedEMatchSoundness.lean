@@ -401,7 +401,9 @@ theorem instantiateF_sound (fuel : Nat) (g : MGraph) (pat : MixedEMatch.Pattern 
             g'' ⟨AmoLean.EGraph.VerifiedExtraction.NodeOps.replaceChildren skelOp childIds⟩
             env v'' hcv'' hpmi'' hshi'' (by sorry /- CHILDREN-BND: childIds bounded by g''.uf.size -/)
         exact ⟨v', hcv', hpmi',
-          sorry /- SHI': ShapeHashconsInv preserved by add -/,
+          AmoLean.EGraph.Verified.Bitwise.MixedAddNodeTriple.add_preserves_shi
+            g'' ⟨AmoLean.EGraph.VerifiedExtraction.NodeOps.replaceChildren skelOp childIds⟩
+            hshi'' hpmi'',
           Nat.le_trans hsize'' hsize',
           fun i hi => (hagree' i (Nat.lt_of_lt_of_le hi hsize'')).trans (hagree'' i hi),
           sorry /- VALUE: v'(root id) = Pattern.eval(.node skelOp subpats, ...) -/⟩
@@ -454,37 +456,24 @@ private theorem ematch_value_chain (g₀ g : MGraph) (env : MixedEnv) (v₀ v : 
 theorem applyRuleAtF_preserves_cv (fuel : Nat) (psrule : PatternSoundRule)
     (classId : CId) (env : MixedEnv) :
     PreservesCV env (fun g => MixedSaturation.applyRuleAtF fuel g psrule.rule classId) := by
-  intro g v hcv hpmi
+  intro g v hcv hpmi hshi
   unfold MixedSaturation.applyRuleAtF
   simp only []  -- zeta-reduce let-bindings (L-676)
   generalize MixedEMatch.ematchF fuel g psrule.rule.lhs classId = results
-  -- Thread CV through foldl via ProofKit pattern (foldl_inv_extends)
-  -- Invariant: ∃ v', CV g' env v' ∧ VPMI g'
   revert g v
   induction results with
-  | nil => intro g v hcv hpmi; exact ⟨v, hcv, hpmi⟩
+  | nil => intro g v hcv hpmi hshi; exact ⟨v, hcv, hpmi, hshi⟩
   | cons σ rest ih =>
-    intro g₀ v₀ hcv₀ hpmi₀
+    intro g₀ v₀ hcv₀ hpmi₀ hshi₀
     simp only [List.foldl]
-    -- Case split: condMet → instantiateF → root equality
-    -- Each branch: either unchanged (use v₀) or needs instantiateF/merge sorry
-    -- split_ifs handles all if-then-else branches and reduces ite
     split_ifs with h_cond h_inst h_roots
-    -- Branch 1: condMet false → graph unchanged
-    · exact ih _ v₀ hcv₀ hpmi₀
-    -- Branch 2: condMet true, instantiateF = none → graph unchanged
-    · -- condMet true: match on instantiateF result
-      -- L-574: use match in tactic mode to reduce the match expression
-      match h_inst : MixedEMatch.instantiateF fuel g₀ psrule.rule.rhs σ with
-      | none =>
-        -- instantiateF = none → g₀ unchanged
-        exact ih _ v₀ hcv₀ hpmi₀
+    · exact ih _ v₀ hcv₀ hpmi₀ hshi₀
+    · match h_inst : MixedEMatch.instantiateF fuel g₀ psrule.rule.rhs σ with
+      | none => exact ih _ v₀ hcv₀ hpmi₀ hshi₀
       | some (rhsId, acc') =>
-        -- instantiateF = some → acc' is the new graph
         split
-        · -- roots equal → acc' has CV from instantiateF_sound, feed into ih
-          sorry /- INST-CV: instantiateF_sound gives CV for acc', then ih for rest -/
-        · sorry /- MERGE-CV: instantiateF_sound + value chain + merge_consistent + ih -/
+        · sorry /- INST-CV -/
+        · sorry /- MERGE-CV -/
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 4: applyRulesF_preserves_cv
@@ -494,28 +483,26 @@ theorem applyRuleAtF_preserves_cv (fuel : Nat) (psrule : PatternSoundRule)
 private theorem applyRuleF_preserves_cv (fuel : Nat) (psrule : PatternSoundRule)
     (env : MixedEnv) :
     PreservesCV env (fun g => MixedSaturation.applyRuleF fuel g psrule.rule) := by
-  intro g v hcv hpmi
-  -- applyRuleF = foldl of applyRuleAtF over all class IDs
+  intro g v hcv hpmi hshi
   unfold MixedSaturation.applyRuleF
-  -- We need to show: foldl (fun acc cid => applyRuleAtF fuel acc rule cid) g allClasses
-  -- preserves CV. This follows by induction on the class list.
   suffices ∀ (classIds : List CId) (g₀ : MGraph) (v₀ : CId → Nat),
-      CV g₀ env v₀ → VPMI g₀ →
+      CV g₀ env v₀ → VPMI g₀ → ShapeHashconsInv g₀ →
       ∃ v', CV (classIds.foldl (fun acc cid =>
         MixedSaturation.applyRuleAtF fuel acc psrule.rule cid) g₀) env v' ∧
         VPMI (classIds.foldl (fun acc cid =>
+          MixedSaturation.applyRuleAtF fuel acc psrule.rule cid) g₀) ∧
+        ShapeHashconsInv (classIds.foldl (fun acc cid =>
           MixedSaturation.applyRuleAtF fuel acc psrule.rule cid) g₀) by
-    obtain ⟨v', hcv', hpmi'⟩ := this _ g v hcv hpmi
-    exact ⟨v', hcv', hpmi'⟩
+    obtain ⟨v', hcv', hpmi', hshi'⟩ := this _ g v hcv hpmi hshi
+    exact ⟨v', hcv', hpmi', hshi'⟩
   intro classIds
   induction classIds with
-  | nil => intro g₀ v₀ hcv₀ hpmi₀; exact ⟨v₀, hcv₀, hpmi₀⟩
+  | nil => intro g₀ v₀ hcv₀ hpmi₀ hshi₀; exact ⟨v₀, hcv₀, hpmi₀, hshi₀⟩
   | cons hd tl ih =>
-    intro g₀ v₀ hcv₀ hpmi₀
+    intro g₀ v₀ hcv₀ hpmi₀ hshi₀
     simp only [List.foldl]
-    -- Each step preserves CV by applyRuleAtF_preserves_cv at the specific classId
-    obtain ⟨v₁, hcv₁, hpmi₁⟩ := applyRuleAtF_preserves_cv fuel psrule hd env g₀ v₀ hcv₀ hpmi₀
-    exact ih _ v₁ hcv₁ hpmi₁
+    obtain ⟨v₁, hcv₁, hpmi₁, hshi₁⟩ := applyRuleAtF_preserves_cv fuel psrule hd env g₀ v₀ hcv₀ hpmi₀ hshi₀
+    exact ih _ v₁ hcv₁ hpmi₁ hshi₁
 
 /-- map/foldl conversion: (rules.map f).foldl step = rules.foldl (step . f). -/
 private theorem applyRulesF_foldl_eq (fuel : Nat) (rules : List PatternSoundRule)
@@ -532,18 +519,17 @@ private theorem applyRulesF_foldl_eq (fuel : Nat) (rules : List PatternSoundRule
 theorem applyRulesF_preserves_cv (fuel : Nat) (rules : List PatternSoundRule)
     (env : MixedEnv) :
     PreservesCV env (fun g => MixedSaturation.applyRulesF fuel g (rules.map (·.rule))) := by
-  intro g v hcv hpmi
-  -- Convert to foldl over PatternSoundRules
+  intro g v hcv hpmi hshi
   show ∃ v', CV (MixedSaturation.applyRulesF fuel g (rules.map (·.rule))) env v' ∧
-    VPMI (MixedSaturation.applyRulesF fuel g (rules.map (·.rule)))
+    VPMI (MixedSaturation.applyRulesF fuel g (rules.map (·.rule))) ∧
+    ShapeHashconsInv (MixedSaturation.applyRulesF fuel g (rules.map (·.rule)))
   rw [applyRulesF_foldl_eq]
-  -- Induction on rules list
   induction rules generalizing g v with
-  | nil => exact ⟨v, hcv, hpmi⟩
+  | nil => exact ⟨v, hcv, hpmi, hshi⟩
   | cons hd tl ih =>
     simp only [List.foldl]
-    obtain ⟨v₁, hcv₁, hpmi₁⟩ := applyRuleF_preserves_cv fuel hd env g v hcv hpmi
-    exact ih _ v₁ hcv₁ hpmi₁
+    obtain ⟨v₁, hcv₁, hpmi₁, hshi₁⟩ := applyRuleF_preserves_cv fuel hd env g v hcv hpmi hshi
+    exact ih _ v₁ hcv₁ hpmi₁ hshi₁
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 5: Smoke tests — non-vacuity

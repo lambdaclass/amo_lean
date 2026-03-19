@@ -43,9 +43,9 @@ theorem add_size_le (g : MGraph) (node : MNode) :
 -- Section 2: ShapeHashconsInv + nodeEval_canonical
 -- ══════════════════════════════════════════════════════════════════
 
-def ShapeHashconsInv (g : MGraph) : Prop :=
-  ∀ (nd : MNode) (id : CId), g.hashcons.get? nd = some id →
-    ∃ cls, g.classes.get? id = some cls ∧ nd ∈ cls.nodes.toList
+-- ShapeHashconsInv is now defined in MixedCoreSpec.lean.
+-- Re-export for backward compatibility.
+abbrev ShapeHashconsInv := AmoLean.EGraph.Verified.Bitwise.MixedCoreSpec.ShapeHashconsInv
 
 /-- Canonical-node bridge: evaluating a node after mapChildren root equals evaluating original.
     Combines evalOp_mapChildren (definitional) + evalOp_ext (v ∘ root = v by consistent_root_eq'). -/
@@ -244,6 +244,112 @@ theorem add_node_consistent (g : MGraph) (node : MNode) (env : MixedEnv) (v : CI
       unfold AmoLean.EGraph.VerifiedExtraction.UnionFind.add; simp [Array.size_push]
     · -- v' backward compat
       intro i hi; exact if_neg (Nat.ne_of_lt hi)
+
+-- ══════════════════════════════════════════════════════════════════
+-- Section 3b: SHI preservation by add and merge
+-- ══════════════════════════════════════════════════════════════════
+
+/-- add preserves ShapeHashconsInv (needs VPMI for hashcons entry bounds).
+    SHI only depends on hashcons + classes, which have the same structure
+    regardless of canonNode value. -/
+theorem add_preserves_shi (g : MGraph) (node : MNode)
+    (hshi : ShapeHashconsInv g) (hpmi : VPMI g) :
+    ShapeHashconsInv (g.add node).2 := by
+  intro nd id hlookup_nd
+  unfold AmoLean.EGraph.VerifiedExtraction.EGraph.add at hlookup_nd
+  simp only at hlookup_nd
+  split at hlookup_nd
+  · -- HIT: graph unchanged, SHI trivially preserved
+    rename_i existingId heq_hit
+    unfold AmoLean.EGraph.VerifiedExtraction.EGraph.add
+    simp only [heq_hit]
+    exact hshi nd id hlookup_nd
+  · -- MISS: canonNode not in hashcons — new hashcons + classes
+    rename_i heq_miss
+    unfold AmoLean.EGraph.VerifiedExtraction.EGraph.add
+    simp only [heq_miss]
+    -- Generalize canonNode so we don't case-split on children.isEmpty
+    generalize hcn : (if (AmoLean.EGraph.VerifiedExtraction.ENode.children node).isEmpty = true
+      then node
+      else AmoLean.EGraph.VerifiedExtraction.ENode.mapChildren
+        (fun c => g.unionFind.root c) node) = canonNode at hlookup_nd ⊢
+    -- hlookup_nd : (g.hashcons.insert canonNode newId).get? nd = some id
+    rw [Std.HashMap.get?_eq_getElem?, Std.HashMap.getElem?_insert] at hlookup_nd
+    split at hlookup_nd
+    · -- nd = canonNode → id = newId
+      rename_i heq_beq
+      have hid := Option.some.inj hlookup_nd; subst hid
+      refine ⟨AmoLean.EGraph.VerifiedExtraction.EClass.singleton canonNode, ?_, ?_⟩
+      · rw [Std.HashMap.get?_eq_getElem?, Std.HashMap.getElem?_insert, beq_self_eq_true]; rfl
+      · unfold AmoLean.EGraph.VerifiedExtraction.EClass.singleton
+        simp only [List.mem_singleton]
+        exact eq_of_beq (BEq.symm heq_beq)
+    · -- nd ≠ canonNode → old hashcons entry, use hshi + PMI
+      rename_i hneq_beq
+      have hget_old : g.hashcons.get? nd = some id := by
+        rwa [Std.HashMap.get?_eq_getElem?]
+      have ⟨cls, hcls, hmem⟩ := hshi nd id hget_old
+      refine ⟨cls, ?_, hmem⟩
+      rw [Std.HashMap.get?_eq_getElem?, Std.HashMap.getElem?_insert]
+      have hid_bnd := hpmi.hashcons_entries_valid nd id
+        (by rw [Std.HashMap.get?_eq_getElem?]; exact hget_old)
+      have : g.unionFind.add.1 = g.unionFind.parent.size := by
+        unfold AmoLean.EGraph.VerifiedExtraction.UnionFind.add; rfl
+      rw [this, show (g.unionFind.parent.size == id) = false from
+        beq_eq_false_iff_ne.mpr (Nat.ne_of_gt hid_bnd)]
+      rw [Std.HashMap.get?_eq_getElem?] at hcls; exact hcls
+
+/-- Elements of ec1 remain in ec1.union ec2.
+    The union foldl only adds elements, never removes. -/
+private theorem union_mem_left (ec1 ec2 : MixedCoreSpec.MClass) (x : MNode)
+    (hx : x ∈ ec1.nodes.toList) :
+    x ∈ (ec1.union ec2).nodes.toList := by
+  unfold AmoLean.EGraph.VerifiedExtraction.EClass.union; simp only
+  -- Convert Array.foldl to List.foldl so we can induct on the list
+  rw [← Array.foldl_toList]
+  -- The foldl adds ec2 elements into ec1.nodes. Show membership is monotone.
+  suffices h : ∀ (arr : List MNode) (acc : Array MNode),
+      x ∈ acc.toList →
+      x ∈ (arr.foldl (fun acc n => if acc.contains n then acc else acc.push n) acc).toList by
+    exact h ec2.nodes.toList ec1.nodes hx
+  intro arr
+  induction arr with
+  | nil => intro acc h; exact h
+  | cons hd tl ih =>
+    intro acc hacc
+    simp only [List.foldl]
+    apply ih
+    split
+    · exact hacc
+    · rw [Array.toList_push]; exact List.mem_append_left _ hacc
+
+/-- merge preserves ShapeHashconsInv.
+    hashcons is unchanged (merge_hashcons). classes: merged class is a superset. -/
+theorem merge_preserves_shi (g : MGraph) (id1 id2 : CId)
+    (hshi : ShapeHashconsInv g) :
+    ShapeHashconsInv (g.merge id1 id2) := by
+  intro nd id hlookup_nd
+  rw [MixedCoreSpec.merge_hashcons] at hlookup_nd
+  obtain ⟨cls, hcls, hmem⟩ := hshi nd id hlookup_nd
+  unfold AmoLean.EGraph.VerifiedExtraction.EGraph.merge; simp only
+  split
+  · exact ⟨cls, hcls, hmem⟩
+  · by_cases hid : AmoLean.EGraph.VerifiedExtraction.UnionFind.root g.unionFind id1 = id
+    · subst hid
+      -- id = root1: merged class = class1.union class2, nd ∈ class1
+      let class1 := (g.classes.get? (AmoLean.EGraph.VerifiedExtraction.UnionFind.root g.unionFind id1)).getD default
+      let class2 := (g.classes.get? (AmoLean.EGraph.VerifiedExtraction.UnionFind.root g.unionFind id2)).getD default
+      refine ⟨class1.union class2, ?_, ?_⟩
+      · rw [Std.HashMap.get?_eq_getElem?, Std.HashMap.getElem?_insert, beq_self_eq_true]; rfl
+      · -- nd ∈ cls.nodes.toList and cls = class1
+        have hcls_eq : class1 = cls := by
+          simp only [class1, hcls, Option.getD_some]
+        rw [← hcls_eq] at hmem
+        exact union_mem_left class1 class2 nd hmem
+    · refine ⟨cls, ?_, hmem⟩
+      rw [Std.HashMap.get?_eq_getElem?, Std.HashMap.getElem?_insert,
+          beq_eq_false_iff_ne.mpr hid]
+      rw [Std.HashMap.get?_eq_getElem?] at hcls; exact hcls
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 4: Smoke tests

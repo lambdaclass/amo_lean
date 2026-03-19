@@ -126,38 +126,41 @@ theorem merge_consistent (g : MGraph) (id1 id2 : CId)
 -- Section 2: PreservesCV predicate + combinators
 -- ══════════════════════════════════════════════════════════════════
 
-/-- A step function preserves the consistency triple (CV + PMI).
+-- Re-export ShapeHashconsInv from MixedCoreSpec
+abbrev ShapeHashconsInv := AmoLean.EGraph.Verified.Bitwise.MixedCoreSpec.ShapeHashconsInv
+
+/-- A step function preserves the consistency triple (CV + VPMI + SHI).
     This is the composability property for the saturation pipeline. -/
 def PreservesCV (env : MixedEnv) (step : MGraph → MGraph) : Prop :=
   ∀ (g : MGraph) (v : CId → Nat),
-    CV g env v → VPMI g →
-    ∃ v', CV (step g) env v' ∧ VPMI (step g)
+    CV g env v → VPMI g → ShapeHashconsInv g →
+    ∃ v', CV (step g) env v' ∧ VPMI (step g) ∧ ShapeHashconsInv (step g)
 
 /-- Composition: if step1 and step2 preserve CV, so does step2 ∘ step1. -/
 theorem comp_preserves_cv (env : MixedEnv) (step1 step2 : MGraph → MGraph)
     (h1 : PreservesCV env step1) (h2 : PreservesCV env step2) :
     PreservesCV env (step2 ∘ step1) := by
-  intro g v hcv hpmi
-  obtain ⟨v1, hcv1, hpmi1⟩ := h1 g v hcv hpmi
-  obtain ⟨v2, hcv2, hpmi2⟩ := h2 (step1 g) v1 hcv1 hpmi1
-  exact ⟨v2, hcv2, hpmi2⟩
+  intro g v hcv hpmi hshi
+  obtain ⟨v1, hcv1, hpmi1, hshi1⟩ := h1 g v hcv hpmi hshi
+  obtain ⟨v2, hcv2, hpmi2, hshi2⟩ := h2 (step1 g) v1 hcv1 hpmi1 hshi1
+  exact ⟨v2, hcv2, hpmi2, hshi2⟩
 
 /-- Identity preserves CV trivially. -/
 theorem id_preserves_cv (env : MixedEnv) : PreservesCV env id := by
-  intro g v hcv hpmi; exact ⟨v, hcv, hpmi⟩
+  intro g v hcv hpmi hshi; exact ⟨v, hcv, hpmi, hshi⟩
 
 /-- foldl with PreservesCV steps preserves CV. -/
 theorem foldl_preserves_cv (env : MixedEnv) (steps : List (MGraph → MGraph))
     (g : MGraph) (v : CId → Nat)
-    (hcv : CV g env v) (hpmi : VPMI g)
+    (hcv : CV g env v) (hpmi : VPMI g) (hshi : ShapeHashconsInv g)
     (hall : ∀ s ∈ steps, PreservesCV env s) :
     ∃ v', CV (steps.foldl (fun acc s => s acc) g) env v' := by
   induction steps generalizing g v with
   | nil => exact ⟨v, hcv⟩
   | cons hd tl ih =>
     simp only [List.foldl]
-    obtain ⟨v1, hcv1, hpmi1⟩ := hall hd (List.Mem.head _) g v hcv hpmi
-    exact ih (hd g) v1 hcv1 hpmi1 (fun s hs => hall s (List.mem_cons_of_mem _ hs))
+    obtain ⟨v1, hcv1, hpmi1, hshi1⟩ := hall hd (List.Mem.head _) g v hcv hpmi hshi
+    exact ih (hd g) v1 hcv1 hpmi1 hshi1 (fun s hs => hall s (List.mem_cons_of_mem _ hs))
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 3: Smoke tests

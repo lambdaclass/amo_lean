@@ -23,7 +23,7 @@ namespace AmoLean.EGraph.Verified.Bitwise.MixedSaturationSpec
 open AmoLean.EGraph.Verified.Bitwise (MixedNodeOp MixedEnv)
 open AmoLean.EGraph.Verified.Bitwise.MixedCoreSpec (MGraph CId)
 open AmoLean.EGraph.Verified.Bitwise.MixedSemanticSpec (VPMI)
-open AmoLean.EGraph.Verified.Bitwise.MixedSemanticSpec (CV PreservesCV)
+open AmoLean.EGraph.Verified.Bitwise.MixedSemanticSpec (CV PreservesCV ShapeHashconsInv)
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 1: Fuel-based saturation loop
@@ -48,29 +48,30 @@ def saturateMixedF (step : MGraph → MGraph) (maxIter : Nat)
     The existential witness comes from the step function. -/
 theorem saturateMixedF_preserves_consistent (step : MGraph → MGraph)
     (maxIter : Nat) (g : MGraph) (env : MixedEnv) (v : CId → Nat)
-    (hcv : CV g env v) (hpmi : VPMI g)
+    (hcv : CV g env v) (hpmi : VPMI g) (hshi : ShapeHashconsInv g)
     (h_step : PreservesCV env step) :
     ∃ v', CV (saturateMixedF step maxIter g) env v' := by
   induction maxIter generalizing g v with
   | zero => exact ⟨v, hcv⟩
   | succ n ih =>
     unfold saturateMixedF
-    obtain ⟨v1, hcv1, hpmi1⟩ := h_step g v hcv hpmi
-    exact ih (step g) v1 hcv1 hpmi1
+    obtain ⟨v1, hcv1, hpmi1, hshi1⟩ := h_step g v hcv hpmi hshi
+    exact ih (step g) v1 hcv1 hpmi1 hshi1
 
 /-- saturateMixedF preserves the full (CV, PMI) pair (needed for composition). -/
 theorem saturateMixedF_preserves_triple (step : MGraph → MGraph)
     (maxIter : Nat) (g : MGraph) (env : MixedEnv) (v : CId → Nat)
-    (hcv : CV g env v) (hpmi : VPMI g)
+    (hcv : CV g env v) (hpmi : VPMI g) (hshi : ShapeHashconsInv g)
     (h_step : PreservesCV env step) :
     ∃ v', CV (saturateMixedF step maxIter g) env v' ∧
-          VPMI (saturateMixedF step maxIter g) := by
+          VPMI (saturateMixedF step maxIter g) ∧
+          ShapeHashconsInv (saturateMixedF step maxIter g) := by
   induction maxIter generalizing g v with
-  | zero => exact ⟨v, hcv, hpmi⟩
+  | zero => exact ⟨v, hcv, hpmi, hshi⟩
   | succ n ih =>
     unfold saturateMixedF
-    obtain ⟨v1, hcv1, hpmi1⟩ := h_step g v hcv hpmi
-    exact ih (step g) v1 hcv1 hpmi1
+    obtain ⟨v1, hcv1, hpmi1, hshi1⟩ := h_step g v hcv hpmi hshi
+    exact ih (step g) v1 hcv1 hpmi1 hshi1
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 3: Two-phase saturation
@@ -87,14 +88,14 @@ def phasedSaturateMixedF (step1 step2 : MGraph → MGraph)
 theorem phasedSaturateMixedF_preserves_consistent
     (step1 step2 : MGraph → MGraph)
     (phase1Fuel phase2Fuel : Nat) (g : MGraph) (env : MixedEnv) (v : CId → Nat)
-    (hcv : CV g env v) (hpmi : VPMI g)
+    (hcv : CV g env v) (hpmi : VPMI g) (hshi : ShapeHashconsInv g)
     (h_step1 : PreservesCV env step1)
     (h_step2 : PreservesCV env step2) :
     ∃ v', CV (phasedSaturateMixedF step1 step2 phase1Fuel phase2Fuel g) env v' := by
   unfold phasedSaturateMixedF
-  obtain ⟨v1, hcv1, hpmi1⟩ := saturateMixedF_preserves_triple step1 phase1Fuel g env v
-    hcv hpmi h_step1
-  exact saturateMixedF_preserves_consistent step2 phase2Fuel _ env v1 hcv1 hpmi1 h_step2
+  obtain ⟨v1, hcv1, hpmi1, hshi1⟩ := saturateMixedF_preserves_triple step1 phase1Fuel g env v
+    hcv hpmi hshi h_step1
+  exact saturateMixedF_preserves_consistent step2 phase2Fuel _ env v1 hcv1 hpmi1 hshi1 h_step2
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 4: Smoke tests

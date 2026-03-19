@@ -101,9 +101,8 @@ theorem sameShape_smulGate (a₁ a₂ : EClassId) (c : Nat)
     evaluating the LHS and RHS patterns produces the same value. -/
 structure PatternSoundRule where
   rule : MixedEMatch.RewriteRule MixedNodeOp
-  envPrecond : MixedEnv → Prop := fun _ => True
-  soundness : ∀ (env : MixedEnv) (σ : PatVarId → Nat),
-    envPrecond env → Pattern.eval rule.lhs env σ = Pattern.eval rule.rhs env σ
+  soundness : ∀ (env : Nat → Nat) (σ : PatVarId → Nat),
+    Pattern.eval rule.lhs env σ = Pattern.eval rule.rhs env σ
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 4: Core bitwise identities as direct theorems
