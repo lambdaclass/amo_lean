@@ -78,6 +78,12 @@ def toCodegenExpr (e : MixedExpr) (constLookup : Nat → Int) : CodegenExpr :=
   | .bitOrE a b      => .binOp .bor  (toCodegenExpr a constLookup) (toCodegenExpr b constLookup)
   | .constMaskE n    => .litInt (↑(2 ^ n - 1 : Nat))
   | .subE a b        => .binOp .sub (toCodegenExpr a constLookup) (toCodegenExpr b constLookup)
+  | .reduceE a p     => .binOp .band (toCodegenExpr a constLookup) (.litInt (↑p - 1))
+  | .kronPackE a b w => .binOp .add (toCodegenExpr a constLookup)
+                          (.binOp .bshl (toCodegenExpr b constLookup) (.litInt (↑w)))
+  | .kronUnpackLoE a w => .binOp .band (toCodegenExpr a constLookup)
+                            (.litInt (↑(2 ^ w - 1 : Nat)))
+  | .kronUnpackHiE a w => .binOp .bshr (toCodegenExpr a constLookup) (.litInt (↑w))
 
 /-! ## Evaluation of CodegenExpr on Int -/
 
@@ -128,6 +134,12 @@ inductive IsBitwiseSubset : MixedExpr → Prop where
   | bitOrE      : ∀ (ea eb : MixedExpr), IsBitwiseSubset ea → IsBitwiseSubset eb →
                   IsBitwiseSubset (.bitOrE ea eb)
   | constMaskE  : ∀ (n : Nat), IsBitwiseSubset (.constMaskE n)
+  | kronPackE   : ∀ (ea eb : MixedExpr) (w : Nat), IsBitwiseSubset ea → IsBitwiseSubset eb →
+                  IsBitwiseSubset (.kronPackE ea eb w)
+  | kronUnpackLoE : ∀ (ea : MixedExpr) (w : Nat), IsBitwiseSubset ea →
+                    IsBitwiseSubset (.kronUnpackLoE ea w)
+  | kronUnpackHiE : ∀ (ea : MixedExpr) (w : Nat), IsBitwiseSubset ea →
+                    IsBitwiseSubset (.kronUnpackHiE ea w)
 
 /-- Environment consistency: the CodegenExpr String-keyed env agrees with
     the MixedEnv Nat-keyed env, and constLookup matches env.constVal. -/
@@ -211,6 +223,25 @@ theorem toCodegenExpr_sound (e : MixedExpr) (env : CircuitEnv Nat)
     rw [iha, ihb]; exact nat_lor_cast _ _
   | constMaskE n =>
     simp [toCodegenExpr, evalCodegenExpr, MixedExpr.eval]
+  | @kronPackE ea eb w _ _ iha ihb =>
+    simp only [toCodegenExpr, evalCodegenExpr, MixedExpr.eval]
+    rw [iha, ihb]; simp [Int.toNat, Nat.shiftLeft_eq, Int.shiftLeft, Nat.cast_add, Nat.cast_mul]
+  | @kronUnpackLoE ea w _ iha =>
+    simp only [toCodegenExpr, evalCodegenExpr, MixedExpr.eval]
+    rw [iha]
+    -- Goal: Int.land (↑(ea.eval env)) (↑(2^w - 1)) = ↑(ea.eval env % 2^w)
+    rw [nat_land_cast (ea.eval env) (2 ^ w - 1)]
+    congr 1
+    show (ea.eval env).land (2 ^ w - 1) = ea.eval env % 2 ^ w
+    have := Nat.and_two_pow_sub_one_eq_mod (ea.eval env) w
+    exact this
+  | @kronUnpackHiE ea w _ iha =>
+    simp only [toCodegenExpr, evalCodegenExpr, MixedExpr.eval]
+    rw [iha]
+    -- Goal: (↑(ea.eval env)).shiftRight (↑w).toNat = ↑(ea.eval env / 2^w)
+    simp only [Int.toNat_natCast]
+    show (↑(ea.eval env) : ℤ) >>> w = ↑(ea.eval env / 2 ^ w)
+    rw [Int.shiftRight_eq_div_pow]; exact_mod_cast rfl
 
 /-! ## C Code Pretty-Printer -/
 
