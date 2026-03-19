@@ -308,7 +308,7 @@ theorem instantiateF_sound (fuel : Nat) (g : MGraph) (pat : MixedEMatch.Pattern 
       v' (AmoLean.EGraph.VerifiedExtraction.UnionFind.root g'.unionFind id) =
         MixedEMatchSpec.Pattern.eval pat (fun n => env.constVal n) (substVal v g.unionFind σ) := by
   -- Induction on fuel
-  induction fuel generalizing g v id g' with
+  induction fuel generalizing g v id g' pat with
   | zero => simp [MixedEMatch.instantiateF] at hinst
   | succ n ih =>
     -- Case split on pattern
@@ -342,9 +342,9 @@ theorem instantiateF_sound (fuel : Nat) (g : MGraph) (pat : MixedEMatch.Pattern 
             AmoLean.EGraph.Verified.Bitwise.MixedAddNodeTriple.ShapeHashconsInv g'' ∧
             g.unionFind.parent.size ≤ g''.unionFind.parent.size ∧
             (∀ i, i < g.unionFind.parent.size → v'' i = v i) := by
-          sorry /- GO-CV: induction on subpats. Base ([]): go returns (ids.reverse, g) → CV unchanged.
-            Step (p :: ps): instantiateF n g p σ = some (childId, g₁) → ih gives CV for g₁ →
-            go g₁ ps ... → IH on ps gives CV for g''. Thread size + agreement. -/
+          sorry /- GO-CV: induction on subpats with @ih for each step.
+            @ih g p v hcv hpmi hshi hbnd_σ childId g₁ h_step gives CV for each child step.
+            Accumulator handling for go needs separate auxiliary lemma. ~30 LOC. -/
         obtain ⟨v'', hcv'', hpmi'', hshi'', hsize'', hagree''⟩ := go_cv
         -- Step 2: add_node_consistent for g''.add(replaceChildren skelOp childIds)
         obtain ⟨v', hcv', hpmi', hval', _, hsize', hagree'⟩ :=
