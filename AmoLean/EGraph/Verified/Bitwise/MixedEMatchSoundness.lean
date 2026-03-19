@@ -291,8 +291,53 @@ theorem ematchF_sound (g : MGraph) (env : MixedEnv) (v : CId → Nat)
     patNode: iterate over class nodes, sameShape matching, recurse on children.
     ~200 LOC. cf. OptiSat EMatchSpec.lean:350-462. -/
 
+open AmoLean.EGraph.Verified.Bitwise.MixedAddNodeTriple (ShapeHashconsInv)
+
+/-- Auxiliary: instantiateF.go preserves CV. Induction on pats using ih_fuel
+    (which works for instantiateF at reduced fuel n). -/
+private theorem go_preserves_cv (n : Nat) (σ : MixedEMatch.Substitution) (env : MixedEnv)
+    (ih_fuel : ∀ (g : MGraph) (pat : MixedEMatch.Pattern MixedNodeOp) (v : CId → Nat),
+      CV g env v → VPMI g → ShapeHashconsInv g →
+      (∀ pv id, σ.get? pv = some id → id < g.unionFind.parent.size) →
+      ∀ id g', MixedEMatch.instantiateF n g pat σ = some (id, g') →
+      ∃ v', CV g' env v' ∧ VPMI g' ∧ ShapeHashconsInv g' ∧
+        g.unionFind.parent.size ≤ g'.unionFind.parent.size ∧
+        (∀ i, i < g.unionFind.parent.size → v' i = v i))
+    (pats : List (MixedEMatch.Pattern MixedNodeOp))
+    (g₀ : MGraph) (v₀ : CId → Nat) (ids₀ : List CId)
+    (hcv₀ : CV g₀ env v₀) (hpmi₀ : VPMI g₀) (hshi₀ : ShapeHashconsInv g₀)
+    (hbnd_σ : ∀ pv id, σ.get? pv = some id → id < g₀.unionFind.parent.size)
+    (childIds : List CId) (g_final : MGraph)
+    (hgo : MixedEMatch.instantiateF.go σ n g₀ pats ids₀ = some (childIds, g_final)) :
+    ∃ v', CV g_final env v' ∧ VPMI g_final ∧ ShapeHashconsInv g_final ∧
+      g₀.unionFind.parent.size ≤ g_final.unionFind.parent.size ∧
+      (∀ i, i < g₀.unionFind.parent.size → v' i = v₀ i) := by
+  induction pats generalizing g₀ v₀ ids₀ with
+  | nil =>
+    -- go returns (ids₀.reverse, g₀) → g₀ unchanged
+    simp [MixedEMatch.instantiateF.go] at hgo
+    obtain ⟨_, rfl⟩ := hgo
+    exact ⟨v₀, hcv₀, hpmi₀, hshi₀, Nat.le_refl _, fun _ _ => rfl⟩
+  | cons p ps ih_go =>
+    -- go calls instantiateF n g₀ p σ, then recurses on ps
+    simp only [MixedEMatch.instantiateF.go] at hgo
+    -- Split on instantiateF result (L-574)
+    split at hgo
+    · -- instantiateF = none → contradiction
+      simp at hgo
+    · -- instantiateF = some (cid, g1)
+      rename_i cid g1 h_eq  -- EClassId, EGraph, proof
+      obtain ⟨v₁, hcv₁, hpmi₁, hshi₁, hsize₁, hagree₁⟩ :=
+        ih_fuel g₀ p v₀ hcv₀ hpmi₀ hshi₀ hbnd_σ cid g1 h_eq
+      obtain ⟨v', hcv', hpmi', hshi', hsize', hagree'⟩ :=
+        ih_go g1 v₁ (cid :: ids₀) hcv₁ hpmi₁ hshi₁
+          (fun pv id h => Nat.lt_of_lt_of_le (hbnd_σ pv id h) hsize₁) hgo
+      exact ⟨v', hcv', hpmi', hshi',
+        Nat.le_trans hsize₁ hsize',
+        fun i hi => (hagree' i (Nat.lt_of_lt_of_le hi hsize₁)).trans (hagree₁ i hi)⟩
+
 /-- InstantiateEvalSound: instantiateF preserves CV and the new node's value
-    matches the pattern evaluation. Proved by induction on Pattern + add_node_consistent.
+    matches the pattern evaluation. Proved by induction on fuel + go_preserves_cv.
     cf. OptiSat EMatchSpec.lean:509-527. -/
 theorem instantiateF_sound (fuel : Nat) (g : MGraph) (pat : MixedEMatch.Pattern MixedNodeOp)
     (σ : MixedEMatch.Substitution) (v : CId → Nat) (env : MixedEnv)
@@ -342,9 +387,13 @@ theorem instantiateF_sound (fuel : Nat) (g : MGraph) (pat : MixedEMatch.Pattern 
             AmoLean.EGraph.Verified.Bitwise.MixedAddNodeTriple.ShapeHashconsInv g'' ∧
             g.unionFind.parent.size ≤ g''.unionFind.parent.size ∧
             (∀ i, i < g.unionFind.parent.size → v'' i = v i) := by
-          sorry /- GO-CV: induction on subpats with @ih for each step.
-            @ih g p v hcv hpmi hshi hbnd_σ childId g₁ h_step gives CV for each child step.
-            Accumulator handling for go needs separate auxiliary lemma. ~30 LOC. -/
+          -- Use go_preserves_cv with ih as ih_fuel
+          exact go_preserves_cv n σ env
+            (fun g₁ pat₁ v₁ hcv₁ hpmi₁ hshi₁ hbnd₁ id₁ g₁' h₁ =>
+              let ⟨v', hcv', hpmi', hshi', hsize', hagree', _⟩ :=
+                @ih g₁ pat₁ v₁ hcv₁ hpmi₁ hshi₁ hbnd₁ id₁ g₁' h₁
+              ⟨v', hcv', hpmi', hshi', hsize', hagree'⟩)
+            subpats g v [] hcv hpmi hshi hbnd_σ childIds g'' h_go_eq
         obtain ⟨v'', hcv'', hpmi'', hshi'', hsize'', hagree''⟩ := go_cv
         -- Step 2: add_node_consistent for g''.add(replaceChildren skelOp childIds)
         obtain ⟨v', hcv', hpmi', hval', _, hsize', hagree'⟩ :=
