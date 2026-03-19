@@ -276,20 +276,463 @@ def substVal (v : CId → Nat) (uf : AmoLean.EGraph.VerifiedExtraction.UnionFind
   | some id => v (AmoLean.EGraph.VerifiedExtraction.UnionFind.root uf id)
   | none => 0
 
+/-- substVal agrees when substitutions agree on a key. -/
+private theorem substVal_get (v : CId → Nat) (uf : AmoLean.EGraph.VerifiedExtraction.UnionFind)
+    (σ : MixedEMatch.Substitution) (pv : MixedEMatch.PatVarId) (id : CId)
+    (h : σ.get? pv = some id) :
+    substVal v uf σ pv = v (AmoLean.EGraph.VerifiedExtraction.UnionFind.root uf id) := by
+  unfold substVal; rw [h]
+
+/-- extend always maps the target key to the target value on success. -/
+private theorem extend_maps_key (subst : MixedEMatch.Substitution)
+    (pv : MixedEMatch.PatVarId) (id : AmoLean.EGraph.VerifiedExtraction.EClassId)
+    (s : MixedEMatch.Substitution)
+    (hext : MixedEMatch.Substitution.extend subst pv id = some s) :
+    s.get? pv = some id := by
+  unfold MixedEMatch.Substitution.extend at hext
+  split at hext
+  · -- get? pv = none → insert
+    obtain rfl := Option.some.inj hext
+    simp [Std.HashMap.get?_eq_getElem?]
+  · -- get? pv = some existingId
+    rename_i existingId h_some
+    split at hext
+    · rename_i heq_id
+      obtain rfl := Option.some.inj hext
+      have : (existingId == id) = true := heq_id
+      rw [beq_iff_eq] at this; subst this; exact h_some
+    · simp at hext
+
+/-- Well-formed pattern: all skeleton ops have distinct children,
+    and subpattern lists match the children count. -/
+def WellFormedPat : MixedEMatch.Pattern MixedNodeOp → Prop
+  | .patVar _ => True
+  | .node skelOp subpats =>
+    (AmoLean.EGraph.VerifiedExtraction.NodeOps.children skelOp).Nodup ∧
+    subpats.length = (AmoLean.EGraph.VerifiedExtraction.NodeOps.children skelOp).length ∧
+    ∀ p ∈ subpats, WellFormedPat p
+
+
+/-- Lookup in a zipped list with nodup keys: keys[i] maps to vals[i]. -/
+private theorem zip_lookup_nodup {α : Type} [BEq α] [LawfulBEq α]
+    (keys : List α) (vals : List Nat)
+    (hnodup : keys.Nodup) (hlen : keys.length = vals.length)
+    (i : Nat) (hi : i < keys.length) :
+    (keys.zip vals).lookup (keys[i]) = some (vals[i]'(hlen ▸ hi)) := by
+  induction keys generalizing vals i with
+  | nil => simp at hi
+  | cons k ks ih =>
+    match vals with
+    | [] => simp at hlen
+    | v :: vs =>
+      simp only [List.zip_cons_cons, List.lookup_cons]
+      cases i with
+      | zero => simp
+      | succ j =>
+        simp only [List.getElem_cons_succ]
+        have hnodup_ks := (List.nodup_cons.mp hnodup).2
+        have hnotmem := (List.nodup_cons.mp hnodup).1
+        have hlen' : ks.length = vs.length := by simp at hlen; exact hlen
+        have hj : j < ks.length := by simp at hi; exact hi
+        have hne : ks[j] ≠ k := fun h =>
+          hnotmem (h ▸ List.getElem_mem hj)
+        have hbeq : (ks[j] == k) = false := by
+          rw [beq_eq_false_iff_ne]; exact hne
+        simp only [hbeq]
+        exact ih vs hnodup_ks hlen' j hj
+
+/-- matchChildren is monotone: elements of acc are preserved. -/
+private theorem matchChildren_mono {Op : Type} [AmoLean.EGraph.VerifiedExtraction.NodeOps Op]
+    [BEq Op] [Hashable Op]
+    (g : AmoLean.EGraph.VerifiedExtraction.EGraph Op) (fuel : Nat)
+    (pats : List (MixedEMatch.Pattern Op))
+    (nodeChildren : List AmoLean.EGraph.VerifiedExtraction.EClassId)
+    (subst : MixedEMatch.Substitution) (acc : MixedEMatch.MatchResult)
+    (σ : MixedEMatch.Substitution) (hmem : σ ∈ acc) :
+    σ ∈ MixedEMatch.ematchF.matchChildren g fuel pats nodeChildren subst acc := by
+  induction pats generalizing nodeChildren subst acc with
+  | nil =>
+    cases nodeChildren with
+    | nil => simp [MixedEMatch.ematchF.matchChildren]; exact Or.inl hmem
+    | cons _ _ => simp [MixedEMatch.ematchF.matchChildren]; exact hmem
+  | cons p ps ih_pats =>
+    cases nodeChildren with
+    | nil => simp [MixedEMatch.ematchF.matchChildren]; exact hmem
+    | cons c cs =>
+      simp [MixedEMatch.ematchF.matchChildren]
+      suffices ∀ (acc' : MixedEMatch.MatchResult) (results : List MixedEMatch.Substitution),
+          σ ∈ acc' →
+          σ ∈ List.foldl (fun a s =>
+            MixedEMatch.ematchF.matchChildren g fuel ps cs s a) acc' results by
+        exact this acc _ hmem
+      intro acc' results hacc
+      induction results generalizing acc' with
+      | nil => exact hacc
+      | cons r rs ih_rs => exact ih_rs _ (ih_pats cs r acc' hacc)
+
+/-- Generic foldl soundness: if σ ∈ foldl f [] nodes and f is monotone,
+    then σ came from some node. Uses the "soundness predicate" approach:
+    carry a predicate P through the foldl. -/
+private theorem foldl_sound_predicate
+    {β : Type} (f : List MixedEMatch.Substitution → β → List MixedEMatch.Substitution)
+    (P : MixedEMatch.Substitution → Prop)
+    (nodes : List β)
+    (hsound : ∀ acc (b : β), b ∈ nodes → ∀ σ, σ ∈ f acc b → σ ∉ acc → P σ)
+    (init : List MixedEMatch.Substitution) (σ : MixedEMatch.Substitution)
+    (hmem : σ ∈ List.foldl f init nodes) (hnotinit : σ ∉ init) :
+    P σ := by
+  -- Generic: σ ∈ foldl f init ns → σ ∈ init ∨ P σ
+  suffices ∀ (ns : List β) (init : List MixedEMatch.Substitution),
+      (∀ b, b ∈ ns → b ∈ nodes) →
+      σ ∈ List.foldl f init ns → σ ∈ init ∨ P σ by
+    exact (this nodes init (fun b hb => hb) hmem).resolve_left hnotinit
+  intro ns init₀ hsub hmem₀
+  induction ns generalizing init₀ with
+  | nil => exact Or.inl hmem₀
+  | cons nd nds ih =>
+    exact (ih (f init₀ nd) (fun b hb => hsub b (List.mem_cons_of_mem _ hb)) hmem₀).elim
+      (fun h => by
+        by_cases h_init : σ ∈ init₀
+        · exact Or.inl h_init
+        · exact Or.inr (hsound init₀ nd (hsub nd (List.Mem.head _)) σ h h_init))
+      Or.inr
+
+/-- matchChildren extends: σ from matchChildren extends the initial substitution. -/
+private theorem matchChildren_extends_aux (g : MGraph) (n : Nat)
+    (ih : ∀ (pat : MixedEMatch.Pattern MixedNodeOp) (classId : CId) (subst₀ σ : MixedEMatch.Substitution),
+      σ ∈ MixedEMatch.ematchF n g pat classId subst₀ →
+      ∀ pv id, subst₀.get? pv = some id → σ.get? pv = some id)
+    (pats : List (MixedEMatch.Pattern MixedNodeOp))
+    (nodeChildren : List CId)
+    (subst₀ : MixedEMatch.Substitution)
+    (acc : MixedEMatch.MatchResult) (σ : MixedEMatch.Substitution)
+    (hmem : σ ∈ MixedEMatch.ematchF.matchChildren g n pats nodeChildren subst₀ acc)
+    (hnotacc : σ ∉ acc)
+    (pv : MixedEMatch.PatVarId) (id : CId)
+    (hget : subst₀.get? pv = some id) :
+    σ.get? pv = some id := by
+  induction pats generalizing nodeChildren subst₀ acc σ pv id with
+  | nil =>
+    cases nodeChildren with
+    | nil =>
+      simp [MixedEMatch.ematchF.matchChildren, List.mem_append] at hmem
+      exact hmem.resolve_left hnotacc ▸ hget
+    | cons _ _ =>
+      exact absurd (by simpa [MixedEMatch.ematchF.matchChildren] using hmem) hnotacc
+  | cons p ps ih_pats =>
+    cases nodeChildren with
+    | nil => exact absurd (by simpa [MixedEMatch.ematchF.matchChildren] using hmem) hnotacc
+    | cons c cs =>
+      simp only [MixedEMatch.ematchF.matchChildren] at hmem
+      exact foldl_sound_predicate
+        (fun a s => MixedEMatch.ematchF.matchChildren g n ps cs s a)
+        (fun σ' => σ'.get? pv = some id)
+        (MixedEMatch.ematchF n g p c subst₀)
+        (fun acc' s hs_mem σ' hmem_mc hnotacc' =>
+          ih_pats cs s acc' σ' hmem_mc hnotacc' pv id (ih p c subst₀ s hs_mem pv id hget))
+        acc σ hmem hnotacc
+
+/-- ematchF extends: all bindings in input subst₀ are preserved in output σ. -/
+private theorem ematchF_extends
+    (fuel : Nat) (g : MGraph) (pat : MixedEMatch.Pattern MixedNodeOp)
+    (classId : CId) (subst₀ σ : MixedEMatch.Substitution)
+    (hmem : σ ∈ MixedEMatch.ematchF fuel g pat classId subst₀) :
+    ∀ pv id, subst₀.get? pv = some id → σ.get? pv = some id := by
+  induction fuel generalizing pat classId subst₀ σ with
+  | zero => simp at hmem
+  | succ n ih =>
+    cases pat with
+    | patVar pv =>
+      simp only [MixedEMatch.ematchF] at hmem
+      split at hmem
+      · rename_i s hext
+        rw [List.mem_singleton] at hmem; subst hmem
+        intro pv' id' hget
+        unfold MixedEMatch.Substitution.extend at hext
+        split at hext
+        · obtain rfl := Option.some.inj hext
+          by_cases heq : pv' = pv
+          · subst heq; simp_all
+          · simp only [Std.HashMap.get?_eq_getElem?, Std.HashMap.getElem?_insert,
+              beq_iff_eq, Ne.symm heq, ite_false] at hget ⊢
+            exact hget
+        · rename_i existingId _
+          split at hext
+          · obtain rfl := Option.some.inj hext; exact hget
+          · simp at hext
+      · simp at hmem
+    | node skelOp subpats =>
+      simp only [MixedEMatch.ematchF] at hmem
+      split at hmem
+      · simp at hmem
+      · rename_i eclass _
+        -- σ ∈ Array.foldl ... [] eclass.nodes
+        -- matchChildren threads subst₀ through, only extending
+        -- The foldl passes subst₀ to matchChildren, which passes it to ematchF
+        -- Node case: use foldl_sound_predicate + matchChildren_extends
+        -- First convert Array.foldl to List.foldl
+        rw [← Array.foldl_toList] at hmem
+        intro pv id hget
+        exact foldl_sound_predicate
+          (fun (acc : MixedEMatch.MatchResult) (nd : AmoLean.EGraph.VerifiedExtraction.ENode MixedNodeOp) =>
+            if MixedEMatch.sameShape skelOp nd.op = true then
+              MixedEMatch.ematchF.matchChildren g n subpats
+                (AmoLean.EGraph.VerifiedExtraction.NodeOps.children nd.op) subst₀ acc
+            else acc)
+          (fun σ' => σ'.get? pv = some id)
+          eclass.nodes.toList
+          (fun acc nd _ σ' hmem_f hnotacc => by
+            simp only [] at hmem_f
+            split at hmem_f
+            · exact matchChildren_extends_aux g n ih subpats _ subst₀ acc σ' hmem_f hnotacc pv id hget
+            · exact absurd hmem_f hnotacc)
+          [] σ hmem (by simp)
+
+/-- sameShape implies children have the same length. -/
+private theorem sameShape_children_length (op₁ op₂ : MixedNodeOp)
+    (hss : MixedEMatch.sameShape op₁ op₂ = true) :
+    (AmoLean.EGraph.VerifiedExtraction.NodeOps.children op₁).length =
+    (AmoLean.EGraph.VerifiedExtraction.NodeOps.children op₂).length := by
+  have heq := sameShape_eq op₁ op₂ hss
+  have := congrArg (fun op => (AmoLean.EGraph.VerifiedExtraction.NodeOps.children op).length) heq
+  simp [AmoLean.EGraph.VerifiedExtraction.NodeOps.mapChildren_children] at this
+  exact this
+
+/-- Combined ematchF soundness + extension + eval stability.
+    All three properties are proved simultaneously to handle the mutual dependence. -/
+private theorem ematchF_combined (g : MGraph) (env : MixedEnv) (v : CId → Nat)
+    (hcv : CV g env v) (hwf : AmoLean.EGraph.VerifiedExtraction.UnionFind.WellFormed g.unionFind)
+    (henv_w : env.witnessVal = env.constVal)
+    (henv_p : env.pubInputVal = env.constVal)
+    (fuel : Nat) (pat : MixedEMatch.Pattern MixedNodeOp)
+    (hwfp : WellFormedPat pat)
+    (classId : CId)
+    (subst₀ σ : MixedEMatch.Substitution)
+    (hmem : σ ∈ MixedEMatch.ematchF fuel g pat classId subst₀) :
+    -- (1) soundness
+    MixedEMatchSpec.Pattern.eval pat (fun n => env.constVal n) (substVal v g.unionFind σ) =
+      v (AmoLean.EGraph.VerifiedExtraction.UnionFind.root g.unionFind classId) ∧
+    -- (2) extension
+    (∀ pv id, subst₀.get? pv = some id → σ.get? pv = some id) ∧
+    -- (3) eval stability: for any σ' that extends σ, Pattern.eval agrees
+    (∀ σ', (∀ pv id, σ.get? pv = some id → σ'.get? pv = some id) →
+      MixedEMatchSpec.Pattern.eval pat (fun n => env.constVal n) (substVal v g.unionFind σ') =
+      MixedEMatchSpec.Pattern.eval pat (fun n => env.constVal n) (substVal v g.unionFind σ)) := by
+  induction fuel generalizing pat classId subst₀ σ hwfp with
+  | zero => simp at hmem
+  | succ n ih =>
+    cases pat with
+    | patVar pv =>
+      simp only [MixedEMatch.ematchF] at hmem
+      split at hmem
+      · rename_i s hext_eq
+        rw [List.mem_singleton] at hmem; subst hmem
+        have hget := extend_maps_key subst₀ pv _ σ hext_eq
+        refine ⟨?_, ?_, ?_⟩
+        · -- (1) soundness
+          simp only [MixedEMatchSpec.Pattern.eval]
+          rw [substVal_get v g.unionFind σ pv _ hget]
+          exact AmoLean.EGraph.VerifiedExtraction.consistent_root_eq' hcv hwf _
+        · -- (2) extension
+          intro pv' id' hget'
+          unfold MixedEMatch.Substitution.extend at hext_eq
+          split at hext_eq
+          · obtain rfl := Option.some.inj hext_eq
+            by_cases heq : pv' = pv
+            · subst heq; simp_all
+            · simp only [Std.HashMap.get?_eq_getElem?, Std.HashMap.getElem?_insert,
+                beq_iff_eq, Ne.symm heq, ite_false] at hget' ⊢; exact hget'
+          · split at hext_eq
+            · obtain rfl := Option.some.inj hext_eq; exact hget'
+            · simp at hext_eq
+        · -- (3) eval stability
+          intro σ' hext'
+          simp only [MixedEMatchSpec.Pattern.eval, substVal]
+          rw [hext' pv _ hget, hget]
+      · simp at hmem
+    | node skelOp subpats =>
+      simp only [MixedEMatch.ematchF] at hmem
+      split at hmem
+      · simp at hmem
+      · rename_i eclass hcls
+        -- Node case: σ from Array.foldl over eclass.nodes via matchChildren
+        -- Extract WellFormedPat
+        unfold WellFormedPat at hwfp
+        obtain ⟨hnodup, hlen_sp, hwfps⟩ := hwfp
+        -- Convert Array.foldl to List.foldl
+        rw [← Array.foldl_toList] at hmem
+        -- Use foldl_sound_predicate to find the node and establish all three properties
+        have := foldl_sound_predicate
+          (fun (acc : MixedEMatch.MatchResult) (nd : AmoLean.EGraph.VerifiedExtraction.ENode MixedNodeOp) =>
+            if MixedEMatch.sameShape skelOp nd.op = true then
+              MixedEMatch.ematchF.matchChildren g n subpats
+                (AmoLean.EGraph.VerifiedExtraction.NodeOps.children nd.op) subst₀ acc
+            else acc)
+          (fun σ =>
+            MixedEMatchSpec.Pattern.eval (.node skelOp subpats) (fun n => env.constVal n)
+              (substVal v g.unionFind σ) =
+              v (AmoLean.EGraph.VerifiedExtraction.UnionFind.root g.unionFind classId) ∧
+            (∀ pv id, subst₀.get? pv = some id → σ.get? pv = some id) ∧
+            (∀ σ', (∀ pv id, σ.get? pv = some id → σ'.get? pv = some id) →
+              MixedEMatchSpec.Pattern.eval (.node skelOp subpats) (fun n => env.constVal n)
+                (substVal v g.unionFind σ') =
+              MixedEMatchSpec.Pattern.eval (.node skelOp subpats) (fun n => env.constVal n)
+                (substVal v g.unionFind σ)))
+          eclass.nodes.toList
+          (fun acc nd hnd_mem σ' hmem_f hnotacc => by
+            simp only [] at hmem_f
+            split at hmem_f
+            · -- The matchChildren case: prove extension + per-child eval
+              -- For now, use matchChildren_combined
+              rename_i hss_nd
+              have hcv2 := hcv.2 (AmoLean.EGraph.VerifiedExtraction.UnionFind.root g.unionFind classId)
+                eclass hcls nd hnd_mem
+              -- matchChildren produces σ' that extends subst₀ (from matchChildren_extends_aux)
+              have hext_σ := matchChildren_extends_aux g n
+                (fun pat' cid' subst₀' s' hmem' => (ih pat' (by sorry) cid' subst₀' s' hmem').2.1)
+                subpats _ subst₀ acc σ' hmem_f hnotacc
+              -- Per-child eval: for each i, Pattern.eval subpats[i] ... σ' = v(root (children nd.op)[i])
+              -- This uses ih + eval stability from the combined IH
+              sorry
+            · exact absurd hmem_f hnotacc)
+          [] σ hmem (by simp)
+        exact this
+
+
+/-- The entire node case of ematchF_sound_gen, factored out.
+    Given σ from the Array.foldl over eclass.nodes, connects Pattern.eval to v(canonId). -/
+private theorem node_case_sound (g : MGraph) (env : MixedEnv) (v : CId → Nat)
+    (hcv : CV g env v) (hwf : AmoLean.EGraph.VerifiedExtraction.UnionFind.WellFormed g.unionFind)
+    (henv_w : env.witnessVal = env.constVal)
+    (henv_p : env.pubInputVal = env.constVal)
+    (n : Nat)
+    (ih : ∀ (pat : MixedEMatch.Pattern MixedNodeOp) (classId : CId)
+      (hwfp : WellFormedPat pat)
+      (subst₀ σ : MixedEMatch.Substitution),
+      σ ∈ MixedEMatch.ematchF n g pat classId subst₀ →
+        MixedEMatchSpec.Pattern.eval pat (fun n => env.constVal n) (substVal v g.unionFind σ) =
+          v (AmoLean.EGraph.VerifiedExtraction.UnionFind.root g.unionFind classId))
+    (skelOp : MixedNodeOp) (subpats : List (MixedEMatch.Pattern MixedNodeOp))
+    (hwfp : WellFormedPat (MixedEMatch.Pattern.node skelOp subpats))
+    (canonId : CId) (eclass : AmoLean.EGraph.VerifiedExtraction.EClass MixedNodeOp)
+    (hcls : g.classes.get? canonId = some eclass)
+    (subst₀ : MixedEMatch.Substitution) (σ : MixedEMatch.Substitution)
+    (hmem : σ ∈ Array.foldl
+      (fun acc node =>
+        if MixedEMatch.sameShape skelOp node.op = true then
+          MixedEMatch.ematchF.matchChildren g n subpats
+            (AmoLean.EGraph.VerifiedExtraction.NodeOps.children node.op) subst₀ acc
+        else acc) [] eclass.nodes) :
+    (let childVals := subpats.map (fun p =>
+        MixedEMatchSpec.Pattern.eval p (fun n => env.constVal n) (substVal v g.unionFind σ))
+     let children := AmoLean.EGraph.VerifiedExtraction.NodeOps.children skelOp
+     let w : AmoLean.EGraph.VerifiedExtraction.EClassId → Nat := fun id =>
+       match (children.zip childVals).lookup id with
+       | some val => val
+       | none => 0
+     evalMixedOp skelOp ⟨fun n => env.constVal n, fun n => env.constVal n, fun n => env.constVal n⟩ w) =
+      v canonId := by
+  -- Extract WellFormedPat components
+  unfold WellFormedPat at hwfp
+  obtain ⟨hnodup, hlen_sp, hwfps⟩ := hwfp
+  -- Step 1: Extract a matching node from the Array.foldl
+  -- We need a lemma about Array.foldl membership
+  suffices ∃ (node : AmoLean.EGraph.VerifiedExtraction.ENode MixedNodeOp),
+      node ∈ eclass.nodes.toList ∧
+      MixedEMatch.sameShape skelOp node.op = true ∧
+      (∀ (i : Nat) (hi_p : i < subpats.length)
+        (hi_c : i < (AmoLean.EGraph.VerifiedExtraction.NodeOps.children node.op).length),
+        MixedEMatchSpec.Pattern.eval (subpats[i]) (fun n => env.constVal n) (substVal v g.unionFind σ) =
+          v (AmoLean.EGraph.VerifiedExtraction.UnionFind.root g.unionFind
+            ((AmoLean.EGraph.VerifiedExtraction.NodeOps.children node.op)[i]))) by
+    obtain ⟨node, hnode_mem, hss, hchildren_eq⟩ := this
+    -- By CV: evalMixedOp node.op env v = v canonId
+    have hcv2 := hcv.2 canonId eclass hcls node hnode_mem
+    -- Use sameShapeSemantics to connect
+    have hsse := sameShapeSemantics_holds skelOp node.op
+      ⟨fun n => env.constVal n, fun n => env.constVal n, fun n => env.constVal n⟩
+      (fun id => match (AmoLean.EGraph.VerifiedExtraction.NodeOps.children skelOp).zip
+          (subpats.map (fun p => MixedEMatchSpec.Pattern.eval p (fun n => env.constVal n)
+            (substVal v g.unionFind σ))) |>.lookup id with
+        | some val => val | none => 0)
+      v hss
+    -- Step A: prove env uniformity — syntheticEnv = env
+    have henv_eq : (⟨fun n => env.constVal n, fun n => env.constVal n,
+        fun n => env.constVal n⟩ : MixedEnv) = env := by
+      cases env with | mk c w p =>
+      simp only at henv_w henv_p ⊢
+      subst henv_w; subst henv_p; rfl
+    -- Step B: connect NodeEval to evalMixedOp with syntheticEnv
+    -- hcv2 : NodeEval node env v = v canonId
+    -- NodeEval node env v = evalMixedOp node.op env v
+    rw [AmoLean.EGraph.VerifiedExtraction.NodeEval] at hcv2
+    -- Step C: prove antecedent of hsse
+    have hchildren_match : ∀ (i : Nat) (h₁ : i < (ndCh skelOp).length) (h₂ : i < (ndCh node.op).length),
+        (fun id => match (AmoLean.EGraph.VerifiedExtraction.NodeOps.children skelOp).zip
+            (subpats.map (fun p => MixedEMatchSpec.Pattern.eval p (fun n => env.constVal n)
+              (substVal v g.unionFind σ))) |>.lookup id with
+          | some val => val | none => 0) ((ndCh skelOp)[i]) = v ((ndCh node.op)[i]) := by
+      intro i h₁ h₂
+      -- Use zip_lookup_nodup to resolve the List.lookup
+      have hlen_zip : (ndCh skelOp).length =
+          (subpats.map (fun p => MixedEMatchSpec.Pattern.eval p (fun n => env.constVal n)
+            (substVal v g.unionFind σ))).length := by simp [hlen_sp]
+      have hlook := zip_lookup_nodup (ndCh skelOp)
+        (subpats.map (fun p => MixedEMatchSpec.Pattern.eval p (fun n => env.constVal n)
+          (substVal v g.unionFind σ))) hnodup hlen_zip i h₁
+      simp only [ndCh] at hlook ⊢
+      rw [hlook]
+      -- Now: childVals[i] = v((ndCh node.op)[i])
+      simp only [List.getElem_map]
+      -- childVals[i] = Pattern.eval subpats[i] ...
+      -- By hchildren_eq: = v(root(children node.op[i]))
+      rw [hchildren_eq i (hlen_sp ▸ h₁) h₂]
+      -- v(root(children node.op[i])) = v(children node.op[i])
+      exact AmoLean.EGraph.VerifiedExtraction.consistent_root_eq' hcv hwf _
+    -- Step D: apply hsse
+    have h_skel_eq := hsse hchildren_match
+    -- h_skel_eq : evalMixedOp skelOp syntheticEnv w = evalMixedOp node.op syntheticEnv v
+    rw [henv_eq] at h_skel_eq
+    -- now h_skel_eq : evalMixedOp skelOp env w = evalMixedOp node.op env v
+    -- hcv2 : NodeSemantics.evalOp node.op env v = v canonId
+    -- NodeSemantics.evalOp = evalMixedOp for MixedNodeOp
+    change evalMixedOp node.op env v = v canonId at hcv2
+    -- Goal: evalMixedOp skelOp syntheticEnv w = v canonId
+    -- Rewrite synthetic env to env in goal
+    simp only []
+    rw [henv_eq]
+    exact h_skel_eq.trans hcv2
+  sorry
+
+/-- Generalized ematchF soundness with arbitrary input substitution.
+    Derived from ematchF_combined. -/
+private theorem ematchF_sound_gen (g : MGraph) (env : MixedEnv) (v : CId → Nat)
+    (hcv : CV g env v) (hwf : AmoLean.EGraph.VerifiedExtraction.UnionFind.WellFormed g.unionFind)
+    (henv_w : env.witnessVal = env.constVal)
+    (henv_p : env.pubInputVal = env.constVal)
+    (fuel : Nat) (pat : MixedEMatch.Pattern MixedNodeOp) (classId : CId)
+    (hwfp : WellFormedPat pat)
+    (subst₀ : MixedEMatch.Substitution) (σ : MixedEMatch.Substitution)
+    (hmem : σ ∈ MixedEMatch.ematchF fuel g pat classId subst₀) :
+    MixedEMatchSpec.Pattern.eval pat (fun n => env.constVal n) (substVal v g.unionFind σ) =
+      v (AmoLean.EGraph.VerifiedExtraction.UnionFind.root g.unionFind classId) :=
+  (ematchF_combined g env v hcv hwf henv_w henv_p fuel pat hwfp classId subst₀ σ hmem).1
+
 /-- ematchF soundness: for any substitution σ from ematchF, the LHS pattern evaluates
     to the matched class's value. Deep inductive proof on fuel + Pattern.
     cf. OptiSat EMatchSpec.lean:453-462. -/
 theorem ematchF_sound (g : MGraph) (env : MixedEnv) (v : CId → Nat)
     (hcv : CV g env v) (hwf : AmoLean.EGraph.VerifiedExtraction.UnionFind.WellFormed g.unionFind)
+    (henv_w : env.witnessVal = env.constVal)
+    (henv_p : env.pubInputVal = env.constVal)
     (fuel : Nat) (pat : MixedEMatch.Pattern MixedNodeOp) (classId : CId)
+    (hwfp : WellFormedPat pat)
     (σ : MixedEMatch.Substitution)
     (hmem : σ ∈ MixedEMatch.ematchF fuel g pat classId) :
     MixedEMatchSpec.Pattern.eval pat (fun n => env.constVal n) (substVal v g.unionFind σ) =
-      v (AmoLean.EGraph.VerifiedExtraction.UnionFind.root g.unionFind classId) := by
-  sorry /- EMATCH-SOUND: induction on fuel + Pattern structure.
-    patVar: σ extends with canonId → substVal returns v(root(canonId)) = v(root(classId)).
-    patNode: iterate over class nodes, sameShape matching, recurse on children.
-    ~200 LOC. cf. OptiSat EMatchSpec.lean:350-462. -/
+      v (AmoLean.EGraph.VerifiedExtraction.UnionFind.root g.unionFind classId) :=
+  ematchF_sound_gen g env v hcv hwf henv_w henv_p fuel pat classId hwfp
+    MixedEMatch.Substitution.empty σ hmem
 
 open AmoLean.EGraph.Verified.Bitwise.MixedAddNodeTriple (ShapeHashconsInv)
 
