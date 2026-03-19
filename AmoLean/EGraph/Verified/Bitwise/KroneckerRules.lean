@@ -5,6 +5,7 @@
   Enables the e-graph to discover and exploit packed representations.
 -/
 import AmoLean.EGraph.Verified.Bitwise.KroneckerPacking
+import AmoLean.EGraph.Verified.Bitwise.BitwiseRules
 
 set_option autoImplicit false
 
@@ -37,6 +38,7 @@ def unpackHiAfterPackRule (w : Nat) : MixedSoundRule where
   rhsEval := fun _env v => v 1 + v 0 / 2^w  -- = v1 when v0 < 2^w (since v0/2^w = 0)
   soundness := fun _env v => by
     rw [Nat.mul_comm (v 1) (2^w), Nat.add_mul_div_left (v 0) (v 1) (Nat.two_pow_pos w)]
+    omega
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 2: Addition fusion rule
