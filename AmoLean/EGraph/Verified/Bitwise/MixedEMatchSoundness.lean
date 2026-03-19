@@ -307,9 +307,34 @@ theorem instantiateF_sound (fuel : Nat) (g : MGraph) (pat : MixedEMatch.Pattern 
       (∀ i, i < g.unionFind.parent.size → v' i = v i) ∧
       v' (AmoLean.EGraph.VerifiedExtraction.UnionFind.root g'.unionFind id) =
         MixedEMatchSpec.Pattern.eval pat (fun n => env.constVal n) (substVal v g.unionFind σ) := by
-  sorry /- INSTANTIATE-SOUND: full version with value property.
-    Requires induction on fuel, go helper lemma, add_node_consistent.
-    cf. OptiSat EMatchSpec.lean:680-757. -/
+  -- Induction on fuel
+  induction fuel generalizing g v id g' with
+  | zero => simp [MixedEMatch.instantiateF] at hinst
+  | succ n ih =>
+    -- Case split on pattern
+    cases pat with
+    | patVar pv =>
+      -- patVar: unfold shows match on σ.lookup pv
+      simp only [MixedEMatch.instantiateF, MixedEMatch.Substitution.lookup] at hinst
+      -- Split on lookup result
+      split at hinst
+      · -- lookup = some → (id, g') = (existId, g)
+        obtain ⟨rfl, rfl⟩ := Prod.mk.inj (Option.some.inj hinst)
+        exact ⟨v, hcv, hpmi, hshi, Nat.le_refl _, fun _ _ => rfl, by
+          simp_all [MixedEMatchSpec.Pattern.eval, substVal, MixedEMatch.Substitution.lookup]⟩
+      · -- lookup = none → contradiction
+        exact absurd hinst (by simp)
+    | node skelOp subpats =>
+      -- patNode: unfold to match on go result
+      simp only [MixedEMatch.instantiateF] at hinst
+      -- Split on go result
+      split at hinst
+      · exact absurd hinst (by simp)  -- go = none
+      · -- go = some (childIds, g'')
+        rename_i childIds g'' h_go_eq
+        obtain ⟨rfl, rfl⟩ := Prod.mk.inj (Option.some.inj hinst)
+        sorry /- GO-THEN-ADD: go preserves CV (by induction on subpats using ih),
+          then add_node_consistent for the final add. -/
 
 /-- Simpler version: instantiateF just preserves CV+VPMI (no value property).
     Used in applyRuleAtF where we only need CV preservation for the non-merge cases. -/
