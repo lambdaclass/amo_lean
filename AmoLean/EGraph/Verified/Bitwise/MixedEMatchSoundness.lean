@@ -333,8 +333,29 @@ theorem instantiateF_sound (fuel : Nat) (g : MGraph) (pat : MixedEMatch.Pattern 
       · -- go = some (childIds, g'')
         rename_i childIds g'' h_go_eq
         obtain ⟨rfl, rfl⟩ := Prod.mk.inj (Option.some.inj hinst)
-        sorry /- GO-THEN-ADD: go preserves CV (by induction on subpats using ih),
-          then add_node_consistent for the final add. -/
+        -- Step 1: go preserves CV (need auxiliary lemma about go using ih)
+        -- Step 2: add_node_consistent for the final g''.add
+        -- For now, thread through: go gives g'' with CV, then add gives final result
+        -- go_sound: auxiliary for go (induction on subpats)
+        -- go calls instantiateF n (reduced fuel) → ih applies
+        have go_cv : ∃ v'', CV g'' env v'' ∧ VPMI g'' ∧
+            AmoLean.EGraph.Verified.Bitwise.MixedAddNodeTriple.ShapeHashconsInv g'' ∧
+            g.unionFind.parent.size ≤ g''.unionFind.parent.size ∧
+            (∀ i, i < g.unionFind.parent.size → v'' i = v i) := by
+          sorry /- GO-CV: induction on subpats. Base ([]): go returns (ids.reverse, g) → CV unchanged.
+            Step (p :: ps): instantiateF n g p σ = some (childId, g₁) → ih gives CV for g₁ →
+            go g₁ ps ... → IH on ps gives CV for g''. Thread size + agreement. -/
+        obtain ⟨v'', hcv'', hpmi'', hshi'', hsize'', hagree''⟩ := go_cv
+        -- Step 2: add_node_consistent for g''.add(replaceChildren skelOp childIds)
+        obtain ⟨v', hcv', hpmi', hval', _, hsize', hagree'⟩ :=
+          AmoLean.EGraph.Verified.Bitwise.MixedAddNodeTriple.add_node_consistent
+            g'' ⟨AmoLean.EGraph.VerifiedExtraction.NodeOps.replaceChildren skelOp childIds⟩
+            env v'' hcv'' hpmi'' hshi'' (by sorry /- CHILDREN-BND: childIds bounded by g''.uf.size -/)
+        exact ⟨v', hcv', hpmi',
+          sorry /- SHI': ShapeHashconsInv preserved by add -/,
+          Nat.le_trans hsize'' hsize',
+          fun i hi => (hagree' i (Nat.lt_of_lt_of_le hi hsize'')).trans (hagree'' i hi),
+          sorry /- VALUE: v'(root id) = Pattern.eval(.node skelOp subpats, ...) -/⟩
 
 /-- Simpler version: instantiateF just preserves CV+VPMI (no value property).
     Used in applyRuleAtF where we only need CV preservation for the non-merge cases. -/
