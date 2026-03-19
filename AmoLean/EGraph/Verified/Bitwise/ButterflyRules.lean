@@ -25,7 +25,16 @@ open AmoLean.EGraph.Verified (EClassId)
     Adapted from BitwiseLean.NTTButterfly.butterfly_ct_mod. -/
 theorem butterfly_ct_sum_mod (a wb p : Nat) (hp : 0 < p) (hwb : wb % p ≤ a + p) :
     ((a + wb) % p + (a + p - wb % p) % p) % p = (2 * a) % p := by
-  sorry -- B73: requires BitwiseLean's butterfly_ct_mod proof pattern (Nat.add_mul_mod_self_right)
+  -- Replace (a + wb) % p with (a + wb%p) % p by removing multiples of p
+  have h1 : (a + wb) % p = (a + wb % p) % p := by
+    conv_lhs => rw [show a + wb = a + wb % p + p * (wb / p) from by
+      have := Nat.div_add_mod wb p; omega]
+    exact Nat.add_mul_mod_self_left (a + wb % p) p (wb / p)
+  -- Combine: ((a + wb%p)%p + (a + p - wb%p)%p)%p = ((a + wb%p) + (a + p - wb%p))%p
+  rw [h1, ← Nat.add_mod]
+  -- The wb%p terms cancel: (a + wb%p) + (a + p - wb%p) = 2*a + p
+  have h2 : (a + wb % p) + (a + p - wb % p) = 2 * a + p := by omega
+  rw [h2, Nat.add_mod_right]
 
 /-- Mod distributes over the CT sum half: (a + wb) % p = (a % p + wb % p) % p. -/
 theorem ct_sum_mod_dist (a wb p : Nat) :

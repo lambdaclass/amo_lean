@@ -40,7 +40,21 @@ theorem deferSafe_chain (values : List Nat) (B w : Nat)
     (hbnd : ∀ v ∈ values, v < B)
     (hfit : values.length * B < 2^w) :
     values.foldl (· + ·) 0 < 2^w := by
-  sorry -- B73.5: needs induction on list + bound propagation
+  suffices h : values.foldl (· + ·) 0 ≤ values.length * B by omega
+  have gen : ∀ (l : List Nat), (∀ v ∈ l, v < B) →
+      ∀ acc : Nat, l.foldl (· + ·) acc ≤ acc + l.length * B := by
+    intro l hl acc
+    induction l generalizing acc with
+    | nil => simp
+    | cons hd tl ih =>
+      show tl.foldl (· + ·) (acc + hd) ≤ acc + (tl.length + 1) * B
+      have h1 : hd < B := hl hd (by simp)
+      have h2 : ∀ v ∈ tl, v < B := fun v hv => hl v (List.mem_cons_of_mem _ hv)
+      calc tl.foldl (· + ·) (acc + hd)
+          ≤ (acc + hd) + tl.length * B := ih h2 _
+        _ ≤ acc + (tl.length + 1) * B := by
+            rw [Nat.add_mul]; omega
+  have h := gen values hbnd 0; omega
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 2: Butterfly-specific lazy bounds
@@ -87,10 +101,14 @@ theorem harveyReduce_mod (x p : Nat) (hp : 0 < p) (hx : x < 4 * p) :
   unfold harveyReduce
   split
   · -- x >= 2p: result = x - 2p
-    sorry -- B73.5: Nat.mod with subtraction needs careful case analysis
+    rename_i hge
+    have heq : x = x - 2 * p + p * 2 := by omega
+    conv_rhs => rw [heq, Nat.add_mul_mod_self_left]
   · split
     · -- p ≤ x < 2p: result = x - p
-      sorry -- B73.5: Nat.mod with subtraction needs careful case analysis
+      rename_i _ hge
+      have heq : x = x - p + p := by omega
+      conv_rhs => rw [heq, Nat.add_mod_right]
     · -- x < p: result = x
       rfl
 

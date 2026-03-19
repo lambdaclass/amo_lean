@@ -45,14 +45,21 @@ def harveyReduceRule (p : Nat) (hp : 0 < p) : MixedSoundRule where
   lhsEval := fun _env v => harveyReduce (v 0) p % p
   rhsEval := fun _env v => v 0 % p
   soundness := fun _env v => by
-    -- The full proof requires harveyReduce_mod which has sorry for two cases.
-    -- We proceed by cases on whether the bound holds.
-    by_cases hx : v 0 < 4 * p
-    · exact harveyReduce_mod (v 0) p hp hx
-    · -- When x >= 4p, harveyReduce may not behave as expected,
-      -- but mod p is still well-defined on both sides.
-      -- This case is unreachable in practice due to bound tracking.
-      sorry
+    -- harveyReduce(x, p) ≡ x (mod p) for ALL x, not just x < 4p.
+    -- The three branches of harveyReduce each preserve mod p.
+    unfold harveyReduce
+    split
+    · -- x >= 2p: result = x - 2p, and (x - 2p) % p = x % p
+      rename_i hge
+      have heq : v 0 = v 0 - 2 * p + p * 2 := by omega
+      conv_rhs => rw [heq, Nat.add_mul_mod_self_left]
+    · split
+      · -- p ≤ x < 2p: result = x - p, and (x - p) % p = x % p
+        rename_i _ hge
+        have heq : v 0 = v 0 - p + p := by omega
+        conv_rhs => rw [heq, Nat.add_mod_right]
+      · -- x < p: trivial
+        rfl
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 2: harveyBoundRule — Harvey output is bounded
@@ -115,25 +122,23 @@ theorem canonicalize_lt (x p : Nat) (_hp : 0 < p) (hx : x < 2 * p) :
     universal quantifier (where x may exceed 2p in the e-graph valuation). -/
 def harveyCanonicalize (p : Nat) (hp : 0 < p) : MixedSoundRule where
   name := s!"harvey_canonicalize_{p}"
-  lhsEval := fun _env v => canonicalize (v 0) p
+  lhsEval := fun _env v => canonicalize (v 0) p % p
   rhsEval := fun _env v => v 0 % p
   soundness := fun _env v => by
+    -- canonicalize(x, p) % p = x % p for ALL x.
+    -- In range (x < 2p): canonicalize_mod handles it.
+    -- Out of range: canonicalize(x, p) = x - p (since x ≥ p), then (x - p) % p = x % p.
     by_cases hx : v 0 < 2 * p
-    · -- In range: canonicalize gives the canonical representative
+    · exact canonicalize_mod (v 0) p hp hx
+    · push_neg at hx
       unfold canonicalize
       split
-      · -- v 0 >= p: result = v 0 - p, and v 0 - p < p
+      · -- v 0 >= p: (v 0 - p) % p = v 0 % p
         rename_i hge
-        have hlt : v 0 - p < p := by omega
-        have heq : v 0 = p + (v 0 - p) := by omega
-        conv_rhs => rw [heq]
-        rw [Nat.add_mod_left]
-        exact (Nat.mod_eq_of_lt hlt).symm
-      · -- v 0 < p: result = v 0, and v 0 % p = v 0
-        rename_i hlt
-        exact (Nat.mod_eq_of_lt (by omega)).symm
-    · -- Out of range: unreachable in practice due to Harvey bound tracking
-      sorry
+        have heq : v 0 = v 0 - p + p := by omega
+        conv_rhs => rw [heq, Nat.add_mod_right]
+      · -- v 0 < p: contradicts v 0 >= 2p
+        omega
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 4: Composition: Harvey reduce followed by canonicalize

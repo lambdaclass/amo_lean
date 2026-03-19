@@ -143,6 +143,104 @@ theorem strongWF_implies_UFWF {uf : MUF} (hwf : StrongWF uf) : UFWF uf where
   root_bounded := fun i hi => rootD_bounded hwf.1 hi
 
 -- ══════════════════════════════════════════════════════════════════
+-- Section 4b: Push lemmas (adapted from OptiSat UnionFind.lean)
+-- Used by add_node_consistent to prove StrongWF after UF.add
+-- ══════════════════════════════════════════════════════════════════
+
+/-- A root in the original array stays a root after push. -/
+theorem IsRootAt_push {parent : Array CId} {v : CId} {i : CId}
+    (hroot : IsRootAt parent i) :
+    IsRootAt (parent.push v) i := by
+  obtain ⟨hlt, hself⟩ := hroot
+  have h' : i < (parent.push v).size := by simp [Array.size_push]; exact Nat.lt_succ_of_lt hlt
+  refine ⟨h', ?_⟩
+  have : (parent.push v)[i]'h' = parent[i]'hlt := by
+    rw [Array.getElem_push]; split
+    · rfl
+    · rename_i hne; exact absurd hlt hne
+  rw [this, hself]
+
+/-- rootD on a pushed array equals rootD on the original for in-bounds IDs.
+    Key lemma: push doesn't affect the parent chain of existing elements. -/
+theorem rootD_push {parent : Array CId} {v : CId} {id : CId} {fuel : Nat}
+    (hbnd : ∀ j, (hj : j < parent.size) → parent[j]'hj < parent.size)
+    (hid : id < parent.size) :
+    rootD (parent.push v) id fuel = rootD parent id fuel := by
+  induction fuel generalizing id with
+  | zero => rfl
+  | succ n ih =>
+    have hid' : id < (parent.push v).size := by simp [Array.size_push]; exact Nat.lt_succ_of_lt hid
+    have hget : (parent.push v)[id]'hid' = parent[id]'hid := by
+      rw [Array.getElem_push]; split
+      · rfl
+      · rename_i hne; exact absurd hid hne
+    unfold rootD
+    rw [dif_pos hid', dif_pos hid, hget]
+    cases hc : parent[id]'hid == id
+    · simp; exact ih (hbnd id hid)
+    · simp
+
+/-- UnionFind.add (push self-root) preserves StrongWF.
+    Adapted from OptiSat add_wf. -/
+theorem push_preserves_strongWF {uf : MUF} (hwf : StrongWF uf) :
+    StrongWF ⟨uf.parent.push uf.parent.size⟩ := by
+  constructor
+  · -- ParentsBounded
+    intro i h
+    simp only [Array.size_push] at h
+    show (uf.parent.push uf.parent.size)[i] < (uf.parent.push uf.parent.size).size
+    rw [Array.size_push, Array.getElem_push]
+    split
+    · rename_i hlt; exact Nat.lt_succ_of_lt (hwf.1 i hlt)
+    · exact Nat.lt_succ_of_le (Nat.le_refl _)
+  · -- IsAcyclic
+    intro i hi
+    simp only [Array.size_push] at hi
+    show IsRootAt (uf.parent.push uf.parent.size)
+      (rootD (uf.parent.push uf.parent.size) i ((uf.parent.push uf.parent.size).size))
+    rw [Array.size_push]
+    by_cases hlt : i < uf.parent.size
+    · -- Old element: rootD on extended array = rootD on original
+      rw [rootD_push hwf.1 hlt, rootD_fuel_extra hwf.1 hlt (hwf.2 i hlt)]
+      exact IsRootAt_push (hwf.2 i hlt)
+    · -- New element: self-root
+      have heq : i = uf.parent.size := by omega
+      subst heq
+      have hisRoot : IsRootAt (uf.parent.push uf.parent.size) uf.parent.size :=
+        ⟨by simp [Array.size_push], Array.getElem_push_eq⟩
+      rw [rootD_of_isRoot hisRoot (by omega)]
+      exact hisRoot
+
+/-- root in pushed UF = root in original UF for ALL IDs.
+    Adapted from OptiSat CoreSpec.lean root_push_all_eq. -/
+theorem root_push_all_eq {uf : MUF} (hwf : StrongWF uf) (k : CId) :
+    AmoLean.EGraph.VerifiedExtraction.UnionFind.root ⟨uf.parent.push uf.parent.size⟩ k =
+    AmoLean.EGraph.VerifiedExtraction.UnionFind.root uf k := by
+  simp only [AmoLean.EGraph.VerifiedExtraction.UnionFind.root, Array.size_push]
+  by_cases hk : k < uf.parent.size
+  · rw [rootD_push hwf.1 hk, rootD_fuel_extra hwf.1 hk (hwf.2 k hk)]
+  · -- k ≥ uf.parent.size: pushed rootD = k, original rootD = k
+    -- pushed: rootD (push size) k (size+1) = k (k ≥ size, so if k=size → self-root, k>size → oob)
+    -- original: rootD parent k size = k (k ≥ size → oob for succ fuel, rfl for zero fuel)
+    -- Both sides = k when k ≥ uf.parent.size
+    -- LHS: rootD of pushed array, RHS: rootD of original array
+    have hrhs : rootD uf.parent k uf.parent.size = k := by
+      cases hs : uf.parent.size with
+      | zero => rfl  -- fuel = 0 → rootD = k
+      | succ n => exact rootD_succ_oob (by omega)  -- k ≥ n+1 → oob
+    by_cases hke : k = uf.parent.size
+    · -- k = size: new self-root in pushed array
+      subst hke
+      rw [rootD_of_isRoot
+        ⟨by simp [Array.size_push], Array.getElem_push_eq⟩
+        (by omega), hrhs]
+    · -- k > size: oob in both arrays
+      have hgt : uf.parent.size < k := Nat.lt_of_le_of_ne (Nat.le_of_not_lt hk) (Ne.symm hke)
+      have hoob : ¬(k < (uf.parent.push uf.parent.size).size) := by
+        simp [Array.size_push]; omega
+      rw [rootD_succ_oob hoob, hrhs]
+
+-- ══════════════════════════════════════════════════════════════════
 -- Section 5: Parent step and set lemmas
 -- ══════════════════════════════════════════════════════════════════
 

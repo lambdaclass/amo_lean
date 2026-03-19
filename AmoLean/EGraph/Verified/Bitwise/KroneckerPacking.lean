@@ -72,7 +72,9 @@ theorem kronPack_add_no_carry (a1 b1 a2 b2 w : Nat)
 theorem kronPack_sub_no_borrow (a1 b1 a2 b2 w : Nat)
     (ha : a2 ≤ a1) (hb : b2 ≤ b1) :
     kronPack a1 b1 w - kronPack a2 b2 w = kronPack (a1 - a2) (b1 - b2) w := by
-  sorry -- B76: Nat subtraction with 2^w terms, needs careful Nat.sub_add_eq chain
+  simp only [kronPack, Nat.sub_mul]
+  have hpw : b2 * 2 ^ w ≤ b1 * 2 ^ w := Nat.mul_le_mul_right _ hb
+  omega
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 4: Smoke tests

@@ -418,4 +418,13 @@ def isAlgebraic : MixedNodeOp → Bool
 theorem algebraic_or_bitwise (op : MixedNodeOp) : isAlgebraic op = true ∨ isBitwise op = true := by
   cases op <;> simp [isAlgebraic, isBitwise]
 
+/-- Canonical-node bridge: evaluating a node with mapped children under v
+    equals evaluating the original node under v ∘ f.
+    This is definitionally true for every MixedNodeOp constructor because
+    mixedMapChildren applies f to children and evalMixedOp reads children via v. -/
+theorem evalOp_mapChildren (f : EClassId → EClassId) (op : MixedNodeOp)
+    (env : MixedEnv) (v : EClassId → Nat) :
+    evalMixedOp (mixedMapChildren f op) env v = evalMixedOp op env (fun c => v (f c)) := by
+  cases op <;> rfl
+
 end AmoLean.EGraph.Verified.Bitwise

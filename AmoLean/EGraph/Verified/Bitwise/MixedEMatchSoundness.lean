@@ -264,23 +264,120 @@ structure PatternSoundRule where
     MixedEMatchSpec.Pattern.eval rule.rhs env σ
 
 -- ══════════════════════════════════════════════════════════════════
--- Section 3: applyRuleAtF_preserves_cv (sorry'd)
+-- Section 3: Focused soundness properties (L-391 decomposition)
 -- ══════════════════════════════════════════════════════════════════
 
+/-- Substitute pattern variables with class values via UF roots.
+    Maps patVar pv → v(root(σ(pv))) where σ : Substitution.
+    cf. OptiSat EMatchSpec.lean substVal. -/
+def substVal (v : CId → Nat) (uf : AmoLean.EGraph.VerifiedExtraction.UnionFind)
+    (σ : MixedEMatch.Substitution) (pv : MixedEMatch.PatVarId) : Nat :=
+  match σ.get? pv with
+  | some id => v (AmoLean.EGraph.VerifiedExtraction.UnionFind.root uf id)
+  | none => 0
+
+/-- ematchF soundness: for any substitution σ from ematchF, the LHS pattern evaluates
+    to the matched class's value. Deep inductive proof on fuel + Pattern.
+    cf. OptiSat EMatchSpec.lean:453-462. -/
+theorem ematchF_sound (g : MGraph) (env : MixedEnv) (v : CId → Nat)
+    (hcv : CV g env v) (hwf : AmoLean.EGraph.VerifiedExtraction.UnionFind.WellFormed g.unionFind)
+    (fuel : Nat) (pat : MixedEMatch.Pattern MixedNodeOp) (classId : CId)
+    (σ : MixedEMatch.Substitution)
+    (hmem : σ ∈ MixedEMatch.ematchF fuel g pat classId) :
+    MixedEMatchSpec.Pattern.eval pat (fun n => env.constVal n) (substVal v g.unionFind σ) =
+      v (AmoLean.EGraph.VerifiedExtraction.UnionFind.root g.unionFind classId) := by
+  sorry /- EMATCH-SOUND: induction on fuel + Pattern structure.
+    patVar: σ extends with canonId → substVal returns v(root(canonId)) = v(root(classId)).
+    patNode: iterate over class nodes, sameShape matching, recurse on children.
+    ~200 LOC. cf. OptiSat EMatchSpec.lean:350-462. -/
+
+/-- InstantiateEvalSound: instantiateF preserves CV and the new node's value
+    matches the pattern evaluation. Proved by induction on Pattern + add_node_consistent.
+    cf. OptiSat EMatchSpec.lean:509-527. -/
+theorem instantiateF_sound (fuel : Nat) (g : MGraph) (pat : MixedEMatch.Pattern MixedNodeOp)
+    (σ : MixedEMatch.Substitution) (v : CId → Nat) (env : MixedEnv)
+    (hcv : CV g env v) (hpmi : VPMI g)
+    (hshi : AmoLean.EGraph.Verified.Bitwise.MixedAddNodeTriple.ShapeHashconsInv g)
+    (hbnd_σ : ∀ pv id, σ.get? pv = some id → id < g.unionFind.parent.size)
+    (id : CId) (g' : MGraph)
+    (hinst : MixedEMatch.instantiateF fuel g pat σ = some (id, g')) :
+    ∃ v', CV g' env v' ∧ VPMI g' ∧
+      AmoLean.EGraph.Verified.Bitwise.MixedAddNodeTriple.ShapeHashconsInv g' ∧
+      g.unionFind.parent.size ≤ g'.unionFind.parent.size ∧
+      (∀ i, i < g.unionFind.parent.size → v' i = v i) ∧
+      v' (AmoLean.EGraph.VerifiedExtraction.UnionFind.root g'.unionFind id) =
+        MixedEMatchSpec.Pattern.eval pat (fun n => env.constVal n) (substVal v g.unionFind σ) := by
+  -- Induction on fuel
+  match fuel, pat with
+  | 0, _ => simp [MixedEMatch.instantiateF] at hinst
+  | fuel + 1, .patVar pv =>
+    -- patVar: σ.lookup pv = some id → graph unchanged
+    simp [MixedEMatch.instantiateF, MixedEMatch.Substitution.lookup] at hinst
+    split at hinst
+    · -- lookup = some existingId → (id, g') = (existingId, g)
+      obtain ⟨rfl, rfl⟩ := Prod.mk.inj (Option.some.inj hinst)
+      exact ⟨v, hcv, hpmi, hshi, Nat.le_refl _, fun _ _ => rfl, by
+        simp_all [MixedEMatchSpec.Pattern.eval, substVal, MixedEMatch.Substitution.lookup]⟩
+    · -- lookup = none → contradiction (hinst : none = some _)
+      exact absurd hinst (by simp)
+  | fuel + 1, .node skelOp subpats =>
+    sorry /- PATNODE: recursive case. Needs:
+      1. Prove go preserves CV by induction on subpats list
+      2. After go: g' has CV, each childId's value = Pattern.eval(subpat_i)
+      3. Apply add_node_consistent to g'.add(replaceChildren skelOp childIds)
+      4. Show new node's value = Pattern.eval(.node skelOp subpats, ...)
+      ~80 LOC. cf. OptiSat EMatchSpec.lean:700-757. -/
+
+-- ══════════════════════════════════════════════════════════════════
+-- Section 4: Composition layer (applyRuleAtF_preserves_cv)
+-- ══════════════════════════════════════════════════════════════════
+
+/-- Value chain: ematch + PatternSoundRule → RHS eval = v(classId).
+    Bridges ematchF_sound + psrule.soundness to merge equality.
+    cf. OptiSat EMatchSpec.lean:873-894. -/
+private theorem ematch_value_chain (g₀ g : MGraph) (env : MixedEnv) (v₀ v : CId → Nat)
+    (hcv₀ : CV g₀ env v₀) (hcv : CV g env v)
+    (hwf₀ : AmoLean.EGraph.VerifiedExtraction.UnionFind.WellFormed g₀.unionFind)
+    (hwf : AmoLean.EGraph.VerifiedExtraction.UnionFind.WellFormed g.unionFind)
+    (hagrees : ∀ i, i < g₀.unionFind.parent.size → v i = v₀ i)
+    (psrule : PatternSoundRule) (fuel : Nat) (classId : CId)
+    (hclass : classId < g₀.unionFind.parent.size)
+    (σ : MixedEMatch.Substitution)
+    (hmem : σ ∈ MixedEMatch.ematchF fuel g₀ psrule.rule.lhs classId) :
+    MixedEMatchSpec.Pattern.eval psrule.rule.rhs (fun n => env.constVal n) (substVal v g.unionFind σ) =
+      v (AmoLean.EGraph.VerifiedExtraction.UnionFind.root g.unionFind classId) := by
+  sorry /- VALUE-CHAIN: calc chain.
+    rhs eval = rhs eval (substVal v₀ g₀.uf σ)  [by substVal_agrees]
+    = lhs eval (substVal v₀ g₀.uf σ)            [by psrule.soundness.symm]
+    = v₀(root g₀.uf classId)                    [by ematchF_sound]
+    = v₀(classId)                                [by consistent_root_eq']
+    = v(classId)                                 [by hagrees.symm]
+    = v(root g.uf classId)                       [by consistent_root_eq'.symm]
+    ~15 LOC once substVal_agrees is proved. -/
+
 /-- Applying a sound rewrite rule at a specific class preserves ConsistentValuation.
-    This is the core soundness lemma for the e-matching pipeline.
-
-    Sorry'd because the proof requires:
-    - ematchF soundness: matched substitutions map pattern vars to class values
-    - instantiateF soundness: the RHS evaluates to the same value as the LHS
-    - merge_consistent: merging LHS and RHS classes preserves CV
-    - foldl composition: iterating over all substitutions preserves the triple
-
-    These are complex inductive proofs over the fuel parameter. -/
+    Decomposed via L-391: ematchF_sound + InstantiateEvalSound + merge_consistent.
+    cf. OptiSat EMatchSpec.lean:985-1085. -/
 theorem applyRuleAtF_preserves_cv (fuel : Nat) (psrule : PatternSoundRule)
     (classId : CId) (env : MixedEnv) :
     PreservesCV env (fun g => MixedSaturation.applyRuleAtF fuel g psrule.rule classId) := by
-  sorry
+  intro g v hcv hpmi
+  unfold MixedSaturation.applyRuleAtF
+  simp only []  -- zeta-reduce let-bindings (L-676)
+  generalize MixedEMatch.ematchF fuel g psrule.rule.lhs classId = results
+  -- Thread CV through foldl via ProofKit pattern (foldl_inv_extends)
+  -- Invariant: ∃ v', CV g' env v' ∧ VPMI g'
+  revert g v
+  induction results with
+  | nil => intro g v hcv hpmi; exact ⟨v, hcv, hpmi⟩
+  | cons σ rest ih =>
+    intro g₀ v₀ hcv₀ hpmi₀
+    simp only [List.foldl]
+    -- Single step preserves CV, then apply IH
+    sorry /- FOLDL-STEP: prove this step preserves CV, then IH for rest.
+      Step: condMet → instantiateF → maybe merge.
+      Uses instantiateF_sound + ematch_value_chain + merge_consistent.
+      Then ih for the remaining substitutions. -/
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 4: applyRulesF_preserves_cv
