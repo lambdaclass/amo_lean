@@ -250,8 +250,17 @@ theorem sameShapeSemantics_holds : SameShapeSemantics := by
     rw [h0]
 
 -- ══════════════════════════════════════════════════════════════════
--- Section 2: PatternSoundRule
+-- Section 2: WellFormedPat + PatternSoundRule
 -- ══════════════════════════════════════════════════════════════════
+
+/-- Well-formed pattern: all skeleton ops have distinct children,
+    and subpattern lists match the children count. -/
+def WellFormedPat : MixedEMatch.Pattern MixedNodeOp → Prop
+  | .patVar _ => True
+  | .node skelOp subpats =>
+    (AmoLean.EGraph.VerifiedExtraction.NodeOps.children skelOp).Nodup ∧
+    subpats.length = (AmoLean.EGraph.VerifiedExtraction.NodeOps.children skelOp).length ∧
+    ∀ p ∈ subpats, WellFormedPat p
 
 /-- A pattern-based rewrite rule with a soundness proof.
     The rule is sound if for all environments and pattern variable assignments,
@@ -262,6 +271,8 @@ structure PatternSoundRule where
   soundness : ∀ (env : Nat → Nat) (σ : PatVarId → Nat),
     MixedEMatchSpec.Pattern.eval rule.lhs env σ =
     MixedEMatchSpec.Pattern.eval rule.rhs env σ
+  wfp_lhs : WellFormedPat rule.lhs
+  wfp_rhs : WellFormedPat rule.rhs
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 3: Focused soundness properties (L-391 decomposition)
@@ -302,15 +313,6 @@ private theorem extend_maps_key (subst : MixedEMatch.Substitution)
       have : (existingId == id) = true := heq_id
       rw [beq_iff_eq] at this; subst this; exact h_some
     · simp at hext
-
-/-- Well-formed pattern: all skeleton ops have distinct children,
-    and subpattern lists match the children count. -/
-def WellFormedPat : MixedEMatch.Pattern MixedNodeOp → Prop
-  | .patVar _ => True
-  | .node skelOp subpats =>
-    (AmoLean.EGraph.VerifiedExtraction.NodeOps.children skelOp).Nodup ∧
-    subpats.length = (AmoLean.EGraph.VerifiedExtraction.NodeOps.children skelOp).length ∧
-    ∀ p ∈ subpats, WellFormedPat p
 
 
 /-- Lookup in a zipped list with nodup keys: keys[i] maps to vals[i]. -/
@@ -958,48 +960,128 @@ theorem ematchF_sound (g : MGraph) (env : MixedEnv) (v : CId → Nat)
 
 open AmoLean.EGraph.Verified.Bitwise.MixedAddNodeTriple (ShapeHashconsInv)
 
-/-- Auxiliary: instantiateF.go preserves CV. Induction on pats using ih_fuel
-    (which works for instantiateF at reduced fuel n). -/
+/-- Children of replaceChildren are bounded when all ids and all original children are bounded.
+    Needed for CHILDREN-BND in instantiateF_sound.
+    Uses Decidable.decide + rfl to reduce the nested match on (op, ids). -/
+private theorem replaceChildren_children_bounded (op : MixedNodeOp) (ids : List CId) (bound : Nat)
+    (hids : ∀ c ∈ ids, c < bound)
+    (hch : ∀ c ∈ AmoLean.EGraph.VerifiedExtraction.NodeOps.children op, c < bound) :
+    ∀ c ∈ AmoLean.EGraph.VerifiedExtraction.NodeOps.children
+      (AmoLean.EGraph.VerifiedExtraction.NodeOps.replaceChildren op ids), c < bound := by
+  change ∀ c ∈ mixedChildren (mixedReplaceChildren op ids), c < bound
+  change ∀ c ∈ mixedChildren op, c < bound at hch
+  intro c hc
+  -- Strategy: case split on op, then on ids, using `dsimp` for kernel-level reduction
+  -- (The nested match on (op, ids) in mixedReplaceChildren needs both known to reduce)
+  cases op <;> (first
+    -- Leaf ops: mixedReplaceChildren returns op regardless of ids; children = []
+    | (dsimp only [mixedReplaceChildren, mixedChildren] at hc; exact absurd hc (by simp))
+    -- Non-leaf: need ids structure. Split on ids.
+    | (cases ids with
+       | nil =>
+         -- Fallback | op, _ => op: use hch
+         dsimp only [mixedReplaceChildren, mixedChildren] at hc; exact hch c hc
+       | cons hd tl =>
+         -- For binary ops, still need tl = hd2 :: _
+         first
+         | (-- Binary with tl = [] or tl = hd2 :: _
+            cases tl with
+            | nil =>
+              first
+              | (-- Binary fallback: ids too short, returns op
+                 dsimp only [mixedReplaceChildren, mixedChildren] at hc; exact hch c hc)
+              | (-- Unary: (.negGate hd) etc. Children = [hd]
+                 dsimp only [mixedReplaceChildren, mixedChildren] at hc
+                 simp only [List.mem_cons, List.mem_nil_iff, or_false] at hc
+                 subst hc; exact hids _ (by simp [List.mem_cons]))
+            | cons hd2 tl2 =>
+              first
+              | (-- Binary: (.addGate hd hd2) etc. Children = [hd, hd2]
+                 dsimp only [mixedReplaceChildren, mixedChildren] at hc
+                 simp only [List.mem_cons, List.mem_nil_iff, or_false] at hc
+                 rcases hc with rfl | rfl
+                 · exact hids _ (by simp [List.mem_cons])
+                 · exact hids _ (by simp [List.mem_cons]))
+              | (-- Unary: (.negGate hd) etc with extra ids. Children = [hd]
+                 dsimp only [mixedReplaceChildren, mixedChildren] at hc
+                 simp only [List.mem_cons, List.mem_nil_iff, or_false] at hc
+                 subst hc; exact hids _ (by simp [List.mem_cons])))))
+
+/-- Auxiliary: instantiateF.go preserves CV and tracks child ID bounds.
+    Induction on pats using ih_fuel (which works for instantiateF at reduced fuel n). -/
 private theorem go_preserves_cv (n : Nat) (σ : MixedEMatch.Substitution) (env : MixedEnv)
     (ih_fuel : ∀ (g : MGraph) (pat : MixedEMatch.Pattern MixedNodeOp) (v : CId → Nat),
       CV g env v → VPMI g → ShapeHashconsInv g →
       (∀ pv id, σ.get? pv = some id → id < g.unionFind.parent.size) →
+      WellFormedPat pat →
       ∀ id g', MixedEMatch.instantiateF n g pat σ = some (id, g') →
       ∃ v', CV g' env v' ∧ VPMI g' ∧ ShapeHashconsInv g' ∧
         g.unionFind.parent.size ≤ g'.unionFind.parent.size ∧
-        (∀ i, i < g.unionFind.parent.size → v' i = v i))
+        (∀ i, i < g.unionFind.parent.size → v' i = v i) ∧
+        id < g'.unionFind.parent.size)
     (pats : List (MixedEMatch.Pattern MixedNodeOp))
     (g₀ : MGraph) (v₀ : CId → Nat) (ids₀ : List CId)
     (hcv₀ : CV g₀ env v₀) (hpmi₀ : VPMI g₀) (hshi₀ : ShapeHashconsInv g₀)
     (hbnd_σ : ∀ pv id, σ.get? pv = some id → id < g₀.unionFind.parent.size)
+    (hwfp_pats : ∀ p ∈ pats, WellFormedPat p)
+    (hbnd_ids₀ : ∀ c ∈ ids₀, c < g₀.unionFind.parent.size)
     (childIds : List CId) (g_final : MGraph)
     (hgo : MixedEMatch.instantiateF.go σ n g₀ pats ids₀ = some (childIds, g_final)) :
     ∃ v', CV g_final env v' ∧ VPMI g_final ∧ ShapeHashconsInv g_final ∧
       g₀.unionFind.parent.size ≤ g_final.unionFind.parent.size ∧
-      (∀ i, i < g₀.unionFind.parent.size → v' i = v₀ i) := by
+      (∀ i, i < g₀.unionFind.parent.size → v' i = v₀ i) ∧
+      (∀ c ∈ childIds, c < g_final.unionFind.parent.size) := by
   induction pats generalizing g₀ v₀ ids₀ with
   | nil =>
-    -- go returns (ids₀.reverse, g₀) → g₀ unchanged
     simp [MixedEMatch.instantiateF.go] at hgo
-    obtain ⟨_, rfl⟩ := hgo
-    exact ⟨v₀, hcv₀, hpmi₀, hshi₀, Nat.le_refl _, fun _ _ => rfl⟩
+    obtain ⟨rfl, rfl⟩ := hgo
+    exact ⟨v₀, hcv₀, hpmi₀, hshi₀, Nat.le_refl _, fun _ _ => rfl,
+      fun c hc => hbnd_ids₀ c (List.mem_reverse.mp hc)⟩
   | cons p ps ih_go =>
-    -- go calls instantiateF n g₀ p σ, then recurses on ps
     simp only [MixedEMatch.instantiateF.go] at hgo
-    -- Split on instantiateF result (L-574)
     split at hgo
-    · -- instantiateF = none → contradiction
-      simp at hgo
-    · -- instantiateF = some (cid, g1)
-      rename_i cid g1 h_eq  -- EClassId, EGraph, proof
-      obtain ⟨v₁, hcv₁, hpmi₁, hshi₁, hsize₁, hagree₁⟩ :=
-        ih_fuel g₀ p v₀ hcv₀ hpmi₀ hshi₀ hbnd_σ cid g1 h_eq
-      obtain ⟨v', hcv', hpmi', hshi', hsize', hagree'⟩ :=
+    · simp at hgo
+    · rename_i cid g1 h_eq
+      have hwfp_p : WellFormedPat p := hwfp_pats p (List.mem_cons.mpr (Or.inl rfl))
+      have hwfp_ps : ∀ q ∈ ps, WellFormedPat q :=
+        fun q hq => hwfp_pats q (List.mem_cons.mpr (Or.inr hq))
+      obtain ⟨v₁, hcv₁, hpmi₁, hshi₁, hsize₁, hagree₁, hcid_bnd⟩ :=
+        ih_fuel g₀ p v₀ hcv₀ hpmi₀ hshi₀ hbnd_σ hwfp_p cid g1 h_eq
+      obtain ⟨v', hcv', hpmi', hshi', hsize', hagree', hbnd_ids⟩ :=
         ih_go g1 v₁ (cid :: ids₀) hcv₁ hpmi₁ hshi₁
-          (fun pv id h => Nat.lt_of_lt_of_le (hbnd_σ pv id h) hsize₁) hgo
+          (fun pv id h => Nat.lt_of_lt_of_le (hbnd_σ pv id h) hsize₁)
+          hwfp_ps
+          (fun c hc => by
+            rw [List.mem_cons] at hc
+            rcases hc with rfl | hc
+            · exact hcid_bnd
+            · exact Nat.lt_of_lt_of_le (hbnd_ids₀ c hc) hsize₁)
+          hgo
       exact ⟨v', hcv', hpmi', hshi',
         Nat.le_trans hsize₁ hsize',
-        fun i hi => (hagree' i (Nat.lt_of_lt_of_le hi hsize₁)).trans (hagree₁ i hi)⟩
+        fun i hi => (hagree' i (Nat.lt_of_lt_of_le hi hsize₁)).trans (hagree₁ i hi),
+        hbnd_ids⟩
+
+/-- go output length: childIds.length = subpats.length + ids₀.length.
+    Simple structural induction matching go's definition. -/
+private theorem go_length (n : Nat) (σ : MixedEMatch.Substitution)
+    (pats : List (MixedEMatch.Pattern MixedNodeOp))
+    (g₀ : MGraph) (ids₀ childIds : List CId) (g_final : MGraph)
+    (hgo : MixedEMatch.instantiateF.go σ n g₀ pats ids₀ = some (childIds, g_final)) :
+    childIds.length = pats.length + ids₀.length := by
+  induction pats generalizing g₀ ids₀ with
+  | nil =>
+    simp [MixedEMatch.instantiateF.go] at hgo
+    obtain ⟨hlen, _⟩ := hgo
+    rw [← hlen]; simp [List.length_reverse]
+  | cons p ps ih =>
+    simp only [MixedEMatch.instantiateF.go] at hgo
+    split at hgo
+    · simp at hgo
+    · rename_i cid g1 _
+      have := ih g1 (cid :: ids₀) hgo
+      simp only [List.length_cons] at this ⊢
+      omega
 
 /-- InstantiateEvalSound: instantiateF preserves CV and the new node's value
     matches the pattern evaluation. Proved by induction on fuel + go_preserves_cv.
@@ -1009,12 +1091,14 @@ theorem instantiateF_sound (fuel : Nat) (g : MGraph) (pat : MixedEMatch.Pattern 
     (hcv : CV g env v) (hpmi : VPMI g)
     (hshi : AmoLean.EGraph.Verified.Bitwise.MixedAddNodeTriple.ShapeHashconsInv g)
     (hbnd_σ : ∀ pv id, σ.get? pv = some id → id < g.unionFind.parent.size)
+    (hwfp : WellFormedPat pat)
     (id : CId) (g' : MGraph)
     (hinst : MixedEMatch.instantiateF fuel g pat σ = some (id, g')) :
     ∃ v', CV g' env v' ∧ VPMI g' ∧
       AmoLean.EGraph.Verified.Bitwise.MixedAddNodeTriple.ShapeHashconsInv g' ∧
       g.unionFind.parent.size ≤ g'.unionFind.parent.size ∧
       (∀ i, i < g.unionFind.parent.size → v' i = v i) ∧
+      id < g'.unionFind.parent.size ∧
       v' (AmoLean.EGraph.VerifiedExtraction.UnionFind.root g'.unionFind id) =
         MixedEMatchSpec.Pattern.eval pat (fun n => env.constVal n) (substVal v g.unionFind σ) := by
   -- Induction on fuel
@@ -1029,8 +1113,10 @@ theorem instantiateF_sound (fuel : Nat) (g : MGraph) (pat : MixedEMatch.Pattern 
       -- Split on lookup result
       split at hinst
       · -- lookup = some → (id, g') = (existId, g)
+        rename_i existId hlookup
         obtain ⟨rfl, rfl⟩ := Prod.mk.inj (Option.some.inj hinst)
-        exact ⟨v, hcv, hpmi, hshi, Nat.le_refl _, fun _ _ => rfl, by
+        exact ⟨v, hcv, hpmi, hshi, Nat.le_refl _, fun _ _ => rfl,
+          hbnd_σ pv existId hlookup, by
           simp_all [MixedEMatchSpec.Pattern.eval, substVal, MixedEMatch.Substitution.lookup]⟩
       · -- lookup = none → contradiction
         exact absurd hinst (by simp)
@@ -1043,34 +1129,53 @@ theorem instantiateF_sound (fuel : Nat) (g : MGraph) (pat : MixedEMatch.Pattern 
       · -- go = some (childIds, g'')
         rename_i childIds g'' h_go_eq
         obtain ⟨rfl, rfl⟩ := Prod.mk.inj (Option.some.inj hinst)
-        -- Step 1: go preserves CV (need auxiliary lemma about go using ih)
-        -- Step 2: add_node_consistent for the final g''.add
-        -- For now, thread through: go gives g'' with CV, then add gives final result
-        -- go_sound: auxiliary for go (induction on subpats)
-        -- go calls instantiateF n (reduced fuel) → ih applies
-        have go_cv : ∃ v'', CV g'' env v'' ∧ VPMI g'' ∧
-            AmoLean.EGraph.Verified.Bitwise.MixedAddNodeTriple.ShapeHashconsInv g'' ∧
-            g.unionFind.parent.size ≤ g''.unionFind.parent.size ∧
-            (∀ i, i < g.unionFind.parent.size → v'' i = v i) := by
-          -- Use go_preserves_cv with ih as ih_fuel
-          exact go_preserves_cv n σ env
-            (fun g₁ pat₁ v₁ hcv₁ hpmi₁ hshi₁ hbnd₁ id₁ g₁' h₁ =>
-              let ⟨v', hcv', hpmi', hshi', hsize', hagree', _⟩ :=
-                @ih g₁ pat₁ v₁ hcv₁ hpmi₁ hshi₁ hbnd₁ id₁ g₁' h₁
-              ⟨v', hcv', hpmi', hshi', hsize', hagree'⟩)
-            subpats g v [] hcv hpmi hshi hbnd_σ childIds g'' h_go_eq
-        obtain ⟨v'', hcv'', hpmi'', hshi'', hsize'', hagree''⟩ := go_cv
+        -- Extract WellFormedPat components
+        unfold WellFormedPat at hwfp
+        obtain ⟨hnodup, hlen_eq, hwfp_sub⟩ := hwfp
+        -- Step 1: go_preserves_cv gives CV+VPMI+SHI + childIds bounded
+        have go_result := go_preserves_cv n σ env
+            (fun g₁ pat₁ v₁ hcv₁ hpmi₁ hshi₁ hbnd₁ hwfp₁ id₁ g₁' h₁ =>
+              let ⟨v', hcv', hpmi', hshi', hsize', hagree', hid_bnd, _⟩ :=
+                @ih g₁ pat₁ v₁ hcv₁ hpmi₁ hshi₁ hbnd₁ hwfp₁ id₁ g₁' h₁
+              ⟨v', hcv', hpmi', hshi', hsize', hagree', hid_bnd⟩)
+            subpats g v [] hcv hpmi hshi hbnd_σ hwfp_sub
+            (fun _ h => by simp at h)
+            childIds g'' h_go_eq
+        obtain ⟨v'', hcv'', hpmi'', hshi'', hsize'', hagree'', hchildIds_bnd⟩ := go_result
         -- Step 2: add_node_consistent for g''.add(replaceChildren skelOp childIds)
-        obtain ⟨v', hcv', hpmi', hval', _, hsize', hagree'⟩ :=
+        -- CHILDREN-BND: use go_length + replaceChildren_children to show
+        -- ndChildren ⟨replaceChildren skelOp childIds⟩ = childIds (since lengths match)
+        have hgo_len := go_length n σ subpats g [] childIds g'' h_go_eq
+        -- hgo_len : childIds.length = subpats.length + [].length
+        -- = subpats.length + 0 = subpats.length
+        have hlen_ids : childIds.length =
+            (AmoLean.EGraph.VerifiedExtraction.NodeOps.children skelOp).length := by
+          simp only [List.length_nil, Nat.add_zero] at hgo_len
+          exact hgo_len.trans hlen_eq
+        -- replaceChildren_children: children (replaceChildren op ids) = ids when lengths match
+        have hch_eq := AmoLean.EGraph.VerifiedExtraction.NodeOps.replaceChildren_children
+            skelOp childIds hlen_ids
+        -- ndChildren ⟨replaceChildren skelOp childIds⟩ = children (replaceChildren skelOp childIds)
+        -- = childIds by hch_eq. So bound follows from hchildIds_bnd.
+        have hnode_bnd : ∀ c ∈ ndChildren
+            ⟨AmoLean.EGraph.VerifiedExtraction.NodeOps.replaceChildren skelOp childIds⟩,
+            c < g''.unionFind.parent.size := by
+          intro c hc
+          change c ∈ AmoLean.EGraph.VerifiedExtraction.NodeOps.children
+            (AmoLean.EGraph.VerifiedExtraction.NodeOps.replaceChildren skelOp childIds) at hc
+          rw [hch_eq] at hc
+          exact hchildIds_bnd c hc
+        obtain ⟨v', hcv', hpmi', hval', hid_bnd', hsize', hagree'⟩ :=
           AmoLean.EGraph.Verified.Bitwise.MixedAddNodeTriple.add_node_consistent
             g'' ⟨AmoLean.EGraph.VerifiedExtraction.NodeOps.replaceChildren skelOp childIds⟩
-            env v'' hcv'' hpmi'' hshi'' (by sorry /- CHILDREN-BND: childIds bounded by g''.uf.size -/)
+            env v'' hcv'' hpmi'' hshi'' hnode_bnd
         exact ⟨v', hcv', hpmi',
           AmoLean.EGraph.Verified.Bitwise.MixedAddNodeTriple.add_preserves_shi
             g'' ⟨AmoLean.EGraph.VerifiedExtraction.NodeOps.replaceChildren skelOp childIds⟩
             hshi'' hpmi'',
           Nat.le_trans hsize'' hsize',
           fun i hi => (hagree' i (Nat.lt_of_lt_of_le hi hsize'')).trans (hagree'' i hi),
+          hid_bnd',
           sorry /- VALUE: v'(root id) = Pattern.eval(.node skelOp subpats, ...) -/⟩
 
 /-- Simpler version: instantiateF just preserves CV+VPMI (no value property).
@@ -1081,11 +1186,12 @@ private theorem instantiateF_preserves (fuel : Nat) (g : MGraph)
     (hcv : CV g env v) (hpmi : VPMI g)
     (hshi : AmoLean.EGraph.Verified.Bitwise.MixedAddNodeTriple.ShapeHashconsInv g)
     (hbnd_σ : ∀ pv id, σ.get? pv = some id → id < g.unionFind.parent.size)
+    (hwfp : WellFormedPat pat)
     (id : CId) (g' : MGraph)
     (hinst : MixedEMatch.instantiateF fuel g pat σ = some (id, g')) :
     ∃ v', CV g' env v' ∧ VPMI g' := by
   -- Derive from the full version
-  obtain ⟨v', hcv', hpmi', _, _, _, _⟩ := instantiateF_sound fuel g pat σ v env hcv hpmi hshi hbnd_σ id g' hinst
+  obtain ⟨v', hcv', hpmi', _, _, _, _, _⟩ := instantiateF_sound fuel g pat σ v env hcv hpmi hshi hbnd_σ hwfp id g' hinst
   exact ⟨v', hcv', hpmi'⟩
 
 -- ══════════════════════════════════════════════════════════════════
@@ -1136,9 +1242,24 @@ theorem applyRuleAtF_preserves_cv (fuel : Nat) (psrule : PatternSoundRule)
     · match h_inst : MixedEMatch.instantiateF fuel g₀ psrule.rule.rhs σ with
       | none => exact ih _ v₀ hcv₀ hpmi₀ hshi₀
       | some (rhsId, acc') =>
+        -- Get CV+VPMI+SHI for acc' from instantiateF_sound
+        -- We need hbnd_σ: all σ values bounded by g₀.uf.size
+        -- σ comes from ematchF which only stores class IDs from g₀
+        -- For now, we use sorry for hbnd_σ (will be closed with ematchF_bnd later)
+        have ⟨v₁, hcv₁, hpmi₁, hshi₁, hsize₁, hagree₁, hrhsId_bnd, hval₁⟩ :=
+          instantiateF_sound fuel g₀ psrule.rule.rhs σ v₀ env hcv₀ hpmi₀ hshi₀
+            (fun pv id h => sorry /- σ IDs bounded -/) psrule.wfp_rhs rhsId acc' h_inst
+        -- Both cases use ih after establishing CV+VPMI+SHI for the step graph.
+        -- INST-CV: roots equal → step = acc' (has CV from instantiateF_sound)
+        -- MERGE-CV: roots differ → step = acc'.merge classId rhsId
+        --   (needs merge_consistent with v₁(root classId) = v₁(root rhsId))
+        -- Both need definitional reduction of `match some (rhsId, acc')` which is stuck.
+        -- Use split + sorry to isolate the remaining proof obligations.
         split
-        · sorry /- INST-CV -/
-        · sorry /- MERGE-CV -/
+        · -- INST-CV: roots equal
+          sorry
+        · -- MERGE-CV: roots differ
+          sorry
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 4: applyRulesF_preserves_cv
@@ -1224,5 +1345,7 @@ example : sameShape (.addGate 0 1) (.mulGate 0 1) = false := by native_decide
 example : PatternSoundRule where
   rule := { name := "id", lhs := .patVar 0, rhs := .patVar 0 }
   soundness := fun _ _ => rfl
+  wfp_lhs := by unfold WellFormedPat; trivial
+  wfp_rhs := by unfold WellFormedPat; trivial
 
 end AmoLean.EGraph.Verified.Bitwise.MixedEMatchSoundness
