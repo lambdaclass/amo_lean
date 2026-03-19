@@ -371,11 +371,26 @@ theorem applyRuleAtF_preserves_cv (fuel : Nat) (psrule : PatternSoundRule)
   | cons σ rest ih =>
     intro g₀ v₀ hcv₀ hpmi₀
     simp only [List.foldl]
-    -- Single step preserves CV, then apply IH
-    sorry /- FOLDL-STEP: each step preserves CV, then IH.
-      Case analysis on sideCondCheck + instantiateF + root equality.
-      Unchanged cases: trivial. InstantiateF cases: instantiateF_sound.
-      Merge case: ematch_value_chain + merge_consistent. -/
+    -- Case split: condMet → instantiateF → root equality
+    -- Each branch: either unchanged (use v₀) or needs instantiateF/merge sorry
+    -- split_ifs handles all if-then-else branches and reduces ite
+    split_ifs with h_cond h_inst h_roots
+    -- Branch 1: condMet false → graph unchanged
+    · exact ih _ v₀ hcv₀ hpmi₀
+    -- Branch 2: condMet true, instantiateF = none → graph unchanged
+    · -- condMet true: match on instantiateF result
+      -- L-574: use match in tactic mode to reduce the match expression
+      match h_inst : MixedEMatch.instantiateF fuel g₀ psrule.rule.rhs σ with
+      | none =>
+        -- instantiateF = none → g₀ unchanged
+        exact ih _ v₀ hcv₀ hpmi₀
+      | some (rhsId, acc') =>
+        -- instantiateF = some → acc' is the new graph
+        split
+        · -- roots equal → acc' has CV from instantiateF_sound, feed into ih
+          sorry /- INST-CV -/
+        · -- roots differ → merge_consistent + value chain, feed into ih
+          sorry /- MERGE-CV -/
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 4: applyRulesF_preserves_cv
