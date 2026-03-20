@@ -113,8 +113,12 @@ where
       s!"vandq_u32({exprToNEON a varName}, vdupq_n_u32({2^w - 1}))"
     | .kronUnpackHiE a w =>
       s!"vshrq_n_u32({exprToNEON a varName}, {w})"
-    | .montyReduceE a p mu =>
-      s!"monty_reduce_neon({exprToNEON a varName}, vdupq_n_u32({p}), vdupq_n_u32({mu}))"
+    | .montyReduceE a _p _mu =>
+      -- Montgomery REDC using Plonky3's NEON recipe (all u32 lanes, no u64):
+      -- Requires lhs (the value to reduce) to be in signed range [-P, P].
+      -- Uses pre-broadcast constants PACKED_P and PACKED_MU.
+      -- Result: canonical form [0, P).
+      s!"monty_mul_neon({exprToNEON a varName})"
     | .barrettReduceE a p m =>
       s!"barrett_reduce_neon({exprToNEON a varName}, vdupq_n_u32({p}), vdupq_n_u32({m}))"
     | .harveyReduceE a p =>
