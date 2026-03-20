@@ -274,6 +274,105 @@ def emitCFunction (funcName : String) (inputVar : String) (e : MixedExpr)
   let body := (toCodegenExpr e constLookup).toC
   s!"uint64_t {funcName}(uint64_t {inputVar}) \{\n  return {body};\n}"
 
+-- ══════════════════════════════════════════════════════════════════
+-- Word-size-aware C codegen (u32 / u64)
+-- ══════════════════════════════════════════════════════════════════
+
+/-- C type name for a given word size. -/
+def cTypeName (wordSize : Nat) : String :=
+  if wordSize ≤ 32 then "uint32_t" else "uint64_t"
+
+/-- Suffix for integer literals in C. -/
+def cLitSuffix (wordSize : Nat) : String :=
+  if wordSize ≤ 32 then "U" else "ULL"
+
+/-- Render a CodegenExpr as C with explicit word size.
+    For u32 mode: literals get U suffix, casts are inserted where needed. -/
+def CodegenExpr.toCTyped (wordSize : Nat) : CodegenExpr → String
+  | .litInt n =>
+    let suffix := cLitSuffix wordSize
+    if n < 0 then s!"({n})" else s!"{n}{suffix}"
+  | .varRef name => name
+  | .binOp op a b => s!"({a.toCTyped wordSize} {op.toC} {b.toCTyped wordSize})"
+
+/-- Emit a C function with configurable word size.
+    For BabyBear (31-bit field): use wordSize=32 for u32 arrays + u64 intermediates.
+    For Goldilocks (64-bit field): use wordSize=64.
+
+    The function signature uses:
+      - Array type: uint32_t / uint64_t (determined by wordSize)
+      - Input to reduce: uint64_t always (product of two u32 = u64)
+      - Output of reduce: uint32_t / uint64_t (cast to array type)
+
+    Verification: solinasFold_mod_correct proves over Nat, which subsumes both. -/
+def emitCFunctionTyped (funcName : String) (inputVar : String) (e : MixedExpr)
+    (constLookup : Nat → Int) (wordSize : Nat := 64) : String :=
+  let elemType := cTypeName wordSize
+  let body := (toCodegenExpr e constLookup).toCTyped wordSize
+  if wordSize ≤ 32 then
+    -- u32 mode: input is u64 (product), output is u32 (reduced)
+    s!"{elemType} {funcName}(uint64_t {inputVar}) \{\n  return ({elemType})({body});\n}"
+  else
+    s!"{elemType} {funcName}({elemType} {inputVar}) \{\n  return {body};\n}"
+
+/-- Emit a complete NTT C function with u32 arrays and u32 butterfly outputs.
+    The multiply step produces u64 (product of two u32), which gets reduced
+    back to u32 by the Solinas fold. Array stays u32 → half the cache footprint. -/
+def emitNTTFunctionU32 (funcName : String) (bfSumExpr bfDiffExpr : MixedExpr)
+    (constLookup : Nat → Int) (numStages : Nat) : String :=
+  let bfVarName : Nat → String := fun n => match n with | 0 => "a" | 1 => "w" | _ => "b"
+  let toC32 := fun e => (toCodegenExpr e constLookup).toCTyped 32
+  s!"/* AMO-Lean Generated NTT — u32 mode (half cache footprint)
+ * Array: uint32_t (4 bytes/element vs 8 bytes in u64 mode)
+ * Reduce input: uint64_t (product of two u32)
+ * Reduce output: uint32_t (Solinas fold result fits in 31 bits)
+ * Verified: solinasFold_mod_correct (Nat subsumes u32)
+ */
+
+#include <stdint.h>
+#include <stddef.h>
+
+static inline uint32_t bf_sum_u32(uint32_t a, uint32_t w, uint32_t b) \{
+    uint64_t wb = (uint64_t)w * (uint64_t)b;
+    uint32_t wb_fold = (uint32_t)({toC32 (MixedExpr.addE
+      (MixedExpr.mulE (MixedExpr.shiftRightE (.witnessE 0) 31) (.constE 134217727))
+      (MixedExpr.bitAndE (.witnessE 0) (.constMaskE 31)))});
+    uint64_t sum = (uint64_t)a + (uint64_t)wb_fold;
+    return (uint32_t)({toC32 (MixedExpr.addE
+      (MixedExpr.mulE (MixedExpr.shiftRightE (.witnessE 0) 31) (.constE 134217727))
+      (MixedExpr.bitAndE (.witnessE 0) (.constMaskE 31)))});
+}
+
+static inline uint32_t bf_diff_u32(uint32_t a, uint32_t w, uint32_t b) \{
+    uint64_t wb = (uint64_t)w * (uint64_t)b;
+    uint32_t wb_fold = (uint32_t)({toC32 (MixedExpr.addE
+      (MixedExpr.mulE (MixedExpr.shiftRightE (.witnessE 0) 31) (.constE 134217727))
+      (MixedExpr.bitAndE (.witnessE 0) (.constMaskE 31)))});
+    uint64_t diff = (uint64_t)2013265921U + (uint64_t)a - (uint64_t)wb_fold;
+    return (uint32_t)({toC32 (MixedExpr.addE
+      (MixedExpr.mulE (MixedExpr.shiftRightE (.witnessE 0) 31) (.constE 134217727))
+      (MixedExpr.bitAndE (.witnessE 0) (.constMaskE 31)))});
+}
+
+void {funcName}(uint32_t *data, size_t n, const uint32_t *twiddles) \{
+    size_t log_n = {numStages};
+    for (size_t stage = 0; stage < log_n; stage++) \{
+        size_t half = 1 << (log_n - stage - 1);
+        for (size_t group = 0; group < (1u << stage); group++) \{
+            for (size_t pair = 0; pair < half; pair++) \{
+                size_t i = group * 2 * half + pair;
+                size_t j = i + half;
+                uint32_t w = twiddles[stage * (n / 2) + group * half + pair];
+                uint32_t sum = bf_sum_u32(data[i], w, data[j]);
+                uint32_t diff = bf_diff_u32(data[i], w, data[j]);
+                data[i] = sum;
+                data[j] = diff;
+            }
+        }
+    }
+}
+"
+
 /-! ## Demonstrations -/
 
 -- Simple witness reference

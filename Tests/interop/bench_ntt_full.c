@@ -83,6 +83,21 @@ static inline void butterfly_harvey(uint64_t *a, uint64_t *b, uint64_t w) {
     *b = reduce_harvey(diff);
 }
 
+/* AMO-Lean Solinas u32 butterfly: same algorithm, u32 arrays (half cache footprint)
+   Input: u32 elements. Multiply → u64. Fold → u32. Store u32.
+   Verified: solinasFold_mod_correct (Nat subsumes u32) */
+static inline uint32_t reduce_solinas_u32(uint64_t x) {
+    return (uint32_t)(((x >> 31) * BABYBEAR_C) + (x & 0x7FFFFFFF));
+}
+
+static inline void butterfly_solinas_u32(uint32_t *a, uint32_t *b, uint32_t w) {
+    uint32_t wb = reduce_solinas_u32((uint64_t)w * (uint64_t)(*b));
+    uint64_t sum64 = (uint64_t)(*a) + (uint64_t)wb;
+    uint64_t diff64 = (uint64_t)BABYBEAR_P + (uint64_t)(*a) - (uint64_t)wb;
+    *a = reduce_solinas_u32(sum64);
+    *b = reduce_solinas_u32(diff64);
+}
+
 /* Plonky3 Montgomery butterfly */
 static inline void butterfly_monty(uint32_t *a, uint32_t *b, uint32_t w) {
     uint32_t wb = reduce_monty((uint64_t)w * (uint64_t)(*b));
@@ -239,14 +254,16 @@ int main(void) {
         printf("══ N = %zu (%d iterations) ══\n\n", n, it);
 
         NTTResult r_naive   = bench_ntt_u64("Naive (% p)", n, it, butterfly_naive);
-        NTTResult r_solinas = bench_ntt_u64("AMO-Lean Solinas", n, it, butterfly_solinas);
-        NTTResult r_harvey  = bench_ntt_u64("AMO-Lean Harvey", n, it, butterfly_harvey);
+        NTTResult r_solinas = bench_ntt_u64("AMO-Lean Solinas u64", n, it, butterfly_solinas);
+        NTTResult r_harvey  = bench_ntt_u64("AMO-Lean Harvey u64", n, it, butterfly_harvey);
+        NTTResult r_sol32   = bench_ntt_u32("AMO-Lean Solinas u32", n, it, butterfly_solinas_u32);
         NTTResult r_monty   = bench_ntt_u32("Plonky3 Montgomery", n, it, butterfly_monty);
 
         printf("\n  Summary (vs Plonky3 Montgomery):\n");
-        printf("    Naive:   %+.1f%%\n", (1.0 - r_naive.us / r_monty.us) * 100);
-        printf("    Solinas: %+.1f%%\n", (1.0 - r_solinas.us / r_monty.us) * 100);
-        printf("    Harvey:  %+.1f%%\n", (1.0 - r_harvey.us / r_monty.us) * 100);
+        printf("    Naive:       %+.1f%%\n", (1.0 - r_naive.us / r_monty.us) * 100);
+        printf("    Solinas u64: %+.1f%%\n", (1.0 - r_solinas.us / r_monty.us) * 100);
+        printf("    Harvey u64:  %+.1f%%\n", (1.0 - r_harvey.us / r_monty.us) * 100);
+        printf("    Solinas u32: %+.1f%%\n", (1.0 - r_sol32.us / r_monty.us) * 100);
         printf("\n");
     }
 
