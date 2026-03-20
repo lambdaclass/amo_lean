@@ -19,6 +19,7 @@
 -/
 import AmoLean.EGraph.Verified.Bitwise.EnhancedCostModel
 import AmoLean.EGraph.Verified.Bitwise.NTTBridge
+import AmoLean.EGraph.Verified.Bitwise.MixedExprToSIMD
 
 set_option autoImplicit false
 

@@ -102,12 +102,24 @@ inductive ExecMode where
   | simdAVX2        -- x86 AVX2, 8 × u32 lanes
   deriving Repr, BEq, Inhabited
 
+instance : ToString ExecMode where
+  toString
+    | .scalar => "scalar"
+    | .simdNEON => "simdNEON"
+    | .simdAVX2 => "simdAVX2"
+
 /-- Reduction strategy — determined by the e-graph's cost extraction. -/
 inductive ReductionStrategy where
   | solinasFold     -- (x >> k) * c + (x & mask)
   | montgomery      -- vqdmulhq-based REDC (u32 lanes)
   | harvey          -- conditional subtraction
   deriving Repr, BEq, Inhabited
+
+instance : ToString ReductionStrategy where
+  toString
+    | .solinasFold => "solinasFold"
+    | .montgomery => "montgomery"
+    | .harvey => "harvey"
 
 /-- Complete codegen configuration — ALL decisions from the e-graph. -/
 structure CodeGenConfig where
@@ -179,17 +191,17 @@ def lowerButterfly (cfg : CodeGenConfig) (aVar wVar bVar : VarName) (s : LowerSt
     (Stmt × VarName × VarName × LowerState) :=
   -- Step 1: wb = w * b
   let (wbVar, s1) := s.fresh
-  let wbStmt := .assign wbVar (.binOp .mul (.var wVar) (.var bVar))
+  let wbStmt : Stmt := .assign wbVar (.binOp .mul (.var wVar) (.var bVar))
   -- Step 2: wb_red = reduce(wb)
   let (wbRedStmts, wbRedVar, s2) := lowerReduction cfg (.var wbVar) s1
   -- Step 3: sum = a + wb_red
   let (sumVar, s3) := s2.fresh
-  let sumStmt := .assign sumVar (.binOp .add (.var aVar) (.var wbRedVar))
+  let sumStmt : Stmt := .assign sumVar (.binOp .add (.var aVar) (.var wbRedVar))
   -- Step 4: sum_red = reduce(sum)
   let (sumRedStmts, sumRedVar, s4) := lowerReduction cfg (.var sumVar) s3
   -- Step 5: diff = p + a - wb_red
   let (diffVar, s5) := s4.fresh
-  let diffStmt := .assign diffVar
+  let diffStmt : Stmt := .assign diffVar
     (.binOp .sub (.binOp .add (.lit cfg.prime) (.var aVar)) (.var wbRedVar))
   -- Step 6: diff_red = reduce(diff)
   let (diffRedStmts, diffRedVar, s6) := lowerReduction cfg (.var diffVar) s5
@@ -440,7 +452,7 @@ def generateAllTargets (n p : Nat) : List (String × String × String) :=
     ("simd_avx2", x86_avx2_simd, "ntt_simd_avx2")]
   targets.map fun (label, hw, funcName) =>
     let cfg := selectConfig hw p
-    (label, repr cfg.reduction |>.toString, generateNTT hw n p funcName)
+    (label, toString cfg.reduction, generateNTT hw n p funcName)
 
 /-- Write all target variants to files. -/
 def writeAllTargets (outputDir : String := "generated/unified") (n p : Nat) : IO Unit := do
