@@ -489,6 +489,115 @@ static inline uint32_t reduce_fallback(uint64_t x) \{
   header ++ bfCode ++ nttCode
 
 -- ══════════════════════════════════════════════════════════════════
+-- Section 5b: Rust NTT generator (for fair comparison with Plonky3)
+-- ══════════════════════════════════════════════════════════════════
+
+/-- Generate a complete Rust NTT with benchmark harness.
+    Compiled with `rustc -O` this gives a fair Rust-vs-Rust comparison
+    against Plonky3's production NTT.
+
+    Strategy selected by e-graph cost model (same as C version). -/
+def generateRustNTT (hw : HardwareCost) (n p : Nat)
+    (funcName : String := "ntt") : String :=
+  let cfg := selectConfig hw p
+  let logN := Nat.log 2 n
+  let elemType := if cfg.wordSize ≤ 32 then "u32" else "u64"
+  let wideType := if cfg.wordSize ≤ 32 then "u64" else "u128"
+
+  let foldFn := if cfg.wordSize ≤ 32 then
+    s!"#[inline(always)]
+fn solinas_fold(x: {wideType}) -> {elemType} \{
+    (((x >> {cfg.shiftBits}) as {wideType}).wrapping_mul({cfg.foldConst} as {wideType}))
+        .wrapping_add(x & {2^cfg.shiftBits - 1} as {wideType}) as {elemType}
+}"
+  else
+    s!"#[inline(always)]
+fn goldilocks_reduce(x: u128) -> u64 \{
+    let x_lo = x as u64;
+    let x_hi = (x >> 64) as u64;
+    let x_hi_hi = x_hi >> 32;
+    let x_hi_lo = x_hi & 0xFFFFFFFF_u64;
+    let (t0, borrow) = x_lo.overflowing_sub(x_hi_hi);
+    let t0 = if borrow \{ t0.wrapping_sub(0xFFFFFFFF_u64) } else \{ t0 };
+    let t1 = x_hi_lo.wrapping_mul(0xFFFFFFFF_u64);
+    let (result, carry) = t0.overflowing_add(t1);
+    if carry || result >= 0xFFFFFFFF00000001_u64 \{ result.wrapping_sub(0xFFFFFFFF00000001_u64) } else \{ result }
+}"
+
+  let bfFn := if cfg.wordSize ≤ 32 then
+    s!"#[inline(always)]
+fn butterfly(a: &mut {elemType}, b: &mut {elemType}, w: {elemType}) \{
+    let orig_a = *a;
+    let wb = solinas_fold((w as {wideType}).wrapping_mul(*b as {wideType}));
+    *a = solinas_fold((orig_a as {wideType}).wrapping_add(wb as {wideType}));
+    *b = solinas_fold(({p} as {wideType}).wrapping_add(orig_a as {wideType}).wrapping_sub(wb as {wideType}));
+}"
+  else
+    s!"#[inline(always)]
+fn butterfly(a: &mut u64, b: &mut u64, w: u64) \{
+    let orig_a = *a;
+    let wb = goldilocks_reduce((w as u128).wrapping_mul(*b as u128));
+    *a = goldilocks_reduce((orig_a as u128).wrapping_add(wb as u128));
+    *b = goldilocks_reduce((0xFFFFFFFF00000001_u128).wrapping_add(orig_a as u128).wrapping_sub(wb as u128));
+}"
+
+  s!"//! AMO-Lean Generated Rust NTT — e-graph cost model selection
+//! N = {n}, p = {p}
+//! Reduction: {toString cfg.reduction}, Word: {elemType}
+//! Compile: rustc -O -o ntt_bench this_file.rs
+//! Same trust boundary as Fiat-Crypto (verified lowering via Trust-Lean)
+
+use std::time::Instant;
+
+const P: {elemType} = {p};
+
+{foldFn}
+
+{bfFn}
+
+fn {funcName}(data: &mut [{elemType}], twiddles: &[{elemType}]) \{
+    let n = data.len();
+    for stage in 0..{logN} \{
+        let half = 1 << ({logN - 1} - stage);
+        let mut group = 0;
+        while group < (1 << stage) \{
+            let mut pair = 0;
+            while pair + 1 <= half \{
+                let i = group * 2 * half + pair;
+                let j = i + half;
+                let tw_idx = stage * (n / 2) + group * half + pair;
+                let w = twiddles[tw_idx];
+                // split_at_mut to satisfy borrow checker (i < j always)
+                let (left, right) = data.split_at_mut(j);
+                butterfly(&mut left[i], &mut right[0], w);
+                pair += 1;
+            }
+            group += 1;
+        }
+    }
+}
+
+fn main() \{
+    let n: usize = {n};
+    let log_n: usize = {logN};
+    let tw_size = n * log_n;
+    let twiddles: Vec<{elemType}> = (0..tw_size).map(|i| ((i as {wideType} * 7 + 31) % P as {wideType}) as {elemType}).collect();
+
+    let iters: usize = {if n ≤ 4096 then 1000 else if n ≤ 65536 then 50 else 3};
+    let start = Instant::now();
+    for _ in 0..iters \{
+        let mut data: Vec<{elemType}> = (0..n).map(|i| ((i as {wideType} * 1000000007) % P as {wideType}) as {elemType}).collect();
+        {funcName}(&mut data, &twiddles);
+    }
+    let elapsed = start.elapsed();
+    let us = elapsed.as_secs_f64() / iters as f64 * 1e6;
+    let melem = n as f64 * iters as f64 / elapsed.as_secs_f64() / 1e6;
+    eprintln!(\"N={n} p={p} ({toString cfg.reduction})\");
+    eprintln!(\"  " ++ "{}" ++ " us  " ++ "{}" ++ " Melem/s\", us, melem);
+}
+"
+
+-- ══════════════════════════════════════════════════════════════════
 -- Section 6: Multi-target generation (one function call → all targets)
 -- ══════════════════════════════════════════════════════════════════
 
