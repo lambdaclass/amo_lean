@@ -23,11 +23,11 @@ static inline void butterfly(uint32_t *a, uint32_t *b, uint32_t w) {
     *b = solinas_fold((uint64_t)2013265921U + (uint64_t)orig_a - (uint64_t)wb);
 }
 void ntt_scalar_arm(uint32_t *data, size_t n, const uint32_t *twiddles) {
-    size_t log_n = 12;
-    for (size_t stage = 0; stage < log_n; stage++) {
-        size_t half = 1 << (log_n - stage - 1);
+    /* Literal loop bound (12) enables compiler loop unrolling */
+    for (size_t stage = 0; stage < 12; stage++) {
+        size_t half = 1 << (11 - stage);
         for (size_t group = 0; group < (1u << stage); group++) {
-            for (size_t pair = 0; pair < half; pair += 1) {
+            for (size_t pair = 0; pair + 1 <= half; pair += 1) {
                 size_t i = group * 2 * half + pair;
                 size_t j = i + half;
                 size_t tw_idx = stage * (n / 2) + group * half + pair;

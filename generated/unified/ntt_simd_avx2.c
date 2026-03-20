@@ -17,11 +17,11 @@ static inline uint32_t reduce_fallback(uint64_t x) {
     return (uint32_t)(((x >> 31) * 134217727U) + (x & 0x7FFFFFFFU));
 }
 void ntt_simd_avx2(uint32_t *data, size_t n, const uint32_t *twiddles) {
-    size_t log_n = 12;
-    for (size_t stage = 0; stage < log_n; stage++) {
-        size_t half = 1 << (log_n - stage - 1);
+    /* Literal loop bound (12) enables compiler loop unrolling */
+    for (size_t stage = 0; stage < 12; stage++) {
+        size_t half = 1 << (11 - stage);
         for (size_t group = 0; group < (1u << stage); group++) {
-            for (size_t pair = 0; pair < half; pair += 8) {
+            for (size_t pair = 0; pair + 8 <= half; pair += 8) {
                 size_t i = group * 2 * half + pair;
                 size_t j = i + half;
                 size_t tw_idx = stage * (n / 2) + group * half + pair;
