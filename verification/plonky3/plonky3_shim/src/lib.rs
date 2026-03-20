@@ -22,6 +22,8 @@ use std::slice;
 use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
 use p3_field::{PrimeField64, TwoAdicField};
 use p3_goldilocks::Goldilocks;
+use p3_baby_bear::BabyBear;
+use p3_koala_bear::KoalaBear;
 use p3_matrix::dense::RowMajorMatrix;
 
 /// Goldilocks prime: p = 2^64 - 2^32 + 1
@@ -113,6 +115,71 @@ pub unsafe extern "C" fn plonky3_ntt_inverse(data: *mut u64, len: usize) -> i32 
 
         for (i, v) in result.values.iter().enumerate() {
             slice[i] = v.as_canonical_u64();
+        }
+    });
+
+    match result {
+        Ok(_) => 0,
+        Err(_) => -1,
+    }
+}
+
+// ============================================================================
+// BabyBear NTT Functions (p = 2^31 - 2^27 + 1 = 2013265921)
+// ============================================================================
+
+/// Compute forward NTT for BabyBear field in place.
+/// Data is u32 (BabyBear elements fit in 31 bits).
+///
+/// # Safety
+/// * `data` must point to a valid array of at least `len` u32 values
+/// * `len` must be a power of 2
+#[no_mangle]
+pub unsafe extern "C" fn plonky3_ntt_babybear_forward(data: *mut u32, len: usize) -> i32 {
+    if data.is_null() || len == 0 || (len & (len - 1)) != 0 {
+        return -1;
+    }
+
+    let result = catch_unwind(|| {
+        let slice = slice::from_raw_parts_mut(data, len);
+        let values: Vec<BabyBear> = slice.iter().map(|&x| BabyBear::new(x)).collect();
+        let mat = RowMajorMatrix::new(values, 1);
+        let dft = Radix2Dit::default();
+        let result = dft.dft_batch(mat);
+        for (i, v) in result.values.iter().enumerate() {
+            slice[i] = v.as_canonical_u64() as u32;
+        }
+    });
+
+    match result {
+        Ok(_) => 0,
+        Err(_) => -1,
+    }
+}
+
+// ============================================================================
+// KoalaBear NTT Functions (p = 2^31 - 2^24 + 1 = 2130706433)
+// ============================================================================
+
+/// Compute forward NTT for KoalaBear field in place.
+///
+/// # Safety
+/// * `data` must point to a valid array of at least `len` u32 values
+/// * `len` must be a power of 2
+#[no_mangle]
+pub unsafe extern "C" fn plonky3_ntt_koalabear_forward(data: *mut u32, len: usize) -> i32 {
+    if data.is_null() || len == 0 || (len & (len - 1)) != 0 {
+        return -1;
+    }
+
+    let result = catch_unwind(|| {
+        let slice = slice::from_raw_parts_mut(data, len);
+        let values: Vec<KoalaBear> = slice.iter().map(|&x| KoalaBear::new(x)).collect();
+        let mat = RowMajorMatrix::new(values, 1);
+        let dft = Radix2Dit::default();
+        let result = dft.dft_batch(mat);
+        for (i, v) in result.values.iter().enumerate() {
+            slice[i] = v.as_canonical_u64() as u32;
         }
     });
 
