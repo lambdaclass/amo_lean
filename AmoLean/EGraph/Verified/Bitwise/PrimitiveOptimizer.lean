@@ -37,52 +37,70 @@ open AmoLean.EGraph.Verified.Bitwise.UnifiedCodeGen (selectConfig CodeGenConfig)
 def friFoldExpr (p : Nat) : MixedExpr :=
   .reduceE (.addE (.witnessE 0) (.reduceE (.mulE (.witnessE 1) (.witnessE 2)) p)) p
 
-/-- Generate optimized C for FRI fold, using the e-graph's cost model.
-    The e-graph chooses Solinas fold for scalar, Montgomery for SIMD. -/
+/-- Generate optimized C for FRI fold.
+    Cost model selects: mulAddReduction for the multiply step,
+    Harvey cond-sub for the add step. Number of branches in Harvey
+    depends on output bound of the mul reduction (1 for Montgomery, 2 for Solinas). -/
 def friFoldToC (hw : HardwareCost) (p : Nat) (n : Nat)
     (funcName : String := "fri_fold") : String :=
   let cfg := selectConfig hw p
   let elemType := if cfg.wordSize ≤ 32 then "uint32_t" else "uint64_t"
   let wideType := if cfg.wordSize ≤ 32 then "uint64_t" else "__uint128_t"
 
-  -- The reduce function (chosen by e-graph cost model)
-  let reduceFn := match cfg.reduction with
+  -- reduce_mul: selected by cost model (mulAddReduction)
+  let reduceMulFn := match cfg.mulAddReduction with
     | .solinasFold =>
-      s!"static inline {elemType} reduce({wideType} x) \{
+      s!"static inline {elemType} reduce_mul({wideType} x) \{
     return ({elemType})(((x >> {cfg.shiftBits}) * {cfg.foldConst}U) + (x & {2^cfg.shiftBits - 1}U));
 }"
     | .montgomery =>
-      s!"/* Montgomery REDC — chosen by e-graph for SIMD context */
-static inline {elemType} reduce({wideType} x) \{
-    /* In NEON context, this would use vqdmulhq_s32 */
+      s!"static inline {elemType} reduce_mul({wideType} x) \{
     {elemType} t = ({elemType})(x * 0x{Nat.toDigits 16 cfg.montyMu |>.asString}ULL);
     {wideType} u = ({wideType})t * ({wideType}){p}U;
     return ({elemType})((x - u) >> 32);
 }"
     | .harvey =>
-      s!"static inline {elemType} reduce({wideType} x) \{
-    if (x >= 2 * {p}U) x -= 2 * {p}U;
-    if (x >= {p}U) x -= {p}U;
-    return ({elemType})x;
+      s!"static inline {elemType} reduce_mul({wideType} x) \{
+    return ({elemType})(((x >> {cfg.shiftBits}) * {cfg.foldConst}U) + (x & {2^cfg.shiftBits - 1}U));
 }"
 
-  s!"/* AMO-Lean Generated FRI Fold — e-graph optimized
- * p = {p}, reduction = {toString cfg.reduction}
- * Operation: result[i] = reduce(even[i] + reduce(alpha * odd[i]))
- * E-graph selected {toString cfg.reduction} for {toString cfg.mode} mode
- * Verified: solinasFold_mod_correct
+  -- reduce_add: Harvey cond-sub. Branches depend on mul output bound.
+  -- Montgomery output < p → sum < 2p → 1 cond sub
+  -- Solinas output < 2p → sum < 3p → 2 cond subs
+  let reduceAddFn := match cfg.mulAddReduction with
+    | .montgomery =>
+      s!"/* Harvey 1-branch — Montgomery output < p, so sum < 2p */
+static inline {elemType} reduce_add({elemType} x) \{
+    if (x >= {p}U) x -= {p}U;
+    return x;
+}"
+    | _ =>
+      s!"/* Harvey 2-branch — Solinas output < 2p, so sum < 3p */
+static inline {elemType} reduce_add({elemType} x) \{
+    if (x >= 2 * {p}U) x -= 2 * {p}U;
+    if (x >= {p}U) x -= {p}U;
+    return x;
+}"
+
+  s!"/* AMO-Lean Generated FRI Fold — cost-model optimized
+ * p = {p}, mul = {toString cfg.mulAddReduction}, add = harvey
+ * solinasWinsForMulAdd = {solinasWinsForMulAdd hw}
+ * Operation: result[i] = reduce_add(even[i] + reduce_mul(alpha * odd[i]))
+ * Verified: solinasFold_mod_correct / monty_reduce_spec, harveyReduce_mod
  */
 
 #include <stdint.h>
 #include <stddef.h>
 
-{reduceFn}
+{reduceMulFn}
+
+{reduceAddFn}
 
 void {funcName}(const {elemType} *even, const {elemType} *odd,
                {elemType} alpha, {elemType} *result, size_t n) \{
     for (size_t i = 0; i < n; i++) \{
-        {elemType} prod_red = reduce(({wideType})alpha * ({wideType})odd[i]);
-        result[i] = reduce(({wideType})even[i] + ({wideType})prod_red);
+        {elemType} prod_red = reduce_mul(({wideType})alpha * ({wideType})odd[i]);
+        result[i] = reduce_add(even[i] + prod_red);
     }
 }
 "
@@ -108,32 +126,41 @@ def hornerExpr (degree : Nat) (p : Nat) : MixedExpr :=
         (.reduceE (.mulE x (build n)) p)) p
   build degree
 
-/-- Generate optimized C for polynomial evaluation via Horner's method. -/
+/-- Generate optimized C for polynomial evaluation via Horner's method.
+    Cost model selects mulAddReduction for the mul step. -/
 def hornerToC (hw : HardwareCost) (p : Nat) (degree : Nat)
     (funcName : String := "poly_eval") : String :=
   let cfg := selectConfig hw p
   let elemType := if cfg.wordSize ≤ 32 then "uint32_t" else "uint64_t"
   let wideType := if cfg.wordSize ≤ 32 then "uint64_t" else "__uint128_t"
 
-  s!"/* AMO-Lean Generated Polynomial Evaluation — Horner's method
- * p = {p}, degree = {degree}, reduction = {toString cfg.reduction}
- * p(x) = coeffs[0] + x*(coeffs[1] + x*(coeffs[2] + ... ))
- * Each mul + add uses e-graph-selected reduction
- * Verified: solinasFold_mod_correct
- */
+  let reduceMulBody := match cfg.mulAddReduction with
+    | .montgomery =>
+      s!"{elemType} t = ({elemType})(x * 0x{Nat.toDigits 16 cfg.montyMu |>.asString}ULL);
+    {wideType} u = ({wideType})t * ({wideType}){p}U;
+    return ({elemType})((x - u) >> 32);"
+    | _ =>
+      s!"return ({elemType})(((x >> {cfg.shiftBits}) * {cfg.foldConst}U) + (x & {2^cfg.shiftBits - 1}U));"
 
+  let reduceAddBody := match cfg.mulAddReduction with
+    | .montgomery => s!"if (x >= {p}U) x -= {p}U; return x;"
+    | _ => s!"if (x >= 2 * {p}U) x -= 2 * {p}U; if (x >= {p}U) x -= {p}U; return x;"
+
+  s!"/* AMO-Lean Poly Eval (Horner) — cost-model optimized
+ * p = {p}, degree = {degree}, mul = {toString cfg.mulAddReduction}
+ * solinasWinsForMulAdd = {solinasWinsForMulAdd hw}
+ */
 #include <stdint.h>
 #include <stddef.h>
 
-static inline {elemType} reduce({wideType} x) \{
-    return ({elemType})(((x >> {cfg.shiftBits}) * {cfg.foldConst}U) + (x & {2^cfg.shiftBits - 1}U));
-}
+static inline {elemType} reduce_mul({wideType} x) \{ {reduceMulBody} }
+static inline {elemType} reduce_add({elemType} x) \{ {reduceAddBody} }
 
 {elemType} {funcName}(const {elemType} *coeffs, size_t degree, {elemType} x) \{
     {elemType} acc = coeffs[degree];
     for (size_t i = degree; i > 0; i--) \{
-        acc = reduce(({wideType})x * ({wideType})acc);    /* x * acc mod p */
-        acc = reduce(({wideType})coeffs[i-1] + ({wideType})acc); /* a_i + x*acc mod p */
+        acc = reduce_mul(({wideType})x * ({wideType})acc);
+        acc = reduce_add(coeffs[i-1] + acc);
     }
     return acc;
 }
@@ -151,25 +178,43 @@ def dotProductToC (hw : HardwareCost) (p : Nat)
   let elemType := if cfg.wordSize ≤ 32 then "uint32_t" else "uint64_t"
   let wideType := if cfg.wordSize ≤ 32 then "uint64_t" else "__uint128_t"
 
-  s!"/* AMO-Lean Generated Dot Product — e-graph optimized
- * p = {p}, reduction = {toString cfg.reduction}
- * result = Σ reduce(a[i] * b[i]) mod p
- * Verified: solinasFold_mod_correct
- */
+  let reduceMulBody := match cfg.mulAddReduction with
+    | .montgomery =>
+      s!"{elemType} t = ({elemType})(x * 0x{Nat.toDigits 16 cfg.montyMu |>.asString}ULL);
+    {wideType} u = ({wideType})t * ({wideType}){p}U;
+    return ({elemType})((x - u) >> 32);"
+    | _ =>
+      s!"return ({elemType})(((x >> {cfg.shiftBits}) * {cfg.foldConst}U) + (x & {2^cfg.shiftBits - 1}U));"
 
+  let reduceAddBody := match cfg.mulAddReduction with
+    | .montgomery => s!"if (x >= {p}U) x -= {p}U; return x;"
+    | _ => s!"if (x >= 2 * {p}U) x -= 2 * {p}U; if (x >= {p}U) x -= {p}U; return x;"
+
+  s!"/* AMO-Lean Dot Product — cost-model optimized
+ * p = {p}, mul = {toString cfg.mulAddReduction}
+ * solinasWinsForMulAdd = {solinasWinsForMulAdd hw}
+ */
 #include <stdint.h>
 #include <stddef.h>
 
-static inline {elemType} reduce({wideType} x) \{
-    return ({elemType})(((x >> {cfg.shiftBits}) * {cfg.foldConst}U) + (x & {2^cfg.shiftBits - 1}U));
+static inline {elemType} reduce_mul({wideType} x) \{ {reduceMulBody} }
+static inline {elemType} reduce_add({elemType} x) \{ {reduceAddBody} }
+
+{elemType} {funcName}(const {elemType} *a, const {elemType} *b, size_t n) \{
+    {elemType} acc = 0;
+    for (size_t i = 0; i < n; i++) \{
+        {elemType} prod = reduce_mul(({wideType})a[i] * ({wideType})b[i]);
+        acc = reduce_add(acc + prod);
+    if (x >= 2 * {p}U) x -= 2 * {p}U;
+    if (x >= {p}U) x -= {p}U;
+    return x;
 }
 
 {elemType} {funcName}(const {elemType} *a, const {elemType} *b, size_t n) \{
     {elemType} acc = 0;
     for (size_t i = 0; i < n; i++) \{
-        {elemType} prod = reduce(({wideType})a[i] * ({wideType})b[i]);
-        acc = reduce(({wideType})acc + ({wideType})prod);
-    }
+        {elemType} prod = reduce_mul(({wideType})a[i] * ({wideType})b[i]);
+        acc = reduce_add(acc + prod);
     return acc;
 }
 "

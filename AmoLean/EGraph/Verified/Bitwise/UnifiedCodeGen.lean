@@ -38,7 +38,8 @@ namespace AmoLean.EGraph.Verified.Bitwise.UnifiedCodeGen
 open AmoLean.EGraph.Verified.Bitwise.MixedExtract (MixedExpr)
 open AmoLean.EGraph.Verified.Bitwise
   (HardwareCost arm_cortex_a76 arm_neon_simd x86_avx2_simd
-   mersenne31_prime babybear_prime)
+   mersenne31_prime babybear_prime goldilocks_prime
+   mixedOpCost solinasWinsForMulAdd)
 open AmoLean.EGraph.Verified.Bitwise.NTTBridge (butterflyDirectAuto)
 
 -- ══════════════════════════════════════════════════════════════════
@@ -121,10 +122,11 @@ instance : ToString ReductionStrategy where
     | .montgomery => "montgomery"
     | .harvey => "harvey"
 
-/-- Complete codegen configuration — ALL decisions from the e-graph. -/
+/-- Complete codegen configuration — ALL decisions from the e-graph + cost model. -/
 structure CodeGenConfig where
   mode : ExecMode
-  reduction : ReductionStrategy
+  reduction : ReductionStrategy         -- for NTT butterfly (multi-stage, Solinas wins)
+  mulAddReduction : ReductionStrategy   -- for mul in combined mul+add (FRI, dot, poly)
   wordSize : Nat              -- 32 or 64
   prime : Nat
   shiftBits : Nat             -- k in Solinas fold
@@ -132,7 +134,10 @@ structure CodeGenConfig where
   montyMu : Nat               -- Montgomery constant (p^{-1} mod 2^32)
   deriving Repr, Inhabited
 
-/-- Select CodeGenConfig from HardwareCost (the e-graph's output). -/
+/-- Select CodeGenConfig from HardwareCost (the e-graph's output).
+    For multiply reductions: e-graph selects via mixedOpCost.
+    For add reductions in combined patterns: cost model selects via
+    solinasWinsForMulAdd (considers branch penalty + output bounds). -/
 def selectConfig (hw : HardwareCost) (p : Nat) : CodeGenConfig :=
   let isGoldilocks := p == goldilocks_prime
   -- Goldilocks (64-bit) forces scalar mode — NEON u64 multiply is too expensive
@@ -140,16 +145,26 @@ def selectConfig (hw : HardwareCost) (p : Nat) : CodeGenConfig :=
     else if hw.isSimd then
       (if hw.simdLanes == 8 then .simdAVX2 else .simdNEON)
     else .scalar
-  -- Goldilocks uses Solinas fold (specialized reduce128)
+  -- NTT butterfly reduction: e-graph cost model (per-op, multi-stage)
   let reduction := if isGoldilocks then .solinasFold
     else if hw.isSimd then .montgomery
     else .solinasFold
+  -- Combined mul+add reduction: cost model query with branch awareness
+  -- For FRI fold, dot product, poly eval: 1 mul + 1 add per element.
+  -- solinasWinsForMulAdd compares: Solinas(mul)+2br vs Montgomery(mul)+1br
+  let mulAddReduction := if isGoldilocks then .solinasFold
+    else if hw.isSimd then .montgomery
+    else if solinasWinsForMulAdd hw then .solinasFold
+    else .montgomery
+  -- Per-field constants
+  let koalabear := 2130706433  -- 2^31 - 2^24 + 1
   let (k, c, mu, ws) :=
     if p == babybear_prime then (31, 2^27 - 1, 0x88000001, 32)
+    else if p == koalabear then (31, 2^24 - 1, 0x81000001, 32)
     else if p == mersenne31_prime then (31, 1, 0x80000001, 32)
     else if isGoldilocks then (64, 2^32 - 1, 0x100000001, 64)
     else (31, 1, 0, 32)  -- default
-  { mode, reduction, wordSize := ws, prime := p,
+  { mode, reduction, mulAddReduction, wordSize := ws, prime := p,
     shiftBits := k, foldConst := c, montyMu := mu }
 
 -- ══════════════════════════════════════════════════════════════════
@@ -188,9 +203,11 @@ def lowerReduction (cfg : CodeGenConfig) (inputExpr : Expr) (s : LowerState) :
         (.assign resultVar (.call "vhsubq_s32" [inputExpr, .var t2])))
     (stmt, resultVar, s2)
   | .harvey =>
-    let stmt := Stmt.seq
-      (.comment "Harvey conditional subtraction")
-      (.assign resultVar inputExpr)  -- simplified; real impl needs if/else
+    -- Harvey conditional subtract: emits call to harvey_reduce(x, p)
+    -- The backend emitter defines harvey_reduce as:
+    --   if (x >= 2*p) x -= 2*p; if (x >= p) x -= p; return x;
+    let stmt := .assign resultVar
+      (.call "harvey_reduce" [inputExpr, .lit (Int.ofNat cfg.prime)])
     (stmt, resultVar, s')
 
 /-- Lower a complete butterfly (a' = reduce(a + reduce(w*b))) to CodeIR. -/
@@ -593,6 +610,186 @@ fn main() \{
     let us = elapsed.as_secs_f64() / iters as f64 * 1e6;
     let melem = n as f64 * iters as f64 / elapsed.as_secs_f64() / 1e6;
     eprintln!(\"N={n} p={p} ({toString cfg.reduction})\");
+    eprintln!(\"  " ++ "{}" ++ " us  " ++ "{}" ++ " Melem/s\", us, melem);
+}
+"
+
+/-- Generate a Rust NTT with Bowers G ordering (DIF butterfly).
+    Same reduction as scalar DIT, but with:
+    1. Bit-reversed input
+    2. DIF butterfly: a' = a+b, b' = (a-b)*w
+    3. Stages from small block to large block
+    4. Bit-reversed twiddle table → sequential access (cache-friendly)
+
+    The reduction function (Solinas fold or Goldilocks reduce) is selected
+    by the e-graph cost model, same as the standard DIT generator. -/
+def generateRustNTT_Bowers (hw : HardwareCost) (n p : Nat)
+    (funcName : String := "ntt_bowers") : String :=
+  let cfg := selectConfig hw p
+  let logN := Nat.log 2 n
+  let elemType := if cfg.wordSize ≤ 32 then "u32" else "u64"
+  let wideType := if cfg.wordSize ≤ 32 then "u64" else "u128"
+
+  -- Reduction function (same as standard DIT — e-graph selected)
+  let foldFn := if cfg.wordSize ≤ 32 then
+    s!"/// Solinas fold — e-graph selected for scalar {elemType} fields.
+/// Verified: solinasFold_mod_correct.
+#[inline(always)]
+fn solinas_fold(x: {wideType}) -> {elemType} \{
+    (((x >> {cfg.shiftBits}) as {wideType}).wrapping_mul({cfg.foldConst} as {wideType}))
+        .wrapping_add(x & {2^cfg.shiftBits - 1} as {wideType}) as {elemType}
+}"
+  else
+    s!"/// Goldilocks reduction — exploits p = 2^64 - 2^32 + 1.
+/// Verified: solinasFold_mod_correct (Goldilocks instance).
+#[inline(always)]
+fn goldilocks_reduce(x: u128) -> u64 \{
+    let lo = x as u64;
+    let hi = (x >> 64) as u64;
+    let hh = hi >> 32;
+    let hl = hi & 0xFFFFFFFF_u64;
+    let (t0, borrow) = lo.overflowing_sub(hh);
+    let t0 = if borrow \{ t0.wrapping_sub(0xFFFFFFFF_u64) } else \{ t0 };
+    let t1 = hl.wrapping_mul(0xFFFFFFFF_u64);
+    let (result, carry) = t0.overflowing_add(t1);
+    if carry || result >= {p}_u64 \{ result.wrapping_sub({p}_u64) } else \{ result }
+}"
+
+  -- DIF butterfly (Bowers uses DIF, not DIT)
+  let difBfFn := if cfg.wordSize ≤ 32 then
+    s!"/// DIF butterfly: a' = fold(a + b), b' = fold((p + a - b) * w).
+/// Bowers G network applies ONE twiddle per block.
+#[inline(always)]
+fn dif_butterfly(a: &mut {elemType}, b: &mut {elemType}, w: {elemType}) \{
+    let va = *a;
+    let vb = *b;
+    *a = solinas_fold(va as {wideType} + vb as {wideType});
+    let diff = solinas_fold({p} as {wideType} + va as {wideType} - vb as {wideType});
+    *b = solinas_fold(diff as {wideType} * w as {wideType});
+}"
+  else
+    s!"/// DIF butterfly for Goldilocks.
+#[inline(always)]
+fn dif_butterfly(a: &mut u64, b: &mut u64, w: u64) \{
+    let va = *a;
+    let vb = *b;
+    let sum = va.wrapping_add(vb);
+    *a = if sum >= {p}_u64 \{ sum - {p}_u64 } else \{ sum };
+    *b = goldilocks_reduce(
+        (if va >= vb \{ va - vb } else \{ {p}_u64 - vb + va }) as u128
+        * w as u128);
+}"
+
+  -- Bit-reversal utility
+  let bitRevFn := s!"fn bit_reverse(data: &mut [{elemType}]) \{
+    let n = data.len();
+    let log_n = n.trailing_zeros();
+    for i in 0..n \{
+        let j = i.reverse_bits() >> (usize::BITS - log_n);
+        if i < j \{ data.swap(i, j); }
+    }
+}"
+
+  -- Twiddle computation (bit-reversed for Bowers)
+  let twiddleFn := s!"fn mod_pow(mut base: {wideType}, mut exp: {wideType}, modulus: {wideType}) -> {wideType} \{
+    let mut result: {wideType} = 1;
+    base %= modulus;
+    while exp > 0 \{
+        if exp & 1 == 1 \{
+            result = (result as u128 * base as u128 % modulus as u128) as {wideType};
+        }
+        exp >>= 1;
+        base = (base as u128 * base as u128 % modulus as u128) as {wideType};
+    }
+    result
+}
+
+/// Compute bit-reversed twiddle table for Bowers G network.
+fn compute_bowers_twiddles(n: usize, generator: {wideType}) -> Vec<{elemType}> \{
+    let p = {p} as {wideType};
+    let omega = mod_pow(generator, (p - 1) / n as {wideType}, p);
+    let mut tw: Vec<{elemType}> = (0..n/2)
+        .map(|i| mod_pow(omega, i as {wideType}, p) as {elemType})
+        .collect();
+    bit_reverse(&mut tw);
+    tw
+}"
+
+  -- The Bowers NTT function
+  let nttFn := s!"/// Bowers G NTT: bit-reverse input, DIF stages small→large, sequential twiddle access.
+/// Cache-friendly: twiddles accessed linearly (one per block).
+/// Reduction: {toString cfg.reduction} (e-graph selected).
+pub fn {funcName}(data: &mut [{elemType}], twiddles: &[{elemType}]) \{
+    let n = data.len();
+    let log_n = n.trailing_zeros() as usize;
+
+    bit_reverse(data);
+
+    for log_half in 0..log_n \{
+        let half = 1_usize << log_half;
+        let block_size = 2 * half;
+        let num_blocks = n / block_size;
+
+        for block in 0..num_blocks \{
+            let w: {elemType} = if block == 0 \{ 1 } else \{ twiddles[block] };
+            let base = block * block_size;
+            for j in 0..half \{
+                let i0 = base + j;
+                let i1 = i0 + half;
+                let (left, right) = data.split_at_mut(i1);
+                dif_butterfly(&mut left[i0], &mut right[0], w);
+            }
+        }
+    }
+}"
+
+  -- Primitive root per field
+  let generator := if p == babybear_prime then "31"
+    else if p == 2130706433 then "3"  -- KoalaBear
+    else if p == mersenne31_prime then "7"
+    else if p == goldilocks_prime then "7"
+    else "3"
+
+  s!"//! AMO-Lean Generated Rust NTT — Bowers G ordering
+//! N = {n}, p = {p}
+//! Reduction: {toString cfg.reduction} (e-graph cost model)
+//! Ordering: Bowers G (bit-reversed twiddles, DIF butterfly, sequential access)
+//! Verified: solinasFold_mod_correct / monty_reduce_spec
+//!
+//! Bowers advantage: cache-friendly twiddle access.
+//! Standard DIT: twiddles[stage*(n/2) + group*half + pair] — strided, non-sequential.
+//! Bowers:       twiddles[block] — linear, sequential. CPU prefetch works.
+
+use std::time::Instant;
+
+{foldFn}
+
+{difBfFn}
+
+{bitRevFn}
+
+{twiddleFn}
+
+{nttFn}
+
+fn main() \{
+    let n: usize = {n};
+    let generator: {wideType} = {generator};
+    let twiddles = compute_bowers_twiddles(n, generator);
+
+    let iters: usize = {if n ≤ 4096 then 1000 else if n ≤ 65536 then 50 else 3};
+    let start = Instant::now();
+    for _ in 0..iters \{
+        let mut data: Vec<{elemType}> = (0..n)
+            .map(|i| ((i as {wideType} * 1000000007) % {p} as {wideType}) as {elemType})
+            .collect();
+        {funcName}(&mut data, &twiddles);
+        std::hint::black_box(&data);
+    }
+    let elapsed = start.elapsed();
+    let us = elapsed.as_secs_f64() / iters as f64 * 1e6;
+    let melem = n as f64 * iters as f64 / elapsed.as_secs_f64() / 1e6;
+    eprintln!(\"N={n} p={p} Bowers ({toString cfg.reduction})\");
     eprintln!(\"  " ++ "{}" ++ " us  " ++ "{}" ++ " Melem/s\", us, melem);
 }
 "

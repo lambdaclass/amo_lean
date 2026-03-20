@@ -1,0 +1,22 @@
+[package]
+name = "bench-native"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "bench_native"
+path = "main.rs"
+
+[dependencies]
+p3-baby-bear = { git = "https://github.com/Plonky3/Plonky3", branch = "main" }
+p3-koala-bear = { git = "https://github.com/Plonky3/Plonky3", branch = "main" }
+p3-monty-31 = { git = "https://github.com/Plonky3/Plonky3", branch = "main" }
+p3-dft = { git = "https://github.com/Plonky3/Plonky3", branch = "main" }
+p3-field = { git = "https://github.com/Plonky3/Plonky3", branch = "main" }
+p3-matrix = { git = "https://github.com/Plonky3/Plonky3", branch = "main" }
+rand = "0.9"
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3

@@ -15,6 +15,7 @@ import AmoLean.EGraph.Verified.Bitwise.FieldFoldPatternRules
 import AmoLean.EGraph.Verified.Bitwise.MixedEGraphBuilder
 import AmoLean.EGraph.Verified.Bitwise.CostExtraction
 import AmoLean.EGraph.Verified.Bitwise.MixedExprToStmt
+import AmoLean.EGraph.Verified.Bitwise.ReductionAlternativeRules
 
 namespace MixedRunner
 
@@ -28,6 +29,7 @@ open CostExtraction (costAwareExtractAuto multiCandidateExtract hwCostFn)
 open MixedEMatch (RewriteRule)
 open MixedSaturation (saturateMixedF rebuildF)
 open MixedEGraphBuilder (addMixedExpr buildEGraph)
+open AmoLean.EGraph.Verified.Bitwise.ReductionAlternativeRules (contextAwareHarveyRules)
 open MixedPatternRules (allBitwisePatternRules allBitwisePatternRulesWithBridges shiftAddPatternRules)
 open FieldFoldPatternRules (fieldFoldPatternRules allFieldFoldPatternRules)
 
@@ -119,8 +121,8 @@ def guidedOptimizeMixedF (p : Nat) (hw : HardwareCost)
   let g1 := runPhase cfg cfg.phase1Iters cfg.phase1Rebuild g allBitwisePatternRulesWithBridges
   -- Phase 2: field-specific fold rules
   let g2 := runPhase cfg cfg.phase2Iters cfg.phase2Rebuild g1 (fieldFoldPatternRules p)
-  -- Phase 3: shift-add decomposition + extra rules
-  let phase3Rules := shiftAddPatternRules ++ extraRules
+  -- Phase 3: shift-add decomposition + context-aware Harvey + extra rules
+  let phase3Rules := shiftAddPatternRules ++ contextAwareHarveyRules p ++ extraRules
   let g3 := if phase3Rules.isEmpty then g2
     else runPhase cfg cfg.phase3Iters cfg.phase3Rebuild g2 phase3Rules
   -- Multi-candidate extraction: prefers non-identity nodes at root

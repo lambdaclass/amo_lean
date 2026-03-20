@@ -64,6 +64,11 @@ structure HardwareCost where
   vectorLength : Nat := 0       -- 0 = single op, >0 = array of this many elements
   cacheThreshold : Nat := 8192  -- above this, cache effects dominate (~32KB = L1/2)
   cachePenalty : Nat := 0       -- extra cycles per op when array exceeds threshold
+  -- v4.3: branch-aware cost for combined mul+add patterns
+  -- In serial patterns (FRI fold, dot product), each conditional subtract is
+  -- a branch. Extra branches add pipeline stall cost beyond the ALU op.
+  -- Solinas output < 2p → 2 cond subs. Montgomery output < p → 1 cond sub.
+  branchPenalty : Nat := 0      -- extra cost per branch in serial reduction patterns
   deriving Repr, DecidableEq
 
 /-! ## Concrete hardware targets -/
@@ -73,7 +78,8 @@ structure HardwareCost where
 def arm_cortex_a76 : HardwareCost :=
   { mul32 := 3, mul64 := 5, add := 1, sub := 1,
     shift := 1, bitAnd := 1, bitXor := 1, bitOr := 1,
-    fusedShiftSub := 1, fusedMulAdd := 3, condSub := 1, modReduce := 1 }
+    fusedShiftSub := 1, fusedMulAdd := 3, condSub := 1, modReduce := 1,
+    branchPenalty := 1 }
 
 /-- RISC-V SiFive U74 cost model (from core complex manual 21G1).
     No barrel shifter — shift+sub = 2 separate instructions. -/
@@ -137,7 +143,8 @@ def arm_scalar_vector (n : Nat) : HardwareCost :=
   { mul32 := 3, mul64 := 5, add := 1, sub := 1,
     shift := 1, bitAnd := 1, bitXor := 1, bitOr := 1,
     fusedShiftSub := 1, fusedMulAdd := 3, condSub := 1, modReduce := 1,
-    vectorLength := n, cacheThreshold := 8192, cachePenalty := 8 }
+    vectorLength := n, cacheThreshold := 8192, cachePenalty := 8,
+    branchPenalty := 1 }
 
 /-- ARM NEON for large vectors — combines SIMD + cache penalties. -/
 def arm_neon_vector (n : Nat) : HardwareCost :=
@@ -178,8 +185,8 @@ def mixedOpCost (hw : HardwareCost) : MixedNodeOp → Nat
   | .bitOr _ _      => hw.bitOr
   | .constMask _    => 0
   | .subGate _ _    => hw.sub
-  | .reduceGate _ _   => hw.bitAnd + u64Penalty hw
-      -- Solinas fold: (x>>31)*c needs u64 intermediate → penalized in SIMD + large arrays
+  | .reduceGate _ _   => hw.shift + hw.mul32 + hw.bitAnd + hw.add + u64Penalty hw
+      -- Solinas fold actual cost: shift + mul(c) + mask + add + u64 penalty
   | .kronPack _ _ _   => 0
   | .kronUnpackLo _ _ => hw.shift
   | .kronUnpackHi _ _ => hw.shift
@@ -191,6 +198,43 @@ def mixedOpCost (hw : HardwareCost) : MixedNodeOp → Nat
       -- Barrett: 6 ops + u64 penalty (SIMD + cache)
   | .harveyReduce _ _    => hw.sub + hw.sub + hw.add
       -- Harvey: 3 ops, u32 conditional subs → no widening
+
+/-! ## Combined mul+add cost (branch-aware selection)
+
+For primitives with the pattern `reduce(a + reduce(x * y))` (FRI fold, dot product,
+polynomial evaluation), the cost of the add reduction depends on the output bound
+of the mul reduction:
+  - Solinas fold output ∈ [0, 2p) → add needs 2 conditional subtracts (2 branches)
+  - Montgomery output ∈ [0, p)  → add needs 1 conditional subtract (1 branch)
+
+`selectMulAddReduction` consults the cost model to pick the cheapest combination,
+accounting for branch penalty in serial patterns. -/
+
+/-- Combined cost of mul-reduce + add-reduce, considering output bounds.
+    Returns (mul_reduction_cost, total_combined_cost). -/
+def combinedMulAddCost (hw : HardwareCost) (useSolinas : Bool) : Nat :=
+  if useSolinas then
+    -- Solinas: cheaper mul, but output < 2p → 2 conditional subs for add
+    let mulCost := mixedOpCost hw (.reduceGate 0 0)
+    let addCost := 2 * (hw.condSub + hw.branchPenalty)
+    mulCost + addCost
+  else
+    -- Montgomery: costlier mul, but output < p → 1 conditional sub for add
+    let mulCost := mixedOpCost hw (.montyReduce 0 0 0)
+    let addCost := 1 * (hw.condSub + hw.branchPenalty)
+    mulCost + addCost
+
+/-- Select the best mul reduction for combined mul+add patterns.
+    Returns true if Solinas wins, false if Montgomery wins.
+    This is a cost-model query, not a hardcoded decision. -/
+def solinasWinsForMulAdd (hw : HardwareCost) : Bool :=
+  combinedMulAddCost hw true ≤ combinedMulAddCost hw false
+
+/-- Non-vacuity: ARM scalar, Solinas+2br (10) vs Montgomery+1br (9).
+    Montgomery wins by 1 cycle due to branchPenalty. -/
+example : combinedMulAddCost arm_cortex_a76 true = 10 := by native_decide
+example : combinedMulAddCost arm_cortex_a76 false = 9 := by native_decide
+example : solinasWinsForMulAdd arm_cortex_a76 = false := by native_decide
 
 /-! ## Zero-cost theorems -/
 

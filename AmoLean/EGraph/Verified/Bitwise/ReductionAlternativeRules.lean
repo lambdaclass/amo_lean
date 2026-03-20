@@ -83,6 +83,37 @@ def patReduceToHarvey (p : Nat) : RewriteRule MixedNodeOp where
   sideCondCheck := none
 
 -- ══════════════════════════════════════════════════════════════════
+-- Section 2b: Context-aware rules (reduce-of-add → Harvey)
+-- ══════════════════════════════════════════════════════════════════
+
+/-- Context-aware: reduce(add(x, y), p) → harveyReduce(add(x, y), p).
+    Only fires when reduceGate wraps an addGate — NOT for multiplications.
+    Harvey (3 ops) beats Solinas fold (6 ops) for additions where
+    inputs are already partially reduced (< 2p). -/
+def patReduceOfAddToHarvey (p : Nat) : RewriteRule MixedNodeOp where
+  name := s!"pat_reduce_add_to_harvey_{p}"
+  lhs := .node (.reduceGate 0 p) [.node (.addGate 0 1) [.patVar 0, .patVar 1]]
+  rhs := .node (.harveyReduce 0 p) [.node (.addGate 0 1) [.patVar 0, .patVar 1]]
+  sideCondCheck := none
+
+/-- Context-aware: reduce(sub(x, y), p) → harveyReduce(sub(x, y), p).
+    Same rationale as add — butterfly diff uses reduce(p + a - wb). -/
+def patReduceOfSubToHarvey (p : Nat) : RewriteRule MixedNodeOp where
+  name := s!"pat_reduce_sub_to_harvey_{p}"
+  lhs := .node (.reduceGate 0 p) [.node (.subGate 0 1) [.patVar 0, .patVar 1]]
+  rhs := .node (.harveyReduce 0 p) [.node (.subGate 0 1) [.patVar 0, .patVar 1]]
+  sideCondCheck := none
+
+/-- Context-aware rules: Harvey for additions/subtractions only.
+    These rules are safe because:
+    1. Harvey only applies to reduce(add/sub(...)), not reduce(mul(...))
+    2. For reduce(mul(...)), Solinas fold or Montgomery stays selected
+    3. The cost model picks Harvey (3 ops) over Solinas (6 ops) for add/sub -/
+def contextAwareHarveyRules (p : Nat) : List (RewriteRule MixedNodeOp) :=
+  [ patReduceOfAddToHarvey p
+  , patReduceOfSubToHarvey p ]
+
+-- ══════════════════════════════════════════════════════════════════
 -- Section 3: Per-field rule collections
 -- ══════════════════════════════════════════════════════════════════
 
