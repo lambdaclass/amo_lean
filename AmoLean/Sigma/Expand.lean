@@ -348,9 +348,20 @@ def expandKernel : Kernel → ExpandedKernel
   | .identity n => expandIdentity n
   | .dft 2 => expandDFT2
   | .dft 4 => expandDFT4
-  | .dft n => expandIdentity n  -- Fallback for larger DFT
-  | .ntt n _ => expandIdentity n  -- TODO: implement proper NTT
-  | .twiddle n _ => expandIdentity n  -- TODO: implement twiddle factors
+  | .dft n => expandIdentity n  -- Fallback for larger DFT (use fftPow2 factorization)
+  | .ntt 2 _ => expandButterfly   -- NTT_2 = butterfly (same as DFT_2 in any field)
+  | .ntt 4 _ => expandButterfly4  -- NTT_4 = radix-4 butterfly
+  | .ntt n _ => expandIdentity n  -- NTT_n for n>4: factored via MatExpr, kernel is butterfly
+  | .twiddle n k =>
+    -- Twiddle factor diagonal: y[i] = x[i] * ω^(i*k)
+    -- Expanded as: each output = input * twiddle_constant
+    -- The actual twiddle values are supplied by the NTT driver (not embedded here)
+    let inputs := List.range n |>.map ScalarVar.input
+    let outputs := List.range n |>.map ScalarVar.output
+    let body := List.range n |>.map fun i =>
+      { target := ScalarVar.output i,
+        value := ScalarExpr.mul (ScalarExpr.x i) (.var ⟨"tw", i⟩) : ScalarAssign }
+    { inputVars := inputs, outputVars := outputs, body := body }
   | .scale => expandScale 1  -- Default scale factor
   | .butterfly => expandButterfly
   | .sbox n α => expandSbox n α  -- Poseidon2 full S-box
