@@ -126,8 +126,7 @@ def mixedOpCost (hw : HardwareCost) : MixedNodeOp → Nat
   | .witness _      => 0
   | .pubInput _     => 0
   | .addGate _ _    => hw.add
-  | .mulGate _ _    => hw.mul32 + if hw.isSimd && MixedNodeOp.needsWidening (.mulGate 0 0)
-                                   then hw.wideningPenalty else 0
+  | .mulGate _ _    => hw.mul32 + if hw.isSimd then hw.wideningPenalty else 0
   | .negGate _      => 0
   | .smulGate _ _   => hw.mul32
   | .shiftLeft _ _  => hw.shift
@@ -143,12 +142,13 @@ def mixedOpCost (hw : HardwareCost) : MixedNodeOp → Nat
   | .kronUnpackLo _ _ => hw.shift
   | .kronUnpackHi _ _ => hw.shift
   -- Modular reduction alternatives
-  | .montyReduce _ _ _   => montgomeryCost hw
-      -- Montgomery: all u32 lanes (vqdmulhq_s32) → NO widening penalty
-  | .barrettReduce _ _ _ => barrettCost hw + if hw.isSimd then hw.wideningPenalty else 0
-      -- Barrett: needs u64 → penalized in SIMD
-  | .harveyReduce _ _    => harveyCost hw
-      -- Harvey: u32 conditional subs → no widening
+  | .montyReduce _ _ _   => hw.bitAnd + hw.mul32 + hw.add + hw.shift + hw.sub
+      -- Montgomery: 5 ops, all u32 lanes → NO widening penalty
+  | .barrettReduce _ _ _ => hw.mul32 + hw.shift + hw.mul32 + hw.sub + hw.sub + hw.add +
+      if hw.isSimd then hw.wideningPenalty else 0
+      -- Barrett: 6 ops + widening penalty in SIMD
+  | .harveyReduce _ _    => hw.sub + hw.sub + hw.add
+      -- Harvey: 3 ops, u32 conditional subs → no widening
 
 /-! ## Zero-cost theorems -/
 
@@ -170,7 +170,7 @@ theorem mixedOpCost_shift_le_mul (hw : HardwareCost) (h : hw.shift ≤ hw.mul32)
     (a : EClassId) (n : Nat) (b : EClassId) :
     mixedOpCost hw (.shiftLeft a n) ≤ mixedOpCost hw (.mulGate a b) := by
   simp [mixedOpCost]
-  exact h
+  omega
 
 /-! ## Reduction strategy cost functions -/
 

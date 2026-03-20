@@ -18,6 +18,7 @@
   Soundness: all alternatives evaluate to x % p (by evalMixedOp definition).
 -/
 import AmoLean.EGraph.Verified.Bitwise.MixedPatternRules
+import AmoLean.EGraph.Verified.Bitwise.BitwiseRules
 
 set_option autoImplicit false
 
