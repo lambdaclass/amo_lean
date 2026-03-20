@@ -44,8 +44,8 @@ def main : IO Unit := do
   IO.println "Generating NTT code for Goldilocks N=4096..."
   writeAllTargets "generated/unified_gl" 4096 goldilocks_prime
 
-  -- Generate Rust NTTs for fair Plonky3 comparison
-  IO.println "Generating Rust NTTs (for fair rustc -O comparison)..."
+  -- Generate Rust NTTs (scalar) for fair Plonky3 comparison
+  IO.println "Generating Rust NTTs — scalar (for rustc -O comparison)..."
   IO.FS.createDirAll "generated/rust_ntt"
   for (name, p, sz) in [
     ("koalabear", (2130706433 : Nat), (1 <<< 20 : Nat)),
@@ -54,6 +54,19 @@ def main : IO Unit := do
     ("babybear_22", babybear_prime, (1 <<< 22 : Nat)),
     ("mersenne31", mersenne31_prime, (1 <<< 20 : Nat))] do
     let code := generateRustNTT arm_cortex_a76 sz p s!"ntt_{name}"
+    let path := s!"generated/rust_ntt/ntt_{name}.rs"
+    IO.FS.writeFile ⟨path⟩ code
+    IO.println s!"  {path} ({code.length} bytes)"
+
+  -- Generate Rust NTTs (NEON) — 4-wide Montgomery
+  IO.println ""
+  IO.println "Generating Rust NTTs — NEON Montgomery (4-wide)..."
+  for (name, p, sz) in [
+    ("koalabear_neon", (2130706433 : Nat), (1 <<< 20 : Nat)),
+    ("koalabear_neon_22", (2130706433 : Nat), (1 <<< 22 : Nat)),
+    ("babybear_neon", babybear_prime, (1 <<< 20 : Nat)),
+    ("babybear_neon_22", babybear_prime, (1 <<< 22 : Nat))] do
+    let code := generateRustNTT_NEON sz p s!"ntt_{name}"
     let path := s!"generated/rust_ntt/ntt_{name}.rs"
     IO.FS.writeFile ⟨path⟩ code
     IO.println s!"  {path} ({code.length} bytes)"
