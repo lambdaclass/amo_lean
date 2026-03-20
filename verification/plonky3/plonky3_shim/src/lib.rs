@@ -190,6 +190,67 @@ pub unsafe extern "C" fn plonky3_ntt_koalabear_forward(data: *mut u32, len: usiz
 }
 
 // ============================================================================
+// BabyBear Field Arithmetic (for primitive benchmarks)
+// ============================================================================
+
+#[no_mangle]
+pub extern "C" fn plonky3_babybear_mul(a: u32, b: u32) -> u32 {
+    (BabyBear::new(a) * BabyBear::new(b)).as_canonical_u64() as u32
+}
+
+#[no_mangle]
+pub extern "C" fn plonky3_babybear_add(a: u32, b: u32) -> u32 {
+    (BabyBear::new(a) + BabyBear::new(b)).as_canonical_u64() as u32
+}
+
+/// FRI fold: result[i] = even[i] + alpha * odd[i]  (BabyBear)
+#[no_mangle]
+pub unsafe extern "C" fn plonky3_babybear_fri_fold(
+    even: *const u32, odd: *const u32, alpha: u32,
+    result: *mut u32, len: usize) -> i32 {
+    if even.is_null() || odd.is_null() || result.is_null() { return -1; }
+    let result_res = catch_unwind(|| {
+        let even_s = slice::from_raw_parts(even, len);
+        let odd_s = slice::from_raw_parts(odd, len);
+        let result_s = slice::from_raw_parts_mut(result, len);
+        let alpha_f = BabyBear::new(alpha);
+        for i in 0..len {
+            result_s[i] = (BabyBear::new(even_s[i]) + alpha_f * BabyBear::new(odd_s[i]))
+                .as_canonical_u64() as u32;
+        }
+    });
+    match result_res { Ok(_) => 0, Err(_) => -1 }
+}
+
+/// Polynomial evaluation (Horner): p(x) = coeffs[0] + x*(coeffs[1] + ...)  (BabyBear)
+#[no_mangle]
+pub unsafe extern "C" fn plonky3_babybear_poly_eval(
+    coeffs: *const u32, degree: usize, x: u32) -> u32 {
+    if coeffs.is_null() { return 0; }
+    let c = slice::from_raw_parts(coeffs, degree + 1);
+    let x_f = BabyBear::new(x);
+    let mut acc = BabyBear::new(c[degree]);
+    for j in (0..degree).rev() {
+        acc = BabyBear::new(c[j]) + x_f * acc;
+    }
+    acc.as_canonical_u64() as u32
+}
+
+/// Dot product: sum(a[i] * b[i])  (BabyBear)
+#[no_mangle]
+pub unsafe extern "C" fn plonky3_babybear_dot_product(
+    a: *const u32, b: *const u32, len: usize) -> u32 {
+    if a.is_null() || b.is_null() { return 0; }
+    let a_s = slice::from_raw_parts(a, len);
+    let b_s = slice::from_raw_parts(b, len);
+    let mut acc = BabyBear::new(0);
+    for i in 0..len {
+        acc = acc + BabyBear::new(a_s[i]) * BabyBear::new(b_s[i]);
+    }
+    acc.as_canonical_u64() as u32
+}
+
+// ============================================================================
 // Field Information Functions
 // ============================================================================
 
