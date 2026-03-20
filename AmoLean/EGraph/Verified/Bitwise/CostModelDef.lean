@@ -56,6 +56,14 @@ structure HardwareCost where
   isSimd : Bool := false     -- true when targeting SIMD (NEON/AVX2)
   wideningPenalty : Nat := 0 -- extra cycles for ops that need u32→u64 widening
   simdLanes : Nat := 1       -- 1 = scalar, 4 = NEON, 8 = AVX2
+  -- v4.2: vector-length-aware cost model
+  -- When processing large arrays, u64 operations cause cache pressure
+  -- (8 bytes/elem vs 4 bytes for u32). Operations that stay in u32
+  -- (Montgomery) are cheaper at scale than u64 operations (Solinas fold).
+  -- cachePenalty is added to u64-needing ops when vectorLength > cacheThreshold.
+  vectorLength : Nat := 0       -- 0 = single op, >0 = array of this many elements
+  cacheThreshold : Nat := 8192  -- above this, cache effects dominate (~32KB = L1/2)
+  cachePenalty : Nat := 0       -- extra cycles per op when array exceeds threshold
   deriving Repr, DecidableEq
 
 /-! ## Concrete hardware targets -/
@@ -114,19 +122,53 @@ def x86_avx2_simd : HardwareCost :=
     fusedShiftSub := 2, fusedMulAdd := 4, condSub := 1, modReduce := 1,
     isSimd := true, wideningPenalty := 8, simdLanes := 8 }
 
+/-! ## Vector-context cost models
+
+When the e-graph optimizes a primitive that operates on a large array
+(FRI fold over N=65536, dot product, NTT), the cache effects of u64 vs u32
+dominate. These cost models add a cache penalty for u64-needing operations
+when the vector is large enough to exceed L1 cache. -/
+
+/-- ARM scalar for large vectors (N > 8192).
+    Same as arm_cortex_a76 but with cache penalty for u64 ops.
+    Makes the e-graph prefer Montgomery (u32) over Solinas (u64)
+    for large-array primitives like FRI fold and dot product. -/
+def arm_scalar_vector (n : Nat) : HardwareCost :=
+  { mul32 := 3, mul64 := 5, add := 1, sub := 1,
+    shift := 1, bitAnd := 1, bitXor := 1, bitOr := 1,
+    fusedShiftSub := 1, fusedMulAdd := 3, condSub := 1, modReduce := 1,
+    vectorLength := n, cacheThreshold := 8192, cachePenalty := 8 }
+
+/-- ARM NEON for large vectors — combines SIMD + cache penalties. -/
+def arm_neon_vector (n : Nat) : HardwareCost :=
+  { mul32 := 3, mul64 := 5, add := 1, sub := 1,
+    shift := 1, bitAnd := 1, bitXor := 1, bitOr := 1,
+    fusedShiftSub := 1, fusedMulAdd := 3, condSub := 1, modReduce := 1,
+    isSimd := true, wideningPenalty := 8, simdLanes := 4,
+    vectorLength := n, cacheThreshold := 8192, cachePenalty := 8 }
+
 /-! ## Parametric cost function -/
+
+/-- Extra cost for operations needing u64 intermediates.
+    Combines SIMD widening penalty + cache pressure penalty. -/
+private def u64Penalty (hw : HardwareCost) : Nat :=
+  let simdPen := if hw.isSimd then hw.wideningPenalty else 0
+  let cachePen := if hw.vectorLength > hw.cacheThreshold then hw.cachePenalty else 0
+  simdPen + cachePen
 
 /-- Parametric cost function: assigns hardware cycle cost to each `MixedNodeOp`.
     Constants and witnesses are free (no ALU operation).
-    When `hw.isSimd = true`, operations that need u32→u64 widening
-    are penalized by `hw.wideningPenalty`. This makes the e-graph
-    prefer Montgomery (u32 lanes) over Solinas (u64 intermediate) in SIMD. -/
+    Operations needing u64 intermediates (Solinas fold, Barrett, mulGate) are
+    penalized when: (1) isSimd=true (widening penalty), or (2) vectorLength
+    exceeds cacheThreshold (cache pressure penalty). This makes the e-graph
+    prefer Montgomery (u32 only) over Solinas (u64 intermediate) for both
+    SIMD contexts and large-array contexts. -/
 def mixedOpCost (hw : HardwareCost) : MixedNodeOp → Nat
   | .constGate _    => 0
   | .witness _      => 0
   | .pubInput _     => 0
   | .addGate _ _    => hw.add
-  | .mulGate _ _    => hw.mul32 + if hw.isSimd then hw.wideningPenalty else 0
+  | .mulGate _ _    => hw.mul32 + u64Penalty hw
   | .negGate _      => 0
   | .smulGate _ _   => hw.mul32
   | .shiftLeft _ _  => hw.shift
@@ -136,8 +178,8 @@ def mixedOpCost (hw : HardwareCost) : MixedNodeOp → Nat
   | .bitOr _ _      => hw.bitOr
   | .constMask _    => 0
   | .subGate _ _    => hw.sub
-  | .reduceGate _ _   => hw.bitAnd + if hw.isSimd then hw.wideningPenalty else 0
-      -- Solinas fold: (x>>31)*c needs u64 intermediate → penalized in SIMD
+  | .reduceGate _ _   => hw.bitAnd + u64Penalty hw
+      -- Solinas fold: (x>>31)*c needs u64 intermediate → penalized in SIMD + large arrays
   | .kronPack _ _ _   => 0
   | .kronUnpackLo _ _ => hw.shift
   | .kronUnpackHi _ _ => hw.shift
@@ -145,8 +187,8 @@ def mixedOpCost (hw : HardwareCost) : MixedNodeOp → Nat
   | .montyReduce _ _ _   => hw.bitAnd + hw.mul32 + hw.add + hw.shift + hw.sub
       -- Montgomery: 5 ops, all u32 lanes → NO widening penalty
   | .barrettReduce _ _ _ => hw.mul32 + hw.shift + hw.mul32 + hw.sub + hw.sub + hw.add +
-      if hw.isSimd then hw.wideningPenalty else 0
-      -- Barrett: 6 ops + widening penalty in SIMD
+      u64Penalty hw
+      -- Barrett: 6 ops + u64 penalty (SIMD + cache)
   | .harveyReduce _ _    => hw.sub + hw.sub + hw.add
       -- Harvey: 3 ops, u32 conditional subs → no widening
 
@@ -266,6 +308,24 @@ example : mixedOpCost arm_neon_simd (.harveyReduce 0 0) <
 example : mixedOpCost arm_cortex_a76 (.harveyReduce 0 0) <
           mixedOpCost arm_cortex_a76 (.montyReduce 0 0 0) := by native_decide
 example : fpga_dsp48e2.shift ≤ fpga_dsp48e2.mul32 := by native_decide
+
+/-! ## Vector-length-aware cost — cache penalty
+
+For single operations, Solinas fold wins (fewer ops).
+For large vectors (N > 8192), Montgomery wins (u32 = half cache footprint).
+The e-graph automatically switches strategy based on vector context. -/
+
+/-- Scalar single-op: Solinas fold is cheaper (no cache penalty). -/
+example : mixedOpCost arm_cortex_a76 (.reduceGate 0 0) <
+          mixedOpCost arm_cortex_a76 (.montyReduce 0 0 0) := by native_decide
+
+/-- Scalar large-vector (N=65536): Montgomery is cheaper (cache penalty on Solinas). -/
+example : mixedOpCost (arm_scalar_vector 65536) (.reduceGate 0 0) >
+          mixedOpCost (arm_scalar_vector 65536) (.montyReduce 0 0 0) := by native_decide
+
+/-- Scalar small-vector (N=1024): Solinas still wins (below cache threshold). -/
+example : mixedOpCost (arm_scalar_vector 1024) (.reduceGate 0 0) <
+          mixedOpCost (arm_scalar_vector 1024) (.montyReduce 0 0 0) := by native_decide
 
 /-- Non-vacuity: mixedOpCost produces non-trivial values on ARM. -/
 example : mixedOpCost arm_cortex_a76 (.mulGate 0 1) = 3 := by native_decide
