@@ -49,6 +49,13 @@ structure HardwareCost where
   fusedMulAdd : Nat := 4    -- fused multiply-accumulate: MADD (ARM), MUL+ADD (others)
   condSub : Nat := 1        -- conditional subtraction for Harvey butterfly
   modReduce : Nat := 1      -- cost of a modular reduction (conditional sub or mask+shift)
+  -- v4.1: SIMD-aware cost model
+  -- When isSimd = true, operations that require widening (u32 → u64 intermediates)
+  -- are penalized. This makes the e-graph prefer Montgomery (u32 lanes) over
+  -- Solinas fold (needs u64) in SIMD contexts, and vice versa for scalar.
+  isSimd : Bool := false     -- true when targeting SIMD (NEON/AVX2)
+  wideningPenalty : Nat := 0 -- extra cycles for ops that need u32→u64 widening
+  simdLanes : Nat := 1       -- 1 = scalar, 4 = NEON, 8 = AVX2
   deriving Repr, DecidableEq
 
 /-! ## Concrete hardware targets -/
@@ -79,17 +86,48 @@ def x86_skylake : HardwareCost :=
     shift := 1, bitAnd := 1, bitXor := 1, bitOr := 1,
     fusedShiftSub := 2, fusedMulAdd := 4, condSub := 1, modReduce := 1 }
 
+/-! ## SIMD hardware targets
+
+When `isSimd = true`, the cost model penalizes operations that need
+u32→u64 widening. This makes the e-graph automatically prefer:
+  - Montgomery REDC for SIMD (stays in u32 lanes → no penalty)
+  - Solinas fold for scalar (fewer ops, but needs u64 → penalized in SIMD)
+
+The `wideningPenalty` represents the cost of extracting u64 lanes,
+doing scalar operations, and repacking — which we measured as
+15-20% overhead in bench_ntt_simd.c. -/
+
+/-- ARM NEON SIMD cost model (4 × u32 lanes).
+    Montgomery stays in u32 (vqdmulhq_s32) → no penalty.
+    Solinas fold needs u64 intermediate → +8 cycle penalty. -/
+def arm_neon_simd : HardwareCost :=
+  { mul32 := 3, mul64 := 5, add := 1, sub := 1,
+    shift := 1, bitAnd := 1, bitXor := 1, bitOr := 1,
+    fusedShiftSub := 1, fusedMulAdd := 3, condSub := 1, modReduce := 1,
+    isSimd := true, wideningPenalty := 8, simdLanes := 4 }
+
+/-- x86 AVX2 SIMD cost model (8 × u32 lanes).
+    Same principle: Montgomery (vpmuludq) stays in lanes, Solinas needs widening. -/
+def x86_avx2_simd : HardwareCost :=
+  { mul32 := 3, mul64 := 4, add := 1, sub := 1,
+    shift := 1, bitAnd := 1, bitXor := 1, bitOr := 1,
+    fusedShiftSub := 2, fusedMulAdd := 4, condSub := 1, modReduce := 1,
+    isSimd := true, wideningPenalty := 8, simdLanes := 8 }
+
 /-! ## Parametric cost function -/
 
 /-- Parametric cost function: assigns hardware cycle cost to each `MixedNodeOp`.
     Constants and witnesses are free (no ALU operation).
-    Default multiply uses 32-bit cost; use `mul64` for Goldilocks pipelines. -/
+    When `hw.isSimd = true`, operations that need u32→u64 widening
+    are penalized by `hw.wideningPenalty`. This makes the e-graph
+    prefer Montgomery (u32 lanes) over Solinas (u64 intermediate) in SIMD. -/
 def mixedOpCost (hw : HardwareCost) : MixedNodeOp → Nat
   | .constGate _    => 0
   | .witness _      => 0
   | .pubInput _     => 0
   | .addGate _ _    => hw.add
-  | .mulGate _ _    => hw.mul32
+  | .mulGate _ _    => hw.mul32 + if hw.isSimd && MixedNodeOp.needsWidening (.mulGate 0 0)
+                                   then hw.wideningPenalty else 0
   | .negGate _      => 0
   | .smulGate _ _   => hw.mul32
   | .shiftLeft _ _  => hw.shift
@@ -99,14 +137,18 @@ def mixedOpCost (hw : HardwareCost) : MixedNodeOp → Nat
   | .bitOr _ _      => hw.bitOr
   | .constMask _    => 0
   | .subGate _ _    => hw.sub
-  | .reduceGate _ _   => hw.bitAnd   -- mod p costs ~1 cycle (like AND)
-  | .kronPack _ _ _   => 0           -- pack is free (add + shift, handled separately)
-  | .kronUnpackLo _ _ => hw.shift    -- mod 2^w costs ~1 cycle (like shift)
-  | .kronUnpackHi _ _ => hw.shift    -- div 2^w costs ~1 cycle (like shift)
+  | .reduceGate _ _   => hw.bitAnd + if hw.isSimd then hw.wideningPenalty else 0
+      -- Solinas fold: (x>>31)*c needs u64 intermediate → penalized in SIMD
+  | .kronPack _ _ _   => 0
+  | .kronUnpackLo _ _ => hw.shift
+  | .kronUnpackHi _ _ => hw.shift
   -- Modular reduction alternatives
-  | .montyReduce _ _ _   => montgomeryCost hw  -- 5 ops: AND + mul32 + add + shift + sub
-  | .barrettReduce _ _ _ => hw.mul32 + hw.shift + hw.mul32 + hw.sub + hw.sub + hw.add  -- 6 ops
-  | .harveyReduce _ _    => hw.sub + hw.sub + hw.add  -- 3 ops: cheapest
+  | .montyReduce _ _ _   => montgomeryCost hw
+      -- Montgomery: all u32 lanes (vqdmulhq_s32) → NO widening penalty
+  | .barrettReduce _ _ _ => barrettCost hw + if hw.isSimd then hw.wideningPenalty else 0
+      -- Barrett: needs u64 → penalized in SIMD
+  | .harveyReduce _ _    => harveyCost hw
+      -- Harvey: u32 conditional subs → no widening
 
 /-! ## Zero-cost theorems -/
 
@@ -195,6 +237,34 @@ example : montgomeryCost riscv_sifive_u74 = 9 := by native_decide
 /-- Non-vacuity: shift_le_mul hypothesis is satisfiable on all three targets. -/
 example : arm_cortex_a76.shift ≤ arm_cortex_a76.mul32 := by native_decide
 example : riscv_sifive_u74.shift ≤ riscv_sifive_u74.mul32 := by native_decide
+
+/-! ## SIMD cost model — cross-context strategy selection
+
+The key property: in SIMD mode, Montgomery becomes cheaper than Solinas fold
+because Solinas fold needs u64 intermediates (penalized by wideningPenalty).
+In scalar mode, Solinas fold is cheaper because it has fewer ops.
+
+This means the e-graph, given the same `reduceGate(x, p)`, will extract:
+  - `solinasFold` when hw.isSimd = false (cheaper: 4 ops, no penalty)
+  - `montyReduce` when hw.isSimd = true  (cheaper: 5 ops but no penalty vs 4+8 penalty)
+-/
+
+/-- In SIMD mode (NEON), reduceGate (Solinas fold) costs more than Montgomery.
+    This is because Solinas fold gets penalized for u64 widening.
+    The e-graph will therefore prefer montyReduce in SIMD context. -/
+example : mixedOpCost arm_neon_simd (.reduceGate 0 0) >
+          mixedOpCost arm_neon_simd (.montyReduce 0 0 0) := by native_decide
+
+/-- In scalar mode (ARM), reduceGate (Solinas fold) costs less than Montgomery.
+    The e-graph will therefore prefer reduceGate (→ Solinas fold) in scalar context. -/
+example : mixedOpCost arm_cortex_a76 (.reduceGate 0 0) <
+          mixedOpCost arm_cortex_a76 (.montyReduce 0 0 0) := by native_decide
+
+/-- Harvey is cheapest in both contexts (3 ops, no widening). -/
+example : mixedOpCost arm_neon_simd (.harveyReduce 0 0) <
+          mixedOpCost arm_neon_simd (.montyReduce 0 0 0) := by native_decide
+example : mixedOpCost arm_cortex_a76 (.harveyReduce 0 0) <
+          mixedOpCost arm_cortex_a76 (.montyReduce 0 0 0) := by native_decide
 example : fpga_dsp48e2.shift ≤ fpga_dsp48e2.mul32 := by native_decide
 
 /-- Non-vacuity: mixedOpCost produces non-trivial values on ARM. -/

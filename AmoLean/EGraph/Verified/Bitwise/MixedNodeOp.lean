@@ -475,6 +475,18 @@ def isAlgebraic : MixedNodeOp → Bool
   | .harveyReduce _ _ => true
   | _                 => false
 
+/-- Returns true if the operation requires u32→u64 widening in SIMD context.
+    Operations that need u64 intermediates (like Solinas fold after multiply)
+    don't vectorize well because NEON/AVX2 lack native u64-lane multiply.
+    Montgomery REDC stays in u32 lanes (via vqdmulhq_s32) → no widening. -/
+def needsWidening : MixedNodeOp → Bool
+  | .reduceGate _ _      => true  -- Solinas fold: (x >> 31) * c needs u64 intermediate
+  | .barrettReduce _ _ _ => true  -- Barrett: mul64 + shift needs u64
+  | .montyReduce _ _ _   => false -- Montgomery: all ops in u32 lanes (vqdmulhq_s32)
+  | .harveyReduce _ _    => false -- Harvey: conditional subs, u32 only
+  | .mulGate _ _         => true  -- u32 × u32 = u64 (before reduction)
+  | _                    => false
+
 /-- Every MixedNodeOp is either algebraic or bitwise. -/
 theorem algebraic_or_bitwise (op : MixedNodeOp) : isAlgebraic op = true ∨ isBitwise op = true := by
   cases op <;> simp [isAlgebraic, isBitwise]
