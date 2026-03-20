@@ -205,6 +205,129 @@ theorem lowerOp_constMask_sound (n : Nat) (llEnv : LowLevelEnv) :
     some (.int ↑(2^n - 1 : Nat)) := by
   simp [lowerOp, evalExpr]
 
+/-- Soundness for constGate: lowering produces env lookup for c_n. -/
+theorem lowerOp_constGate_sound (n : Nat) (llEnv : LowLevelEnv) :
+    evalExpr llEnv (lowerOp (.constGate n) (fun _ => .litInt 0)) =
+    some (llEnv (.user s!"c_{n}")) := by
+  simp [lowerOp]
+
+/-- Soundness for witness: lowering produces env lookup for w_n. -/
+theorem lowerOp_witness_sound (n : Nat) (llEnv : LowLevelEnv) :
+    evalExpr llEnv (lowerOp (.witness n) (fun _ => .litInt 0)) =
+    some (llEnv (.user s!"w_{n}")) := by
+  simp [lowerOp, mixedVarName]
+
+/-- Soundness for pubInput: lowering produces env lookup for pub_n. -/
+theorem lowerOp_pubInput_sound (n : Nat) (llEnv : LowLevelEnv) :
+    evalExpr llEnv (lowerOp (.pubInput n) (fun _ => .litInt 0)) =
+    some (llEnv (.user s!"pub_{n}")) := by
+  simp [lowerOp]
+
+/-- Soundness for mulGate: lowering preserves multiplication semantics. -/
+theorem lowerOp_mulGate_sound (a b : EClassId) (ia ib : Int) (llEnv : LowLevelEnv)
+    (ha : llEnv (.user s!"w_{a}") = .int ia)
+    (hb : llEnv (.user s!"w_{b}") = .int ib) :
+    evalExpr llEnv (lowerOp (.mulGate a b) (fun eid => .varRef (.user s!"w_{eid}"))) =
+    some (.int (ia * ib)) := by
+  simp [lowerOp, evalExpr, ha, hb, evalBinOp]
+
+/-- Soundness for subGate: lowering preserves subtraction semantics. -/
+theorem lowerOp_subGate_sound (a b : EClassId) (ia ib : Int) (llEnv : LowLevelEnv)
+    (ha : llEnv (.user s!"w_{a}") = .int ia)
+    (hb : llEnv (.user s!"w_{b}") = .int ib) :
+    evalExpr llEnv (lowerOp (.subGate a b) (fun eid => .varRef (.user s!"w_{eid}"))) =
+    some (.int (ia - ib)) := by
+  simp [lowerOp, evalExpr, ha, hb, evalBinOp]
+
+/-- Soundness for negGate: lowering preserves negation as 0 - x. -/
+theorem lowerOp_negGate_sound (a : EClassId) (ia : Int) (llEnv : LowLevelEnv)
+    (ha : llEnv (.user s!"w_{a}") = .int ia) :
+    evalExpr llEnv (lowerOp (.negGate a) (fun eid => .varRef (.user s!"w_{eid}"))) =
+    some (.int (0 - ia)) := by
+  simp [lowerOp, evalExpr, ha, evalBinOp]
+
+/-- Soundness for smulGate: lowering preserves scalar multiplication.
+    c_n * v(a) where c_n is looked up from the environment. -/
+theorem lowerOp_smulGate_sound (n : Nat) (a : EClassId) (ic ia : Int) (llEnv : LowLevelEnv)
+    (hc : llEnv (.user s!"c_{n}") = .int ic)
+    (ha : llEnv (.user s!"w_{a}") = .int ia) :
+    evalExpr llEnv (lowerOp (.smulGate n a) (fun eid => .varRef (.user s!"w_{eid}"))) =
+    some (.int (ic * ia)) := by
+  simp [lowerOp, evalExpr, hc, ha, evalBinOp]
+
+/-- Soundness for shiftLeft: lowering preserves left-shift semantics. -/
+theorem lowerOp_shiftLeft_sound (a : EClassId) (n : Nat) (ia : Int) (llEnv : LowLevelEnv)
+    (ha : llEnv (.user s!"w_{a}") = .int ia) :
+    evalExpr llEnv (lowerOp (.shiftLeft a n) (fun eid => .varRef (.user s!"w_{eid}"))) =
+    some (.int (Int.shiftLeft ia (↑n % 64))) := by
+  simp [lowerOp, evalExpr, ha, evalBinOp]
+
+/-- Soundness for bitXor: lowering preserves XOR semantics. -/
+theorem lowerOp_bitXor_sound (a b : EClassId) (ia ib : Int) (llEnv : LowLevelEnv)
+    (ha : llEnv (.user s!"w_{a}") = .int ia)
+    (hb : llEnv (.user s!"w_{b}") = .int ib) :
+    evalExpr llEnv (lowerOp (.bitXor a b) (fun eid => .varRef (.user s!"w_{eid}"))) =
+    some (.int (Int.xor ia ib)) := by
+  simp [lowerOp, evalExpr, ha, hb, evalBinOp]
+
+/-- Soundness for bitOr: lowering preserves OR semantics. -/
+theorem lowerOp_bitOr_sound (a b : EClassId) (ia ib : Int) (llEnv : LowLevelEnv)
+    (ha : llEnv (.user s!"w_{a}") = .int ia)
+    (hb : llEnv (.user s!"w_{b}") = .int ib) :
+    evalExpr llEnv (lowerOp (.bitOr a b) (fun eid => .varRef (.user s!"w_{eid}"))) =
+    some (.int (Int.lor ia ib)) := by
+  simp [lowerOp, evalExpr, ha, hb, evalBinOp]
+
+/-- Soundness for reduceGate: lowering produces Mersenne approximation (x & (p-1)). -/
+theorem lowerOp_reduceGate_sound (a : EClassId) (p : Nat) (ia : Int) (llEnv : LowLevelEnv)
+    (ha : llEnv (.user s!"w_{a}") = .int ia) :
+    evalExpr llEnv (lowerOp (.reduceGate a p) (fun eid => .varRef (.user s!"w_{eid}"))) =
+    some (.int (Int.land ia ↑(p - 1))) := by
+  simp [lowerOp, evalExpr, ha, evalBinOp]
+
+/-- Soundness for kronPack: lowering preserves a + (b << w). -/
+theorem lowerOp_kronPack_sound (a b : EClassId) (w : Nat) (ia ib : Int) (llEnv : LowLevelEnv)
+    (ha : llEnv (.user s!"w_{a}") = .int ia)
+    (hb : llEnv (.user s!"w_{b}") = .int ib) :
+    evalExpr llEnv (lowerOp (.kronPack a b w) (fun eid => .varRef (.user s!"w_{eid}"))) =
+    some (.int (ia + Int.shiftLeft ib (↑w % 64))) := by
+  simp [lowerOp, evalExpr, ha, hb, evalBinOp]
+
+/-- Soundness for kronUnpackLo: lowering preserves a & (2^w - 1). -/
+theorem lowerOp_kronUnpackLo_sound (a : EClassId) (w : Nat) (ia : Int) (llEnv : LowLevelEnv)
+    (ha : llEnv (.user s!"w_{a}") = .int ia) :
+    evalExpr llEnv (lowerOp (.kronUnpackLo a w) (fun eid => .varRef (.user s!"w_{eid}"))) =
+    some (.int (Int.land ia ↑(2^w - 1 : Nat))) := by
+  simp [lowerOp, evalExpr, ha, evalBinOp]
+
+/-- Soundness for kronUnpackHi: lowering preserves a >> w. -/
+theorem lowerOp_kronUnpackHi_sound (a : EClassId) (w : Nat) (ia : Int) (llEnv : LowLevelEnv)
+    (ha : llEnv (.user s!"w_{a}") = .int ia) :
+    evalExpr llEnv (lowerOp (.kronUnpackHi a w) (fun eid => .varRef (.user s!"w_{eid}"))) =
+    some (.int (Int.shiftRight ia (↑w % 64))) := by
+  simp [lowerOp, evalExpr, ha, evalBinOp]
+
+/-- Soundness for montyReduce: lowering defers to backend (passes through child value). -/
+theorem lowerOp_montyReduce_sound (a : EClassId) (p mu : Nat) (ia : Int) (llEnv : LowLevelEnv)
+    (ha : llEnv (.user s!"w_{a}") = .int ia) :
+    evalExpr llEnv (lowerOp (.montyReduce a p mu) (fun eid => .varRef (.user s!"w_{eid}"))) =
+    some (.int ia) := by
+  simp [lowerOp, ha]
+
+/-- Soundness for barrettReduce: lowering defers to backend (passes through child value). -/
+theorem lowerOp_barrettReduce_sound (a : EClassId) (p m : Nat) (ia : Int) (llEnv : LowLevelEnv)
+    (ha : llEnv (.user s!"w_{a}") = .int ia) :
+    evalExpr llEnv (lowerOp (.barrettReduce a p m) (fun eid => .varRef (.user s!"w_{eid}"))) =
+    some (.int ia) := by
+  simp [lowerOp, ha]
+
+/-- Soundness for harveyReduce: lowering defers to backend (passes through child value). -/
+theorem lowerOp_harveyReduce_sound (a : EClassId) (p : Nat) (ia : Int) (llEnv : LowLevelEnv)
+    (ha : llEnv (.user s!"w_{a}") = .int ia) :
+    evalExpr llEnv (lowerOp (.harveyReduce a p) (fun eid => .varRef (.user s!"w_{eid}"))) =
+    some (.int ia) := by
+  simp [lowerOp, ha]
+
 -- ══════════════════════════════════════════════════════════════════
 -- Section 5: Verified Solinas fold lowering
 -- ══════════════════════════════════════════════════════════════════
