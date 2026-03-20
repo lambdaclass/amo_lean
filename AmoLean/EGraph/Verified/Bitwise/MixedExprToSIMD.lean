@@ -83,6 +83,12 @@ where
       s!"_mm256_and_si256({exprToAVX2 a varName}, _mm256_set1_epi32({2^w - 1}))"
     | .kronUnpackHiE a w =>
       s!"_mm256_srli_epi32({exprToAVX2 a varName}, {w})"
+    | .montyReduceE a p mu =>
+      s!"monty_reduce_avx2({exprToAVX2 a varName}, _mm256_set1_epi32({p}), _mm256_set1_epi32({mu}))"
+    | .barrettReduceE a p m =>
+      s!"barrett_reduce_avx2({exprToAVX2 a varName}, _mm256_set1_epi32({p}), _mm256_set1_epi32({m}))"
+    | .harveyReduceE a p =>
+      s!"harvey_reduce_avx2({exprToAVX2 a varName}, _mm256_set1_epi32({p}))"
 
   exprToNEON (e : MixedExpr) (varName : Nat → String) : String :=
     match e with
@@ -107,6 +113,12 @@ where
       s!"vandq_u32({exprToNEON a varName}, vdupq_n_u32({2^w - 1}))"
     | .kronUnpackHiE a w =>
       s!"vshrq_n_u32({exprToNEON a varName}, {w})"
+    | .montyReduceE a p mu =>
+      s!"monty_reduce_neon({exprToNEON a varName}, vdupq_n_u32({p}), vdupq_n_u32({mu}))"
+    | .barrettReduceE a p m =>
+      s!"barrett_reduce_neon({exprToNEON a varName}, vdupq_n_u32({p}), vdupq_n_u32({m}))"
+    | .harveyReduceE a p =>
+      s!"harvey_reduce_neon({exprToNEON a varName}, vdupq_n_u32({p}))"
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 3: SIMD function emission

@@ -103,6 +103,10 @@ def mixedOpCost (hw : HardwareCost) : MixedNodeOp → Nat
   | .kronPack _ _ _   => 0           -- pack is free (add + shift, handled separately)
   | .kronUnpackLo _ _ => hw.shift    -- mod 2^w costs ~1 cycle (like shift)
   | .kronUnpackHi _ _ => hw.shift    -- div 2^w costs ~1 cycle (like shift)
+  -- Modular reduction alternatives
+  | .montyReduce _ _ _   => montgomeryCost hw  -- 5 ops: AND + mul32 + add + shift + sub
+  | .barrettReduce _ _ _ => hw.mul32 + hw.shift + hw.mul32 + hw.sub + hw.sub + hw.add  -- 6 ops
+  | .harveyReduce _ _    => hw.sub + hw.sub + hw.add  -- 3 ops: cheapest
 
 /-! ## Zero-cost theorems -/
 
@@ -139,6 +143,14 @@ def pseudoMersenneFoldCost (hw : HardwareCost) : Nat :=
 /-- Cost of Montgomery reduction (REDC): AND + mul32 + add + shift + sub (5 ops). -/
 def montgomeryCost (hw : HardwareCost) : Nat :=
   hw.bitAnd + hw.mul32 + hw.add + hw.shift + hw.sub
+
+/-- Cost of Barrett reduction: mul64 + shift + mul32 + sub + conditional sub + add (6 ops). -/
+def barrettCost (hw : HardwareCost) : Nat :=
+  hw.mul32 + hw.shift + hw.mul32 + hw.sub + hw.sub + hw.add
+
+/-- Cost of Harvey conditional subtraction: 2 comparisons + 1-2 conditional subs (3 ops). -/
+def harveyCost (hw : HardwareCost) : Nat :=
+  hw.sub + hw.sub + hw.add
 
 /-! ## Cost comparison theorems -/
 

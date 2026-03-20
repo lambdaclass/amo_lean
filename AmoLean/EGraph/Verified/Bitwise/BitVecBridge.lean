@@ -81,6 +81,10 @@ def evalMixedBV (w : Nat) (op : MixedNodeOp) (env : MixedEnv)
   | .kronPack a b ww  => BitVec.ofNat w ((v a).toNat + (v b).toNat * 2 ^ ww)
   | .kronUnpackLo a ww => BitVec.ofNat w ((v a).toNat % 2 ^ ww)
   | .kronUnpackHi a ww => BitVec.ofNat w ((v a).toNat / 2 ^ ww)
+  -- Modular reduction alternatives: all semantically x % p
+  | .montyReduce a p _mu   => BitVec.ofNat w ((v a).toNat % p)
+  | .barrettReduce a p _m  => BitVec.ofNat w ((v a).toNat % p)
+  | .harveyReduce a p      => BitVec.ofNat w ((v a).toNat % p)
 
 /-! ## Boundedness predicates -/
 
@@ -107,6 +111,9 @@ def ArithNoOverflow (w : Nat) (op : MixedNodeOp) (env : MixedEnv)
   | .kronPack a b ww  => v a + v b * 2 ^ ww < 2 ^ w
   | .kronUnpackLo a ww => v a % 2 ^ ww < 2 ^ w
   | .kronUnpackHi a ww => v a / 2 ^ ww < 2 ^ w
+  | .montyReduce a p _   => v a % p < 2 ^ w
+  | .barrettReduce a p _ => v a % p < 2 ^ w
+  | .harveyReduce a p    => v a % p < 2 ^ w
   | _               => True
 
 /-! ## Lifting: Nat valuation → BitVec valuation -/
@@ -488,6 +495,18 @@ theorem evalMixed_bv_agree_arith (op : MixedNodeOp) (env : MixedEnv)
     have h : v a / 2 ^ ww < 2 ^ w := hno
     rw [BitVec.toNat_ofNat, BitVec.toNat_ofNat, Nat.mod_eq_of_lt (hb a),
         Nat.mod_eq_of_lt h]
+  case montyReduce a p mu =>
+    have h : v a % p < 2 ^ w := hno
+    rw [BitVec.toNat_ofNat, BitVec.toNat_ofNat, Nat.mod_eq_of_lt (hb a),
+        Nat.mod_eq_of_lt h]
+  case barrettReduce a p m =>
+    have h : v a % p < 2 ^ w := hno
+    rw [BitVec.toNat_ofNat, BitVec.toNat_ofNat, Nat.mod_eq_of_lt (hb a),
+        Nat.mod_eq_of_lt h]
+  case harveyReduce a p =>
+    have h : v a % p < 2 ^ w := hno
+    rw [BitVec.toNat_ofNat, BitVec.toNat_ofNat, Nat.mod_eq_of_lt (hb a),
+        Nat.mod_eq_of_lt h]
 
 /-! ## Full bridge (all ops) -/
 
@@ -513,6 +532,9 @@ def OpInBounds (w : Nat) (op : MixedNodeOp) (env : MixedEnv)
   | .kronPack a b ww  => v a + v b * 2 ^ ww < 2 ^ w
   | .kronUnpackLo a ww => v a % 2 ^ ww < 2 ^ w
   | .kronUnpackHi a ww => v a / 2 ^ ww < 2 ^ w
+  | .montyReduce a p _   => v a % p < 2 ^ w
+  | .barrettReduce a p _ => v a % p < 2 ^ w
+  | .harveyReduce a p    => v a % p < 2 ^ w
   | _               => True
 
 /-- **Full bridge**: for ANY MixedNodeOp, if values and environment are in bounds
@@ -602,6 +624,18 @@ theorem evalMixed_bv_agree (op : MixedNodeOp) (env : MixedEnv)
         Nat.mod_eq_of_lt h]
   case kronUnpackHi a ww =>
     have h : v a / 2 ^ ww < 2 ^ w := hop
+    rw [BitVec.toNat_ofNat, BitVec.toNat_ofNat, Nat.mod_eq_of_lt (hb a),
+        Nat.mod_eq_of_lt h]
+  case montyReduce a p mu =>
+    have h : v a % p < 2 ^ w := hop
+    rw [BitVec.toNat_ofNat, BitVec.toNat_ofNat, Nat.mod_eq_of_lt (hb a),
+        Nat.mod_eq_of_lt h]
+  case barrettReduce a p m =>
+    have h : v a % p < 2 ^ w := hop
+    rw [BitVec.toNat_ofNat, BitVec.toNat_ofNat, Nat.mod_eq_of_lt (hb a),
+        Nat.mod_eq_of_lt h]
+  case harveyReduce a p =>
+    have h : v a % p < 2 ^ w := hop
     rw [BitVec.toNat_ofNat, BitVec.toNat_ofNat, Nat.mod_eq_of_lt (hb a),
         Nat.mod_eq_of_lt h]
 
@@ -713,6 +747,12 @@ theorem evalMixed_bv_agree_mod (op : MixedNodeOp) (env : MixedEnv)
   case kronUnpackLo a ww =>
     rw [BitVec.toNat_ofNat, BitVec.toNat_ofNat, Nat.mod_eq_of_lt (hb a)]
   case kronUnpackHi a ww =>
+    rw [BitVec.toNat_ofNat, BitVec.toNat_ofNat, Nat.mod_eq_of_lt (hb a)]
+  case montyReduce a p mu =>
+    rw [BitVec.toNat_ofNat, BitVec.toNat_ofNat, Nat.mod_eq_of_lt (hb a)]
+  case barrettReduce a p m =>
+    rw [BitVec.toNat_ofNat, BitVec.toNat_ofNat, Nat.mod_eq_of_lt (hb a)]
+  case harveyReduce a p =>
     rw [BitVec.toNat_ofNat, BitVec.toNat_ofNat, Nat.mod_eq_of_lt (hb a)]
 
 end AmoLean.EGraph.Verified.Bitwise

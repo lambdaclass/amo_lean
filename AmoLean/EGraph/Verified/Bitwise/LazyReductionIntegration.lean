@@ -83,6 +83,10 @@ def propagateBounds (op : MixedNodeOp) (bg : BoundedEGraph) : Nat :=
   | .kronPack a b w  => bg.getBound a + bg.getBound b * 2 ^ w
   | .kronUnpackLo _ w => 2 ^ w - 1
   | .kronUnpackHi a w => bg.getBound a / 2 ^ w + 1
+  -- Modular reduction alternatives: all produce x % p, so bound is p - 1
+  | .montyReduce _ p _   => if p > 0 then p - 1 else 0
+  | .barrettReduce _ p _ => if p > 0 then p - 1 else 0
+  | .harveyReduce _ p    => if p > 0 then p - 1 else 0
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 3: shouldInsertReduce — decide when reduction is mandatory

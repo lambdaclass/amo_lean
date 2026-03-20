@@ -121,6 +121,15 @@ def addMixedExpr (g : EGraph MixedNodeOp) (expr : MixedExpr)
   | .kronUnpackHiE a w =>
     let (aId, g1) := addMixedExpr g a
     g1.add ⟨.kronUnpackHi aId w⟩
+  | .montyReduceE a p mu =>
+    let (aId, g1) := addMixedExpr g a
+    g1.add ⟨.montyReduce aId p mu⟩
+  | .barrettReduceE a p m =>
+    let (aId, g1) := addMixedExpr g a
+    g1.add ⟨.barrettReduce aId p m⟩
+  | .harveyReduceE a p =>
+    let (aId, g1) := addMixedExpr g a
+    g1.add ⟨.harveyReduce aId p⟩
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 4: Convenience — build from scratch

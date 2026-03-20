@@ -84,6 +84,10 @@ def toCodegenExpr (e : MixedExpr) (constLookup : Nat → Int) : CodegenExpr :=
   | .kronUnpackLoE a w => .binOp .band (toCodegenExpr a constLookup)
                             (.litInt (↑(2 ^ w - 1 : Nat)))
   | .kronUnpackHiE a w => .binOp .bshr (toCodegenExpr a constLookup) (.litInt (↑w))
+  -- Modular reduction variants: all semantically x % p, codegen as function calls
+  | .montyReduceE a _p _mu => toCodegenExpr a constLookup  -- codegen defers to backend
+  | .barrettReduceE a _p _m => toCodegenExpr a constLookup
+  | .harveyReduceE a _p => toCodegenExpr a constLookup
 
 /-! ## Evaluation of CodegenExpr on Int -/
 

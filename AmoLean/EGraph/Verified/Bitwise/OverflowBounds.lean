@@ -81,6 +81,9 @@ def IsBitwiseOnly : MixedExpr → Bool
   | .kronPackE _ _ _ => false
   | .kronUnpackLoE _ _ => false
   | .kronUnpackHiE _ _ => false
+  | .montyReduceE _ _ _ => false
+  | .barrettReduceE _ _ _ => false
+  | .harveyReduceE _ _ => false
 
 /-- All environment values bounded at width w. -/
 def BoundedEnv (env : MixedEnv) (w : Nat) : Prop :=
@@ -123,6 +126,9 @@ theorem evalMixed_bitwise_bounded (e : MixedExpr) (env : MixedEnv) (w : Nat)
   | kronPackE _ _ _ _ _ => simp [IsBitwiseOnly] at hbw
   | kronUnpackLoE _ _ _ => simp [IsBitwiseOnly] at hbw
   | kronUnpackHiE _ _ _ => simp [IsBitwiseOnly] at hbw
+  | montyReduceE _ _ _ _ => simp [IsBitwiseOnly] at hbw
+  | barrettReduceE _ _ _ _ => simp [IsBitwiseOnly] at hbw
+  | harveyReduceE _ _ _ => simp [IsBitwiseOnly] at hbw
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 3: Smoke tests

@@ -51,6 +51,12 @@ def exprToRust (e : MixedExpr) (paramNames : Nat → String := fun n => s!"v{n}"
     s!"({exprToRust a paramNames}).wrapping_add(({exprToRust b paramNames}) << {w})"
   | .kronUnpackLoE a w => s!"({exprToRust a paramNames} & {2^w - 1}_u64)"
   | .kronUnpackHiE a w => s!"({exprToRust a paramNames} >> {w})"
+  | .montyReduceE a p mu =>
+    s!"monty_reduce({exprToRust a paramNames}, {p}_u64, {mu}_u64)"
+  | .barrettReduceE a p m =>
+    s!"barrett_reduce({exprToRust a paramNames}, {p}_u64, {m}_u64)"
+  | .harveyReduceE a p =>
+    s!"harvey_reduce({exprToRust a paramNames}, {p}_u64)"
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 2: Rust function generation

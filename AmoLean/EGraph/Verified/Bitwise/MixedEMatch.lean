@@ -44,6 +44,9 @@ instance : Hashable MixedNodeOp where
     | .kronPack a b w   => mixHash 15 (mixHash (mixHash (hash a) (hash b)) (hash w))
     | .kronUnpackLo a w => mixHash 16 (mixHash (hash a) (hash w))
     | .kronUnpackHi a w => mixHash 17 (mixHash (hash a) (hash w))
+    | .montyReduce a p mu => mixHash 21 (mixHash (mixHash (hash a) (hash p)) (hash mu))
+    | .barrettReduce a p m => mixHash 22 (mixHash (mixHash (hash a) (hash p)) (hash m))
+    | .harveyReduce a p => mixHash 23 (mixHash (hash a) (hash p))
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 1: Pattern and Substitution

@@ -82,6 +82,9 @@ def tempCount : MixedExpr → Nat
   | .kronPackE a b _ => max (tempCount a + 1) (tempCount b + 1)
   | .kronUnpackLoE a _ => tempCount a
   | .kronUnpackHiE a _ => tempCount a
+  | .montyReduceE a _ _ => tempCount a
+  | .barrettReduceE a _ _ => tempCount a
+  | .harveyReduceE a _ => tempCount a
 
 /-! ## Expression-level operation cost (recursive) -/
 
@@ -106,6 +109,9 @@ def exprOpCost (hw : HardwareCost) : MixedExpr → Nat
   | .kronPackE a b _ => 0 + exprOpCost hw a + exprOpCost hw b
   | .kronUnpackLoE a _ => hw.shift + exprOpCost hw a
   | .kronUnpackHiE a _ => hw.shift + exprOpCost hw a
+  | .montyReduceE a _ _ => montgomeryCost hw + exprOpCost hw a
+  | .barrettReduceE a _ _ => barrettCost hw + exprOpCost hw a
+  | .harveyReduceE a _ => harveyCost hw + exprOpCost hw a
 
 /-! ## Spill penalty and enhanced cost -/
 

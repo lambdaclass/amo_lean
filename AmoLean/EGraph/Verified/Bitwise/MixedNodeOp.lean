@@ -70,6 +70,20 @@ inductive MixedNodeOp where
   | kronUnpackLo : EClassId → Nat → MixedNodeOp
   /-- Kronecker unpack high: child / 2^w (extract high element) -/
   | kronUnpackHi : EClassId → Nat → MixedNodeOp
+  -- ═══ Modular reduction alternatives (Fase 22+) ═══
+  /-- Montgomery REDC: montyReduce(x, p, mu) where mu = p^{-1} mod 2^32.
+      Evaluates to: ((x - (x * mu % 2^32) * p) / 2^32) % p
+      Verified: monty_reduce_spec in AmoLean/Field/Montgomery.lean -/
+  | montyReduce : EClassId → Nat → Nat → MixedNodeOp
+  /-- Barrett reduction: barrettReduce(x, p, m) where m ≈ 2^k / p.
+      Evaluates to: x - (x * m / 2^k) * p, then conditional subtract.
+      Verified: barrett_reduce_correct in BitwiseLean/Barrett.lean -/
+  | barrettReduce : EClassId → Nat → Nat → MixedNodeOp
+  /-- Harvey conditional subtraction: harveyReduce(x, p).
+      If x >= 2p: x - 2p. If x >= p: x - p. Else: x.
+      Output in [0, 2p) for input in [0, 4p).
+      Verified: harveyReduce_mod, harveyReduce_bound in LazyReductionSpike_aux.lean -/
+  | harveyReduce : EClassId → Nat → MixedNodeOp
   deriving Repr, DecidableEq
 
 instance : BEq MixedNodeOp := instBEqOfDecidableEq
@@ -98,6 +112,9 @@ instance : Inhabited MixedNodeOp := ⟨.constGate 0⟩
   | .kronPack a b _    => [a, b]
   | .kronUnpackLo a _  => [a]
   | .kronUnpackHi a _  => [a]
+  | .montyReduce a _ _ => [a]
+  | .barrettReduce a _ _ => [a]
+  | .harveyReduce a _  => [a]
 
 /-- Apply a function to all e-class children. -/
 @[simp] def mixedMapChildren (f : EClassId → EClassId) : MixedNodeOp → MixedNodeOp
@@ -119,6 +136,9 @@ instance : Inhabited MixedNodeOp := ⟨.constGate 0⟩
   | .kronPack a b w    => .kronPack (f a) (f b) w
   | .kronUnpackLo a w  => .kronUnpackLo (f a) w
   | .kronUnpackHi a w  => .kronUnpackHi (f a) w
+  | .montyReduce a p mu => .montyReduce (f a) p mu
+  | .barrettReduce a p m => .barrettReduce (f a) p m
+  | .harveyReduce a p  => .harveyReduce (f a) p
 
 /-- Positionally replace children with new e-class IDs. -/
 @[simp] def mixedReplaceChildren (op : MixedNodeOp) (ids : List EClassId) : MixedNodeOp :=
@@ -137,6 +157,9 @@ instance : Inhabited MixedNodeOp := ⟨.constGate 0⟩
   | .kronPack _ _ w, a :: b :: _    => .kronPack a b w
   | .kronUnpackLo _ w, a :: _       => .kronUnpackLo a w
   | .kronUnpackHi _ w, a :: _       => .kronUnpackHi a w
+  | .montyReduce _ p mu, a :: _    => .montyReduce a p mu
+  | .barrettReduce _ p m, a :: _   => .barrettReduce a p m
+  | .harveyReduce _ p, a :: _      => .harveyReduce a p
   | op, _                           => op
 
 /-- Cost model: mul = 1, all others = 0. Extensible for hardware-specific models. -/
@@ -164,6 +187,9 @@ def mixedSimplicity : MixedNodeOp → Nat
   | .kronPack _ _ _   => 15
   | .smulGate _ _     => 16
   | .mulGate _ _      => 17
+  | .harveyReduce _ _ => 18
+  | .montyReduce _ _ _ => 19
+  | .barrettReduce _ _ _ => 20
 
 /-! ## List length helpers -/
 
@@ -206,6 +232,9 @@ instance : NodeOps MixedNodeOp where
     | kronPack a b w => simp at hlen; obtain ⟨x, y, rfl⟩ := list_length_two hlen; rfl
     | kronUnpackLo a w => simp at hlen; obtain ⟨x, rfl⟩ := list_length_one hlen; rfl
     | kronUnpackHi a w => simp at hlen; obtain ⟨x, rfl⟩ := list_length_one hlen; rfl
+    | montyReduce a p mu => simp at hlen; obtain ⟨x, rfl⟩ := list_length_one hlen; rfl
+    | barrettReduce a p m => simp at hlen; obtain ⟨x, rfl⟩ := list_length_one hlen; rfl
+    | harveyReduce a p => simp at hlen; obtain ⟨x, rfl⟩ := list_length_one hlen; rfl
   replaceChildren_sameShape op ids hlen := by
     cases op with
     | constGate _ => simp at hlen; subst hlen; rfl
@@ -226,6 +255,9 @@ instance : NodeOps MixedNodeOp where
     | kronPack a b w => simp at hlen; obtain ⟨x, y, rfl⟩ := list_length_two hlen; rfl
     | kronUnpackLo a w => simp at hlen; obtain ⟨x, rfl⟩ := list_length_one hlen; rfl
     | kronUnpackHi a w => simp at hlen; obtain ⟨x, rfl⟩ := list_length_one hlen; rfl
+    | montyReduce a p mu => simp at hlen; obtain ⟨x, rfl⟩ := list_length_one hlen; rfl
+    | barrettReduce a p m => simp at hlen; obtain ⟨x, rfl⟩ := list_length_one hlen; rfl
+    | harveyReduce a p => simp at hlen; obtain ⟨x, rfl⟩ := list_length_one hlen; rfl
 
 /-! ## Semantics: Evaluation on Nat -/
 
@@ -266,6 +298,20 @@ abbrev MixedEnv := CircuitEnv Nat
   | .kronUnpackLo a w  => v a % 2 ^ w
   -- Kronecker: extract high bits
   | .kronUnpackHi a w  => v a / 2 ^ w
+  -- Modular reduction alternatives
+  | .montyReduce a p _mu =>
+    -- Montgomery REDC: semantically equivalent to x % p
+    -- The mu parameter is for codegen only (determines the algorithm);
+    -- the denotational semantics is simply modular reduction.
+    v a % p
+  | .barrettReduce a p _m =>
+    -- Barrett reduction: semantically equivalent to x % p
+    -- The m parameter is for codegen only (precomputed ≈ 2^k/p).
+    v a % p
+  | .harveyReduce a p =>
+    -- Harvey conditional subtraction: semantically equivalent to x % p
+    -- Output is in [0, 2p) for input in [0, 4p), but denotationally = x % p.
+    v a % p
 
 /-! ## NodeSemantics Instance -/
 
@@ -334,6 +380,18 @@ instance : NodeSemantics MixedNodeOp MixedEnv Nat where
       congr 1
       exact h a (by simp [NodeOps.children, mixedChildren])
     | kronUnpackHi a w =>
+      simp only [evalMixedOp]
+      congr 1
+      exact h a (by simp [NodeOps.children, mixedChildren])
+    | montyReduce a p mu =>
+      simp only [evalMixedOp]
+      congr 1
+      exact h a (by simp [NodeOps.children, mixedChildren])
+    | barrettReduce a p m =>
+      simp only [evalMixedOp]
+      congr 1
+      exact h a (by simp [NodeOps.children, mixedChildren])
+    | harveyReduce a p =>
       simp only [evalMixedOp]
       congr 1
       exact h a (by simp [NodeOps.children, mixedChildren])
@@ -412,6 +470,9 @@ def isAlgebraic : MixedNodeOp → Bool
   | .kronPack _ _ _   => true
   | .kronUnpackLo _ _ => true
   | .kronUnpackHi _ _ => true
+  | .montyReduce _ _ _ => true
+  | .barrettReduce _ _ _ => true
+  | .harveyReduce _ _ => true
   | _                 => false
 
 /-- Every MixedNodeOp is either algebraic or bitwise. -/

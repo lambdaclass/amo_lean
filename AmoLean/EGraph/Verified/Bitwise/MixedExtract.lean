@@ -55,6 +55,9 @@ inductive MixedExpr where
   | kronPackE   (a b : MixedExpr) (w : Nat)
   | kronUnpackLoE (a : MixedExpr) (w : Nat)
   | kronUnpackHiE (a : MixedExpr) (w : Nat)
+  | montyReduceE  (a : MixedExpr) (p : Nat) (mu : Nat)
+  | barrettReduceE (a : MixedExpr) (p : Nat) (m : Nat)
+  | harveyReduceE (a : MixedExpr) (p : Nat)
 
 /-! ## Extractable Instance -/
 
@@ -80,6 +83,9 @@ inductive MixedExpr where
   | .kronPack _ _ w, [a, b] => some (.kronPackE a b w)
   | .kronUnpackLo _ w, [a] => some (.kronUnpackLoE a w)
   | .kronUnpackHi _ w, [a] => some (.kronUnpackHiE a w)
+  | .montyReduce _ p mu, [a] => some (.montyReduceE a p mu)
+  | .barrettReduce _ p m, [a] => some (.barrettReduceE a p m)
+  | .harveyReduce _ p, [a] => some (.harveyReduceE a p)
   | _, _                   => none
 
 instance : Extractable MixedNodeOp MixedExpr where
@@ -108,6 +114,9 @@ instance : Extractable MixedNodeOp MixedExpr where
   | .kronPackE a b w => a.eval env + b.eval env * 2 ^ w
   | .kronUnpackLoE a w => a.eval env % 2 ^ w
   | .kronUnpackHiE a w => a.eval env / 2 ^ w
+  | .montyReduceE a p _mu => a.eval env % p
+  | .barrettReduceE a p _m => a.eval env % p
+  | .harveyReduceE a p => a.eval env % p
 
 instance : EvalExpr MixedExpr MixedEnv Nat where
   evalExpr e env := e.eval env
@@ -272,6 +281,33 @@ theorem mixed_extractable_sound :
       hchildren 0 (by omega) (by simp [NodeOps.children, mixedChildren])
     rw [h0]
   | kronUnpackHi a w =>
+    simp [NodeOps.children, mixedChildren] at hlen
+    obtain ⟨x, rfl⟩ := list_length_one hlen
+    simp [Extractable.reconstruct, mixedReconstruct] at hrec
+    subst hrec
+    simp only [EvalExpr.evalExpr, MixedExpr.eval, NodeSemantics.evalOp, evalMixedOp]
+    have h0 : x.eval env = v a :=
+      hchildren 0 (by omega) (by simp [NodeOps.children, mixedChildren])
+    rw [h0]
+  | montyReduce a p mu =>
+    simp [NodeOps.children, mixedChildren] at hlen
+    obtain ⟨x, rfl⟩ := list_length_one hlen
+    simp [Extractable.reconstruct, mixedReconstruct] at hrec
+    subst hrec
+    simp only [EvalExpr.evalExpr, MixedExpr.eval, NodeSemantics.evalOp, evalMixedOp]
+    have h0 : x.eval env = v a :=
+      hchildren 0 (by omega) (by simp [NodeOps.children, mixedChildren])
+    rw [h0]
+  | barrettReduce a p m =>
+    simp [NodeOps.children, mixedChildren] at hlen
+    obtain ⟨x, rfl⟩ := list_length_one hlen
+    simp [Extractable.reconstruct, mixedReconstruct] at hrec
+    subst hrec
+    simp only [EvalExpr.evalExpr, MixedExpr.eval, NodeSemantics.evalOp, evalMixedOp]
+    have h0 : x.eval env = v a :=
+      hchildren 0 (by omega) (by simp [NodeOps.children, mixedChildren])
+    rw [h0]
+  | harveyReduce a p =>
     simp [NodeOps.children, mixedChildren] at hlen
     obtain ⟨x, rfl⟩ := list_length_one hlen
     simp [Extractable.reconstruct, mixedReconstruct] at hrec
