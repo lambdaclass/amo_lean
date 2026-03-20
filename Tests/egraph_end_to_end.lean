@@ -33,6 +33,18 @@ def main : IO Unit := do
   writeAllTargets "generated/unified_m31" 4096 mersenne31_prime
 
   IO.println ""
+
+  -- Show Goldilocks selection
+  IO.println "Goldilocks strategy selection:"
+  let glCfg := selectConfig arm_neon_simd goldilocks_prime
+  IO.println s!"  Even with NEON target: mode={toString glCfg.mode}, reduction={toString glCfg.reduction}, wordSize=u{glCfg.wordSize}"
+  IO.println "  (64-bit field → scalar mode forced, Solinas fold, u64 arrays)"
+  IO.println ""
+
+  IO.println "Generating NTT code for Goldilocks N=4096..."
+  writeAllTargets "generated/unified_gl" 4096 goldilocks_prime
+
+  IO.println ""
   IO.println "Done. Compile and benchmark:"
-  IO.println "  cc -O2 -o ntt_scalar generated/unified/ntt_scalar_arm.c && ./ntt_scalar"
-  IO.println "  cc -O2 -o ntt_neon generated/unified/ntt_simd_neon.c && ./ntt_neon"
+  IO.println "  cc -O2 -o ntt_neon generated/unified/ntt_simd_neon.c   # BabyBear NEON"
+  IO.println "  cc -O2 -o ntt_gl generated/unified_gl/ntt_scalar_arm.c # Goldilocks scalar"

@@ -134,15 +134,22 @@ structure CodeGenConfig where
 
 /-- Select CodeGenConfig from HardwareCost (the e-graph's output). -/
 def selectConfig (hw : HardwareCost) (p : Nat) : CodeGenConfig :=
-  let mode := if hw.isSimd then
-    (if hw.simdLanes == 8 then .simdAVX2 else .simdNEON)
-  else .scalar
-  let reduction := if hw.isSimd then .montgomery else .solinasFold
-  let (k, c, mu) :=
-    if p == babybear_prime then (31, 2^27 - 1, 0x88000001)
-    else if p == mersenne31_prime then (31, 1, 0x80000001)
-    else (31, 1, 0)  -- default
-  { mode, reduction, wordSize := 32, prime := p,
+  let isGoldilocks := p == goldilocks_prime
+  -- Goldilocks (64-bit) forces scalar mode — NEON u64 multiply is too expensive
+  let mode := if isGoldilocks then .scalar
+    else if hw.isSimd then
+      (if hw.simdLanes == 8 then .simdAVX2 else .simdNEON)
+    else .scalar
+  -- Goldilocks uses Solinas fold (specialized reduce128)
+  let reduction := if isGoldilocks then .solinasFold
+    else if hw.isSimd then .montgomery
+    else .solinasFold
+  let (k, c, mu, ws) :=
+    if p == babybear_prime then (31, 2^27 - 1, 0x88000001, 32)
+    else if p == mersenne31_prime then (31, 1, 0x80000001, 32)
+    else if isGoldilocks then (64, 2^32 - 1, 0x100000001, 64)
+    else (31, 1, 0, 32)  -- default
+  { mode, reduction, wordSize := ws, prime := p,
     shiftBits := k, foldConst := c, montyMu := mu }
 
 -- ══════════════════════════════════════════════════════════════════
@@ -364,7 +371,9 @@ def generateNTT (hw : HardwareCost) (n p : Nat)
   -- Generate the butterfly function
   let bfCode := match cfg.reduction, cfg.mode with
     | .solinasFold, .scalar =>
-      s!"static inline uint32_t solinas_fold(uint64_t x) \{
+      if cfg.wordSize ≤ 32 then
+        -- 31-bit fields (BabyBear, Mersenne31, KoalaBear): u32 arrays, u64 products
+        s!"static inline uint32_t solinas_fold(uint64_t x) \{
     return (uint32_t)(((x >> {cfg.shiftBits}) * {cfg.foldConst}U) + (x & {2^cfg.shiftBits - 1}U));
 }
 
@@ -373,6 +382,41 @@ static inline void butterfly(uint32_t *a, uint32_t *b, uint32_t w) \{
     uint32_t wb = solinas_fold((uint64_t)w * (uint64_t)(*b));
     *a = solinas_fold((uint64_t)orig_a + (uint64_t)wb);
     *b = solinas_fold((uint64_t){p}U + (uint64_t)orig_a - (uint64_t)wb);
+}
+"
+      else
+        -- 64-bit fields (Goldilocks): u64 arrays, u128 products
+        -- Reduction: 2^64 ≡ 2^32-1 (mod p), so split at bit 64
+        -- hi * (2^32-1) + lo ≡ x (mod p)
+        -- Plonky3 pattern: reduce128(x) with overflowing_sub + conditional add
+        s!"#define GOLDILOCKS_P 0xFFFFFFFF00000001ULL
+#define NEG_ORDER 0xFFFFFFFFULL
+
+static inline uint64_t goldilocks_reduce128(__uint128_t x) \{
+    uint64_t x_lo = (uint64_t)x;
+    uint64_t x_hi = (uint64_t)(x >> 64);
+    uint64_t x_hi_hi = x_hi >> 32;
+    uint64_t x_hi_lo = x_hi & NEG_ORDER;
+    /* t0 = x_lo - x_hi_hi (with borrow handling) */
+    uint64_t t0;
+    int borrow = __builtin_sub_overflow(x_lo, x_hi_hi, &t0);
+    if (borrow) t0 -= NEG_ORDER;
+    /* t1 = x_hi_lo * NEG_ORDER */
+    uint64_t t1 = x_hi_lo * NEG_ORDER;
+    /* result = t0 + t1 (with carry handling) */
+    uint64_t result;
+    int carry = __builtin_add_overflow(t0, t1, &result);
+    if (carry || result >= GOLDILOCKS_P) result -= GOLDILOCKS_P;
+    return result;
+}
+
+static inline void butterfly(uint64_t *a, uint64_t *b, uint64_t w) \{
+    uint64_t orig_a = *a;
+    uint64_t wb = goldilocks_reduce128((__uint128_t)w * (__uint128_t)(*b));
+    __uint128_t sum128 = (__uint128_t)orig_a + (__uint128_t)wb;
+    *a = goldilocks_reduce128(sum128);
+    __uint128_t diff128 = (__uint128_t)GOLDILOCKS_P + (__uint128_t)orig_a - (__uint128_t)wb;
+    *b = goldilocks_reduce128(diff128);
 }
 "
     | .montgomery, .simdNEON =>
@@ -413,7 +457,7 @@ static inline uint32_t reduce_fallback(uint64_t x) \{
   -- Generate the NTT function
   let elemType := match cfg.mode with
     | .simdNEON => "int32_t"
-    | _ => "uint32_t"
+    | _ => if cfg.wordSize ≤ 32 then "uint32_t" else "uint64_t"
   let stride := match cfg.mode with
     | .simdNEON => "4"
     | .simdAVX2 => "8"
@@ -486,5 +530,14 @@ example : (selectConfig arm_cortex_a76 babybear_prime).mode = .scalar := rfl
 
 /-- Smoke: AVX2 selects SIMD mode. -/
 example : (selectConfig x86_avx2_simd babybear_prime).mode = .simdAVX2 := rfl
+
+/-- Smoke: Goldilocks forces scalar mode (64-bit, no SIMD benefit). -/
+example : (selectConfig arm_neon_simd goldilocks_prime).mode = .scalar := rfl
+
+/-- Smoke: Goldilocks uses Solinas fold (not Montgomery). -/
+example : (selectConfig arm_neon_simd goldilocks_prime).reduction = .solinasFold := rfl
+
+/-- Smoke: Goldilocks uses 64-bit word size. -/
+example : (selectConfig arm_cortex_a76 goldilocks_prime).wordSize = 64 := rfl
 
 end AmoLean.EGraph.Verified.Bitwise.UnifiedCodeGen
