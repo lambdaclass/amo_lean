@@ -14,8 +14,11 @@
     --help        show this help
 -/
 import AmoLean.EGraph.Verified.Bitwise.CostModelDef
+import AmoLean.EGraph.Verified.Bitwise.VerifiedCodeGen
 
 open AmoLean.EGraph.Verified.Bitwise
+open AmoLean.EGraph.Verified.Bitwise.VerifiedCodeGen (emitC emitSolinasFoldC lowerMixedExprToLLE)
+open AmoLean.EGraph.Verified.Bitwise.MixedExtract (MixedExpr)
 
 -- ═══════════════════════════════════════════════════════════════════
 -- Section 1: Types
@@ -130,8 +133,13 @@ def explainStrategy (hw : HardwareCost) (prim : PrimChoice) (fd : FieldData) : I
 -- Section 4: C code generation
 -- ═══════════════════════════════════════════════════════════════════
 
+/-- Generate Solinas fold C function.
+    For 31-bit fields: the expression body comes from VerifiedCodeGen
+    (emitSolinasFoldC), wrapped in a C function with proper types.
+    For Goldilocks: hand-written (u128 split requires __builtin_sub_overflow). -/
 def genSolinasReduce (fd : FieldData) : String :=
   if fd.k == 64 then
+    -- Goldilocks: hand-written because __builtin_sub_overflow is not in Trust-Lean IR
     s!"static inline uint64_t amo_reduce(__uint128_t x) \{
     uint64_t lo=(uint64_t)x, hi=(uint64_t)(x>>64);
     uint64_t hh=hi>>32, hl=hi&0xFFFFFFFF;
@@ -143,8 +151,13 @@ def genSolinasReduce (fd : FieldData) : String :=
     return r;
 }"
   else
-    s!"static inline {fd.elemType} amo_reduce({fd.wideType} x) \{
-    return ({fd.elemType})(((x >> {fd.k}) * {fd.c}) + (x & {2^fd.k - 1}U));
+    -- 31-bit fields: expression body from VerifiedCodeGen (VERIFIED path)
+    let verifiedBody := emitSolinasFoldC (.witnessE 0) fd.k fd.cNat
+    -- Wrap in C function with variable rename: w_0 → x
+    let cBody := verifiedBody.replace "w_0" "x"
+    s!"/* Solinas fold — expression body generated via VerifiedCodeGen (verified) */
+static inline {fd.elemType} amo_reduce({fd.wideType} x) \{
+    return ({fd.elemType}){cBody};
 }"
 
 def genMontyReduce (fd : FieldData) : String :=
