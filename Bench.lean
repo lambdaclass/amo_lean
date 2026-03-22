@@ -284,6 +284,175 @@ int main(void) \{
 }"
 
 -- ═══════════════════════════════════════════════════════════════════
+-- Section 4b: Rust code generation
+-- ═══════════════════════════════════════════════════════════════════
+
+def genSolinasReduceRust (fd : FieldData) : String :=
+  if fd.k == 64 then
+    s!"#[inline(always)]
+fn amo_reduce(x: u128) -> u64 \{
+    let lo = x as u64;
+    let hi = (x >> 64) as u64;
+    let hh = hi >> 32;
+    let hl = hi & 0xFFFFFFFF_u64;
+    let (t0, borrow) = lo.overflowing_sub(hh);
+    let t0 = if borrow \{ t0.wrapping_sub(0xFFFFFFFF_u64) } else \{ t0 };
+    let t1 = hl.wrapping_mul(0xFFFFFFFF_u64);
+    let (result, carry) = t0.overflowing_add(t1);
+    if carry || result >= {fd.pNat}_u64 \{ result.wrapping_sub({fd.pNat}_u64) } else \{ result }
+}"
+  else
+    s!"#[inline(always)]
+fn amo_reduce(x: u64) -> u64 \{
+    (x >> {fd.k}).wrapping_mul({fd.cNat}_u64).wrapping_add(x & {2^fd.k - 1}_u64)
+}"
+
+def genMontyReduceRust (fd : FieldData) : String :=
+  if fd.k == 64 then
+    s!"#[inline(always)]
+fn p3_reduce(x: u128) -> u64 \{
+    let lo = x as u64;
+    let hi = (x >> 64) as u64;
+    let hh = hi >> 32;
+    let hl = hi & 0xFFFFFFFF_u64;
+    let (t0, borrow) = lo.overflowing_sub(hh);
+    let t0 = if borrow \{ t0.wrapping_sub(0xFFFFFFFF_u64) } else \{ t0 };
+    let t1 = hl.wrapping_mul(0xFFFFFFFF_u64);
+    let (result, carry) = t0.overflowing_add(t1);
+    if carry || result >= {fd.pNat}_u64 \{ result.wrapping_sub({fd.pNat}_u64) } else \{ result }
+}"
+  else
+    let muNat := fd.mu.replace "0x" "" |>.replace "U" ""
+    s!"#[inline(always)]
+fn p3_reduce(x: u64) -> u32 \{
+    let t = x.wrapping_mul(0x{muNat}_u64) as u32;
+    let u = t as u64 * {fd.pNat}_u64;
+    let d = x.wrapping_sub(u);
+    let hi = (d >> 32) as u32;
+    if x < u \{ hi.wrapping_add({fd.pNat}_u32) } else \{ hi }
+}"
+
+def genNTTBenchRust (fd : FieldData) (logN iters : Nat) : String :=
+  let n := 2^logN
+  let (et, wt) := if fd.k == 64 then ("u64", "u128") else ("u32", "u64")
+  let pLit := if fd.k == 64 then s!"{fd.pNat}_u64" else s!"{fd.pNat}_u32"
+  let twMod := if fd.k == 64 then s!"{fd.pNat}_u128" else s!"{fd.pNat}_u64"
+  let dataMod := if fd.k == 64 then s!"{fd.pNat}_u128" else s!"{fd.pNat}_u64"
+  s!"use std::time::Instant;
+
+{genSolinasReduceRust fd}
+
+#[inline(always)]
+fn amo_bf(a: &mut {et}, b: &mut {et}, w: {et}) \{{if fd.k == 64 then s!"
+    let oa = *a; let wb = amo_reduce(w as u128 * *b as u128);
+    let (s, ov) = oa.overflowing_add(wb);
+    *a = if ov || s >= {pLit} \{ s.wrapping_sub({pLit}) } else \{ s };
+    *b = if oa >= wb \{ oa - wb } else \{ {pLit} - wb + oa };"
+  else s!"
+    let oa = *a; let wb = amo_reduce(w as u64 * *b as u64) as u32;
+    *a = amo_reduce(oa as u64 + wb as u64) as u32;
+    *b = amo_reduce({fd.pNat}_u64 + oa as u64 - wb as u64) as u32;"}
+}
+
+{genMontyReduceRust fd}
+
+#[inline(always)]
+fn p3_bf(a: &mut {et}, b: &mut {et}, w: {et}) \{{if fd.k == 64 then s!"
+    let oa = *a; let wb = p3_reduce(w as u128 * *b as u128);
+    let (s, ov) = oa.overflowing_add(wb);
+    *a = if ov || s >= {pLit} \{ s.wrapping_sub({pLit}) } else \{ s };
+    *b = if oa >= wb \{ oa - wb } else \{ {pLit} - wb + oa };"
+  else s!"
+    let oa = *a; let wb = p3_reduce(w as u64 * *b as u64);
+    let s = oa.wrapping_add(wb);
+    *a = if s >= {fd.pNat}_u32 \{ s - {fd.pNat}_u32 } else \{ s };
+    *b = if oa >= wb \{ oa - wb } else \{ {fd.pNat}_u32 - wb + oa };"}
+}
+
+" ++
+  -- Main body built with ++ to avoid `let` keyword conflicts in s!"..."
+  "fn main() {\n" ++
+  s!"    let n: usize = {n};\n" ++
+  s!"    let logn: usize = {logN};\n" ++
+  s!"    let iters: usize = {iters};\n" ++
+  "    let tw_sz = n * logn;\n" ++
+  s!"    let tw: Vec<{et}> = (0..tw_sz).map(|i| ((i as {wt} * 7 + 31) % {twMod}) as {et}).collect();\n" ++
+  s!"    let orig: Vec<{et}> = (0..n).map(|i| ((i as {wt} * 1000000007) % {dataMod}) as {et}).collect();\n" ++
+  "    let mut d = orig.clone();\n" ++
+  "    for st in 0..logn { let h = 1usize << (logn-st-1);\n" ++
+  "      for g in 0..(1usize<<st) { for p in 0..h {\n" ++
+  "        let i=g*2*h+p; let j=i+h; let w=tw[(st*(n/2)+g*h+p)%tw_sz];\n" ++
+  "        let (l,r) = d.split_at_mut(j); amo_bf(&mut l[i], &mut r[0], w);\n" ++
+  "      }}}\n" ++
+  "    std::hint::black_box(&d);\n" ++
+  "    let start = std::time::Instant::now();\n" ++
+  "    for _ in 0..iters {\n" ++
+  "      let mut d = orig.clone();\n" ++
+  "      for st in 0..logn { let h = 1usize << (logn-st-1);\n" ++
+  "        for g in 0..(1usize<<st) { for p in 0..h {\n" ++
+  "          let i=g*2*h+p; let j=i+h; let w=tw[(st*(n/2)+g*h+p)%tw_sz];\n" ++
+  "          let (l,r) = d.split_at_mut(j); amo_bf(&mut l[i], &mut r[0], w);\n" ++
+  "        }}}\n" ++
+  "      std::hint::black_box(&d);\n" ++
+  "    }\n" ++
+  "    let amo_us = start.elapsed().as_secs_f64() / iters as f64 * 1e6;\n" ++
+  "    let start = std::time::Instant::now();\n" ++
+  "    for _ in 0..iters {\n" ++
+  "      let mut d = orig.clone();\n" ++
+  "      for st in 0..logn { let h = 1usize << (logn-st-1);\n" ++
+  "        for g in 0..(1usize<<st) { for p in 0..h {\n" ++
+  "          let i=g*2*h+p; let j=i+h; let w=tw[(st*(n/2)+g*h+p)%tw_sz];\n" ++
+  "          let (l,r) = d.split_at_mut(j); p3_bf(&mut l[i], &mut r[0], w);\n" ++
+  "        }}}\n" ++
+  "      std::hint::black_box(&d);\n" ++
+  "    }\n" ++
+  "    let p3_us = start.elapsed().as_secs_f64() / iters as f64 * 1e6;\n" ++
+  s!"    let melem = {n}_f64 / (amo_us / 1e6) / 1e6;\n" ++
+  "    println!(\"{:.1},{:.1},{:.1},{:+.1}\", amo_us, p3_us, melem, (1.0 - amo_us/p3_us)*100.0);\n" ++
+  "}\n"
+
+def genLinearBenchRust (fd : FieldData) (prim : PrimChoice) (logN iters : Nat) : String :=
+  let n := 2^logN
+  let (et, wt) := if fd.k == 64 then ("u64", "u128") else ("u32", "u64")
+  let pLit := if fd.k == 64 then s!"{fd.pNat}_u64" else s!"{fd.pNat}_u32"
+  let dataMod := if fd.k == 64 then s!"{fd.pNat}_u128" else s!"{fd.pNat}_u64"
+  let castSuffix := if fd.k == 64 then "" else " as u32"
+  let innerLoop := match prim with
+    | .poly =>
+      "for i in 0..n { let mut ac: " ++ et ++ " = co[7];\n" ++
+      "            for j in (1..=7).rev() { ac = p3_reduce(a[i] as " ++ wt ++ " * ac as " ++ wt ++ ")" ++ castSuffix ++ ";\n" ++
+      "              let sm = co[j-1].wrapping_add(ac); ac = if sm >= " ++ pLit ++ " { sm - " ++ pLit ++ " } else { sm }; }\n" ++
+      "            std::hint::black_box(ac); }"
+    | .fri =>
+      "for i in 0..n { let pr = p3_reduce(42_" ++ wt ++ " * b[i] as " ++ wt ++ ")" ++ castSuffix ++ ";\n" ++
+      "            let sm = a[i].wrapping_add(pr); r[i] = if sm >= " ++ pLit ++ " { sm - " ++ pLit ++ " } else { sm }; }\n" ++
+      "          std::hint::black_box(r[n/2]);"
+    | .dot =>
+      "{ let mut ac: " ++ et ++ " = 0; for i in 0..n {\n" ++
+      "            let pr = p3_reduce(a[i] as " ++ wt ++ " * b[i] as " ++ wt ++ ")" ++ castSuffix ++ ";\n" ++
+      "            let sm = ac.wrapping_add(pr); ac = if sm >= " ++ pLit ++ " { sm - " ++ pLit ++ " } else { sm }; }\n" ++
+      "          std::hint::black_box(ac); }"
+    | .ntt => ""
+  "use std::time::Instant;\n\n" ++
+  genMontyReduceRust fd ++ "\n\n" ++
+  "fn main() {\n" ++
+  s!"    let n: usize = {n};\n" ++
+  s!"    let iters: usize = {iters};\n" ++
+  s!"    let a: Vec<{et}> = (0..n).map(|i| ((i as {wt} * 1000000007) % {dataMod}) as {et}).collect();\n" ++
+  s!"    let b: Vec<{et}> = (0..n).map(|i| ((i as {wt} * 999999937) % {dataMod}) as {et}).collect();\n" ++
+  s!"    let mut r: Vec<{et}> = vec![0; n];\n" ++
+  s!"    let co: [{et}; 8] = [42,17,99,3,55,7,13,1];\n" ++
+  "    " ++ innerLoop ++ "\n" ++
+  "    let start = Instant::now();\n" ++
+  "    for _ in 0..iters {\n" ++
+  "      " ++ innerLoop ++ "\n" ++
+  "    }\n" ++
+  "    let amo_us = start.elapsed().as_secs_f64() / iters as f64 * 1e6;\n" ++
+  s!"    let melem = {n}_f64 / (amo_us / 1e6) / 1e6;\n" ++
+  "    println!(\"{:.1},{:.1},{:.1},+0.0\", amo_us, amo_us, melem);\n" ++
+  "}\n"
+
+-- ═══════════════════════════════════════════════════════════════════
 -- Section 5: Compile + Run + Parse
 -- ═══════════════════════════════════════════════════════════════════
 
@@ -537,7 +706,26 @@ def main (args : List String) : IO Unit := do
             else
               IO.println s!"  {fd.name}  2^{logN}  {langStr}  PARSE ERROR: {run.stdout.trim}"
           else
-            IO.println s!"  {fd.name}  2^{logN}  {langStr}  (Rust: not yet in bencher)"
+            let code := match prim with
+              | .ntt => genNTTBenchRust fd logN iters
+              | _ => genLinearBenchRust fd prim logN iters
+            IO.FS.writeFile ⟨"/tmp/amobench.rs"⟩ code
+            let comp ← IO.Process.output { cmd := "rustc", args := #["-O", "/tmp/amobench.rs", "-o", "/tmp/amobench_rs"] }
+            if comp.exitCode != 0 then
+              IO.println s!"  {fd.name}  2^{logN}  {langStr}  COMPILE ERROR"
+              IO.eprintln s!"    {comp.stderr.take 200}"
+              continue
+            let run ← IO.Process.output { cmd := "/tmp/amobench_rs" }
+            let parts := run.stdout.trim.splitOn ","
+            if h : parts.length ≥ 4 then
+              let amo := parts[0]'(by omega)
+              let p3 := parts[1]'(by omega)
+              let melem := parts[2]'(by omega)
+              let diff := parts[3]'(by omega)
+              let pad := String.mk (List.replicate (12 - fd.name.length) ' ')
+              IO.println s!"  {fd.name}{pad} 2^{logN}   {langStr}  {amo} us   {p3} us   {melem}   {diff}%"
+            else
+              IO.println s!"  {fd.name}  2^{logN}  {langStr}  PARSE ERROR: {run.stdout.trim}"
 
     IO.println ""
 
