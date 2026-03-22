@@ -243,7 +243,7 @@ def genLinearBenchC (fd : FieldData) (prim : PrimChoice) (logN iters : Nat) : St
   let n := 2^logN
   -- For non-NTT primitives, both sides use Montgomery+1br (same algorithm)
   let reduceFn := genMontyReduce fd
-  let amoRedName := if fd.k == 64 then "amo_reduce" else "p3_reduce"
+  let amoRedName := "p3_reduce"  -- always p3_reduce: for linear prims both sides use same algo
   let innerLoop := match prim with
     | .poly => s!"for(size_t i=0;i<n;i++) \{ {fd.elemType} ac=co[7];
             for(int j=7;j>0;j--) \{ ac={amoRedName}(({fd.wideType})a[i]*({fd.wideType})ac);
