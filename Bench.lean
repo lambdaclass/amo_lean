@@ -148,7 +148,18 @@ def genSolinasReduce (fd : FieldData) : String :=
 }"
 
 def genMontyReduce (fd : FieldData) : String :=
-  if fd.k == 64 then genSolinasReduce fd  -- Goldilocks uses same reduce for both
+  if fd.k == 64 then
+    -- Goldilocks: same algorithm, but named p3_reduce to avoid duplicate
+    s!"static inline uint64_t p3_reduce(__uint128_t x) \{
+    uint64_t lo=(uint64_t)x, hi=(uint64_t)(x>>64);
+    uint64_t hh=hi>>32, hl=hi&0xFFFFFFFF;
+    uint64_t t0; int borrow=__builtin_sub_overflow(lo,hh,&t0);
+    if(borrow) t0-=0xFFFFFFFF;
+    uint64_t t1=hl*0xFFFFFFFF;
+    uint64_t r; int carry=__builtin_add_overflow(t0,t1,&r);
+    if(carry||r>={fd.p}) r-={fd.p};
+    return r;
+}"
   else
     s!"static inline {fd.elemType} p3_reduce({fd.wideType} x) \{
     {fd.wideType} t=(x*({fd.wideType}){fd.mu})&0xFFFFFFFF;
@@ -167,17 +178,22 @@ def genNTTBenchC (fd : FieldData) (logN iters : Nat) : String :=
 
 {genSolinasReduce fd}
 
-static inline void amo_bf({fd.elemType} *a, {fd.elemType} *b, {fd.elemType} w) \{
+static inline void amo_bf({fd.elemType} *a, {fd.elemType} *b, {fd.elemType} w) \{{if fd.k == 64 then s!"
+    /* Goldilocks: amo_reduce for twiddle mul, conditional subtract for sum/diff */
+    {fd.elemType} oa=*a, wb=amo_reduce(({fd.wideType})w*({fd.wideType})(*b));
+    {fd.elemType} s=oa+wb; *a=(s>={fd.p}||s<oa)?s-{fd.p}:s;
+    *b=(oa>=wb)?oa-wb:{fd.p}-wb+oa;"
+  else s!"
     {fd.elemType} oa=*a, wb=amo_reduce(({fd.wideType})w*({fd.wideType})(*b));
     *a=amo_reduce(({fd.wideType})oa+({fd.wideType})wb);
-    *b=amo_reduce(({fd.wideType}){fd.p}+({fd.wideType})oa-({fd.wideType})wb);
+    *b=amo_reduce(({fd.wideType}){fd.p}+({fd.wideType})oa-({fd.wideType})wb);"}
 }
 
 {genMontyReduce fd}
 
 static inline void p3_bf({fd.elemType} *a, {fd.elemType} *b, {fd.elemType} w) \{
     {fd.elemType} oa=*a, wb=p3_reduce(({fd.wideType})w*({fd.wideType})(*b));
-    {fd.elemType} s=oa+wb; *a=(s>={fd.p})?s-{fd.p}:s;
+    {fd.elemType} s=oa+wb; {if fd.k == 64 then s!"*a=(s>={fd.p}||s<oa)?s-{fd.p}:s;" else s!"*a=(s>={fd.p})?s-{fd.p}:s;"}
     *b=(oa>=wb)?oa-wb:{fd.p}-wb+oa;
 }
 
