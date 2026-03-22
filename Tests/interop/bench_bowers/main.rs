@@ -9,6 +9,7 @@
 
 use std::time::Instant;
 
+use p3_baby_bear::BabyBear;
 use p3_koala_bear::KoalaBear;
 use p3_goldilocks::Goldilocks;
 use p3_dft::{Radix2Bowers, TwoAdicSubgroupDft};
@@ -22,8 +23,12 @@ use rand::rngs::SmallRng;
 // AMO-Lean Bowers NTT: Solinas fold + DIF butterfly + Bowers ordering
 // ═══════════════════════════════════════════════════════════════════
 
+const BB_P: u32 = 0x78000001;  // BabyBear
+const BB_C: u32 = 134217727;   // 2^27 - 1
 const KB_P: u32 = 0x7F000001;  // KoalaBear
 const KB_C: u32 = 16777215;    // 2^24 - 1
+const M31_P: u32 = 0x7FFFFFFF; // Mersenne31
+const M31_C: u32 = 1;          // 2^1 - 1
 
 const GL_P: u64 = 0xFFFFFFFF00000001;
 
@@ -93,6 +98,64 @@ fn compute_bowers_twiddles_u64(n: usize, p: u64, generator: u64) -> Vec<u64> {
         .collect();
     bit_reverse(&mut tw);
     tw
+}
+
+/// AMO-Lean Bowers NTT for any 31-bit Solinas prime.
+fn amo_bowers_u32(data: &mut [u32], twiddles_br: &[u32], p: u32, c: u32) {
+    let n = data.len();
+    let log_n = n.trailing_zeros() as usize;
+    bit_reverse(data);
+    for log_half in 0..log_n {
+        let half = 1usize << log_half;
+        let block_size = 2 * half;
+        let num_blocks = n / block_size;
+        for block in 0..num_blocks {
+            let w = if block == 0 { 1u32 } else { twiddles_br[block] };
+            let base = block * block_size;
+            for j in 0..half {
+                let i0 = base + j;
+                let i1 = i0 + half;
+                let a = data[i0];
+                let b = data[i1];
+                data[i0] = solinas(a as u64 + b as u64, c);
+                let diff = solinas(p as u64 + a as u64 - b as u64, c);
+                data[i1] = solinas(diff as u64 * w as u64, c);
+            }
+        }
+    }
+}
+
+/// Generic benchmark for any 31-bit field vs Plonky3 Bowers.
+fn bench_u32_field<F: p3_field::TwoAdicField + PrimeCharacteristicRing>(
+    name: &str, p: u32, c: u32, generator: u64, log_n: usize, iters: usize
+) {
+    let n = 1 << log_n;
+    let twiddles = compute_bowers_twiddles_u32(n, p as u64, generator);
+    let mut rng = SmallRng::seed_from_u64(42);
+    let p3_data: Vec<F> = (0..n).map(|_| F::from_u32(rng.next_u32() % p)).collect();
+    let dft = Radix2Bowers;
+    let _ = dft.dft_batch(RowMajorMatrix::new_col(p3_data.clone()));
+    let amo_data: Vec<u32> = (0..n).map(|i| ((i as u64 * 1000000007) % p as u64) as u32).collect();
+    let mut warmup = amo_data.clone();
+    amo_bowers_u32(&mut warmup, &twiddles, p, c);
+
+    let start = Instant::now();
+    for _ in 0..iters {
+        let mat = RowMajorMatrix::new_col(p3_data.clone());
+        let _ = std::hint::black_box(dft.dft_batch(mat));
+    }
+    let p3_us = start.elapsed().as_secs_f64() / iters as f64 * 1e6;
+
+    let start = Instant::now();
+    for _ in 0..iters {
+        let mut data = amo_data.clone();
+        amo_bowers_u32(&mut data, &twiddles, p, c);
+        std::hint::black_box(&data);
+    }
+    let amo_us = start.elapsed().as_secs_f64() / iters as f64 * 1e6;
+
+    let diff = (1.0 - amo_us / p3_us) * 100.0;
+    println!("{},{},{},NTT-Bowers,{:.0},{:.0},{:+.1}", name, log_n, n, amo_us, p3_us, diff);
 }
 
 /// AMO-Lean Bowers NTT for KoalaBear (Solinas fold + DIF butterfly).
@@ -241,8 +304,8 @@ fn bench_goldilocks(log_n: usize, iters: usize) {
 
 fn main() {
     println!("field,log_n,n,primitive,amo_us,p3_us,diff_pct");
-    println!("# AMO-Lean Bowers (Solinas/GL reduce) vs Plonky3 Radix2Bowers (Montgomery)");
-    println!("# Both native Rust, --release LTO, same binary");
+    println!("# AMO-Lean Bowers vs Plonky3 Radix2Bowers (native Rust API)");
+    println!("# Both --release LTO, same binary. 4 fields × 5 sizes.");
 
     let sizes: [(usize, usize); 5] = [
         (14, 500),
@@ -253,7 +316,10 @@ fn main() {
     ];
 
     for &(log_n, iters) in &sizes {
-        bench_koalabear(log_n, iters);
+        bench_u32_field::<BabyBear>("BabyBear", BB_P, BB_C, 31, log_n, iters);
+    }
+    for &(log_n, iters) in &sizes {
+        bench_u32_field::<KoalaBear>("KoalaBear", KB_P, KB_C, 3, log_n, iters);
     }
     for &(log_n, iters) in &sizes {
         bench_goldilocks(log_n, iters);
