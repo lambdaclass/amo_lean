@@ -21,6 +21,7 @@
 -/
 import AmoLean.EGraph.Verified.Bitwise.TrustLeanBridge
 import AmoLean.EGraph.Verified.Bitwise.MixedExtract
+import TrustLean.Backend.CBackend
 
 set_option autoImplicit false
 
@@ -362,5 +363,73 @@ example : lowerMixedExprToLLE
 
 /-- Smoke: lowerMixedExprToStmt produces an assignment with a temp variable. -/
 example : (lowerMixedExprToStmt (.witnessE 0) {}).2.1 = .temp 0 := rfl
+
+-- ══════════════════════════════════════════════════════════════════
+-- Section 7: Stmt evaluation soundness
+-- ══════════════════════════════════════════════════════════════════
+
+open TrustLean (Outcome)
+
+/-- Soundness for Stmt.assign: wrapping a lowered expression in an assignment
+    produces the correct value in the updated environment.
+    This connects lowerMixedExprToLLE (expression level) to evalStmt (statement level). -/
+theorem lowerMixedExprToStmt_sound (e : MixedExpr) (llEnv : LowLevelEnv)
+    (mEnv : MixedEnv) (henv : EnvConsistent llEnv mEnv) :
+    ∃ (v : Int),
+      let (stmt, resultVar, _) := lowerMixedExprToStmt e {}
+      evalStmt 1 llEnv stmt = some (.normal, llEnv.update resultVar (.int v)) := by
+  obtain ⟨v, hv⟩ := lowerMixedExprToLLE_evaluates e llEnv mEnv henv
+  exact ⟨v, by simp [lowerMixedExprToStmt, evalStmt, hv]⟩
+
+-- ══════════════════════════════════════════════════════════════════
+-- Section 8: C code emission (connecting to Trust-Lean CBackend)
+-- ══════════════════════════════════════════════════════════════════
+
+open TrustLean (exprToC stmtToC)
+
+/-- Emit C code for a MixedExpr via Trust-Lean's verified backend.
+    This is the verified alternative to UnifiedCodeGen's string emission.
+
+    Pipeline:
+      MixedExpr → lowerMixedExprToLLE → LowLevelExpr → exprToC → C string
+    Each step is either verified (lowerMixedExprToLLE_evaluates) or
+    part of Trust-Lean's TCB (exprToC is a pretty-printer). -/
+def emitC (e : MixedExpr) : String :=
+  exprToC (lowerMixedExprToLLE e)
+
+/-- Emit C statement for a MixedExpr (assigns to a temp variable). -/
+def emitCStmt (e : MixedExpr) : String :=
+  let (stmt, _, _) := lowerMixedExprToStmt e {}
+  stmtToC 0 stmt
+
+/-- Emit C code for a Solinas fold applied to a MixedExpr.
+    fold(e, k, c) = (lower(e) >> k) * c + (lower(e) & (2^k - 1))
+    This is what the NTT butterfly uses for field reduction. -/
+def emitSolinasFoldC (e : MixedExpr) (k c : Nat) : String :=
+  exprToC (lowerSolinasFoldExpr e k c)
+
+-- ══════════════════════════════════════════════════════════════════
+-- Section 9: Integration smoke tests (end-to-end)
+-- ══════════════════════════════════════════════════════════════════
+
+-- End-to-end: MixedExpr → C expression string
+-- witnessE 0 + witnessE 1 → "(w_0 + w_1)"
+#eval emitC (.addE (.witnessE 0) (.witnessE 1))
+
+-- End-to-end: Solinas fold for BabyBear
+-- fold(x, 31, 134217727) → "((w_0 >> 31) * 134217727 + (w_0 & 2147483647))"
+#eval emitSolinasFoldC (.witnessE 0) 31 134217727
+
+-- End-to-end: Complete butterfly sum expression
+-- fold(a + fold(w * b)) → nested C expression
+#eval emitSolinasFoldC
+  (.addE (.witnessE 0)
+    (.addE (.smulE 134217727 (.shiftRightE (.mulE (.witnessE 1) (.witnessE 2)) 31))
+           (.bitAndE (.mulE (.witnessE 1) (.witnessE 2)) (.constMaskE 31))))
+  31 134217727
+
+-- End-to-end: Assignment statement
+-- → "_t0 = (w_0 + w_1);"
+#eval emitCStmt (.addE (.witnessE 0) (.witnessE 1))
 
 end AmoLean.EGraph.Verified.Bitwise.VerifiedCodeGen
