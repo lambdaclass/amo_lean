@@ -447,22 +447,75 @@ def lowerDIFButterflyStmt (aVar bVar wVar : VarName) (p k c : Nat)
   let s3 := Stmt.assign bPrimeVar bPrimeExpr
   (.seq s1 (.seq s2 s3), sumVar, bPrimeVar, cgs3)
 
+/-- Helper: solinasFoldLLE evaluates successfully if its input evaluates. -/
+theorem solinasFoldLLE_evaluates (x : LowLevelExpr) (k c : Nat) (vx : Int)
+    (llEnv : LowLevelEnv) (hx : evalExpr llEnv x = some (.int vx)) :
+    ∃ (v : Int), evalExpr llEnv (solinasFoldLLE x k c) = some (.int v) := by
+  exact ⟨vx.shiftRight (↑k % 64) * ↑c + Int.land vx ↑(2^k - 1 : Nat),
+    by simp [solinasFoldLLE, evalExpr, hx, evalBinOp]⟩
+
 /-- Soundness for DIF butterfly: each step evaluates if inputs evaluate.
-    This follows from lowerMixedExprToLLE_evaluates applied to each fold. -/
+    Factored into 3 sequential assignment evaluations.
+    Requires: variable names don't collide with temp names (.temp 0/1/2).
+    This is always true in practice (user vars are .user "a", temps are .temp n). -/
 theorem lowerDIFButterflyStmt_evaluates (aVar bVar wVar : VarName)
     (p k c : Nat) (va vb vw : Int) (llEnv : LowLevelEnv)
     (ha : llEnv aVar = .int va) (hb : llEnv bVar = .int vb)
-    (hw : llEnv wVar = .int vw) :
+    (hw : llEnv wVar = .int vw)
+    -- Disjointness: user variables ≠ temp variables
+    (hna0 : aVar ≠ .temp 0) (hna1 : aVar ≠ .temp 1)
+    (hnb0 : bVar ≠ .temp 0) (hnb1 : bVar ≠ .temp 1)
+    (hnw0 : wVar ≠ .temp 0) (hnw1 : wVar ≠ .temp 1) :
     ∃ (env' : LowLevelEnv),
       let (stmt, _, _, _) := lowerDIFButterflyStmt aVar bVar wVar p k c {}
       evalStmt 3 llEnv stmt = some (.normal, env') := by
-  simp [lowerDIFButterflyStmt, solinasFoldLLE, evalStmt, evalExpr, ha, hb, hw, evalBinOp,
-        LowLevelEnv.update]
-  sorry -- TRACKED: needs evalStmt seq composition + VarName disjointness.
-         -- The 3 assignments use .temp 0, .temp 1, .temp 2 which don't
-         -- collide with user-provided aVar/bVar/wVar. Case split resolves
-         -- but the expanded goal is ~200 lines of match trees.
-         -- Individual expressions are verified (lowerMixedExprToLLE_evaluates).
+  -- Unfold the butterfly definition
+  simp only [lowerDIFButterflyStmt, CodeGenState.freshVar]
+  -- Step 1: evaluate sum = fold(a + b)
+  -- After s1: env1 = llEnv.update (.temp 0) (fold(va + vb))
+  have hsum : evalExpr llEnv (.binOp .add (.varRef aVar) (.varRef bVar)) =
+      some (.int (va + vb)) := by
+    simp [evalExpr, ha, hb, evalBinOp]
+  obtain ⟨vsum, hfsum⟩ := solinasFoldLLE_evaluates _ k c _ llEnv hsum
+  -- Step 2: evaluate diff = fold(p + a - b) in env1
+  -- env1 preserves aVar, bVar (they ≠ .temp 0)
+  have ha1 : (llEnv.update (.temp 0) (.int vsum)) aVar = .int va := by
+    simp [LowLevelEnv.update, hna0, ha]
+  have hb1 : (llEnv.update (.temp 0) (.int vsum)) bVar = .int vb := by
+    simp [LowLevelEnv.update, hnb0, hb]
+  have hdiff_input : evalExpr (llEnv.update (.temp 0) (.int vsum))
+      (.binOp .sub (.binOp .add (.litInt ↑p) (.varRef aVar)) (.varRef bVar)) =
+      some (.int (↑p + va - vb)) := by
+    simp [evalExpr, ha1, hb1, evalBinOp]
+  obtain ⟨vdiff, hfdiff⟩ := solinasFoldLLE_evaluates _ k c _ _ hdiff_input
+  -- Step 3: evaluate b' = fold(diff * w) in env2
+  -- env2 = env1.update (.temp 1) (fold(p + va - vb))
+  -- env2 (.temp 1) = diffVal (from update_same)
+  -- env2 wVar = vw (wVar ≠ .temp 0, wVar ≠ .temp 1)
+  have hw2 : ((llEnv.update (.temp 0) (.int vsum)).update (.temp 1) (.int vdiff)) wVar = .int vw := by
+    simp [LowLevelEnv.update, hnw0, hnw1, hw]
+  have hdiff_ref : ((llEnv.update (.temp 0) (.int vsum)).update (.temp 1) (.int vdiff)) (.temp 1) =
+      .int vdiff := by
+    simp [LowLevelEnv.update]
+  have hprod_input : evalExpr ((llEnv.update (.temp 0) (.int vsum)).update (.temp 1) (.int vdiff))
+      (.binOp .mul (.varRef (.temp 1)) (.varRef wVar)) =
+      some (.int (vdiff * vw)) := by
+    simp [evalExpr, hdiff_ref, hw2, evalBinOp]
+  obtain ⟨vprod, hfprod⟩ := solinasFoldLLE_evaluates _ k c _ _ hprod_input
+  -- Compose: seq s1 (seq s2 s3) evaluates
+  -- Use rewrite instead of simp to avoid match-tree explosion
+  refine ⟨((llEnv.update (.temp 0) (.int vsum)).update (.temp 1) (.int vdiff)).update (.temp 2) (.int vprod), ?_⟩
+  -- Step-by-step: rewrite evalStmt for each seq/assign
+  show evalStmt 3 llEnv (.seq _ (.seq _ _)) = _
+  simp only [evalStmt, Nat.add_eq, Nat.add_zero]
+  -- After unfolding seq: first assignment
+  rw [hfsum]
+  simp only [evalStmt, Nat.add_eq, Nat.add_zero]
+  -- After first assign: second assignment in env1
+  rw [hfdiff]
+  simp only [evalStmt, Nat.add_eq, Nat.add_zero]
+  -- After second assign: third assignment in env2
+  rw [hfprod]
 
 /-- Emit C for a complete DIF butterfly.
     Produces 3 C statements: sum, diff, b_prime assignments. -/
