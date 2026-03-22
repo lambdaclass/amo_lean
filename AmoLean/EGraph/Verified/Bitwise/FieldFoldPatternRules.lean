@@ -21,6 +21,9 @@ open AmoLean.EGraph.VerifiedExtraction
 open AmoLean.EGraph.Verified.Bitwise (MixedNodeOp)
 open AmoLean.EGraph.Verified.Bitwise
   (mersenne31_prime babybear_prime goldilocks_prime babybear_c goldilocks_c)
+
+def koalabear_prime : Nat := 2130706433  -- 2^31 - 2^24 + 1
+def koalabear_c : Nat := 2^24 - 1       -- 16777215
 open MixedEMatch (Pattern PatVarId Substitution RewriteRule)
 
 -- ══════════════════════════════════════════════════════════════════
@@ -57,6 +60,13 @@ def patBabyBearFold : RewriteRule MixedNodeOp where
   lhs := .patVar 0
   rhs := mkFoldPattern 31 babybear_c
 
+/-- KoalaBear fold: x → (x >>> 31) * c + (x &&& (2^31 - 1)) where c = 2^24 - 1.
+    Sound modulo p = 2^31 - (2^24 - 1): fold(x) % p = x % p. -/
+def patKoalaBearFold : RewriteRule MixedNodeOp where
+  name := "koalabear_fold"
+  lhs := .patVar 0
+  rhs := mkFoldPattern 31 koalabear_c
+
 /-- Goldilocks fold: x → (x >>> 64) * c + (x &&& (2^64 - 1)) where c = 2^32 - 1.
     Sound modulo p = 2^64 - (2^32 - 1): fold(x) % p = x % p. -/
 def patGoldilocksFold : RewriteRule MixedNodeOp where
@@ -73,18 +83,21 @@ def patGoldilocksFold : RewriteRule MixedNodeOp where
 def fieldFoldPatternRules (p : Nat) : List (RewriteRule MixedNodeOp) :=
   if p == mersenne31_prime then [patMersenne31Fold]
   else if p == babybear_prime then [patBabyBearFold]
+  else if p == koalabear_prime then [patKoalaBearFold]
   else if p == goldilocks_prime then [patGoldilocksFold]
   else []
 
 /-- All field fold rules for the three Plonky3 fields. -/
 def allFieldFoldPatternRules : List (RewriteRule MixedNodeOp) :=
-  [patMersenne31Fold, patBabyBearFold, patGoldilocksFold]
+  [patMersenne31Fold, patBabyBearFold, patKoalaBearFold, patGoldilocksFold]
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 4: Smoke tests
 -- ══════════════════════════════════════════════════════════════════
 
-example : allFieldFoldPatternRules.length = 3 := rfl
+example : allFieldFoldPatternRules.length = 4 := rfl
+
+example : (patKoalaBearFold).name = "koalabear_fold" := rfl
 
 example : (patMersenne31Fold).name = "mersenne31_fold" := rfl
 
@@ -97,6 +110,8 @@ example : (fieldFoldPatternRules mersenne31_prime).length = 1 := by native_decid
 example : (fieldFoldPatternRules babybear_prime).length = 1 := by native_decide
 
 example : (fieldFoldPatternRules goldilocks_prime).length = 1 := by native_decide
+
+example : (fieldFoldPatternRules koalabear_prime).length = 1 := by native_decide
 
 example : (fieldFoldPatternRules 17).length = 0 := by native_decide
 
