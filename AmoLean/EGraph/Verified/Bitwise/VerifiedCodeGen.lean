@@ -169,7 +169,91 @@ theorem lowerMixedExprToLLE_constMaskE_sound (n : Nat) (llEnv : LowLevelEnv) :
   simp [lowerMixedExprToLLE, evalExpr]
 
 -- ══════════════════════════════════════════════════════════════════
--- Section 5: Main compositional soundness theorem
+-- Section 5: Compositional soundness for binary operations
+-- ══════════════════════════════════════════════════════════════════
+
+/-- Soundness for addE: if children lower correctly, add lowers correctly.
+    evalExpr on the lowered addE = Int sum of children's results. -/
+theorem lowerMixedExprToLLE_addE_sound (a b : MixedExpr)
+    (va vb : Int) (llEnv : LowLevelEnv)
+    (ha : evalExpr llEnv (lowerMixedExprToLLE a) = some (.int va))
+    (hb : evalExpr llEnv (lowerMixedExprToLLE b) = some (.int vb)) :
+    evalExpr llEnv (lowerMixedExprToLLE (.addE a b)) =
+    some (.int (va + vb)) := by
+  simp [lowerMixedExprToLLE, evalExpr, ha, hb, evalBinOp]
+
+/-- Soundness for mulE. -/
+theorem lowerMixedExprToLLE_mulE_sound (a b : MixedExpr)
+    (va vb : Int) (llEnv : LowLevelEnv)
+    (ha : evalExpr llEnv (lowerMixedExprToLLE a) = some (.int va))
+    (hb : evalExpr llEnv (lowerMixedExprToLLE b) = some (.int vb)) :
+    evalExpr llEnv (lowerMixedExprToLLE (.mulE a b)) =
+    some (.int (va * vb)) := by
+  simp [lowerMixedExprToLLE, evalExpr, ha, hb, evalBinOp]
+
+/-- Soundness for subE. -/
+theorem lowerMixedExprToLLE_subE_sound (a b : MixedExpr)
+    (va vb : Int) (llEnv : LowLevelEnv)
+    (ha : evalExpr llEnv (lowerMixedExprToLLE a) = some (.int va))
+    (hb : evalExpr llEnv (lowerMixedExprToLLE b) = some (.int vb)) :
+    evalExpr llEnv (lowerMixedExprToLLE (.subE a b)) =
+    some (.int (va - vb)) := by
+  simp [lowerMixedExprToLLE, evalExpr, ha, hb, evalBinOp]
+
+/-- Soundness for bitAndE. -/
+theorem lowerMixedExprToLLE_bitAndE_sound (a b : MixedExpr)
+    (va vb : Int) (llEnv : LowLevelEnv)
+    (ha : evalExpr llEnv (lowerMixedExprToLLE a) = some (.int va))
+    (hb : evalExpr llEnv (lowerMixedExprToLLE b) = some (.int vb)) :
+    evalExpr llEnv (lowerMixedExprToLLE (.bitAndE a b)) =
+    some (.int (Int.land va vb)) := by
+  simp [lowerMixedExprToLLE, evalExpr, ha, hb, evalBinOp]
+
+/-- Soundness for shiftRightE. -/
+theorem lowerMixedExprToLLE_shiftRightE_sound (a : MixedExpr) (n : Nat)
+    (va : Int) (llEnv : LowLevelEnv)
+    (ha : evalExpr llEnv (lowerMixedExprToLLE a) = some (.int va)) :
+    evalExpr llEnv (lowerMixedExprToLLE (.shiftRightE a n)) =
+    some (.int (Int.shiftRight va (↑n % 64))) := by
+  simp [lowerMixedExprToLLE, evalExpr, ha, evalBinOp]
+
+/-- Soundness for shiftLeftE. -/
+theorem lowerMixedExprToLLE_shiftLeftE_sound (a : MixedExpr) (n : Nat)
+    (va : Int) (llEnv : LowLevelEnv)
+    (ha : evalExpr llEnv (lowerMixedExprToLLE a) = some (.int va)) :
+    evalExpr llEnv (lowerMixedExprToLLE (.shiftLeftE a n)) =
+    some (.int (Int.shiftLeft va (↑n % 64))) := by
+  simp [lowerMixedExprToLLE, evalExpr, ha, evalBinOp]
+
+/-- Soundness for bitXorE. -/
+theorem lowerMixedExprToLLE_bitXorE_sound (a b : MixedExpr)
+    (va vb : Int) (llEnv : LowLevelEnv)
+    (ha : evalExpr llEnv (lowerMixedExprToLLE a) = some (.int va))
+    (hb : evalExpr llEnv (lowerMixedExprToLLE b) = some (.int vb)) :
+    evalExpr llEnv (lowerMixedExprToLLE (.bitXorE a b)) =
+    some (.int (Int.xor va vb)) := by
+  simp [lowerMixedExprToLLE, evalExpr, ha, hb, evalBinOp]
+
+/-- Soundness for bitOrE. -/
+theorem lowerMixedExprToLLE_bitOrE_sound (a b : MixedExpr)
+    (va vb : Int) (llEnv : LowLevelEnv)
+    (ha : evalExpr llEnv (lowerMixedExprToLLE a) = some (.int va))
+    (hb : evalExpr llEnv (lowerMixedExprToLLE b) = some (.int vb)) :
+    evalExpr llEnv (lowerMixedExprToLLE (.bitOrE a b)) =
+    some (.int (Int.lor va vb)) := by
+  simp [lowerMixedExprToLLE, evalExpr, ha, hb, evalBinOp]
+
+/-- Soundness for smulE. -/
+theorem lowerMixedExprToLLE_smulE_sound (n : Nat) (a : MixedExpr)
+    (vc va : Int) (llEnv : LowLevelEnv)
+    (hc : llEnv (.user s!"c_{n}") = .int vc)
+    (ha : evalExpr llEnv (lowerMixedExprToLLE a) = some (.int va)) :
+    evalExpr llEnv (lowerMixedExprToLLE (.smulE n a)) =
+    some (.int (vc * va)) := by
+  simp [lowerMixedExprToLLE, evalExpr, hc, ha, evalBinOp]
+
+-- ══════════════════════════════════════════════════════════════════
+-- Section 5b: Main compositional soundness theorem
 -- ══════════════════════════════════════════════════════════════════
 
 /-- The main soundness theorem: lowering a MixedExpr tree to Trust-Lean
