@@ -631,13 +631,16 @@ def generateRustNTT_Bowers (hw : HardwareCost) (n p : Nat)
   let wideType := if cfg.wordSize ≤ 32 then "u64" else "u128"
 
   -- Reduction function (same as standard DIT — e-graph selected)
+  -- Bug fix: solinas_fold returns wideType (u64) to avoid premature truncation.
+  -- The DIF butterfly stores results as elemType (u32) via `as u32` at assignment.
   let foldFn := if cfg.wordSize ≤ 32 then
     s!"/// Solinas fold — e-graph selected for scalar {elemType} fields.
-/// Verified: solinasFold_mod_correct.
+/// Returns {wideType} (not {elemType}) to avoid premature truncation in chained operations.
+/// Verified: solinasFold_mod_correct — fold(x) % p = x % p.
 #[inline(always)]
-fn solinas_fold(x: {wideType}) -> {elemType} \{
-    (((x >> {cfg.shiftBits}) as {wideType}).wrapping_mul({cfg.foldConst} as {wideType}))
-        .wrapping_add(x & {2^cfg.shiftBits - 1} as {wideType}) as {elemType}
+fn solinas_fold(x: {wideType}) -> {wideType} \{
+    ((x >> {cfg.shiftBits}).wrapping_mul({cfg.foldConst} as {wideType}))
+        .wrapping_add(x & {2^cfg.shiftBits - 1} as {wideType})
 }"
   else
     s!"/// Goldilocks reduction — exploits p = 2^64 - 2^32 + 1.
@@ -656,25 +659,29 @@ fn goldilocks_reduce(x: u128) -> u64 \{
 }"
 
   -- DIF butterfly (Bowers uses DIF, not DIT)
+  -- Bug fix: u32 fields use wideType (u64) for twiddle multiply to avoid truncation.
+  -- Bug fix: Goldilocks uses overflowing_add for sum to detect u64 overflow.
   let difBfFn := if cfg.wordSize ≤ 32 then
     s!"/// DIF butterfly: a' = fold(a + b), b' = fold((p + a - b) * w).
 /// Bowers G network applies ONE twiddle per block.
+/// solinas_fold returns {wideType} to avoid truncation; cast to {elemType} at storage.
 #[inline(always)]
 fn dif_butterfly(a: &mut {elemType}, b: &mut {elemType}, w: {elemType}) \{
-    let va = *a;
-    let vb = *b;
-    *a = solinas_fold(va as {wideType} + vb as {wideType});
-    let diff = solinas_fold({p} as {wideType} + va as {wideType} - vb as {wideType});
-    *b = solinas_fold(diff as {wideType} * w as {wideType});
+    let va = *a as {wideType};
+    let vb = *b as {wideType};
+    *a = solinas_fold(va + vb) as {elemType};
+    let diff = solinas_fold({p} as {wideType} + va - vb);
+    *b = solinas_fold(diff.wrapping_mul(w as {wideType})) as {elemType};
 }"
   else
     s!"/// DIF butterfly for Goldilocks.
+/// Uses overflowing_add to correctly handle sum >= 2^64.
 #[inline(always)]
 fn dif_butterfly(a: &mut u64, b: &mut u64, w: u64) \{
     let va = *a;
     let vb = *b;
-    let sum = va.wrapping_add(vb);
-    *a = if sum >= {p}_u64 \{ sum - {p}_u64 } else \{ sum };
+    let (sum, overflow) = va.overflowing_add(vb);
+    *a = if overflow || sum >= {p}_u64 \{ sum.wrapping_sub({p}_u64) } else \{ sum };
     *b = goldilocks_reduce(
         (if va >= vb \{ va - vb } else \{ {p}_u64 - vb + va }) as u128
         * w as u128);
