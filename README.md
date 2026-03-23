@@ -1,4 +1,4 @@
-# Truth Research: Verified Optimizing Compiler for Cryptographic Primitives
+# Truth Research Cryptography: Verified Optimizing Compiler for Cryptographic Primitives
 
 [![Lean 4](https://img.shields.io/badge/Lean-4.26.0-blue.svg)](https://leanprover.github.io/lean4/doc/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
