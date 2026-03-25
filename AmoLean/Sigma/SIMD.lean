@@ -219,12 +219,23 @@ def genDFT8_SIMD (indent : Nat) : String :=
   s!"{pad}{cfg.vectorType} t0 = {cfg.addIntrinsic}(v0, v1);\n" ++
   s!"{pad}{cfg.vectorType} t1 = {cfg.subIntrinsic}(v0, v1);\n" ++
   s!"{pad}\n" ++
-  s!"{pad}// TODO: Twiddle factors would go here\n" ++
-  s!"{pad}// t1 = t1 * twiddles;\n" ++
+  s!"{pad}// Twiddle factors: t1[i] = t1[i] * twiddle[i]\n" ++
+  s!"{pad}// In NTT: twiddle[i] = ω^i for i=0..3\n" ++
+  s!"{pad}{cfg.vectorType} tw = {cfg.loadIntrinsic}(&twiddles[0]);\n" ++
+  s!"{pad}t1 = {cfg.mulIntrinsic}(t1, tw);\n" ++
   s!"{pad}\n" ++
   s!"{pad}// Stage 2: I_2 ⊗ DFT_4 (two DFT_4 in parallel)\n" ++
-  s!"{pad}// Each DFT_4 operates on one AVX register\n" ++
-  s!"{pad}// ... (DFT_4 code for t0 and t1)\n" ++
+  s!"{pad}// Each half of the register holds one DFT_4 input\n" ++
+  s!"{pad}// DFT_4 = butterfly2(pairs[0,2]) then butterfly2(pairs[1,3]) with twiddles\n" ++
+  s!"{pad}{cfg.vectorType} shuf02 = _mm256_permute2f128_pd(t0, t0, 0x01); // swap 128-bit halves\n" ++
+  s!"{pad}{cfg.vectorType} u0 = {cfg.addIntrinsic}(t0, shuf02);  // butterfly upper\n" ++
+  s!"{pad}{cfg.vectorType} u1 = {cfg.subIntrinsic}(t0, shuf02);  // butterfly lower\n" ++
+  s!"{pad}{cfg.vectorType} shuf13 = _mm256_permute2f128_pd(t1, t1, 0x01);\n" ++
+  s!"{pad}{cfg.vectorType} u2 = {cfg.addIntrinsic}(t1, shuf13);\n" ++
+  s!"{pad}{cfg.vectorType} u3 = {cfg.subIntrinsic}(t1, shuf13);\n" ++
+  s!"{pad}// Blend final results\n" ++
+  s!"{pad}t0 = _mm256_blend_pd(u0, u2, 0b1100);\n" ++
+  s!"{pad}t1 = _mm256_blend_pd(u1, u3, 0b1100);\n" ++
   s!"{pad}\n" ++
   s!"{pad}{cfg.storeIntrinsic}(&out[0], t0);\n" ++
   s!"{pad}{cfg.storeIntrinsic}(&out[4], t1);"
