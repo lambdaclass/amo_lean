@@ -376,3 +376,4 @@ v4.0          (Mar 2026)   ematchF_sound fully proved, NTT butterfly codegen,
 ## License
 
 MIT License — see [LICENSE](LICENSE) for details.
+
