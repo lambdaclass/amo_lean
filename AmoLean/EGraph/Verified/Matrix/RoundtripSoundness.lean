@@ -140,19 +140,17 @@ theorem add_preserves_allBestNode (g : MatEGraph) (node : MatENode)
       exact hwf _ _ hcls
 
 /-- Structural roundtrip: extraction succeeds on a fresh graph.
-    Note: extractMatExpr uses fuel (default 100). The theorem as stated
-    uses the default fuel. For expressions deeper than 100, a larger
-    fuel parameter would be needed. The non-vacuity examples below
-    demonstrate correctness for practical expression sizes. -/
+    BLOCKER: MatUnionFind.find is `partial`, so Lean generates no equation
+    lemmas for it. extractMatExpr calls g.find internally, making it impossible
+    to unfold extraction in proofs and determine which canonical ID is returned.
+    The invariant infrastructure (add_bestNode_isSome, add_preserves_allBestNode)
+    is proven, but wiring requires reasoning about find's output.
+    Additionally, extractMatExpr uses fuel (default 100); the theorem needs
+    either depth-bounded expressions or existential fuel.
+    Non-vacuity examples below cover all key constructors via native_decide. -/
 theorem roundtrip_succeeds (m n : Nat) (expr : MatExpr Nat m n) :
     let (classId, g) := fromMatExpr expr
     (extractMatExpr g classId).isSome = true := by
-  -- The full proof requires:
-  -- 1. add_bestNode_isSome (PROVEN above)
-  -- 2. add_preserves_allBestNode (PROVEN above)
-  -- 3. Monotonicity: adding nodes doesn't break existing extraction
-  -- 4. Fuel bound: expr.depth ≤ 100 (implicit in default fuel)
-  -- The non-vacuity examples cover all constructors via native_decide.
   sorry
 
 -- PENDIENTE: roundtrip_preserves_eval (semantic roundtrip)
@@ -175,6 +173,34 @@ example : let (classId, g) := fromMatExpr (MatExpr.dft 8 : MatExpr Nat 8 8)
 /-- Non-vacuity: extraction succeeds for Kronecker products. -/
 example : let e : MatExpr Nat (2*4) (2*4) :=
     MatExpr.kron (MatExpr.dft 2) (MatExpr.identity 4)
+  let (classId, g) := fromMatExpr e
+  (extractMatExpr g classId).isSome = true := by
+  native_decide
+
+/-- Non-vacuity: extraction succeeds for composition. -/
+example : let e : MatExpr Nat 4 4 :=
+    MatExpr.compose (MatExpr.dft 4) (MatExpr.identity 4)
+  let (classId, g) := fromMatExpr e
+  (extractMatExpr g classId).isSome = true := by
+  native_decide
+
+/-- Non-vacuity: extraction succeeds for matrix addition. -/
+example : let e : MatExpr Nat 4 4 :=
+    MatExpr.add (MatExpr.identity 4) (MatExpr.dft 4)
+  let (classId, g) := fromMatExpr e
+  (extractMatExpr g classId).isSome = true := by
+  native_decide
+
+/-- Non-vacuity: extraction succeeds for transpose. -/
+example : let e : MatExpr Nat 4 8 :=
+    MatExpr.transpose (MatExpr.zero 8 4 : MatExpr Nat 8 4)
+  let (classId, g) := fromMatExpr e
+  (extractMatExpr g classId).isSome = true := by
+  native_decide
+
+/-- Non-vacuity: extraction succeeds for nested Kronecker (depth 3). -/
+example : let e : MatExpr Nat ((2*2)*2) ((2*2)*2) :=
+    MatExpr.kron (MatExpr.kron (MatExpr.dft 2) (MatExpr.identity 2)) (MatExpr.dft 2)
   let (classId, g) := fromMatExpr e
   (extractMatExpr g classId).isSome = true := by
   native_decide
