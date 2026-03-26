@@ -363,20 +363,20 @@ private lemma dit_first_n_stages_independent [DecidableEq F] [Inhabited F]
     (n : Nat) (data : List F) (omega : F) (twiddles : Nat → F)
     (hlen : data.length = 2 ^ (n + 1))
     (hroot : IsPrimitiveRoot omega (2 ^ (n + 1)))
-    (htw : ∀ stage group pair,
-      stage < n + 1 →
-      let half := 2 ^ stage
-      let stride := 2 ^ (n + 1 - 1 - stage)
-      group < 2 ^ (n + 1) / (2 * half) →
+    (htw : ∀ stageIdx group pair,
+      stageIdx < n + 1 →
+      let half := 2 ^ (n + 1 - 1 - stageIdx)
+      let numGroups := 2 ^ stageIdx
+      group < numGroups →
       pair < half →
-      twiddles (stage * (2 ^ (n + 1) / 2) + group * half + pair) = omega ^ (pair * stride))
+      twiddles (stageIdx * (2 ^ (n + 1) / 2) + group * half + pair) = omega ^ (pair * numGroups))
     (ih : ∀ (data' : List F) (omega' : F),
       data'.length = 2 ^ n → IsPrimitiveRoot omega' (2 ^ n) →
       ∀ (twiddles' : Nat → F),
-        (∀ stage group pair, stage < n →
-          let half := 2 ^ stage; let stride := 2 ^ (n - 1 - stage)
-          group < 2 ^ n / (2 * half) → pair < half →
-          twiddles' (stage * (2 ^ n / 2) + group * half + pair) = omega' ^ (pair * stride)) →
+        (∀ stageIdx group pair, stageIdx < n →
+          let half := 2 ^ (n - 1 - stageIdx); let numGroups := 2 ^ stageIdx
+          group < numGroups → pair < half →
+          twiddles' (stageIdx * (2 ^ n / 2) + group * half + pair) = omega' ^ (pair * numGroups)) →
         applyAllStages_DIT (bitRevPermute n data') twiddles' n = ntt_generic omega' data') :
     (List.range n).foldl
       (fun d stage => applyStage d twiddles (n + 1) (n + 1 - 1 - stage))
@@ -397,24 +397,22 @@ private lemma dit_last_stage_combine [DecidableEq F] [Inhabited F]
     (n : Nat) (data : List F) (omega : F) (twiddles : Nat → F)
     (hlen : data.length = 2 ^ (n + 1))
     (hroot : IsPrimitiveRoot omega (2 ^ (n + 1)))
-    (htw : ∀ stage group pair,
-      stage < n + 1 →
-      let half := 2 ^ stage
-      let stride := 2 ^ (n + 1 - 1 - stage)
-      group < 2 ^ (n + 1) / (2 * half) →
+    (htw : ∀ stageIdx group pair,
+      stageIdx < n + 1 →
+      let half := 2 ^ (n + 1 - 1 - stageIdx)
+      let numGroups := 2 ^ stageIdx
+      group < numGroups →
       pair < half →
-      twiddles (stage * (2 ^ (n + 1) / 2) + group * half + pair) = omega ^ (pair * stride))
+      twiddles (stageIdx * (2 ^ (n + 1) / 2) + group * half + pair) = omega ^ (pair * numGroups))
     (intermediate : List F)
     (h_int : intermediate =
       ntt_generic (omega * omega) (evens data) ++ ntt_generic (omega * omega) (odds data)) :
     applyStage intermediate twiddles (n + 1) (n + 1 - 1 - n) =
     ntt_generic omega data := by
-  -- stageIdx = n+1-1-n = 0, so stagePairs (n+1) 0 generates:
-  --   half = 2^n, numGroups = 1, pairs (k, k + 2^n) for k = 0..2^n-1
-  -- twiddle at pair k: htw gives omega^(k * 1) = omega^k (stride = 2^(n+1-1-n) = 2^0 = 1... wait)
-  -- Actually stride = 2^(n+1-1-0) = 2^n for stageIdx=0 in htw. But htw indexes by DIT stage, not stageIdx.
-  -- DIT stage n corresponds to stageIdx 0.
-  -- htw at stage=n: twiddles(n * 2^n + 0 * 2^n + k) = omega^(k * 2^0) = omega^k
+  -- stageIdx = 0, so stagePairs (n+1) 0 generates:
+  --   half = 2^n, numGroups = 2^0 = 1, pairs (k, k + 2^n) for k = 0..2^n-1
+  -- twIdx = 0 * 2^n + 0 * 2^n + k = k
+  -- htw at stageIdx=0: twiddles(k) = omega^(k * 1) = omega^k
   -- So butterfly at (k, k+2^n) uses twiddle omega^k.
   -- Result: output[k] = E[k] + omega^k * O[k] (upper half)
   --         output[k+2^n] = E[k] - omega^k * O[k] (lower half)
@@ -442,14 +440,14 @@ theorem dit_bottomUp_eq_ntt_generic [DecidableEq F] [Inhabited F]
     (hlen : data.length = 2 ^ logN)
     (hroot : IsPrimitiveRoot omega (2 ^ logN))
     (twiddles : Nat → F)
-    (htw : ∀ stage group pair,
-      stage < logN →
-      let half := 2 ^ stage
-      let stride := 2 ^ (logN - 1 - stage)
-      group < 2 ^ logN / (2 * half) →
+    (htw : ∀ stageIdx group pair,
+      stageIdx < logN →
+      let half := 2 ^ (logN - 1 - stageIdx)
+      let numGroups := 2 ^ stageIdx
+      group < numGroups →
       pair < half →
-      twiddles (stage * (2 ^ logN / 2) + group * half + pair) =
-        omega ^ (pair * stride)) :
+      twiddles (stageIdx * (2 ^ logN / 2) + group * half + pair) =
+        omega ^ (pair * numGroups)) :
     applyAllStages_DIT (bitRevPermute logN data) twiddles logN =
     ntt_generic omega data := by
   -- Strategy: both sides equal ntt_spec_generic omega data.
@@ -543,14 +541,14 @@ theorem dit_bottomUp_eq_ntt_spec [DecidableEq F] [Inhabited F]
     (hlen : data.length = 2 ^ logN)
     (hroot : IsPrimitiveRoot omega (2 ^ logN))
     (twiddles : Nat → F)
-    (htw : ∀ stage group pair,
-      stage < logN →
-      let half := 2 ^ stage
-      let stride := 2 ^ (logN - 1 - stage)
-      group < 2 ^ logN / (2 * half) →
+    (htw : ∀ stageIdx group pair,
+      stageIdx < logN →
+      let half := 2 ^ (logN - 1 - stageIdx)
+      let numGroups := 2 ^ stageIdx
+      group < numGroups →
       pair < half →
-      twiddles (stage * (2 ^ logN / 2) + group * half + pair) =
-        omega ^ (pair * stride)) :
+      twiddles (stageIdx * (2 ^ logN / 2) + group * half + pair) =
+        omega ^ (pair * numGroups)) :
     applyAllStages_DIT (bitRevPermute logN data) twiddles logN =
     ntt_spec_generic omega data := by
   rw [dit_bottomUp_eq_ntt_generic data omega logN hlen hroot twiddles htw]
