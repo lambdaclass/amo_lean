@@ -205,6 +205,125 @@ def applyAllStages_DIT (data : List F) (twiddles : Nat → F) (logN : Nat) : Lis
   simp [bitRevPermute]
 
 -- ══════════════════════════════════════════════════════════════════
+-- bitRev structural lemmas for the DIT correctness proof
+-- ══════════════════════════════════════════════════════════════════
+
+/-- bitRev.go with nonzero initial result = shift + bitRev.go with zero. -/
+private lemma bitRev_go_shift (v result fuel : Nat) :
+    bitRev.go v result fuel = result * 2 ^ fuel + bitRev.go v 0 fuel := by
+  induction fuel generalizing v result with
+  | zero => simp [bitRev.go]
+  | succ n ih =>
+    simp only [bitRev.go, Nat.zero_mul, Nat.zero_add]
+    rw [ih (v / 2) (result * 2 + v % 2), ih (v / 2) (v % 2)]
+    ring
+
+/-- Expanding bitRev (n+1) i via LSB extraction. -/
+private lemma bitRev_succ (n i : Nat) :
+    bitRev (n + 1) i = (i % 2) * 2 ^ n + bitRev n (i / 2) := by
+  simp only [bitRev, bitRev.go]
+  rw [bitRev_go_shift]
+  ring
+
+/-- Key identity: for i < 2^n, bitRev (n+1) i = 2 * bitRev n i.
+    (The extra bit position adds a trailing 0 in the reversed form.) -/
+theorem bitRev_succ_lt (n i : Nat) (hi : i < 2 ^ n) :
+    bitRev (n + 1) i = 2 * bitRev n i := by
+  induction n generalizing i with
+  | zero =>
+    interval_cases i
+    simp [bitRev, bitRev.go]
+  | succ k ih =>
+    rw [bitRev_succ (k + 1) i]
+    have hi2 : i / 2 < 2 ^ k := by omega
+    rw [ih (i / 2) hi2]
+    rw [bitRev_succ k i]
+    ring
+
+/-- Key identity: for j < 2^n, bitRev (n+1) (2^n + j) = 2 * bitRev n j + 1.
+    (The MSB=1 becomes the trailing 1 in the reversed form.) -/
+theorem bitRev_succ_ge (n j : Nat) (hj : j < 2 ^ n) :
+    bitRev (n + 1) (2 ^ n + j) = 2 * bitRev n j + 1 := by
+  induction n generalizing j with
+  | zero =>
+    interval_cases j
+    simp [bitRev, bitRev.go]
+  | succ k ih =>
+    rw [bitRev_succ (k + 1) (2 ^ (k + 1) + j)]
+    rw [show (2 ^ (k + 1) + j) % 2 = j % 2 from by omega]
+    rw [show (2 ^ (k + 1) + j) / 2 = 2 ^ k + j / 2 from by omega]
+    have hj2 : j / 2 < 2 ^ k := by omega
+    rw [ih (j / 2) hj2, bitRev_succ k j]
+    ring
+
+/-- bitRev maps [0, 2^n) to [0, 2^n). -/
+private lemma bitRev_lt (n i : Nat) (hi : i < 2 ^ n) : bitRev n i < 2 ^ n := by
+  induction n generalizing i with
+  | zero => interval_cases i; simp [bitRev, bitRev.go]
+  | succ k ih =>
+    rw [bitRev_succ]
+    have hi2 : i / 2 < 2 ^ k := by omega
+    have hbr : bitRev k (i / 2) < 2 ^ k := ih (i / 2) hi2
+    have hmod : i % 2 ≤ 1 := by omega
+    have h1 : (i % 2) * 2 ^ k ≤ 1 * 2 ^ k := Nat.mul_le_mul_right _ hmod
+    have : 2 ^ (k + 1) = 2 ^ k + 2 ^ k := by omega
+    omega
+
+/-- Element access for bitRevPermute via getD. -/
+private lemma bitRevPermute_getD [Inhabited F] (logN : Nat) (xs : List F)
+    (i : Nat) (hi : i < 2 ^ logN) :
+    (bitRevPermute logN xs).getD i default = xs.getD (bitRev logN i) default := by
+  simp only [bitRevPermute, List.getD_eq_getElem?_getD]
+  rw [List.getElem?_map, List.getElem?_range hi]
+  simp
+
+/-- bitRevPermute (n+1) splits into evens/odds halves:
+    first 2^n elements = bitRevPermute n (evens data),
+    second 2^n elements = bitRevPermute n (odds data). -/
+theorem bitRevPermute_split [Inhabited F] (n : Nat) (data : List F)
+    (hlen : data.length = 2 ^ (n + 1)) :
+    bitRevPermute (n + 1) data =
+    bitRevPermute n (evens data) ++ bitRevPermute n (odds data) := by
+  apply List.ext_getElem
+  · simp [bitRevPermute_length]; omega
+  · intro i h1 h2
+    have hi_bound : i < 2 ^ (n + 1) := by rwa [bitRevPermute_length] at h1
+    -- Use getD-based reasoning: convert getElem to getD
+    rw [show (bitRevPermute (n + 1) data)[i] =
+           (bitRevPermute (n + 1) data).getD i default from by
+         simp [List.getD_eq_getElem?_getD, List.getElem?_eq_getElem h1]]
+    rw [show (bitRevPermute n (evens data) ++ bitRevPermute n (odds data))[i] =
+           (bitRevPermute n (evens data) ++ bitRevPermute n (odds data)).getD i default from by
+         simp [List.getD_eq_getElem?_getD, List.getElem?_eq_getElem h2]]
+    -- Goal: data.getD (bitRev (n+1) i) default = (A ++ B).getD i default
+    -- where A = bitRevPermute n (evens data), B = bitRevPermute n (odds data)
+    rw [bitRevPermute_getD (n + 1) data i hi_bound]
+    have hlen_left : (bitRevPermute n (evens data)).length = 2 ^ n := bitRevPermute_length n _
+    by_cases hi : i < 2 ^ n
+    · -- First half → evens
+      rw [bitRev_succ_lt n i hi]
+      conv_rhs => rw [List.getD_eq_getElem?_getD, List.getElem?_append_left (by omega)]
+      rw [← List.getD_eq_getElem?_getD, bitRevPermute_getD n (evens data) i hi]
+      have hbr := bitRev_lt n i hi
+      have hbr_ev : bitRev n i < (evens data).length := by
+        rw [evens_length_pow2 data (n + 1) (by omega) hlen]; exact hbr
+      rw [List.getD_eq_getElem?_getD, List.getD_eq_getElem?_getD,
+          evens_get data (bitRev n i) hbr_ev]
+    · -- Second half → odds
+      push_neg at hi
+      have hi2 : i - 2 ^ n < 2 ^ n := by omega
+      rw [show i = 2 ^ n + (i - 2 ^ n) from by omega, bitRev_succ_ge n (i - 2 ^ n) hi2]
+      conv_rhs => rw [List.getD_eq_getElem?_getD, List.getElem?_append_right (by omega)]
+      rw [show 2 ^ n + (i - 2 ^ n) - (bitRevPermute n (evens data)).length = i - 2 ^ n from by
+            rw [hlen_left]; omega]
+      rw [← List.getD_eq_getElem?_getD, bitRevPermute_getD n (odds data) (i - 2 ^ n) hi2]
+      have hbr := bitRev_lt n (i - 2 ^ n) hi2
+      have hbr_od : bitRev n (i - 2 ^ n) < (odds data).length := by
+        rw [odds_length_pow2 data (n + 1) (by omega) hlen]; exact hbr
+      rw [List.getD_eq_getElem?_getD, List.getD_eq_getElem?_getD,
+          odds_get data (bitRev n (i - 2 ^ n)) hbr_od]
+
+-- ══════════════════════════════════════════════════════════════════
 -- Proof roadmap for dit_bottomUp_eq_ntt_generic
 --
 -- FINDING: A naive "blocks contain sub-NTTs" invariant is INCORRECT.
