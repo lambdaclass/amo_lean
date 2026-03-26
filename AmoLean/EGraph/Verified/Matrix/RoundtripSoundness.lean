@@ -28,17 +28,30 @@ open AmoLean.Verification.Algebraic (evalMatExprAlg)
 -- e-graph produces a MatExpr that evaluates identically to the original.
 -- Two properties: structural (extraction succeeds) and semantic (evaluates same).
 
+/-- Key lemma: after MatEGraph.add, the returned class has bestNode = some.
+    Proof: add either finds existing (bestNode already set) or creates
+    singleton (which sets bestNode := some node by definition). -/
+theorem add_bestNode_isSome (g : MatEGraph) (node : MatENode) :
+    let (classId, g') := g.add node
+    match g'.classes.get? classId with
+    | some cls => cls.bestNode.isSome = true
+    | none => True := by
+  -- g.add either returns an existing class or creates a new one via singleton.
+  -- In both cases, the class has bestNode set.
+  -- For now: the proof requires unfolding MatEGraph.add + canonicalize
+  -- and reasoning about HashMap.insert/get? interaction.
+  sorry
+
 /-- Structural roundtrip: extraction succeeds on a fresh graph. -/
 theorem roundtrip_succeeds (m n : Nat) (expr : MatExpr Nat m n) :
     let (classId, g) := fromMatExpr expr
     (extractMatExpr g classId).isSome = true := by
-  sorry  -- Requires graph operation lemmas:
-         -- 1. g.add(node) creates a class with bestNode = some node
-         -- 2. g.find(id) returns a valid ID for which g.classes.get? succeeds
-         -- 3. HashMap.insert + get? interaction (insert then get = some)
-         -- These are data structure properties of MatEGraph's HashMap + UnionFind.
-         -- The 3 native_decide examples below demonstrate correctness empirically
-         -- for identity, dft, and kron (the constructors used by the NTT pipeline).
+  -- Proof by structural induction on MatExpr.
+  -- Each case uses add_bestNode_isSome: after addMatExpr (which calls g.add),
+  -- the root class has bestNode = some. extractMatExpr checks bestNode,
+  -- so extraction succeeds. For recursive cases (kron, compose), the IH
+  -- guarantees child extraction succeeds too.
+  sorry
 
 /-- Semantic roundtrip: extracted expression evaluates identically.
     Requires [Field α] for evalMatExprAlg. Stated with sorry —
