@@ -409,14 +409,17 @@ private lemma dit_last_stage_combine [DecidableEq F] [Inhabited F]
       ntt_generic (omega * omega) (evens data) ++ ntt_generic (omega * omega) (odds data)) :
     applyStage intermediate twiddles (n + 1) (n + 1 - 1 - n) =
     ntt_generic omega data := by
-  -- stageIdx = 0, so stagePairs (n+1) 0 generates:
-  --   half = 2^n, numGroups = 2^0 = 1, pairs (k, k + 2^n) for k = 0..2^n-1
-  -- twIdx = 0 * 2^n + 0 * 2^n + k = k
-  -- htw at stageIdx=0: twiddles(k) = omega^(k * 1) = omega^k
-  -- So butterfly at (k, k+2^n) uses twiddle omega^k.
-  -- Result: output[k] = E[k] + omega^k * O[k] (upper half)
-  --         output[k+2^n] = E[k] - omega^k * O[k] (lower half)
-  -- This matches ntt_generic omega data's recursive structure.
+  -- Proof: stageIdx = 0 butterflies at (k, k+2^n) with twiddle omega^k
+  -- transform E++O into the CT butterfly combination = ntt_generic omega data.
+  -- The non-overlapping pairs (k, k+2^n) for k=0..2^n-1 each modify exactly
+  -- two positions, and no two pairs share a position. So the foldl result
+  -- at position k is determined solely by the butterfly touching k.
+  --
+  -- Full proof requires: (1) unfold stagePairs (n+1) 0, (2) show non-overlapping
+  -- butterfly foldl element-wise via butterflyAt_get_i/j/other + L-700 pattern
+  -- (generalize accumulator for foldl preservation), (3) match with ntt_generic
+  -- unfolding via ntt_coeff_generic_split / ntt_coeff_generic_split_upper.
+  -- Each step is ~30 LOC; total ~80-100 LOC of List.set/getElem reasoning.
   sorry
 
 /-- bitRevPermute 0 of a singleton is itself. -/
