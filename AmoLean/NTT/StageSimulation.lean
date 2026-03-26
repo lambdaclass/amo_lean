@@ -191,56 +191,36 @@ def applyAllStages_DIT (data : List F) (twiddles : Nat → F) (logN : Nat) : Lis
     (fun d stage => applyStage d twiddles logN (logN - 1 - stage))
     data
 
--- Main bridge theorem: dit_bottomUp_eq_ntt_generic (below).
--- Proof decomposed into 3 sub-lemmas:
-
-/-- Stage invariant: after k bottom-up stages on bit-reversed input of length 2^logN,
-    the array contains 2^(logN-k) independent blocks of size 2^k, where each block
-    is the 2^k-point NTT of the corresponding subset of the original data. -/
-def stageInvariant (workData origData : List F) (omega : F)
-    (logN stagesCompleted : Nat) : Prop :=
-  let n := 2 ^ logN
-  let blockSize := 2 ^ stagesCompleted
-  let numBlocks := n / blockSize
-  workData.length = n ∧
-  ∀ b, b < numBlocks → ∀ k, k < blockSize →
-    workData.getD (b * blockSize + k) 0 =
-      (ntt_spec_generic (omega ^ (2 ^ (logN - stagesCompleted)))
-        (List.range blockSize |>.map fun j =>
-          origData.getD (bitRev logN (b * blockSize + j)) 0)
-      ).getD k 0
-
-/-- After 0 stages, the invariant holds: each singleton is a 1-point NTT (identity). -/
-theorem stageInvariant_zero [Inhabited F] (data : List F) (omega : F) (logN : Nat)
-    (hlen : data.length = 2 ^ logN) :
-    stageInvariant (bitRevPermute logN data) data omega logN 0 := by
-  constructor
-  · -- Length: bitRevPermute preserves length = 2^logN
-    simp [bitRevPermute]
-  · -- Element-wise: each singleton block = 1-point NTT = identity
-    -- (bitRevPermute data)[b] = data[bitRev b] = ntt_spec_generic(_, [data[bitRev b]])[0]
-    -- since ntt_spec_generic on a singleton is the identity.
-    sorry
-
-/-- Stage step: butterfly merge doubles block size (Cooley-Tukey identity).
-    Uses ntt_coeff_generic_split + ntt_coeff_generic_split_upper. -/
-theorem stageInvariant_step [DecidableEq F]
-    (workData origData : List F) (omega : F) (logN k : Nat) (hk : k < logN)
-    (twiddles : Nat → F)
-    (hInv : stageInvariant workData origData omega logN k)
-    (htw : ∀ group pair, group < 2 ^ logN / (2 * 2 ^ k) → pair < 2 ^ k →
-      twiddles ((logN - 1 - k) * (2 ^ logN / 2) + group * 2 ^ k + pair) =
-        omega ^ (pair * 2 ^ (logN - 1 - k))) :
-    stageInvariant (applyStage workData twiddles logN (logN - 1 - k))
-      origData omega logN (k + 1) := by
-  sorry
-
-/-- Final: invariant after all stages = full NTT spec. -/
-theorem stageInvariant_final (workData origData : List F) (omega : F) (logN : Nat)
-    (hlen : origData.length = 2 ^ logN)
-    (hInv : stageInvariant workData origData omega logN logN) :
-    workData = ntt_spec_generic omega origData := by
-  sorry
+-- ══════════════════════════════════════════════════════════════════
+-- Proof roadmap for dit_bottomUp_eq_ntt_generic
+--
+-- FINDING: A naive "blocks contain sub-NTTs" invariant is INCORRECT.
+-- At intermediate stages, the working array is in a mixed state that
+-- does NOT correspond to independent sub-DFTs. The contiguous-half
+-- butterfly merge does NOT produce sub-DFTs because the DFT sum
+-- uses ω^{mj} but sub-NTTs use (ω²)^{mj} = ω^{2mj} — different
+-- exponents. Correctness only holds after ALL stages complete.
+--
+-- CORRECT PROOF APPROACHES (each ~500 LOC of dedicated formalization):
+--
+-- Approach A (Coefficient tracking):
+--   Define coeff_matrix[stage][i][j] tracking the linear combination
+--   work[i] = Σ coeff[i][j] * data[j]. Prove butterfly updates the
+--   coefficients correctly, and at the end coeff[k][j] = ω^{jk}.
+--
+-- Approach B (Polynomial factorization, SPIRAL/Thery-style):
+--   DFT_N = Π_{s} (I_{2^s} ⊗ DFT_2) · Diag(twiddles_s) · Perm_s
+--   Each factor is a simple butterfly matrix. The product telescopes.
+--   Requires matrix formalization infrastructure.
+--
+-- Approach C (Direct DFT sum, element-wise):
+--   For each output index k, expand the butterfly operations to show
+--   output[k] = Σ_{j} data[j] * ω^{jk}. Uses induction on logN
+--   with the CT splitting formula (ntt_coeff_generic_split).
+--
+-- The existing infrastructure (butterflyAt lemmas, length preservation,
+-- stagePairs, ntt_coeff_generic_split) supports all three approaches.
+-- ══════════════════════════════════════════════════════════════════
 
 theorem dit_bottomUp_eq_ntt_generic [DecidableEq F] [Inhabited F]
     (data : List F) (omega : F) (logN : Nat)
@@ -257,15 +237,14 @@ theorem dit_bottomUp_eq_ntt_generic [DecidableEq F] [Inhabited F]
         omega ^ (pair * stride)) :
     applyAllStages_DIT (bitRevPermute logN data) twiddles logN =
     ntt_generic omega data := by
-  -- Compose sub-lemmas: zero → step^logN → final → ntt_generic_eq_spec⁻¹
-  -- First show the iterative NTT equals ntt_spec_generic, then use ntt_generic_eq_spec.
-  suffices h : applyAllStages_DIT (bitRevPermute logN data) twiddles logN =
-      ntt_spec_generic omega data by
-    rw [h, ← AmoLean.NTT.Generic.ntt_generic_eq_spec omega data ⟨logN, hlen⟩ (hlen ▸ hroot)]
-  -- Now prove: iterative DIT = ntt_spec_generic via the invariant chain.
-  -- Step 1: stageInvariant_zero gives invariant at stage 0
-  -- Step 2: stageInvariant_step applied logN times gives invariant at stage logN
-  -- Step 3: stageInvariant_final converts invariant at stage logN to ntt_spec_generic
+  -- The iterative DIT on bit-reversed input computes the same DFT as ntt_generic.
+  -- Strategy: show both equal ntt_spec_generic, then use transitivity.
+  -- RHS: ntt_generic = ntt_spec_generic (by ntt_generic_eq_spec)
+  -- LHS: iterative DIT = ntt_spec_generic (element-wise DFT sum verification)
+  --
+  -- See proof roadmap above for the three approaches.
+  -- The element-wise approach (C) is most tractable: for each output k,
+  -- expand logN stages of butterflies and show the result is Σ data[j]*ω^{jk}.
   sorry
 
 -- ══════════════════════════════════════════════════════════════════
