@@ -390,6 +390,36 @@ private lemma dit_first_n_stages_independent [DecidableEq F] [Inhabited F]
   -- By IH: each half's result = ntt_generic (omega²) (evens/odds data).
   sorry
 
+-- ══════════════════════════════════════════════════════════════════
+-- N2: Core lemma — foldl of disjoint butterflies is element-wise predictable
+-- ══════════════════════════════════════════════════════════════════
+
+/-- After a foldl of butterflyAt over non-overlapping pairs, position k retains
+    its original value if no pair touches k. Generalized over accumulator (L-700). -/
+private lemma foldl_butterflyAt_getElem_untouched
+    (pairs : List ButterflyPair) (twiddles : Nat → F) (acc : List F)
+    (k : Nat) (hk : k < acc.length)
+    (hbounds : ∀ bp ∈ pairs, bp.i < acc.length ∧ bp.j < acc.length)
+    (hdisjoint : ∀ bp ∈ pairs, bp.i ≠ k ∧ bp.j ≠ k) :
+    (pairs.foldl (fun d bp => butterflyAt d bp.i bp.j (twiddles bp.twiddleIdx)) acc)[k]'
+      (by rw [foldl_butterflyAt_length]; exact hk) =
+    acc[k] := by
+  induction pairs generalizing acc with
+  | nil => simp [List.foldl]
+  | cons bp rest ih =>
+    simp only [List.foldl_cons]
+    have hbp_disj := hdisjoint bp (List.mem_cons.mpr (Or.inl rfl))
+    have hbp_bnd := hbounds bp (List.mem_cons.mpr (Or.inl rfl))
+    have hrest_disj : ∀ bp' ∈ rest, bp'.i ≠ k ∧ bp'.j ≠ k :=
+      fun bp' h => hdisjoint bp' (List.mem_cons.mpr (Or.inr h))
+    have hrest_bnd : ∀ bp' ∈ rest, bp'.i < (butterflyAt acc bp.i bp.j (twiddles bp.twiddleIdx)).length ∧
+        bp'.j < (butterflyAt acc bp.i bp.j (twiddles bp.twiddleIdx)).length :=
+      fun bp' h => by rw [butterflyAt_length]; exact hbounds bp' (List.mem_cons.mpr (Or.inr h))
+    rw [ih (butterflyAt acc bp.i bp.j (twiddles bp.twiddleIdx))
+          (by rw [butterflyAt_length]; exact hk) hrest_bnd hrest_disj]
+    exact butterflyAt_get_other acc bp.i bp.j k (twiddles bp.twiddleIdx)
+      hbp_bnd.1 hbp_bnd.2 hbp_disj.1.symm hbp_disj.2.symm hk
+
 /-- Sub-lemma 2: The last DIT stage (stageIdx = 0, distance = 2^n) applies
     butterfly operations across the two halves, combining E and O into
     the full NTT via the Cooley-Tukey formula. -/
