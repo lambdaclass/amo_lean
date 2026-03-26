@@ -354,6 +354,73 @@ theorem bitRevPermute_split [Inhabited F] (n : Nat) (data : List F)
 -- stagePairs, ntt_coeff_generic_split) supports all three approaches.
 -- ══════════════════════════════════════════════════════════════════
 
+/-- Sub-lemma 1: The first n DIT stages on bitRevPermute (n+1) data produce
+    ntt_generic (ω²) (evens data) ++ ntt_generic (ω²) (odds data).
+    Butterflies at stageIdx ≥ 1 have distance < 2^n, so they don't cross the
+    midpoint of the concatenated list. Each half independently computes a
+    sub-DFT via twiddle-value correspondence + IH. -/
+private lemma dit_first_n_stages_independent [DecidableEq F] [Inhabited F]
+    (n : Nat) (data : List F) (omega : F) (twiddles : Nat → F)
+    (hlen : data.length = 2 ^ (n + 1))
+    (hroot : IsPrimitiveRoot omega (2 ^ (n + 1)))
+    (htw : ∀ stage group pair,
+      stage < n + 1 →
+      let half := 2 ^ stage
+      let stride := 2 ^ (n + 1 - 1 - stage)
+      group < 2 ^ (n + 1) / (2 * half) →
+      pair < half →
+      twiddles (stage * (2 ^ (n + 1) / 2) + group * half + pair) = omega ^ (pair * stride))
+    (ih : ∀ (data' : List F) (omega' : F),
+      data'.length = 2 ^ n → IsPrimitiveRoot omega' (2 ^ n) →
+      ∀ (twiddles' : Nat → F),
+        (∀ stage group pair, stage < n →
+          let half := 2 ^ stage; let stride := 2 ^ (n - 1 - stage)
+          group < 2 ^ n / (2 * half) → pair < half →
+          twiddles' (stage * (2 ^ n / 2) + group * half + pair) = omega' ^ (pair * stride)) →
+        applyAllStages_DIT (bitRevPermute n data') twiddles' n = ntt_generic omega' data') :
+    (List.range n).foldl
+      (fun d stage => applyStage d twiddles (n + 1) (n + 1 - 1 - stage))
+      (bitRevPermute n (evens data) ++ bitRevPermute n (odds data)) =
+    ntt_generic (omega * omega) (evens data) ++ ntt_generic (omega * omega) (odds data) := by
+  -- The first n stages use stageIdx = n, n-1, ..., 1.
+  -- At each stage, half = 2^(n - stageIdx) < 2^n, so butterflies stay within halves.
+  -- Each half independently processes a standalone DIT with appropriate twiddles.
+  -- By twiddle-value correspondence: big twiddle at index (s, g, p) has value
+  --   omega^(p * 2^(n-s)) = (omega²)^(p * 2^(n-1-s)) = sub-DFT twiddle value.
+  -- By IH: each half's result = ntt_generic (omega²) (evens/odds data).
+  sorry
+
+/-- Sub-lemma 2: The last DIT stage (stageIdx = 0, distance = 2^n) applies
+    butterfly operations across the two halves, combining E and O into
+    the full NTT via the Cooley-Tukey formula. -/
+private lemma dit_last_stage_combine [DecidableEq F] [Inhabited F]
+    (n : Nat) (data : List F) (omega : F) (twiddles : Nat → F)
+    (hlen : data.length = 2 ^ (n + 1))
+    (hroot : IsPrimitiveRoot omega (2 ^ (n + 1)))
+    (htw : ∀ stage group pair,
+      stage < n + 1 →
+      let half := 2 ^ stage
+      let stride := 2 ^ (n + 1 - 1 - stage)
+      group < 2 ^ (n + 1) / (2 * half) →
+      pair < half →
+      twiddles (stage * (2 ^ (n + 1) / 2) + group * half + pair) = omega ^ (pair * stride))
+    (intermediate : List F)
+    (h_int : intermediate =
+      ntt_generic (omega * omega) (evens data) ++ ntt_generic (omega * omega) (odds data)) :
+    applyStage intermediate twiddles (n + 1) (n + 1 - 1 - n) =
+    ntt_generic omega data := by
+  -- stageIdx = n+1-1-n = 0, so stagePairs (n+1) 0 generates:
+  --   half = 2^n, numGroups = 1, pairs (k, k + 2^n) for k = 0..2^n-1
+  -- twiddle at pair k: htw gives omega^(k * 1) = omega^k (stride = 2^(n+1-1-n) = 2^0 = 1... wait)
+  -- Actually stride = 2^(n+1-1-0) = 2^n for stageIdx=0 in htw. But htw indexes by DIT stage, not stageIdx.
+  -- DIT stage n corresponds to stageIdx 0.
+  -- htw at stage=n: twiddles(n * 2^n + 0 * 2^n + k) = omega^(k * 2^0) = omega^k
+  -- So butterfly at (k, k+2^n) uses twiddle omega^k.
+  -- Result: output[k] = E[k] + omega^k * O[k] (upper half)
+  --         output[k+2^n] = E[k] - omega^k * O[k] (lower half)
+  -- This matches ntt_generic omega data's recursive structure.
+  sorry
+
 /-- bitRevPermute 0 of a singleton is itself. -/
 private lemma bitRevPermute_zero_singleton [Inhabited F] (x : F) :
     bitRevPermute 0 [x] = [x] := by
@@ -391,28 +458,49 @@ theorem dit_bottomUp_eq_ntt_generic [DecidableEq F] [Inhabited F]
   induction logN generalizing data omega twiddles with
   | zero => exact dit_base_case_zero data omega twiddles hlen
   | succ n ih =>
-    -- Bridge: both sides equal ntt_spec_generic omega data.
-    -- Use ntt_generic_eq_spec for the RHS.
-    rw [AmoLean.NTT.Generic.ntt_generic_eq_spec omega data ⟨n + 1, hlen⟩ (hlen ▸ hroot)]
-    -- Now goal: applyAllStages_DIT (bitRevPermute (n+1) data) twiddles (n+1) =
-    --           ntt_spec_generic omega data
-    -- Use list extensionality: equal length + equal elements
-    apply List.ext_getElem
-    · -- Length equality
-      simp [applyAllStages_DIT_length, bitRevPermute_length,
-            AmoLean.NTT.Generic.ntt_spec_generic_length, hlen]
-    · -- Element-wise equality: for each k, output[k] = DFT coeff k
-      -- This is the core of the Cooley-Tukey theorem.
-      -- The proof requires showing:
-      -- (a) bitRevPermute (n+1) splits into evens/odds halves
-      -- (b) First n DIT stages = independent sub-DFTs on each half (stage
-      --     independence: butterflies with distance < N don't cross halves)
-      -- (c) Last stage (stageIdx=0, distance=N) combines via butterfly
-      --     matching ntt_coeff_generic_split / ntt_coeff_generic_split_upper
-      -- Available lemmas: butterflyAt_get_i/j/other, ntt_coeff_generic_split,
-      --   ntt_coeff_generic_split_upper, squared_is_primitive, IH
-      intro k hk1 hk2
-      sorry
+    -- Step 1: Decompose input via bitRevPermute_split
+    rw [bitRevPermute_split n data hlen]
+    -- Goal: applyAllStages_DIT (bRP n (evens data) ++ bRP n (odds data)) twiddles (n+1) =
+    --       ntt_generic omega data
+    -- Step 2: Unfold applyAllStages_DIT (n+1) = lastStage ∘ firstNStages
+    -- The DIT applies n+1 stages to A ++ B where A = bRP n (evens), B = bRP n (odds):
+    --   Stages 0..n-1 (stageIdx n..1): butterflies within halves (distance < 2^n)
+    --   Stage n (stageIdx 0): butterflies across halves (distance = 2^n)
+    -- After first n stages: the halves become independent sub-DFTs E, O
+    -- After last stage: butterfly combine E, O → ntt_generic omega data
+    --
+    -- Key sub-lemma (stage independence + IH application):
+    -- The first n DIT stages on A ++ B produce E ++ O where
+    --   E = ntt_generic (ω²) (evens data)
+    --   O = ntt_generic (ω²) (odds data)
+    -- This requires:
+    --   (i) Butterflies with stageIdx ≥ 1 don't cross the midpoint (index arithmetic)
+    --   (ii) The butterfly operations on each half match a standalone DIT
+    --   (iii) Twiddle values match between big and standalone indexing
+    --   (iv) IH application on each half
+    --
+    -- Key sub-lemma (last stage combine):
+    -- applyStage (E ++ O) twiddles (n+1) 0 produces the CT butterfly combination
+    -- matching ntt_generic omega data's upper ++ lower structure.
+    -- Decompose foldl (n+1) = foldl (first n) then one more step
+    show (List.range (n + 1)).foldl
+      (fun d stage => applyStage d twiddles (n + 1) (n + 1 - 1 - stage))
+      (bitRevPermute n (evens data) ++ bitRevPermute n (odds data)) =
+      ntt_generic omega data
+    rw [List.range_succ, List.foldl_append, List.foldl_cons, List.foldl_nil]
+    -- Define intermediate state after first n stages
+    set intermediate := (List.range n).foldl
+      (fun d stage => applyStage d twiddles (n + 1) (n + 1 - 1 - stage))
+      (bitRevPermute n (evens data) ++ bitRevPermute n (odds data))
+    -- Sub-lemma 1: first n stages produce E ++ O (sub-DFTs on each half)
+    -- Butterflies with stageIdx ≥ 1 have distance < 2^n, so they don't cross halves.
+    -- Each half independently computes a sub-DFT via twiddle-value correspondence.
+    have h_intermediate :
+        intermediate = ntt_generic (omega * omega) (evens data) ++
+                       ntt_generic (omega * omega) (odds data) :=
+      dit_first_n_stages_independent n data omega twiddles hlen hroot htw ih
+    -- Sub-lemma 2: last stage butterfly combines E ++ O into ntt_generic omega data
+    exact dit_last_stage_combine n data omega twiddles hlen hroot htw intermediate h_intermediate
 
 -- ══════════════════════════════════════════════════════════════════
 -- Layer 3b: Deprecated top-down formulation
