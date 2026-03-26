@@ -439,17 +439,15 @@ private lemma dit_last_stage_combine [DecidableEq F] [Inhabited F]
       ntt_generic (omega * omega) (evens data) ++ ntt_generic (omega * omega) (odds data)) :
     applyStage intermediate twiddles (n + 1) (n + 1 - 1 - n) =
     ntt_generic omega data := by
-  -- Proof: stageIdx = 0 butterflies at (k, k+2^n) with twiddle omega^k
-  -- transform E++O into the CT butterfly combination = ntt_generic omega data.
+  -- Step 1: Simplify stageIdx = n+1-1-n = 0
+  -- Step 2: Unfold ntt_generic for data.length ≥ 2
+  -- Step 3: Show element-wise equality using butterfly lemmas
   -- The non-overlapping pairs (k, k+2^n) for k=0..2^n-1 each modify exactly
-  -- two positions, and no two pairs share a position. So the foldl result
-  -- at position k is determined solely by the butterfly touching k.
-  --
-  -- Full proof requires: (1) unfold stagePairs (n+1) 0, (2) show non-overlapping
-  -- butterfly foldl element-wise via butterflyAt_get_i/j/other + L-700 pattern
-  -- (generalize accumulator for foldl preservation), (3) match with ntt_generic
-  -- unfolding via ntt_coeff_generic_split / ntt_coeff_generic_split_upper.
-  -- Each step is ~30 LOC; total ~80-100 LOC of List.set/getElem reasoning.
+  -- two positions, and no two pairs share a position.
+  -- foldl_butterflyAt_getElem_untouched handles untouched positions.
+  -- butterflyAt_get_i/j handle the touched positions.
+  -- htw at stageIdx=0 gives twiddles(k) = omega^k.
+  -- ntt_generic_unfold gives the target as upper ++ lower.
   sorry
 
 /-- bitRevPermute 0 of a singleton is itself. -/
