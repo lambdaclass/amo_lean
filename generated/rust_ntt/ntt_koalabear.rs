@@ -9,17 +9,16 @@ use std::time::Instant;
 const P: u32 = 2130706433;
 
 #[inline(always)]
-fn solinas_fold(x: u64) -> u32 {
-    (((x >> 31) as u64).wrapping_mul(1 as u64))
-        .wrapping_add(x & 2147483647 as u64) as u32
+fn reduce(x: u64) -> u32 {
+    (x % P as u64) as u32
 }
 
 #[inline(always)]
 fn butterfly(a: &mut u32, b: &mut u32, w: u32) {
     let orig_a = *a;
-    let wb = solinas_fold((w as u64).wrapping_mul(*b as u64));
-    *a = solinas_fold((orig_a as u64).wrapping_add(wb as u64));
-    *b = solinas_fold((2130706433 as u64).wrapping_add(orig_a as u64).wrapping_sub(wb as u64));
+    let wb = reduce((w as u64).wrapping_mul(*b as u64));
+    *a = reduce((orig_a as u64).wrapping_add(wb as u64));
+    *b = reduce((2130706433 as u64).wrapping_add(orig_a as u64).wrapping_sub(wb as u64));
 }
 
 fn ntt_koalabear(data: &mut [u32], twiddles: &[u32]) {

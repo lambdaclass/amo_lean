@@ -1,10 +1,39 @@
-═══ Specification Audit: amo-lean ═══
-Theorems: 1553  Lemmas: 61  Pipeline: 360
-Clean: 1359  T1(vacuity): 0  T1.5(identity): 0  T2(weak): 23  T3(structural): 44  T4(no-witness): 188
+═══ Specification Audit: truth_research_zk ═══
+Theorems: 1783  Lemmas: 62  Pipeline: 416
+Clean: 1563  T1(vacuity): 1  T1.5(identity): 0  T2(weak): 29  T3(structural): 50  T4(no-witness): 202
 
-── TIER 2 — WEAK SPECS (23 issues) ──
+── TIER 1 — VACUITY (1 issues) ──
+  theorem wrapWidth_preserves_mod
+    AmoLean/EGraph/Verified/Bitwise/VerifiedCodeGen.lean:619
+    ⚠ T1-VACUOUS: conclusion is `True` — proves nothing
+
+── TIER 2 — WEAK SPECS (29 issues) ──
   theorem threePhaseSaturateF_preserves_consistent
     AmoLean/EGraph/Verified/Bitwise/Discovery/GuidedSaturation.lean:253
+    ⚠ T2-EXISTENTIAL-ONLY: conclusion is existential without equality/equivalence — may not reach concrete evaluation
+
+  theorem canonicalize_mod
+    AmoLean/EGraph/Verified/Bitwise/HarveyPreservation.lean:92
+    ⚠ T2-UNUSED-PARTIAL: 1/2 params are _-prefixed: ['_hp']
+
+  theorem canonicalize_lt [SORRY]
+    AmoLean/EGraph/Verified/Bitwise/HarveyPreservation.lean:111
+    ⚠ T2-UNUSED-PARTIAL: 1/2 params are _-prefixed: ['_hp']
+
+  theorem instantiateF_preserves
+    AmoLean/EGraph/Verified/Bitwise/MixedEMatchSoundness.lean:1380
+    ⚠ T2-EXISTENTIAL-ONLY: conclusion is existential without equality/equivalence — may not reach concrete evaluation
+
+  theorem saturateMixedF_preserves_consistent
+    AmoLean/EGraph/Verified/Bitwise/MixedSaturationSpec.lean:49
+    ⚠ T2-EXISTENTIAL-ONLY: conclusion is existential without equality/equivalence — may not reach concrete evaluation
+
+  theorem saturateMixedF_preserves_triple
+    AmoLean/EGraph/Verified/Bitwise/MixedSaturationSpec.lean:62
+    ⚠ T2-EXISTENTIAL-ONLY: conclusion is existential without equality/equivalence — may not reach concrete evaluation
+
+  theorem phasedSaturateMixedF_preserves_consistent
+    AmoLean/EGraph/Verified/Bitwise/MixedSaturationSpec.lean:88
     ⚠ T2-EXISTENTIAL-ONLY: conclusion is existential without equality/equivalence — may not reach concrete evaluation
 
   theorem phasedSaturateF_phase1_consistent
@@ -95,7 +124,7 @@ Clean: 1359  T1(vacuity): 0  T1.5(identity): 0  T2(weak): 23  T3(structural): 44
     AmoLean/Verification/Poseidon_Semantics.lean:567
     ⚠ T2-PIPELINE-SORRY: pipeline theorem contains sorry — top-level result is unverified
 
-── TIER 3 — STRUCTURAL (44 issues) ──
+── TIER 3 — STRUCTURAL (50 issues) ──
   theorem costAwareExtractF_zero_fuel_correct [PIPELINE]
     AmoLean/EGraph/Verified/Bitwise/CostExtraction.lean:279
     ⚠ T3-MANY-HYPOTHESES: 11 hypotheses on pipeline theorem — verify each is satisfiable and necessary
@@ -108,36 +137,62 @@ Clean: 1359  T1(vacuity): 0  T1.5(identity): 0  T2(weak): 23  T3(structural): 44
     AmoLean/EGraph/Verified/Bitwise/Discovery/LazyReduction.lean:103
     ⚠ T3-NAME-MISMATCH: name contains 'sound' but conclusion has no equality, biconditional, or implication
 
+  theorem foldl_sound_predicate [PIPELINE]
+    AmoLean/EGraph/Verified/Bitwise/MixedEMatchSoundness.lean:378
+    ⚠ T3-NAME-MISMATCH: name contains 'sound' but conclusion has no equality, biconditional, or implication
+    ⚠ T3-MANY-HYPOTHESES: 9 hypotheses on pipeline theorem — verify each is satisfiable and necessary
+
+  theorem matchChildren_combined_sound [PIPELINE]
+    AmoLean/EGraph/Verified/Bitwise/MixedEMatchSoundness.lean:512
+    ⚠ T3-MANY-HYPOTHESES: 20 hypotheses on pipeline theorem — verify each is satisfiable and necessary
+
+  theorem node_case_sound [PIPELINE]
+    AmoLean/EGraph/Verified/Bitwise/MixedEMatchSoundness.lean:767
+    ⚠ T3-NAME-MISMATCH: name contains 'sound' but conclusion has no equality, biconditional, or implication
+    ⚠ T3-MANY-HYPOTHESES: 21 hypotheses on pipeline theorem — verify each is satisfiable and necessary
+
+  theorem ematchF_sound_gen [PIPELINE]
+    AmoLean/EGraph/Verified/Bitwise/MixedEMatchSoundness.lean:933
+    ⚠ T3-MANY-HYPOTHESES: 14 hypotheses on pipeline theorem — verify each is satisfiable and necessary
+
+  theorem ematchF_sound [PIPELINE]
+    AmoLean/EGraph/Verified/Bitwise/MixedEMatchSoundness.lean:948
+    ⚠ T3-MANY-HYPOTHESES: 13 hypotheses on pipeline theorem — verify each is satisfiable and necessary
+
+  theorem instantiateF_sound [PIPELINE]
+    AmoLean/EGraph/Verified/Bitwise/MixedEMatchSoundness.lean:1221
+    ⚠ T3-MANY-HYPOTHESES: 15 hypotheses on pipeline theorem — verify each is satisfiable and necessary
+
   theorem mixed_extractable_sound [PIPELINE]
-    AmoLean/EGraph/Verified/Bitwise/MixedExtract.lean:103
+    AmoLean/EGraph/Verified/Bitwise/MixedExtract.lean:127
     ⚠ T3-NAME-MISMATCH: name contains 'sound' but conclusion has no equality, biconditional, or implication
 
   theorem mixed_extractF_correct [PIPELINE]
-    AmoLean/EGraph/Verified/Bitwise/MixedPipeline.lean:63
+    AmoLean/EGraph/Verified/Bitwise/MixedPipeline.lean:71
     ⚠ T3-MANY-HYPOTHESES: 10 hypotheses on pipeline theorem — verify each is satisfiable and necessary
 
   theorem mixed_extractAuto_correct [PIPELINE]
-    AmoLean/EGraph/Verified/Bitwise/MixedPipeline.lean:74
+    AmoLean/EGraph/Verified/Bitwise/MixedPipeline.lean:82
     ⚠ T3-MANY-HYPOTHESES: 9 hypotheses on pipeline theorem — verify each is satisfiable and necessary
 
   theorem mixedEquivalent_refl
-    AmoLean/EGraph/Verified/Bitwise/MixedPipeline.lean:167
+    AmoLean/EGraph/Verified/Bitwise/MixedPipeline.lean:175
     ⚠ T3-DIRECTION: name suggests equivalence but conclusion is unidirectional (→ not ↔)
 
   theorem mixedEquivalent_symm
-    AmoLean/EGraph/Verified/Bitwise/MixedPipeline.lean:172
+    AmoLean/EGraph/Verified/Bitwise/MixedPipeline.lean:180
     ⚠ T3-DIRECTION: name suggests equivalence but conclusion is unidirectional (→ not ↔)
 
   theorem mixedEquivalent_trans
-    AmoLean/EGraph/Verified/Bitwise/MixedPipeline.lean:178
+    AmoLean/EGraph/Verified/Bitwise/MixedPipeline.lean:186
     ⚠ T3-DIRECTION: name suggests equivalence but conclusion is unidirectional (→ not ↔)
 
   theorem extract_same_class_equivalent
-    AmoLean/EGraph/Verified/Bitwise/MixedPipeline.lean:185
+    AmoLean/EGraph/Verified/Bitwise/MixedPipeline.lean:193
     ⚠ T3-DIRECTION: name suggests equivalence but conclusion is unidirectional (→ not ↔)
 
   theorem pipeline_mixed_equivalent [PIPELINE]
-    AmoLean/EGraph/Verified/Bitwise/MixedPipeline.lean:204
+    AmoLean/EGraph/Verified/Bitwise/MixedPipeline.lean:212
     ⚠ T3-MANY-HYPOTHESES: 10 hypotheses on pipeline theorem — verify each is satisfiable and necessary
     ⚠ T3-DIRECTION: name suggests equivalence but conclusion is unidirectional (→ not ↔)
 
@@ -274,7 +329,7 @@ Clean: 1359  T1(vacuity): 0  T1.5(identity): 0  T2(weak): 23  T3(structural): 44
     AmoLean/Plonky3/EndToEnd.lean:75
     ⚠ T3-MANY-HYPOTHESES: 9 hypotheses on pipeline theorem — verify each is satisfiable and necessary
 
-── TIER 4 — NO WITNESS (188 issues) ──
+── TIER 4 — NO WITNESS (202 issues) ──
   lemma applyFirst_sound [PIPELINE]
     AmoLean/Correctness.lean:239
     ⚠ T4-NO-WITNESS: 2 Prop hypotheses [pipeline, threshold=2] but no non-vacuity example found in Tests/NonVacuity*.lean or same file
@@ -283,6 +338,76 @@ Clean: 1359  T1(vacuity): 0  T1.5(identity): 0  T2(weak): 23  T3(structural): 44
     AmoLean/EGraph/Verified/Bitwise/Discovery/GuidedSaturation.lean:231
     ⚠ T2-EXISTENTIAL-ONLY: conclusion is existential without equality/equivalence — may not reach concrete evaluation
     ⚠ T4-NO-WITNESS: 4 Prop hypotheses but no non-vacuity example found in Tests/NonVacuity*.lean or same file
+
+  theorem rootD_bounded
+    AmoLean/EGraph/Verified/Bitwise/MixedUnionFind.lean:79
+    ⚠ T4-NO-WITNESS: 3 Prop hypotheses but no non-vacuity example found in Tests/NonVacuity*.lean or same file
+
+  theorem rootD_fuel_extra
+    AmoLean/EGraph/Verified/Bitwise/MixedUnionFind.lean:95
+    ⚠ T4-NO-WITNESS: 4 Prop hypotheses but no non-vacuity example found in Tests/NonVacuity*.lean or same file
+
+  theorem rootD_fuel_add
+    AmoLean/EGraph/Verified/Bitwise/MixedUnionFind.lean:114
+    ⚠ T4-NO-WITNESS: 4 Prop hypotheses but no non-vacuity example found in Tests/NonVacuity*.lean or same file
+
+  theorem rootD_push
+    AmoLean/EGraph/Verified/Bitwise/MixedUnionFind.lean:165
+    ⚠ T4-NO-WITNESS: 3 Prop hypotheses but no non-vacuity example found in Tests/NonVacuity*.lean or same file
+
+  theorem rootD_parent_step
+    AmoLean/EGraph/Verified/Bitwise/MixedUnionFind.lean:248
+    ⚠ T4-NO-WITNESS: 5 Prop hypotheses but no non-vacuity example found in Tests/NonVacuity*.lean or same file
+
+  theorem IsRootAt_set_ne
+    AmoLean/EGraph/Verified/Bitwise/MixedUnionFind.lean:261
+    ⚠ T4-NO-WITNESS: 3 Prop hypotheses but no non-vacuity example found in Tests/NonVacuity*.lean or same file
+
+  theorem rootD_set_not_in_class
+    AmoLean/EGraph/Verified/Bitwise/MixedUnionFind.lean:271
+    ⚠ T4-NO-WITNESS: 6 Prop hypotheses but no non-vacuity example found in Tests/NonVacuity*.lean or same file
+
+  theorem rootD_set_other_class
+    AmoLean/EGraph/Verified/Bitwise/MixedUnionFind.lean:298
+    ⚠ T4-NO-WITNESS: 5 Prop hypotheses but no non-vacuity example found in Tests/NonVacuity*.lean or same file
+
+  theorem rootD_set_same_class
+    AmoLean/EGraph/Verified/Bitwise/MixedUnionFind.lean:324
+    ⚠ T2-UNUSED-PARTIAL: 3/7 params are _-prefixed: ['_hbnd', '_hacyc', '_hrt_eq']
+    ⚠ T4-NO-WITNESS: 7 Prop hypotheses but no non-vacuity example found in Tests/NonVacuity*.lean or same file
+
+  theorem rootD_compose
+    AmoLean/EGraph/Verified/Bitwise/MixedUnionFind.lean:375
+    ⚠ T4-NO-WITNESS: 3 Prop hypotheses but no non-vacuity example found in Tests/NonVacuity*.lean or same file
+
+  theorem cycle_contradicts_wf
+    AmoLean/EGraph/Verified/Bitwise/MixedUnionFind.lean:424
+    ⚠ T4-NO-WITNESS: 7 Prop hypotheses but no non-vacuity example found in Tests/NonVacuity*.lean or same file
+
+  theorem rootD_depth_bound
+    AmoLean/EGraph/Verified/Bitwise/MixedUnionFind.lean:443
+    ⚠ T2-UNUSED-PARTIAL: 1/6 params are _-prefixed: ['_hr2']
+    ⚠ T4-NO-WITNESS: 6 Prop hypotheses but no non-vacuity example found in Tests/NonVacuity*.lean or same file
+
+  theorem rootD_union_step
+    AmoLean/EGraph/Verified/Bitwise/MixedUnionFind.lean:473
+    ⚠ T4-NO-WITNESS: 8 Prop hypotheses but no non-vacuity example found in Tests/NonVacuity*.lean or same file
+
+  theorem rootD_set_root_to_root
+    AmoLean/EGraph/Verified/Bitwise/MixedUnionFind.lean:534
+    ⚠ T4-NO-WITNESS: 8 Prop hypotheses but no non-vacuity example found in Tests/NonVacuity*.lean or same file
+
+  theorem isAcyclic_after_set
+    AmoLean/EGraph/Verified/Bitwise/MixedUnionFind.lean:576
+    ⚠ T4-NO-WITNESS: 7 Prop hypotheses but no non-vacuity example found in Tests/NonVacuity*.lean or same file
+
+  theorem union_preserves_strongWF
+    AmoLean/EGraph/Verified/Bitwise/MixedUnionFind.lean:597
+    ⚠ T4-NO-WITNESS: 3 Prop hypotheses but no non-vacuity example found in Tests/NonVacuity*.lean or same file
+
+  theorem union_root_cases
+    AmoLean/EGraph/Verified/Bitwise/MixedUnionFind.lean:637
+    ⚠ T4-NO-WITNESS: 3 Prop hypotheses but no non-vacuity example found in Tests/NonVacuity*.lean or same file
 
   theorem IsRootAt_of_rootD_self
     AmoLean/EGraph/Verified/CoreSpec.lean:218
@@ -873,18 +998,6 @@ Clean: 1359  T1(vacuity): 0  T1.5(identity): 0  T2(weak): 23  T3(structural): 44
 
   theorem ntt_constant_nonzero
     AmoLean/NTT/Properties.lean:230
-    ⚠ T4-NO-WITNESS: 3 Prop hypotheses but no non-vacuity example found in Tests/NonVacuity*.lean or same file
-
-  theorem butterfly4_as_butterfly2_composition
-    AmoLean/NTT/Radix4/Butterfly4.lean:95
-    ⚠ T4-NO-WITNESS: 13 Prop hypotheses but no non-vacuity example found in Tests/NonVacuity*.lean or same file
-
-  theorem butterfly4_ibutterfly4_identity
-    AmoLean/NTT/Radix4/Butterfly4.lean:188
-    ⚠ T4-NO-WITNESS: 3 Prop hypotheses but no non-vacuity example found in Tests/NonVacuity*.lean or same file
-
-  theorem interleave4_length
-    AmoLean/NTT/Radix4/Stride4.lean:157
     ⚠ T4-NO-WITNESS: 3 Prop hypotheses but no non-vacuity example found in Tests/NonVacuity*.lean or same file
 
   theorem n_pos

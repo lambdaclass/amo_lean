@@ -404,7 +404,9 @@ def generateFriFold (config : CodeGenConfig) (n : Nat) : String :=
             (int64_t)input[2*(i+3)+1], (int64_t)input[2*(i+2)+1],
             (int64_t)input[2*(i+1)+1], (int64_t)input[2*i+1]);
 
-        // Compute: even + alpha * odd (simplified, real impl needs modular mul)
+        // WARNING: This AVX2 path uses native integer mul+add, NOT modular field ops.
+        // For production use, replace with field-aware SIMD reduction (see field_goldilocks_avx2.h).
+        // TODO: integrate SIMD field_mul from Vector/CodeGenAVX2.lean
         __m256i prod = _mm256_mullo_epi64(v_alpha, odd);
         __m256i result = _mm256_add_epi64(even, prod);
 
@@ -412,16 +414,16 @@ def generateFriFold (config : CodeGenConfig) (n : Nat) : String :=
         _mm256_storeu_si256((__m256i*)&output[i], result);
     }}
 
-    // Handle remainder
+    // Handle remainder (scalar path — must use modular field operations)
     for (size_t i = ({n} / 4) * 4; i < {n}; i++) \{
-        output[i] = input[2*i] + alpha * input[2*i + 1];
+        output[i] = field_add(input[2*i], field_mul(alpha, input[2*i + 1]));
     }}
 }}
 "
   else
     s!"{anchor}void fri_fold_{n}(const {ft}* input, {ft}* output, {ft} alpha) \{
     for (size_t i = 0; i < {n}; i++) \{
-        output[i] = input[2*i] + alpha * input[2*i + 1];
+        output[i] = field_add(input[2*i], field_mul(alpha, input[2*i + 1]));
     }}
 }}
 "
@@ -432,12 +434,12 @@ def generateParametricFriFold (config : CodeGenConfig) : String :=
   let anchor := if config.proofAnchors then
     proofAnchor "fri_fold"
       ["n > 0", "input has 2*n elements", "output has n elements", "input != output (no aliasing)"]
-      ["forall i in [0, n): output[i] == input[2*i] + alpha * input[2*i + 1]"]
+      ["forall i in [0, n): output[i] == field_add(input[2*i], field_mul(alpha, input[2*i + 1]))"]
       ["Memory accesses are contiguous", "Suitable for SIMD vectorization"]
     else ""
   s!"{anchor}void fri_fold(size_t n, const {ft}* input, {ft}* output, {ft} alpha) \{
     for (size_t i = 0; i < n; i++) \{
-        output[i] = input[2*i] + alpha * input[2*i + 1];
+        output[i] = field_add(input[2*i], field_mul(alpha, input[2*i + 1]));
     }}
 }}
 "

@@ -156,14 +156,14 @@ def selectConfig (hw : HardwareCost) (p : Nat) : CodeGenConfig :=
     else if hw.isSimd then .montgomery
     else if solinasWinsForMulAdd hw then .solinasFold
     else .montgomery
-  -- Per-field constants
+  -- Per-field constants (NO silent default — unknown prime must fail loudly)
   let koalabear := 2130706433  -- 2^31 - 2^24 + 1
   let (k, c, mu, ws) :=
     if p == babybear_prime then (31, 2^27 - 1, 0x88000001, 32)
     else if p == koalabear then (31, 2^24 - 1, 0x81000001, 32)
     else if p == mersenne31_prime then (31, 1, 0x80000001, 32)
     else if isGoldilocks then (64, 2^32 - 1, 0x100000001, 64)
-    else (31, 1, 0, 32)  -- default
+    else panic! s!"selectConfig: unknown prime {p} — add explicit field constants"
   { mode, reduction, mulAddReduction, wordSize := ws, prime := p,
     shiftBits := k, foldConst := c, montyMu := mu }
 
@@ -521,15 +521,36 @@ def generateRustNTT (hw : HardwareCost) (n p : Nat)
   let elemType := if cfg.wordSize ≤ 32 then "u32" else "u64"
   let wideType := if cfg.wordSize ≤ 32 then "u64" else "u128"
 
-  let foldFn := if cfg.wordSize ≤ 32 then
-    s!"#[inline(always)]
-fn solinas_fold(x: {wideType}) -> {elemType} \{
-    (((x >> {cfg.shiftBits}) as {wideType}).wrapping_mul({cfg.foldConst} as {wideType}))
-        .wrapping_add(x & {2^cfg.shiftBits - 1} as {wideType}) as {elemType}
+  -- Canonical reduce: u64 → u32 (guaranteed < p).
+  -- For Mersenne31 (c=1): two Solinas folds + conditional subtraction (~3 ops, fastest).
+  -- For BabyBear/KoalaBear (c large): a single Solinas fold does NOT reduce to u32
+  -- (each fold only reduces ~4–7 bits, starting from ~62), so we use (x % P) which
+  -- LLVM optimizes to reciprocal multiplication (~3 cycles, always correct).
+  let isMersenne := cfg.foldConst == 1
+  let reduceFn := if cfg.wordSize ≤ 32 then
+    if isMersenne then
+      s!"/// Mersenne31 canonical reduction: two Solinas folds + conditional subtraction.
+/// Since c=1, each fold halves the excess: 62-bit → 32-bit → done.
+#[inline(always)]
+fn reduce(x: {wideType}) -> {elemType} \{
+    let v = (x >> {cfg.shiftBits}) + (x & {2^cfg.shiftBits - 1});
+    let v = (v >> {cfg.shiftBits}) + (v & {2^cfg.shiftBits - 1});
+    if v >= P as {wideType} \{ (v - P as {wideType}) as {elemType} } else \{ v as {elemType} }
+}"
+    else
+      s!"/// Canonical modular reduction for {elemType} fields.
+/// A single Solinas fold does NOT fit in {elemType} when c={cfg.foldConst} (fold reduces
+/// only {cfg.shiftBits - Nat.log 2 cfg.foldConst} bits per pass, need ~{(62 - cfg.shiftBits) / (cfg.shiftBits - Nat.log 2 cfg.foldConst) + 1} passes from a u64 product).
+/// LLVM optimizes (x % constant) to a reciprocal multiply-high + shift (~3 cycles).
+#[inline(always)]
+fn reduce(x: {wideType}) -> {elemType} \{
+    (x % P as {wideType}) as {elemType}
 }"
   else
-    s!"#[inline(always)]
-fn goldilocks_reduce(x: u128) -> u64 \{
+    s!"/// Goldilocks reduction — exploits p = 2^64 - 2^32 + 1.
+/// Verified: solinasFold_mod_correct (Goldilocks instance).
+#[inline(always)]
+fn reduce(x: u128) -> u64 \{
     let x_lo = x as u64;
     let x_hi = (x >> 64) as u64;
     let x_hi_hi = x_hi >> 32;
@@ -538,24 +559,31 @@ fn goldilocks_reduce(x: u128) -> u64 \{
     let t0 = if borrow \{ t0.wrapping_sub(0xFFFFFFFF_u64) } else \{ t0 };
     let t1 = x_hi_lo.wrapping_mul(0xFFFFFFFF_u64);
     let (result, carry) = t0.overflowing_add(t1);
-    if carry || result >= 0xFFFFFFFF00000001_u64 \{ result.wrapping_sub(0xFFFFFFFF00000001_u64) } else \{ result }
+    if carry || result >= {p}_u64 \{ result.wrapping_sub({p}_u64) } else \{ result }
 }"
 
   let bfFn := if cfg.wordSize ≤ 32 then
-    s!"#[inline(always)]
+    s!"/// CT butterfly: a' = reduce(a + wb), b' = reduce(p + a - wb).
+/// All intermediate arithmetic in {wideType} to prevent overflow.
+#[inline(always)]
 fn butterfly(a: &mut {elemType}, b: &mut {elemType}, w: {elemType}) \{
-    let orig_a = *a;
-    let wb = solinas_fold((w as {wideType}).wrapping_mul(*b as {wideType}));
-    *a = solinas_fold((orig_a as {wideType}).wrapping_add(wb as {wideType}));
-    *b = solinas_fold(({p} as {wideType}).wrapping_add(orig_a as {wideType}).wrapping_sub(wb as {wideType}));
+    let orig_a = *a as {wideType};
+    let orig_b = *b as {wideType};
+    let wb = reduce((w as {wideType}) * orig_b) as {wideType};
+    *a = reduce(orig_a + wb);
+    *b = reduce({p} as {wideType} + orig_a - wb);
 }"
   else
-    s!"#[inline(always)]
+    s!"/// CT butterfly for Goldilocks — uses overflowing_add for sum overflow detection.
+#[inline(always)]
 fn butterfly(a: &mut u64, b: &mut u64, w: u64) \{
     let orig_a = *a;
-    let wb = goldilocks_reduce((w as u128).wrapping_mul(*b as u128));
-    *a = goldilocks_reduce((orig_a as u128).wrapping_add(wb as u128));
-    *b = goldilocks_reduce((0xFFFFFFFF00000001_u128).wrapping_add(orig_a as u128).wrapping_sub(wb as u128));
+    let wb = reduce((w as u128) * (*b as u128));
+    let (sum, overflow) = orig_a.overflowing_add(wb);
+    *a = if overflow || sum >= {p}_u64 \{ sum.wrapping_sub({p}_u64) } else \{ sum };
+    *b = reduce(
+        if orig_a >= wb \{ (orig_a - wb) as u128 }
+        else \{ ({p}_u64 - wb + orig_a) as u128 });
 }"
 
   s!"//! AMO-Lean Generated Rust NTT — e-graph cost model selection
@@ -568,7 +596,7 @@ use std::time::Instant;
 
 const P: {elemType} = {p};
 
-{foldFn}
+{reduceFn}
 
 {bfFn}
 
@@ -630,23 +658,27 @@ def generateRustNTT_Bowers (hw : HardwareCost) (n p : Nat)
   let elemType := if cfg.wordSize ≤ 32 then "u32" else "u64"
   let wideType := if cfg.wordSize ≤ 32 then "u64" else "u128"
 
-  -- Reduction function (same as standard DIT — e-graph selected)
-  -- Bug fix: solinas_fold returns wideType (u64) to avoid premature truncation.
-  -- The DIF butterfly stores results as elemType (u32) via `as u32` at assignment.
-  let foldFn := if cfg.wordSize ≤ 32 then
-    s!"/// Solinas fold — e-graph selected for scalar {elemType} fields.
-/// Returns {wideType} (not {elemType}) to avoid premature truncation in chained operations.
-/// Verified: solinasFold_mod_correct — fold(x) % p = x % p.
+  -- Canonical reduce function (same strategy as DIT — see generateRustNTT).
+  let isMersenne := cfg.foldConst == 1
+  let reduceFn := if cfg.wordSize ≤ 32 then
+    if isMersenne then
+      s!"/// Mersenne31 canonical reduction: two Solinas folds + conditional subtraction.
 #[inline(always)]
-fn solinas_fold(x: {wideType}) -> {wideType} \{
-    ((x >> {cfg.shiftBits}).wrapping_mul({cfg.foldConst} as {wideType}))
-        .wrapping_add(x & {2^cfg.shiftBits - 1} as {wideType})
+fn reduce(x: {wideType}) -> {elemType} \{
+    let v = (x >> {cfg.shiftBits}) + (x & {2^cfg.shiftBits - 1});
+    let v = (v >> {cfg.shiftBits}) + (v & {2^cfg.shiftBits - 1});
+    if v >= P as {wideType} \{ (v - P as {wideType}) as {elemType} } else \{ v as {elemType} }
+}"
+    else
+      s!"/// Canonical modular reduction (LLVM reciprocal multiply optimization).
+#[inline(always)]
+fn reduce(x: {wideType}) -> {elemType} \{
+    (x % P as {wideType}) as {elemType}
 }"
   else
     s!"/// Goldilocks reduction — exploits p = 2^64 - 2^32 + 1.
-/// Verified: solinasFold_mod_correct (Goldilocks instance).
 #[inline(always)]
-fn goldilocks_reduce(x: u128) -> u64 \{
+fn reduce(x: u128) -> u64 \{
     let lo = x as u64;
     let hi = (x >> 64) as u64;
     let hh = hi >> 32;
@@ -658,20 +690,19 @@ fn goldilocks_reduce(x: u128) -> u64 \{
     if carry || result >= {p}_u64 \{ result.wrapping_sub({p}_u64) } else \{ result }
 }"
 
-  -- DIF butterfly (Bowers uses DIF, not DIT)
-  -- Bug fix: u32 fields use wideType (u64) for twiddle multiply to avoid truncation.
-  -- Bug fix: Goldilocks uses overflowing_add for sum to detect u64 overflow.
+  -- DIF butterfly: canonical reduce on all stores (no truncation bugs).
   let difBfFn := if cfg.wordSize ≤ 32 then
-    s!"/// DIF butterfly: a' = fold(a + b), b' = fold((p + a - b) * w).
+    s!"/// DIF butterfly: a' = reduce(a + b), b' = reduce((p + a - b) * w).
 /// Bowers G network applies ONE twiddle per block.
-/// solinas_fold returns {wideType} to avoid truncation; cast to {elemType} at storage.
+/// All intermediate arithmetic in {wideType}; reduce() guarantees canonical {elemType}.
 #[inline(always)]
 fn dif_butterfly(a: &mut {elemType}, b: &mut {elemType}, w: {elemType}) \{
     let va = *a as {wideType};
     let vb = *b as {wideType};
-    *a = solinas_fold(va + vb) as {elemType};
-    let diff = solinas_fold({p} as {wideType} + va - vb);
-    *b = solinas_fold(diff.wrapping_mul(w as {wideType})) as {elemType};
+    let sum = va + vb;
+    let diff = {p} as {wideType} + va - vb;
+    *a = reduce(sum);
+    *b = reduce(diff * (w as {wideType}));
 }"
   else
     s!"/// DIF butterfly for Goldilocks.
@@ -682,7 +713,7 @@ fn dif_butterfly(a: &mut u64, b: &mut u64, w: u64) \{
     let vb = *b;
     let (sum, overflow) = va.overflowing_add(vb);
     *a = if overflow || sum >= {p}_u64 \{ sum.wrapping_sub({p}_u64) } else \{ sum };
-    *b = goldilocks_reduce(
+    *b = reduce(
         (if va >= vb \{ va - vb } else \{ {p}_u64 - vb + va }) as u128
         * w as u128);
 }"
@@ -769,7 +800,7 @@ pub fn {funcName}(data: &mut [{elemType}], twiddles: &[{elemType}]) \{
 
 use std::time::Instant;
 
-{foldFn}
+{reduceFn}
 
 {difBfFn}
 
@@ -822,6 +853,18 @@ use std::arch::aarch64::*;
 const P_VAL: i32 = {p} as i32;
 const MU_VAL: i32 = 0x{muHex}u32 as i32;
 
+/// Scalar Montgomery multiply — exact scalar equivalent of NEON monty_mul.
+/// Used for tail elements when half < 4.
+#[inline(always)]
+fn scalar_monty_mul(lhs: i32, rhs: i32, p: i32, mu: i32) -> i32 \{
+    let c_hi = ((lhs as i64 * rhs as i64 * 2) >> 32) as i32;
+    let mu_rhs = rhs.wrapping_mul(mu);
+    let q = lhs.wrapping_mul(mu_rhs);
+    let qp_hi = ((q as i64 * p as i64 * 2) >> 32) as i32;
+    let d = (c_hi.wrapping_sub(qp_hi)) >> 1;
+    if c_hi < qp_hi \{ d.wrapping_add(p) } else \{ d }
+}
+
 /// NEON Montgomery multiply: 4 parallel field multiplications.
 /// All ops in i32 lanes — no u64 intermediates.
 /// 6 NEON instructions, ~1.5 cyc/vec throughput.
@@ -867,6 +910,7 @@ fn {funcName}(data: &mut [i32], twiddles: &[i32]) \{
             let mut group = 0usize;
             while group < (1 << stage) \{
                 let mut pair = 0usize;
+                // Vectorized: 4 butterflies per iteration
                 while pair + 4 <= half \{
                     let i = group * 2 * half + pair;
                     let j = i + half;
@@ -878,6 +922,21 @@ fn {funcName}(data: &mut [i32], twiddles: &[i32]) \{
                     vst1q_s32(data.as_mut_ptr().add(i), va);
                     vst1q_s32(data.as_mut_ptr().add(j), vb);
                     pair += 4;
+                }
+                // Scalar tail: handles last stages where half < 4.
+                // Uses exact scalar equivalent of NEON monty_mul (vqdmulhq_s32 etc).
+                while pair < half \{
+                    let i = group * 2 * half + pair;
+                    let j = i + half;
+                    let tw_idx = stage * (n / 2) + group * half + pair;
+                    let w = twiddles[tw_idx];
+                    let wb = scalar_monty_mul(w, data[j], P_VAL, MU_VAL);
+                    let orig_a = data[i];
+                    let sum = orig_a.wrapping_add(wb);
+                    data[i] = if (sum as u32) >= (P_VAL as u32) \{ sum.wrapping_sub(P_VAL) } else \{ sum };
+                    let dif = orig_a.wrapping_sub(wb);
+                    data[j] = if dif < 0 \{ dif.wrapping_add(P_VAL) } else \{ dif };
+                    pair += 1;
                 }
                 group += 1;
             }

@@ -26,6 +26,40 @@ open AmoLean.EGraph.Verified.Bitwise
 open MixedRunner (GuidedMixedConfig guidedOptimizeMixedF)
 
 -- ══════════════════════════════════════════════════════════════════
+-- Section 0: NTT feasibility guard — 2-adic valuation check
+-- ══════════════════════════════════════════════════════════════════
+
+/-- Compute the 2-adic valuation of n: the largest k such that 2^k divides n.
+    Returns 0 for n = 0. -/
+def twoAdicValuation (n : Nat) : Nat :=
+  if n == 0 then 0
+  else
+    let rec go (m : Nat) (k : Nat) : (fuel : Nat) → Nat
+      | 0 => k
+      | fuel + 1 => if m % 2 == 0 then go (m / 2) (k + 1) fuel else k
+    go n 0 64
+
+/-- Check if NTT of size 2^logN is possible over F_p.
+    Requires: ord_2(p-1) >= logN, i.e., p-1 must be divisible by 2^logN.
+    Returns (true, _) if possible, (false, maxLogN) if not. -/
+def canGenerateNTT (p : Nat) (logN : Nat) : Bool × Nat :=
+  let v := twoAdicValuation (p - 1)
+  (logN ≤ v, v)
+
+-- Mersenne31: p-1 = 2 * 1073741823, so v = 1
+#eval twoAdicValuation (2147483647 - 1)  -- expected: 1
+#eval canGenerateNTT 2147483647 1   -- expected: (true, 1)
+#eval canGenerateNTT 2147483647 2   -- expected: (false, 1)
+
+-- BabyBear: p-1 = 2^27 * 15, so v = 27
+#eval twoAdicValuation (2013265921 - 1)  -- expected: 27
+#eval canGenerateNTT 2013265921 20  -- expected: (true, 27)
+#eval canGenerateNTT 2013265921 28  -- expected: (false, 27)
+
+-- Goldilocks: p-1 = 2^32 * (2^32 - 1), so v = 32
+#eval twoAdicValuation (18446744069414584321 - 1)  -- expected: 32
+
+-- ══════════════════════════════════════════════════════════════════
 -- Section 1: Butterfly → MixedExpr conversion
 -- ══════════════════════════════════════════════════════════════════
 

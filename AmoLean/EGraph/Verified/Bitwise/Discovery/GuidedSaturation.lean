@@ -111,6 +111,8 @@ def phase3ShiftAddRules : List MixedSoundRule :=
   generateShiftAddRules [
     -- BabyBear correction: 2^27 - 1
     134217727,
+    -- KoalaBear correction: 2^24 - 1
+    16777215,
     -- Goldilocks correction: 2^32 - 1
     4294967295,
     -- Common small constants for shift-add optimization

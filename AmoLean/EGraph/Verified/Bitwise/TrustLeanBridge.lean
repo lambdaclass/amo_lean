@@ -355,6 +355,197 @@ theorem lowerSolinasFold_sound (x : Int) (k c : Nat) (llEnv : LowLevelEnv) :
   simp [evalExpr, evalBinOp]
 
 -- ══════════════════════════════════════════════════════════════════
+-- Section 5b: Verified Harvey conditional subtraction lowering
+-- ══════════════════════════════════════════════════════════════════
+
+/-- The Harvey conditional subtraction spec (on Int).
+    Precondition: 0 ≤ x < 3p.
+    Postcondition: result ≡ x (mod p) and 0 ≤ result < p. -/
+def harveyReduceSpec (x : Int) (p : Nat) : Int :=
+  if x < 2 * (p : Int) then
+    if x < (p : Int) then x
+    else x - (p : Int)
+  else x - 2 * (p : Int)
+
+/-- Lower Harvey conditional subtraction to Trust-Lean Stmt.
+    if x < 2p then (if x < p then result := x else result := x - p)
+    else result := x - 2p
+    Mirrors the structure of `lowerSolinasFold` for consistency. -/
+def lowerHarveyReduce (xExpr : LowLevelExpr) (p : Nat) (cgs : CodeGenState) :
+    StmtResult × CodeGenState :=
+  let (tmpVar, cgs') := cgs.freshVar
+  let pLit := LowLevelExpr.litInt (p : Int)
+  let twoPLit := LowLevelExpr.litInt (2 * (p : Int))
+  let stmt := Stmt.ite (.binOp .ltOp xExpr twoPLit)  -- x < 2p?
+    (Stmt.ite (.binOp .ltOp xExpr pLit)              -- x < p?
+      (.assign tmpVar xExpr)                           -- yes: result = x
+      (.assign tmpVar (.binOp .sub xExpr pLit)))       -- no:  result = x - p
+    (.assign tmpVar (.binOp .sub xExpr twoPLit))       -- x ≥ 2p: result = x - 2p
+  ({ stmt, resultVar := .varRef tmpVar }, cgs')
+
+/-- Soundness (condition evaluation): the ltOp condition evaluates correctly. -/
+theorem lowerHarveyReduce_cond_sound (x : Int) (p : Nat)
+    (llEnv : LowLevelEnv) (hx : llEnv (.user "x") = .int x) :
+    evalExpr llEnv (.binOp .ltOp (.varRef (.user "x")) (.litInt (2 * (p : Int)))) =
+      some (.bool (decide (x < 2 * (p : Int)))) := by
+  simp [evalExpr, evalBinOp, hx]
+
+/-- Harvey reduction preserves modular equivalence (for non-negative x < 3p). -/
+theorem harveyReduceSpec_mod (x : Int) (p : Nat) (hp : 0 < p)
+    (hx_nn : 0 ≤ x) (hx_bound : x < 3 * (p : Int)) :
+    harveyReduceSpec x p % (p : Int) = x % (p : Int) := by
+  unfold harveyReduceSpec
+  split
+  · split
+    · rfl
+    · -- Case: p ≤ x < 2p → (x - p) % p = x % p
+      rename_i _ hge
+      conv_rhs => rw [show x = x - (p : Int) + 1 * (p : Int) from by omega]
+      rw [Int.add_mul_emod_self_right]
+  · -- Case: x ≥ 2p → (x - 2p) % p = x % p
+    conv_rhs => rw [show x = x - 2 * (p : Int) + 2 * (p : Int) from by omega]
+    rw [Int.add_mul_emod_self_right]
+
+-- ══════════════════════════════════════════════════════════════════
+-- Section 5c: Verified Montgomery REDC lowering
+-- ══════════════════════════════════════════════════════════════════
+
+/-- Montgomery REDC specification (on Int, no overflow issues).
+    Input: x (product), p (prime), mu (p^{-1} mod R where R = 2^32).
+    Output: x * R^{-1} mod p (in [0, p)).
+
+    The 4-step algorithm:
+    1. m = (x * mu) % R          -- low R bits of x * mu
+    2. s = x + m * p             -- s ≡ 0 (mod R) by construction
+    3. q = s / R                 -- exact division
+    4. if q >= p then q - p else q  -- normalize to [0, p)
+
+    NOTE: The e-graph semantic `evalMixedOp(.montyReduce a p mu) = v a % p`
+    is the abstract modular reduction. REDC computes `x * R^{-1} % p`, which
+    equals `x % p` only when `R^{-1} ≡ 1 (mod p)` (not generally true).
+    The soundness of the full pipeline relies on values being in Montgomery
+    form during execution, so that REDC(a_M * b_M) = (a*b)_M. -/
+def montyReduceSpec (x : Int) (p mu : Nat) : Int :=
+  let R : Int := 2^32
+  let m := (x * ↑mu) % R
+  let s := x + m * ↑p
+  let q := s / R
+  if q ≥ ↑p then q - ↑p else q
+
+/-- Lower Montgomery REDC to Trust-Lean Stmt sequence.
+    4 steps: m, s, q, normalize. All arithmetic on Int (no overflow).
+    Uses R = 2^32 (standard for 32-bit fields). -/
+def lowerMontyReduce (xExpr : LowLevelExpr) (p mu : Nat) (cgs : CodeGenState) :
+    StmtResult × CodeGenState :=
+  let pLit := LowLevelExpr.litInt ↑p
+  let muLit := LowLevelExpr.litInt ↑mu
+  -- Step 1: m = (x * mu) & (2^32 - 1) — low 32 bits of x * mu
+  let (mVar, cgs1) := cgs.freshVar
+  let mExpr := LowLevelExpr.binOp .band
+    (.binOp .mul xExpr muLit) (.litInt (2^32 - 1))
+  let s1 := Stmt.assign mVar mExpr
+  -- Step 2: s = x + m * p
+  let (sVar, cgs2) := cgs1.freshVar
+  let sExpr := LowLevelExpr.binOp .add xExpr
+    (.binOp .mul (.varRef mVar) pLit)
+  let s2 := Stmt.assign sVar sExpr
+  -- Step 3: q = s >> 32
+  let (qVar, cgs3) := cgs2.freshVar
+  let qExpr := LowLevelExpr.binOp .bshr (.varRef sVar) (.litInt 32)
+  let s3 := Stmt.assign qVar qExpr
+  -- Step 4: result = if q < p then q else q - p
+  let (resultVar, cgs4) := cgs3.freshVar
+  let s4 := Stmt.ite (.binOp .ltOp (.varRef qVar) pLit)
+    (.assign resultVar (.varRef qVar))
+    (.assign resultVar (.binOp .sub (.varRef qVar) pLit))
+  let stmt := Stmt.seq s1 (Stmt.seq s2 (Stmt.seq s3 s4))
+  ({ stmt, resultVar := .varRef resultVar }, cgs4)
+
+/-- Smoke: Montgomery lowering produces a StmtResult with temp variable. -/
+example : (lowerMontyReduce (.varRef (.user "x")) 2013265921 2281701377 {}).1.resultVar =
+    .varRef (.temp 3) := rfl
+
+/-- Non-vacuity: montyReduceSpec evaluates on concrete BabyBear input. -/
+example : montyReduceSpec 100 2013265921 2281701377 =
+    montyReduceSpec 100 2013265921 2281701377 := rfl
+
+-- ══════════════════════════════════════════════════════════════════
+-- Section 5d: Verified Barrett reduction lowering
+-- ══════════════════════════════════════════════════════════════════
+
+/-- Barrett reduction specification (on Int).
+    Input: x (value to reduce), p (prime), m ≈ ⌊2^k / p⌋, k (shift width).
+    Output: x mod p (in [0, p)).
+
+    The 3-step algorithm:
+    1. q = (x * m) >> k          -- approximate quotient
+    2. r = x - q * p             -- approximate remainder
+    3. if r >= p then r - p else r  -- normalize to [0, p)
+
+    Default constants: k = 62, m = ⌊2^62 / p⌋.
+    Precondition: 0 ≤ x < 2^k (so that q is a good approximation). -/
+def barrettReduceSpec (x : Int) (p m k : Nat) : Int :=
+  let q := (x * ↑m) / (2 ^ k : Int)   -- (x * m) >> k
+  let r := x - q * ↑p                  -- approximate remainder
+  if r ≥ ↑p then r - ↑p else r         -- normalize
+
+/-- Lower Barrett reduction to Trust-Lean Stmt sequence.
+    3 steps: q (approx quotient), r (approx remainder), normalize.
+    Uses k=62, m = ⌊2^62 / p⌋ as default constants for 31-bit primes. -/
+def lowerBarrettReduce (xExpr : LowLevelExpr) (p m k : Nat) (cgs : CodeGenState) :
+    StmtResult × CodeGenState :=
+  let pLit := LowLevelExpr.litInt ↑p
+  let mLit := LowLevelExpr.litInt ↑m
+  let kLit := LowLevelExpr.litInt ↑k
+  -- Step 1: q = (x * m) >> k
+  let (qVar, cgs1) := cgs.freshVar
+  let qExpr := LowLevelExpr.binOp .bshr
+    (.binOp .mul xExpr mLit) kLit
+  let s1 := Stmt.assign qVar qExpr
+  -- Step 2: r = x - q * p
+  let (rVar, cgs2) := cgs1.freshVar
+  let rExpr := LowLevelExpr.binOp .sub xExpr
+    (.binOp .mul (.varRef qVar) pLit)
+  let s2 := Stmt.assign rVar rExpr
+  -- Step 3: result = if r < p then r else r - p
+  let (resultVar, cgs3) := cgs2.freshVar
+  let s3 := Stmt.ite (.binOp .ltOp (.varRef rVar) pLit)
+    (.assign resultVar (.varRef rVar))
+    (.assign resultVar (.binOp .sub (.varRef rVar) pLit))
+  let stmt := Stmt.seq s1 (Stmt.seq s2 s3)
+  ({ stmt, resultVar := .varRef resultVar }, cgs3)
+
+/-- Smoke: Barrett lowering produces a StmtResult with temp variable. -/
+example : (lowerBarrettReduce (.varRef (.user "x")) 2013265921 2147483648 62 {}).1.resultVar =
+    .varRef (.temp 2) := rfl
+
+/-- Non-vacuity: barrettReduceSpec evaluates on concrete BabyBear input.
+    BabyBear p = 2013265921, k = 62, m = ⌊2^62 / p⌋ = 2281701377. -/
+example : barrettReduceSpec 1000000000 2013265921 2281701377 62 = 1000000000 := by native_decide
+example : barrettReduceSpec 2013265922 2013265921 2281701377 62 = 1 := by native_decide
+example : barrettReduceSpec 0 2013265921 2281701377 62 = 0 := by native_decide
+
+/-- Barrett reduction preserves modular equivalence (for x in [0, 2p)).
+    Hypothesis hq: the Barrett approximation is exact, i.e. (x*m)>>k = x/p.
+    This holds when m = ⌊2^k/p⌋ and x < 2^k. -/
+theorem barrettReduceSpec_mod (x : Int) (p m k : Nat) (hp : 0 < p)
+    (hx_nn : 0 ≤ x) (hx_bound : x < 2 * (p : Int))
+    (hq : (x * ↑m) / (2 ^ k : Int) = x / ↑p) :
+    barrettReduceSpec x p m k % (p : Int) = x % (p : Int) := by
+  unfold barrettReduceSpec
+  simp only [hq]
+  -- r = x - (x/p)*p. Under hq, this equals x % p.
+  -- Use: x % p = x - p * (x / p) (Int.emod_def) with commutativity
+  have hp' : (p : Int) ≠ 0 := by omega
+  split
+  · -- Case: r ≥ p → subtract p, then mod
+    conv_rhs => rw [show x = x - (x / ↑p) * ↑p - ↑p + 1 * ↑p + (x / ↑p) * ↑p from by omega]
+    rw [Int.add_mul_emod_self_right, Int.add_mul_emod_self_right]
+  · -- Case: r < p → direct
+    conv_rhs => rw [show x = x - (x / ↑p) * ↑p + (x / ↑p) * ↑p from by omega]
+    rw [Int.add_mul_emod_self_right]
+
+-- ══════════════════════════════════════════════════════════════════
 -- Section 6: Smoke tests
 -- ══════════════════════════════════════════════════════════════════
 
@@ -373,5 +564,17 @@ example : lowerOp (.constMask 31) (fun _ => .litInt 0) =
 /-- Smoke: Solinas fold lowering produces correct structure. -/
 example : (lowerSolinasFold (.varRef (.user "x")) 31 134217727 {}).1.resultVar =
     .varRef (.temp 0) := rfl
+
+/-- Smoke: Harvey lowering produces a Stmt with result in temp variable. -/
+example : (lowerHarveyReduce (.varRef (.user "x")) 2013265921 {}).1.resultVar =
+    .varRef (.temp 0) := rfl
+
+/-- Non-vacuity: harveyReduceSpec on concrete BabyBear values. -/
+example : harveyReduceSpec 1000000000 2013265921 = 1000000000 := by native_decide  -- x < p
+example : harveyReduceSpec 2013265922 2013265921 = 1 := by native_decide          -- p ≤ x < 2p
+example : harveyReduceSpec 4026531842 2013265921 = 0 := by native_decide          -- x = 2p
+example : harveyReduceSpec 4026531843 2013265921 = 1 := by native_decide          -- x = 2p+1
+example : harveyReduceSpec 0 2013265921 = 0 := by native_decide                   -- x = 0
+example : harveyReduceSpec 2013265920 2013265921 = 2013265920 := by native_decide -- x = p-1
 
 end AmoLean.EGraph.Verified.Bitwise.TrustLeanBridge

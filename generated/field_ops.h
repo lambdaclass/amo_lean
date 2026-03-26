@@ -26,6 +26,7 @@
 #define FIELD_OPS_H
 
 #include <stdint.h>
+#include <stddef.h>
 #include <assert.h>
 
 /* =========================================================================

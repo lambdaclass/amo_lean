@@ -1,3 +1,5 @@
+#include <immintrin.h>
+
 /* FRI fold: result[i] = fold(even[i] + fold(alpha * odd[i]))
  * Each lane processes one evaluation point independently.
  * Verified: solinasFold_mod_correct (scalar level)

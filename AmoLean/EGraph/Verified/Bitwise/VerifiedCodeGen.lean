@@ -32,7 +32,8 @@ open TrustLean (Value LowLevelExpr LowLevelEnv VarName BinOp Stmt StmtResult
   CodeGenState evalExpr evalStmt evalBinOp)
 open AmoLean.EGraph.Verified.Bitwise (MixedNodeOp MixedEnv evalMixedOp)
 open AmoLean.EGraph.Verified.Bitwise.MixedExtract (MixedExpr)
-open AmoLean.EGraph.Verified.Bitwise.TrustLeanBridge (lowerOp lowerSolinasFold mixedVarName)
+open AmoLean.EGraph.Verified.Bitwise.TrustLeanBridge (lowerOp lowerSolinasFold mixedVarName
+  lowerHarveyReduce lowerMontyReduce lowerBarrettReduce)
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 1: MixedExpr → Trust-Lean LowLevelExpr (recursive lowering)
@@ -66,9 +67,15 @@ def lowerMixedExprToLLE (e : MixedExpr) : LowLevelExpr :=
     .binOp .band (lowerMixedExprToLLE a) (.litInt ↑(2^w - 1 : Nat))
   | .kronUnpackHiE a w =>
     .binOp .bshr (lowerMixedExprToLLE a) (.litInt ↑w)
-  | .montyReduceE a _p _mu => lowerMixedExprToLLE a
-  | .barrettReduceE a _p _m => lowerMixedExprToLLE a
-  | .harveyReduceE a _p => lowerMixedExprToLLE a
+  -- PENDING: These three reductions are currently identity passes.
+  -- They lower to just the input expression, discarding p/mu/m parameters.
+  -- The soundness proofs below correctly prove "output = input" for each,
+  -- which is trivially true but means no modular reduction happens.
+  -- To complete: lower to actual reduction operations in Trust-Lean IR.
+  -- See ARCHITECTURE.md for the plan to close these.
+  | .montyReduceE a _p _mu => lowerMixedExprToLLE a   -- TODO: actual Montgomery REDC
+  | .barrettReduceE a _p _m => lowerMixedExprToLLE a  -- TODO: actual Barrett reduction
+  | .harveyReduceE a _p => lowerMixedExprToLLE a      -- TODO: actual Harvey cond-sub
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 2: MixedExpr → Trust-Lean Stmt (with temporaries)
@@ -81,6 +88,41 @@ def lowerMixedExprToStmt (e : MixedExpr) (cgs : CodeGenState) :
   let expr := lowerMixedExprToLLE e
   let (resultVar, cgs') := cgs.freshVar
   (.assign resultVar expr, resultVar, cgs')
+
+/-- Extract VarName from a LowLevelExpr that is known to be a variable reference.
+    Used to unwrap StmtResult.resultVar which is always `.varRef vn`. -/
+private def extractVarName : LowLevelExpr → VarName
+  | .varRef vn => vn
+  | _ => .user "error"  -- should never happen: reduction lowers always produce .varRef
+
+/-- Lower a full MixedExpr tree to a Trust-Lean Stmt, handling conditional
+    reductions (Harvey, Montgomery, Barrett) that require multi-statement
+    lowering. Primitive nodes delegate to lowerMixedExprToLLE for the
+    expression, then assign to a fresh temporary. -/
+def lowerMixedExprFull (e : MixedExpr) (cgs : CodeGenState) :
+    Stmt × VarName × CodeGenState :=
+  match e with
+  | .harveyReduceE child p =>
+    -- 1. Lower child recursively
+    let (childStmt, childVar, cgs1) := lowerMixedExprFull child cgs
+    -- 2. Apply Harvey conditional subtraction
+    let (hrResult, cgs2) := lowerHarveyReduce (.varRef childVar) p cgs1
+    -- 3. Compose: child computation → reduction
+    (.seq childStmt hrResult.stmt, extractVarName hrResult.resultVar, cgs2)
+  | .montyReduceE child p mu =>
+    let (childStmt, childVar, cgs1) := lowerMixedExprFull child cgs
+    let (mrResult, cgs2) := lowerMontyReduce (.varRef childVar) p mu cgs1
+    (.seq childStmt mrResult.stmt, extractVarName mrResult.resultVar, cgs2)
+  | .barrettReduceE child p m =>
+    let (childStmt, childVar, cgs1) := lowerMixedExprFull child cgs
+    -- Barrett uses k=62 default for 31-bit primes
+    let (brResult, cgs2) := lowerBarrettReduce (.varRef childVar) p m 62 cgs1
+    (.seq childStmt brResult.stmt, extractVarName brResult.resultVar, cgs2)
+  | other =>
+    -- All primitive nodes: lower to LLE, assign to temp
+    let lle := lowerMixedExprToLLE other
+    let (tmpVar, cgs') := cgs.freshVar
+    (.assign tmpVar lle, tmpVar, cgs')
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 3: Solinas fold lowering for MixedExpr
@@ -548,19 +590,37 @@ def lowerNTTLoopStmt (logN p k c : Nat) : Stmt :=
   let iVar := VarName.user "i"
   let jVar := VarName.user "j"
   let halfVar := VarName.user "half"
+  let twIdxVar := VarName.user "tw_idx"
   -- Butterfly body (verified)
   let (bfStmt, sumVar, bPrimeVar, _) := lowerDIFButterflyStmt
     (.user "a_val") (.user "b_val") (.user "w_val") p k c {}
+  -- Compute index variables: i, j, tw_idx
+  --   i = group * 2 * half + pair
+  let assignI := Stmt.assign iVar
+    (.binOp .add
+      (.binOp .mul (.binOp .mul (.varRef groupVar) (.litInt 2)) (.varRef halfVar))
+      (.varRef pairVar))
+  --   j = i + half
+  let assignJ := Stmt.assign jVar
+    (.binOp .add (.varRef iVar) (.varRef halfVar))
+  --   tw_idx = stage * (n/2) + group * half + pair
+  let assignTw := Stmt.assign twIdxVar
+    (.binOp .add
+      (.binOp .add
+        (.binOp .mul (.varRef stageVar) (.litInt ↑(2^(logN - 1) : Nat)))
+        (.binOp .mul (.varRef groupVar) (.varRef halfVar)))
+      (.varRef pairVar))
   -- Load a_val = data[i], b_val = data[j], w_val = twiddles[tw_idx]
   let loadA := Stmt.load (.user "a_val") (.varRef (.user "data")) (.varRef iVar)
   let loadB := Stmt.load (.user "b_val") (.varRef (.user "data")) (.varRef jVar)
-  let loadW := Stmt.load (.user "w_val") (.varRef (.user "twiddles")) (.varRef (.user "tw_idx"))
+  let loadW := Stmt.load (.user "w_val") (.varRef (.user "twiddles")) (.varRef twIdxVar)
   -- Store results: data[i] = sum, data[j] = b'
   let storeA := Stmt.store (.varRef (.user "data")) (.varRef iVar) (.varRef sumVar)
   let storeB := Stmt.store (.varRef (.user "data")) (.varRef jVar) (.varRef bPrimeVar)
-  -- Compose: load → butterfly → store
-  let body := Stmt.seq loadA (Stmt.seq loadB (Stmt.seq loadW
-    (Stmt.seq bfStmt (Stmt.seq storeA storeB))))
+  -- Compose: assign indices → load → butterfly → store
+  let body := Stmt.seq assignI (Stmt.seq assignJ (Stmt.seq assignTw
+    (Stmt.seq loadA (Stmt.seq loadB (Stmt.seq loadW
+      (Stmt.seq bfStmt (Stmt.seq storeA storeB)))))))
   -- Inner loop: for pair in 0..half
   let innerLoop := Stmt.for_
     (.assign pairVar (.litInt 0))
@@ -596,6 +656,26 @@ inductive WordWidth where
   | u32 | u64
   deriving Repr, BEq
 
+/-- Value representation in the computation domain.
+    The e-graph discovers reductions; the representation annotation
+    tells the lowering what domain the values are in.
+    - standard: value is x (plain field element)
+    - montgomery: value is x * R mod p (Montgomery form)
+    - custom: value is f(x, p) for some function f -/
+inductive Repr where
+  | standard
+  | montgomery (R : Nat)  -- R = 2^wordSize
+  deriving BEq, Inhabited
+
+/-- Annotated MixedExpr: each extracted expression carries its representation. -/
+structure AnnotatedExpr where
+  expr : MixedExpr
+  repr : Repr := .standard
+
+/-- Check if a representation requires conversion before field operations. -/
+def Repr.needsConversion (from_ to_ : Repr) : Bool :=
+  from_ != to_
+
 /-- Wrap a Solinas fold result to the target word width.
     This models what the C code does: `(uint32_t)(fold_result)`.
     For 31-bit fields: wrap to u32.
@@ -605,20 +685,24 @@ def wrapFoldResult (w : WordWidth) (x : Int) : Int :=
   | .u32 => wrapUInt32 x
   | .u64 => wrapUInt64 x
 
-/-- The key width theorem: for a Solinas fold of a product of two field elements,
-    wrapping to u32 preserves the modular congruence IF the fold result is < 2^32.
+/-- Key width theorem: truncating a modularly reduced value is identity.
+    If p < 2^w (which holds for all our fields: BabyBear p < 2^31 < 2^32,
+    Goldilocks p < 2^64), then wrapWidth w (x % p) = x % p.
 
-    This is the condition that MUST hold for the generated C to be correct.
-    When fold(a*b) >= 2^32 (which happens for BabyBear), the u32 truncation
-    produces a different value, but fold(x) % p = x % p still holds in the
-    mathematical (Int) domain.
-
-    The C code uses Int (arbitrary precision) semantics through Trust-Lean,
-    so truncation bugs are caught at the type level — not silently as in
-    the unverified string-emission path. -/
-theorem wrapWidth_preserves_mod (w p : Nat) (x : Int)
-    (hx : 0 ≤ x) (hw : 0 < w) (hp : 0 < p) (hdvd : (p : Int) ∣ (2 ^ w : Int) - 1 → False)
-    : True := trivial  -- placeholder: full proof requires Nat.mod_mod_of_dvd generalization
+    This is what makes the generated C code correct: after canonical
+    modular reduction (x % p), casting to uint32_t/uint64_t preserves
+    the value because p fits in the target width. -/
+theorem wrapWidth_preserves_reduced (w p : Nat) (x : Int)
+    (hp : 0 < p) (hpw : (p : Int) ≤ 2 ^ w) :
+    wrapWidth w (x % (p : Int)) = x % (p : Int) := by
+  -- x % p is in [0, p) since p > 0
+  have hp' : (0 : Int) < (p : Int) := Int.ofNat_pos.mpr hp
+  have hmod_nn : 0 ≤ x % (p : Int) := Int.emod_nonneg x (by omega)
+  have hmod_lt : x % (p : Int) < (p : Int) := Int.emod_lt_of_pos x hp'
+  -- Since 0 ≤ x % p < p ≤ 2^w, wrapWidth is identity
+  have hmod_lt_pow : x % (p : Int) < 2 ^ w := lt_of_lt_of_le hmod_lt hpw
+  simp only [wrapWidth]
+  exact Int.emod_eq_of_lt hmod_nn hmod_lt_pow
 
 /-- Non-vacuity: wrapUInt32 wraps large values. -/
 example : wrapUInt32 (2^55 : Int) ≠ (2^55 : Int) := by native_decide

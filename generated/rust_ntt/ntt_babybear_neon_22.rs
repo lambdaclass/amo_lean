@@ -11,6 +11,16 @@ use std::arch::aarch64::*;
 const P_VAL: i32 = 2013265921 as i32;
 const MU_VAL: i32 = 0x88000001u32 as i32;
 
+#[inline(always)]
+fn scalar_monty_mul(lhs: i32, rhs: i32, p: i32, mu: i32) -> i32 {
+    let c_hi = ((lhs as i64 * rhs as i64 * 2) >> 32) as i32;
+    let mu_rhs = rhs.wrapping_mul(mu);
+    let q = lhs.wrapping_mul(mu_rhs);
+    let qp_hi = ((q as i64 * p as i64 * 2) >> 32) as i32;
+    let d = (c_hi.wrapping_sub(qp_hi)) >> 1;
+    if c_hi < qp_hi { d.wrapping_add(p) } else { d }
+}
+
 /// NEON Montgomery multiply: 4 parallel field multiplications.
 /// All ops in i32 lanes — no u64 intermediates.
 /// 6 NEON instructions, ~1.5 cyc/vec throughput.
@@ -67,6 +77,20 @@ fn ntt_babybear_neon_22(data: &mut [i32], twiddles: &[i32]) {
                     vst1q_s32(data.as_mut_ptr().add(i), va);
                     vst1q_s32(data.as_mut_ptr().add(j), vb);
                     pair += 4;
+                }
+                // Scalar tail for stages where half < 4
+                while pair < half {
+                    let i = group * 2 * half + pair;
+                    let j = i + half;
+                    let tw_idx = stage * (n / 2) + group * half + pair;
+                    let w = twiddles[tw_idx];
+                    let wb = scalar_monty_mul(w, data[j], P_VAL, MU_VAL);
+                    let orig_a = data[i];
+                    let sum = orig_a.wrapping_add(wb);
+                    data[i] = if (sum as u32) >= (P_VAL as u32) { sum.wrapping_sub(P_VAL) } else { sum };
+                    let dif = orig_a.wrapping_sub(wb);
+                    data[j] = if dif < 0 { dif.wrapping_add(P_VAL) } else { dif };
+                    pair += 1;
                 }
                 group += 1;
             }
