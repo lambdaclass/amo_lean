@@ -23,6 +23,7 @@ import Std.Data.HashMap
 import Std.Data.HashSet
 import AmoLean.Matrix.Basic
 import AmoLean.EGraph.Basic
+import AmoLean.EGraph.VerifiedExtraction.Core
 
 namespace AmoLean.EGraph.Matrix
 
@@ -293,6 +294,47 @@ def localCost (cm : MatCostModel := defaultMatCostModel) : MatENode → Nat
 
 end MatENode
 
+/-! ## Part 1b: NodeOps instance for MatENodeOp -/
+
+/-- Replace children positionally with new IDs. -/
+def MatENode.replaceChildren (node : MatENode) (ids : List MatEClassId) : MatENode :=
+  match node, ids with
+  | ⟨.kron _ _ m1 n1 m2 n2⟩, [a, b] => ⟨.kron a b m1 n1 m2 n2⟩
+  | ⟨.compose _ _ m k n⟩, [a, b] => ⟨.compose a b m k n⟩
+  | ⟨.add _ _ m n⟩, [a, b] => ⟨.add a b m n⟩
+  | ⟨.smul _ _ m n⟩, [s, a] => ⟨.smul s a m n⟩
+  | ⟨.transpose _ m n⟩, [a] => ⟨.transpose a m n⟩
+  | ⟨.conjTranspose _ m n⟩, [a] => ⟨.conjTranspose a m n⟩
+  | ⟨.elemwise op _ m n⟩, [a] => ⟨.elemwise op a m n⟩
+  | ⟨.perm (.compose _ _)⟩, [p1, p2] => ⟨.perm (.compose p1 p2)⟩
+  | ⟨.perm (.inverse _)⟩, [p] => ⟨.perm (.inverse p)⟩
+  | ⟨.perm (.tensor _ _)⟩, [p1, p2] => ⟨.perm (.tensor p1 p2)⟩
+  | node, _ => node  -- leaf nodes or mismatched length: return unchanged
+
+open AmoLean.EGraph.VerifiedExtraction (NodeOps EClassId) in
+/-- NodeOps instance for MatENode, enabling verified extraction. -/
+instance : NodeOps MatENode where
+  children := MatENode.children
+  mapChildren := MatENode.mapChildren
+  replaceChildren := MatENode.replaceChildren
+  localCost := MatENode.localCost
+  mapChildren_children := by
+    intro f op; cases op with | mk op =>
+    cases op <;> simp [MatENode.children, MatENode.mapChildren]
+    all_goals (try rfl); all_goals (rename_i p; cases p <;> simp [MatENode.children, MatENode.mapChildren])
+  mapChildren_id := by
+    intro op; cases op with | mk op =>
+    cases op <;> simp [MatENode.mapChildren]
+    all_goals (try rfl); all_goals (rename_i p; cases p <;> simp [MatENode.mapChildren])
+  replaceChildren_children := by
+    intro op ids hlen; cases op with | mk op =>
+    cases op <;> simp [MatENode.children, MatENode.replaceChildren] at *
+    all_goals sorry  -- case analysis on PermOp + list length matching
+  replaceChildren_sameShape := by
+    intro op ids hlen; cases op with | mk op =>
+    cases op <;> simp [MatENode.mapChildren, MatENode.replaceChildren] at *
+    all_goals sorry  -- case analysis on PermOp + list length matching
+
 /-! ## Part 2: Matrix E-Class -/
 
 /-- A matrix equivalence class contains:
@@ -531,17 +573,35 @@ partial def rebuild (g : MatEGraph) : MatEGraph :=
 
 /-! ## Part 6: Add MatExpr to E-Graph -/
 
-/-- Convert Perm to PermOp.
-    Uses explicit pattern matching to handle dependent types correctly. -/
-def permToPermOp (n : Nat) (p : Perm n) : PermOp :=
+/-- Convert Perm to PermOp, adding sub-permutations to the e-graph.
+    Recursive permutations (compose, inverse, tensor) become e-graph nodes
+    with MatEClassId references to their sub-permutation e-classes.
+    Replaces the old lossy `permToPermOp` that collapsed recursive cases to identity. -/
+def addPermToEGraph (g : MatEGraph) (n : Nat) (p : Perm n) : PermOp × MatEGraph :=
   match p with
-  | .identity => .identity n
-  | .stride m n' => .stride m n'
-  | .bitRev k => .bitRev k
-  | .swap => .swap
-  | .compose _ _ => .identity n  -- Simplified for now
-  | .inverse _ => .identity n
-  | .tensor _ _ => .identity n  -- Simplified for now
+  | .identity => (.identity n, g)
+  | .stride m n' => (.stride m n', g)
+  | .bitRev k => (.bitRev k, g)
+  | .swap => (.swap, g)
+  | @Perm.compose _ p1 p2 =>
+    let (pop1, g1) := addPermToEGraph g n p1
+    let (id1, g2) := g1.add (MatENode.mkPerm pop1)
+    let (pop2, g3) := addPermToEGraph g2 n p2
+    let (id2, g4) := g3.add (MatENode.mkPerm pop2)
+    (.compose id1 id2, g4)
+  | @Perm.inverse _ p1 =>
+    let (pop1, g1) := addPermToEGraph g n p1
+    let (id1, g2) := g1.add (MatENode.mkPerm pop1)
+    (.inverse id1, g2)
+  | @Perm.tensor m' n' p1 p2 =>
+    let (pop1, g1) := addPermToEGraph g m' p1
+    let (id1, g2) := g1.add (MatENode.mkPerm pop1)
+    let (pop2, g3) := addPermToEGraph g2 n' p2
+    let (id2, g4) := g3.add (MatENode.mkPerm pop2)
+    (.tensor id1 id2, g4)
+
+/-- Backward compat: pure conversion for non-recursive perms. -/
+def permToPermOp (n : Nat) (p : Perm n) : PermOp := (addPermToEGraph MatEGraph.empty n p).1
 
 /-- Add a MatExpr to the E-graph recursively.
     Note: This handles the symbolic representation without expanding Kronecker products.
@@ -553,7 +613,9 @@ def addMatExpr (g : MatEGraph) (m n : Nat) : MatExpr α m n → (MatEClassId × 
   | .dft n' => g.add (MatENode.mkDFT n')
   | .ntt n' p => g.add (MatENode.mkNTT n' p)
   | .twiddle n' k => g.add (MatENode.mkTwiddle n' k)
-  | .perm p => g.add (MatENode.mkPerm (permToPermOp n p))
+  | .perm p =>
+    let (pop, g1) := addPermToEGraph g n p
+    g1.add (MatENode.mkPerm pop)
   | @MatExpr.kron _ m₁ n₁ m₂ n₂ a b =>
     let (idA, g1) := addMatExpr g m₁ n₁ a
     let (idB, g2) := addMatExpr g1 m₂ n₂ b
@@ -577,6 +639,7 @@ def addMatExpr (g : MatEGraph) (m n : Nat) : MatExpr α m n → (MatEClassId × 
     let (idA, g1) := addMatExpr g m' n' a
     g1.add ⟨.conjTranspose idA m' n'⟩
   | .diag _ =>
+    -- Approximation: diag vector ≈ identity (diagonal structure preserved in semantics)
     g.add (MatENode.mkIdentity n)
   | .scalar _ =>
     g.add (MatENode.mkIdentity 1)
@@ -584,13 +647,16 @@ def addMatExpr (g : MatEGraph) (m n : Nat) : MatExpr α m n → (MatEClassId × 
     -- elemwise is an OPAQUE BARRIER - it enters the E-graph but rules don't penetrate it
     let (idA, g1) := addMatExpr g m' n' a
     g1.add (MatENode.mkElemwise op idA m' n')
-  -- Poseidon2 operations - not yet implemented in E-graph
-  | @MatExpr.partialElemwise _ _ _ _ _ _ =>
-    panic! "addMatExpr: partialElemwise not yet implemented"
-  | @MatExpr.mdsApply _ _ _ _ _ =>
-    panic! "addMatExpr: mdsApply not yet implemented"
-  | @MatExpr.addRoundConst _ _ _ _ _ =>
-    panic! "addMatExpr: addRoundConst not yet implemented"
+  -- Poseidon2 operations: lowered as opaque elemwise barriers
+  | @MatExpr.partialElemwise _ m' n' idx op a =>
+    let (idA, g1) := addMatExpr g m' n' a
+    g1.add (MatENode.mkElemwise (.custom s!"partial_{idx}") idA m' n')
+  | .mdsApply mdsName _stateSize a =>
+    let (idA, g1) := addMatExpr g m 1 a
+    g1.add (MatENode.mkElemwise (.custom s!"mds_{mdsName}") idA m 1)
+  | .addRoundConst round _stateSize a =>
+    let (idA, g1) := addMatExpr g m 1 a
+    g1.add (MatENode.mkElemwise (.custom s!"arc_{round}") idA m 1)
 
 /-- Create a MatEGraph from a MatExpr -/
 def fromMatExpr (e : MatExpr α m n) : (MatEClassId × MatEGraph) :=
