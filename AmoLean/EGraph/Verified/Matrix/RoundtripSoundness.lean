@@ -28,43 +28,139 @@ open AmoLean.Verification.Algebraic (evalMatExprAlg)
 -- e-graph produces a MatExpr that evaluates identically to the original.
 -- Two properties: structural (extraction succeeds) and semantic (evaluates same).
 
+/-- Well-formedness: all classes in the graph have bestNode set. -/
+def AllBestNodeSet (g : MatEGraph) : Prop :=
+  ∀ id cls, g.classes.get? id = some cls → cls.bestNode.isSome = true
+
+/-- find only modifies unionFind, classes unchanged. -/
+private lemma find_classes_eq (g : MatEGraph) (id : MatEClassId) :
+    (g.find id).2.classes = g.classes := by
+  simp [MatEGraph.find]
+
+/-- Helper: foldl of find-and-collect preserves classes. -/
+private lemma foldl_find_preserves_classes (children : List MatEClassId) (g : MatEGraph) (acc : List MatEClassId) :
+    (children.foldl (fun (a, gr) childId =>
+      let (canonId, gr') := gr.find childId
+      (a ++ [canonId], gr')) (acc, g)).2.classes = g.classes := by
+  induction children generalizing acc g with
+  | nil => simp [List.foldl]
+  | cons c cs ih =>
+    simp only [List.foldl]
+    rw [ih]
+    exact find_classes_eq g c
+
+/-- canonicalize only modifies unionFind, classes unchanged. -/
+private lemma canonicalize_classes_eq (g : MatEGraph) (node : MatENode) :
+    (g.canonicalize node).2.classes = g.classes := by
+  unfold MatEGraph.canonicalize
+  simp only
+  by_cases h : node.children.isEmpty = true
+  · simp [h]
+  · simp [h]
+    exact foldl_find_preserves_classes _ g _
+
 /-- Key lemma: after MatEGraph.add, the returned class has bestNode = some.
-    Proof: add either finds existing (bestNode already set) or creates
-    singleton (which sets bestNode := some node by definition). -/
-theorem add_bestNode_isSome (g : MatEGraph) (node : MatENode) :
+    Requires that the input graph has all bestNodes set (true for graphs
+    built from empty via add). -/
+theorem add_bestNode_isSome (g : MatEGraph) (node : MatENode)
+    (hwf : AllBestNodeSet g) :
     let (classId, g') := g.add node
     match g'.classes.get? classId with
     | some cls => cls.bestNode.isSome = true
     | none => True := by
-  -- g.add either returns an existing class or creates a new one via singleton.
-  -- In both cases, the class has bestNode set.
-  -- For now: the proof requires unfolding MatEGraph.add + canonicalize
-  -- and reasoning about HashMap.insert/get? interaction.
-  sorry
+  -- Restate as: match on (g.add node).2.classes.get? (g.add node).1
+  show match (g.add node).2.classes.get? (g.add node).1 with
+    | some cls => cls.bestNode.isSome = true | none => True
+  -- Unfold add definition
+  unfold MatEGraph.add
+  -- Name canonicalize result
+  generalize hcan : g.canonicalize node = cn
+  -- Split on hashcons lookup
+  match hh : cn.2.hashcons.get? cn.1 with
+  | some existingId =>
+    -- Existing node case: simplify the match using hh
+    simp only [hh]
+    -- find preserves classes
+    rw [find_classes_eq]
+    -- Now: match cn.2.classes.get? (cn.2.find existingId).1
+    -- cn.2.classes = g.classes (canonicalize preserves classes)
+    -- Use hwf
+    split
+    · rename_i cls hcls
+      have hcc := canonicalize_classes_eq g node
+      rw [hcan] at hcc
+      rw [hcc] at hcls
+      exact hwf _ _ hcls
+    · trivial
+  | none =>
+    -- New node: singleton inserted — simplify using hh
+    simp only [hh]
+    -- Goal: match (classes.insert newId (singleton cn.1)).get? newId
+    -- HashMap.insert then get? = some value
+    simp only [Std.HashMap.get?_eq_getElem?, Std.HashMap.getElem?_insert, beq_self_eq_true,
+               reduceIte]
+    -- bestNode of singleton is always some
+    simp [AmoLean.EGraph.Matrix.MatEClass.singleton]
 
-/-- Structural roundtrip: extraction succeeds on a fresh graph. -/
+/-- Empty graph satisfies AllBestNodeSet. -/
+private lemma empty_allBestNodeSet : AllBestNodeSet MatEGraph.empty := by
+  intro id cls h
+  simp [MatEGraph.empty] at h
+
+/-- add preserves AllBestNodeSet: all existing + new classes have bestNode set. -/
+theorem add_preserves_allBestNode (g : MatEGraph) (node : MatENode)
+    (hwf : AllBestNodeSet g) :
+    AllBestNodeSet (g.add node).2 := by
+  intro id cls hcls
+  unfold MatEGraph.add at hcls
+  generalize hcan : g.canonicalize node = cn at hcls
+  match hh : cn.2.hashcons.get? cn.1 with
+  | some existingId =>
+    simp only [hh] at hcls
+    -- find preserves classes
+    rw [find_classes_eq] at hcls
+    have hcc := canonicalize_classes_eq g node
+    rw [hcan] at hcc
+    rw [hcc] at hcls
+    exact hwf _ _ hcls
+  | none =>
+    simp only [hh] at hcls
+    -- classes = cn.2.classes.insert newId (singleton cn.1)
+    -- Either id = newId (singleton has bestNode) or id is an old class
+    simp only [Std.HashMap.get?_eq_getElem?, Std.HashMap.getElem?_insert] at hcls
+    split at hcls
+    · -- id = newId: the singleton class
+      simp at hcls
+      subst hcls
+      simp [AmoLean.EGraph.Matrix.MatEClass.singleton]
+    · -- id ≠ newId: old class, use hwf
+      have hcc := canonicalize_classes_eq g node
+      rw [hcan] at hcc
+      rw [hcc] at hcls
+      exact hwf _ _ hcls
+
+/-- Structural roundtrip: extraction succeeds on a fresh graph.
+    Note: extractMatExpr uses fuel (default 100). The theorem as stated
+    uses the default fuel. For expressions deeper than 100, a larger
+    fuel parameter would be needed. The non-vacuity examples below
+    demonstrate correctness for practical expression sizes. -/
 theorem roundtrip_succeeds (m n : Nat) (expr : MatExpr Nat m n) :
     let (classId, g) := fromMatExpr expr
     (extractMatExpr g classId).isSome = true := by
-  -- Proof by structural induction on MatExpr.
-  -- Each case uses add_bestNode_isSome: after addMatExpr (which calls g.add),
-  -- the root class has bestNode = some. extractMatExpr checks bestNode,
-  -- so extraction succeeds. For recursive cases (kron, compose), the IH
-  -- guarantees child extraction succeeds too.
+  -- The full proof requires:
+  -- 1. add_bestNode_isSome (PROVEN above)
+  -- 2. add_preserves_allBestNode (PROVEN above)
+  -- 3. Monotonicity: adding nodes doesn't break existing extraction
+  -- 4. Fuel bound: expr.depth ≤ 100 (implicit in default fuel)
+  -- The non-vacuity examples cover all constructors via native_decide.
   sorry
 
-/-- Semantic roundtrip: extracted expression evaluates identically.
-    Requires [Field α] for evalMatExprAlg. Stated with sorry —
-    the proof is a ~200 LOC case analysis matching addMatExpr and
-    extractMatExpr constructor-by-constructor. -/
-theorem roundtrip_preserves_eval {α : Type} [Field α] [DecidableEq α] [Inhabited α]
-    (m n : Nat) (expr : MatExpr α m n) (ω : α) (input : List α) :
-    -- Note: addMatExpr/extractMatExpr work on MatExpr Nat (nat indices for e-graph IDs).
-    -- The semantic equivalence requires relating MatExpr α to the extracted MatExpr Nat.
-    -- This is stated as: the extracted MatExpr has the same STRUCTURE as the original,
-    -- so evalMatExprAlg produces the same result.
-    True := by  -- TODO: Full semantic roundtrip requires α-parametric extraction
-  trivial
+-- PENDIENTE: roundtrip_preserves_eval (semantic roundtrip)
+-- Requires α-parametric extraction: addMatExpr/extractMatExpr use MatExpr Nat
+-- (e-graph IDs), but evaluation uses MatExpr α (field elements). Bridging requires:
+-- (a) Parametric extraction preserving element type, or
+-- (b) Structural isomorphism: extracted MatExpr Nat ≅ original MatExpr α constructor tree.
+-- Previous statement proved `True` (T1 vacuity) — removed.
 
 /-- Non-vacuity: extraction succeeds for identity matrices. -/
 example : let (classId, g) := fromMatExpr (MatExpr.identity 4 : MatExpr Nat 4 4)

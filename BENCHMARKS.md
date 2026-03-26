@@ -1849,3 +1849,312 @@ Nodes covered: N10.7 Stress Test + Docs.
 <!-- CHECK:f17_e2e_nonvac --> End-to-end non-vacuity example (Mersenne31)
 - `lake build` clean, no island modules, all nodes referenced
 
+## Verification Criteria by Node (Fase 19 — MatEGraph Reconnection, Option D)
+
+### Mechanical Health (Fase 19 — Global)
+<!-- CHECK:f19_zero_sorry --> Zero sorry/admit in ALL Fase 19 files
+<!-- CHECK:f19_zero_axiom --> Zero custom axioms (#print axioms shows ONLY standard Lean/Mathlib)
+<!-- CHECK:f19_build --> `lake build` 0 errors, 0 warnings on all Fase 19 modules
+<!-- CHECK:f19_no_simp_star --> No `simp [*]` in Fase 19 code
+<!-- CHECK:f19_scoped_simp --> All `simp` calls are `simp only [...]` in FUND/CRIT nodes
+<!-- CHECK:f19_no_native_in_proofs --> No `native_decide` in theorem proofs (OK in tests/examples/non-vacuity)
+<!-- CHECK:f19_no_identity_passes --> No `:= id`, `fun x => x`, or `fun _ w => w` in pipeline fields unless documented PENDIENTE
+<!-- CHECK:f19_no_panic --> No `panic!` in any new or modified function (existing panics in addMatExpr must be replaced with proper handling)
+<!-- CHECK:f19_backward_compat --> Existing `lake build` passes unchanged — zero regressions on all prior Fase modules
+<!-- CHECK:f19_loc_budget --> Total new + modified LOC <= 4,000 (excluding deleted code)
+<!-- CHECK:f19_no_matop_refs --> After N19.8, zero references to `MatOp`, `TransformId`, `FactorizationTree`, `exploreFact`, or `expandSubDFTs` in any non-deleted file
+
+---
+
+### N19.1 Fix addMatExpr (HOJA)
+
+**Goal**: Fix lossy cases in `addMatExpr` (EGraph/Vector.lean). Currently `Perm.compose`/`inverse`/`tensor` collapse to identity in `permToPermOp`. Fix to produce correct `PermOp`. Also fix `diag`/`scalar` approximations and replace `partialElemwise`/`mdsApply`/`addRoundConst` panics with proper handling.
+
+#### Correctness (BLOCKING)
+<!-- CHECK:f19_n1_perm_compose --> `permToPermOp` handles `Perm.compose p q` by recursively converting both sub-permutations and producing a `PermOp.compose`. NEVER collapses to `.identity n`.
+<!-- CHECK:f19_n1_perm_inverse --> `permToPermOp` handles `Perm.inverse p` by converting the sub-permutation and producing a `PermOp.inverse`. NEVER collapses to `.identity n`.
+<!-- CHECK:f19_n1_perm_tensor --> `permToPermOp` handles `Perm.tensor p q` by converting both sub-permutations and producing a `PermOp.tensor`. NEVER collapses to `.identity n`.
+<!-- CHECK:f19_n1_diag_correct --> `addMatExpr` for `.diag coeffs` produces a diagonal matrix node that retains the coefficient information, NOT a plain `.identity n`.
+<!-- CHECK:f19_n1_scalar_correct --> `addMatExpr` for `.scalar c` produces a scalar multiplication node that retains the scalar value, NOT a plain `.identity 1`.
+<!-- CHECK:f19_n1_no_panic --> `addMatExpr` for `.partialElemwise`, `.mdsApply`, and `.addRoundConst` does NOT panic. Each case either: (a) produces a correct MatENodeOp representation, or (b) uses an opaque barrier node with dimensions preserved and is documented as PENDIENTE in ARCHITECTURE.md.
+<!-- CHECK:f19_n1_total_function --> `addMatExpr` is total for all 17 MatExpr constructors. No `panic!`, no `sorry`, no `unreachable!`.
+
+#### Structural (BLOCKING)
+<!-- CHECK:f19_n1_permop_extended --> If `PermOp` needs new constructors (`.compose`, `.inverse`, `.tensor`), they are added with `BEq`, `Hashable`, `Repr` derived. The `children`, `mapChildren`, `localCost` functions in `MatENodeOp` are updated to handle the new `PermOp` variants.
+<!-- CHECK:f19_n1_backward_compat --> Existing callers of `addMatExpr` continue to compile. No signature change.
+<!-- CHECK:f19_n1_consumed_by_n5 --> The fixed `addMatExpr` is used by N19.5's soundness proof. Not an isolated fix.
+
+#### Non-vacuity (BLOCKING)
+<!-- CHECK:f19_n1_nonvac_compose --> Non-vacuity `example`: `addMatExpr` on a `MatExpr` containing `Perm.compose stride bitRev` produces a `MatENodeOp` where the permutation is NOT `.identity`. Compile without sorry.
+<!-- CHECK:f19_n1_nonvac_diag --> Non-vacuity `example`: `addMatExpr` on `.diag [1,2,3]` produces a node distinguishable from `.identity 3`. Compile without sorry.
+
+#### Edge Cases (ADVISORY)
+<!-- CHECK:f19_n1_edge_identity_perm --> `permToPermOp` on `Perm.identity` still produces `PermOp.identity n`. No regression.
+<!-- CHECK:f19_n1_edge_nested_compose --> `permToPermOp` on `Perm.compose (Perm.compose a b) c` handles nested composition without stack overflow (structurally recursive on Perm).
+<!-- CHECK:f19_n1_edge_zero_dim --> `addMatExpr` on `.zero 0 0`, `.identity 0` produces valid nodes (dimensions stored correctly).
+
+---
+
+### N19.2 NodeOps MatENodeOp (HOJA)
+
+**Goal**: Implement the `NodeOps` typeclass instance for `MatENodeOp`. Functions (`children`, `mapChildren`, `localCost`) exist in Vector.lean; need `replaceChildren` + 4 proof obligations from `NodeOps` in VerifiedExtraction/Core.lean.
+
+#### Correctness (BLOCKING)
+<!-- CHECK:f19_n2_instance --> `instance : NodeOps MatENodeOp` compiles without sorry.
+<!-- CHECK:f19_n2_replaceChildren --> `replaceChildren : MatENodeOp -> List EClassId -> MatENodeOp` is implemented for all 14 MatENodeOp constructors. Leaf nodes (identity, zero, dft, ntt, twiddle, perm) ignore the list. Non-leaf nodes replace children positionally.
+<!-- CHECK:f19_n2_law_mapChildren_children --> `mapChildren_children` proven: `forall f op, children (mapChildren f op) = (children op).map f`. Covers all 14 constructors.
+<!-- CHECK:f19_n2_law_mapChildren_id --> `mapChildren_id` proven: `forall op, mapChildren id op = op`. Covers all 14 constructors.
+<!-- CHECK:f19_n2_law_replaceChildren_children --> `replaceChildren_children` proven: `forall op ids, ids.length = (children op).length -> children (replaceChildren op ids) = ids`. Covers all 14 constructors.
+<!-- CHECK:f19_n2_law_replaceChildren_sameShape --> `replaceChildren_sameShape` proven: `forall op ids, ids.length = (children op).length -> mapChildren (fun _ => 0) (replaceChildren op ids) = mapChildren (fun _ => 0) op`. Covers all 14 constructors.
+
+#### Structural (BLOCKING)
+<!-- CHECK:f19_n2_uses_existing_fns --> The instance reuses the existing `children`, `mapChildren`, and `localCost` definitions from Vector.lean (lines 230-293). Does NOT redefine them.
+<!-- CHECK:f19_n2_consumed_by_n4 --> The `NodeOps MatENodeOp` instance is imported and used by N19.4 (extractMatExpr). Not an island typeclass instance.
+<!-- CHECK:f19_n2_matches_core_class --> The instance matches the exact `NodeOps` class signature from `VerifiedExtraction/Core.lean` (4 fields + 4 proof obligations). No additional axioms or sorry.
+
+#### Non-vacuity (BLOCKING)
+<!-- CHECK:f19_n2_nonvac_kron --> Non-vacuity `example`: `NodeOps.children (.kron a b m1 n1 m2 n2) = [a, b]` and `NodeOps.replaceChildren (.kron a b m1 n1 m2 n2) [c, d] |> NodeOps.children = [c, d]` for concrete `a, b, c, d`. Compile without sorry.
+<!-- CHECK:f19_n2_nonvac_compose --> Non-vacuity `example`: same pattern for `.compose a b m k n`. Compile without sorry.
+<!-- CHECK:f19_n2_nonvac_leaf --> Non-vacuity `example`: `NodeOps.children (.dft 8) = []` and `NodeOps.replaceChildren (.dft 8) [] = .dft 8`. Compile without sorry.
+
+#### Edge Cases (ADVISORY)
+<!-- CHECK:f19_n2_edge_wrong_length --> `replaceChildren op ids` when `ids.length != (children op).length` is well-defined (does not panic). Behavior documented (e.g., returns op unchanged, or takes min-length prefix).
+<!-- CHECK:f19_n2_edge_all_constructors --> A single test exercises `children` on all 14 MatENodeOp constructors, verifying the expected child count: 0 for leaves, 1 for unary, 2 for binary, 2 for kron/compose/add.
+
+---
+
+### N19.3 BreakdownRules as Rewrite Rules (CRITICO)
+
+**Goal**: Convert `cooleyTukeyRule`, `baseCase2Rule`, `radix4Rule` from FactorizationTree builders (MatNodeOps.lean) to MatEGraph rewrite rules. Each rule inserts a decomposition into the MatEGraph via `addMatExpr`. Must be sound: the rewrite preserves `evalMatExprAlg`.
+
+#### Soundness (BLOCKING)
+<!-- CHECK:f19_n3_ct_rule_sound --> Cooley-Tukey rewrite rule has a soundness proof: for all `omega`, `input`, `n` where `n = 2*m`, `evalMatExprAlg omega (fftCooleyTukey 2 m) input = evalMatExprAlg omega (dft (2*m)) input` (under `IsPrimitiveRoot omega (2*m)` and `input.length = 2*m`). The proof references or implies N19.9.
+<!-- CHECK:f19_n3_base2_rule_sound --> Base case rule has a soundness proof: for `n = 2`, `evalMatExprAlg omega (dft 2) input = evalDFT2 input` (for `input.length = 2`). This follows from `evalMatExprAlg_dft_eq_kernelAlg` and `dft2_algebraic_correct`.
+<!-- CHECK:f19_n3_radix4_rule_sound --> Radix-4 rule has a soundness proof: `evalMatExprAlg omega (fftCooleyTukey 4 m) input = evalMatExprAlg omega (dft (4*m)) input` (under appropriate preconditions). This composes two radix-2 steps.
+<!-- CHECK:f19_n3_rules_type --> Each rule has type compatible with a `MatSoundRule` structure (analogous to `MixedSoundRule` in BitwiseRules.lean). The structure includes: `name : String`, `lhsMatch : MatENodeOp -> Bool`, `apply : MatEGraph -> MatEClassId -> MatEGraph`, `sound : [soundness statement]`.
+<!-- CHECK:f19_n3_rules_use_addMatExpr --> Each rule's `apply` function uses `addMatExpr` (from N19.1) to insert the decomposition MatExpr into the MatEGraph. The decomposed MatExpr is constructed as a concrete `MatExpr` term, NOT as ad-hoc node insertions.
+
+#### Structural (BLOCKING)
+<!-- CHECK:f19_n3_all_rules_collected --> All breakdown rules are collected in an `allBreakdownRules` list with a `length` theorem and a master `allBreakdownRules_sound` theorem (analogous to `allBitwiseRules` pattern in BitwiseRules.lean).
+<!-- CHECK:f19_n3_lhs_matches_dft --> Each rule's `lhsMatch` triggers on `.dft n` (or `.ntt n p`) nodes in the MatEGraph. The Cooley-Tukey rule triggers when `n` is even and `n > 2`. The base case triggers when `n = 2`. Radix-4 triggers when `4 | n` and `n > 4`.
+<!-- CHECK:f19_n3_consumed_by_n7 --> The rules are imported and passed to the saturation engine in N19.7 (CrossEGraphProtocol rewire). Not island definitions.
+<!-- CHECK:f19_n3_no_factorizationTree --> The rules do NOT produce `FactorizationTree` values. They produce `MatEGraph` modifications (e-class merges). The entire `FactorizationTree` abstraction is being replaced.
+
+#### Non-vacuity (BLOCKING)
+<!-- CHECK:f19_n3_nonvac_ct_apply --> Non-vacuity `example`: start with `MatEGraph` containing a single `dft 8` node. Apply the Cooley-Tukey rule. The resulting `MatEGraph` has > 1 e-class (the decomposition was inserted). Compile without sorry.
+<!-- CHECK:f19_n3_nonvac_base2_apply --> Non-vacuity `example`: start with `MatEGraph` containing `dft 2`. Apply the base case rule. The resulting e-graph has the DFT2 kernel merged with the `dft 2` class. Compile without sorry.
+
+#### Edge Cases (ADVISORY)
+<!-- CHECK:f19_n3_edge_dft1 --> Rules do NOT trigger on `dft 1` (identity, should be left alone).
+<!-- CHECK:f19_n3_edge_dft_odd --> Cooley-Tukey rule does NOT trigger on `dft 7` (odd, not decomposable).
+<!-- CHECK:f19_n3_edge_double_apply --> Applying the same rule twice to the same e-class is idempotent (second application either detects the decomposition already exists or produces a no-op merge).
+
+---
+
+### N19.4 extractMatExpr (CRITICO)
+
+**Goal**: Implement extraction from `MatEGraph` back to `MatExpr`. Must reconstruct dependent types (m x n dimensions) from the Nat fields in `MatENodeOp`. Uses the `NodeOps` interface for tree extraction.
+
+#### Correctness (BLOCKING)
+<!-- CHECK:f19_n4_extracts_matexpr --> `extractMatExpr : MatEGraph -> MatEClassId -> Option (MatExpr alpha m n)` returns a `MatExpr` for valid e-class IDs. The `m` and `n` are determined from the `MatENodeOp`'s dimension fields.
+<!-- CHECK:f19_n4_dimension_reconstruction --> For every `MatENodeOp` constructor, the extraction correctly reconstructs the `m x n` type indices: `.dft n` -> `MatExpr alpha n n`, `.kron a b m1 n1 m2 n2` -> `MatExpr alpha (m1*m2) (n1*n2)`, `.compose a b m k n` -> `MatExpr alpha m n`, etc.
+<!-- CHECK:f19_n4_recursive --> Extraction is recursive: for non-leaf nodes, it extracts children first, then reconstructs the parent MatExpr from the children's MatExpr values. Uses `NodeOps.children` (from N19.2) to traverse.
+<!-- CHECK:f19_n4_handles_all_ops --> Extraction handles all 14 `MatENodeOp` constructors. No `sorry`, no `panic!`, no missing match arms.
+<!-- CHECK:f19_n4_perm_reconstruction --> For `.perm pop`, the extraction reconstructs a `Perm` from `PermOp`, including the new `PermOp.compose`/`inverse`/`tensor` variants (from N19.1). The reconstructed `Perm` has correct type-level dimension `n`.
+
+#### Structural (BLOCKING)
+<!-- CHECK:f19_n4_uses_nodeops --> Extraction uses `NodeOps MatENodeOp` (from N19.2) for `children` traversal, NOT direct pattern matching on the MatEGraph internals. This ensures compatibility with the generic extraction framework.
+<!-- CHECK:f19_n4_uses_best_node --> Extraction selects the best (lowest cost) node from each e-class, following the standard greedy extraction pattern from `VerifiedExtraction/Core.lean`.
+<!-- CHECK:f19_n4_consumed_by_n6 --> The extraction function is used by N19.6 (extractMatExpr soundness). Not an island function.
+<!-- CHECK:f19_n4_consumed_by_n7 --> The extraction function is used by N19.7 (CrossEGraphProtocol rewire) to produce the final `MatExpr` from the optimized MatEGraph.
+
+#### Non-vacuity (BLOCKING)
+<!-- CHECK:f19_n4_nonvac_roundtrip_dft --> Non-vacuity `example`: `addMatExpr` a `dft 8` MatExpr into a fresh MatEGraph, then `extractMatExpr` from the root e-class. The extracted MatExpr evaluates identically to the original via `evalMatExprAlg`. Compile without sorry.
+<!-- CHECK:f19_n4_nonvac_kron --> Non-vacuity `example`: `addMatExpr` a `kron (identity 2) (dft 4)` into MatEGraph, extract, verify the extracted MatExpr has the correct structure (kron with identity and dft children). Compile without sorry.
+<!-- CHECK:f19_n4_nonvac_composed --> Non-vacuity `example`: `addMatExpr` a `compose (perm stride) (kron (identity 2) (dft 4))`, extract, verify structure. Compile without sorry.
+
+#### Edge Cases (ADVISORY)
+<!-- CHECK:f19_n4_edge_invalid_id --> `extractMatExpr` on an invalid (non-existent) e-class ID returns `none`, not panic.
+<!-- CHECK:f19_n4_edge_empty_graph --> `extractMatExpr` on an empty `MatEGraph` returns `none`.
+<!-- CHECK:f19_n4_edge_merged_classes --> After merging two e-classes, extraction from either original ID returns a valid MatExpr (follows canonical representatives).
+
+---
+
+### N19.5 addMatExpr Soundness (FUNDACIONAL)
+
+**Goal**: Prove that `addMatExpr` preserves semantic equivalence: for any `MatExpr e`, the e-class containing its `MatENodeOp` representation, when extracted back to `MatExpr`, evaluates (via `evalMatExprAlg`) to the same result as `evalMatExprAlg(e)`.
+
+#### Soundness (BLOCKING)
+<!-- CHECK:f19_n5_insertion_sound --> Master theorem: `addMatExpr_sound : forall (g : MatEGraph) (m n : Nat) (e : MatExpr alpha m n) (omega : alpha) (input : List alpha), let (rootId, g') := addMatExpr g m n e in forall e', extractMatExpr g' rootId = some e' -> evalMatExprAlg omega m n e' input = evalMatExprAlg omega m n e input`. This is the key insertion theorem.
+<!-- CHECK:f19_n5_preserves_existing --> `addMatExpr` does NOT corrupt existing e-classes: `forall id, id < g.numClasses -> extractMatExpr g' id = extractMatExpr g id` (modulo canonical representative changes). Existing classes are preserved.
+<!-- CHECK:f19_n5_structural_induction --> The proof is by structural induction on `MatExpr`, covering all 17 constructors. Each case shows the inserted MatENodeOp, when extracted, reconstructs a semantically equivalent MatExpr.
+<!-- CHECK:f19_n5_perm_faithful --> The proof covers the fixed `permToPermOp`: for `MatExpr.perm p`, the theorem shows `evalMatExprAlg(extracted) = applyPerm p input`. This requires that `permToPermOp` is faithful (not lossy, verified by N19.1).
+
+#### Structural (BLOCKING)
+<!-- CHECK:f19_n5_depends_on_n1 --> The proof imports and relies on the fixed `addMatExpr` (N19.1). If `permToPermOp` is lossy, this theorem CANNOT hold for `.perm (Perm.compose ...)`.
+<!-- CHECK:f19_n5_depends_on_n4 --> The proof uses `extractMatExpr` (N19.4) in its statement. The two functions are inverses for the insertion case.
+<!-- CHECK:f19_n5_no_sorry --> Zero sorry in the proof. This is the FUNDACIONAL node — no deferral allowed.
+<!-- CHECK:f19_n5_bridge_to_lowering --> The theorem's conclusion uses `evalMatExprAlg`, which is the same evaluation function used in `lowering_algebraic_correct` (AlgebraicSemantics.lean). This ensures the e-graph soundness composes with the existing lowering soundness.
+
+#### Non-vacuity (BLOCKING)
+<!-- CHECK:f19_n5_nonvac_concrete --> Non-vacuity `example`: instantiate `addMatExpr_sound` with `e := fftCooleyTukey 2 4` (CT decomposition of DFT-8), concrete `omega` (8th root of unity in a concrete field), concrete `input := [1,2,3,4,5,6,7,8]`. Show all hypotheses are satisfiable and the conclusion holds. Compile without sorry.
+<!-- CHECK:f19_n5_nonvac_perm --> Non-vacuity `example`: instantiate with `e := perm (Perm.compose stride bitRev)`. Show the composed permutation survives the addMatExpr -> extract roundtrip. Compile without sorry.
+
+#### Edge Cases (ADVISORY)
+<!-- CHECK:f19_n5_edge_identity --> Soundness for `.identity n`: trivially preserves (identity is identity).
+<!-- CHECK:f19_n5_edge_zero --> Soundness for `.zero m n`: produces all-zeros list.
+<!-- CHECK:f19_n5_edge_empty_graph --> Starting from `MatEGraph.empty`, the first insertion is sound.
+
+---
+
+### N19.6 extractMatExpr Soundness (CRITICO)
+
+**Goal**: Prove that extraction produces a `MatExpr` that evaluates to the same result as the original. Combined with N19.5, gives the roundtrip: insert -> optimize -> extract preserves semantics.
+
+#### Soundness (BLOCKING)
+<!-- CHECK:f19_n6_extraction_sound --> Master theorem: `extractMatExpr_sound : forall (g : MatEGraph) (id : MatEClassId) (omega : alpha) (input : List alpha), MatEGraphConsistent g -> forall e, extractMatExpr g id = some e -> evalMatExprAlg omega m n e input = semanticValue g id omega input`. Here `semanticValue` is the e-graph's semantic interpretation of the e-class, and `MatEGraphConsistent` is the invariant that all merged classes have equal semantic values.
+<!-- CHECK:f19_n6_consistency_invariant --> Define `MatEGraphConsistent : MatEGraph -> Prop` that asserts: for all e-classes `c`, all nodes `n1, n2` in `c`, `evalMatExprAlg(extract n1) = evalMatExprAlg(extract n2)` (all nodes in the same class evaluate identically). This is the matrix analog of `ConsistentValuation` from SemanticSpec.lean.
+<!-- CHECK:f19_n6_merge_preserves_consistency --> Prove that `merge` preserves `MatEGraphConsistent` when the two merged classes have equal semantic values. This is required for breakdown rules to maintain the invariant.
+<!-- CHECK:f19_n6_add_preserves_consistency --> Prove that `add` (inserting a new node) preserves `MatEGraphConsistent`. A fresh e-class with a single node is trivially consistent.
+
+#### Structural (BLOCKING)
+<!-- CHECK:f19_n6_composes_with_n5 --> The roundtrip theorem follows from N19.5 + N19.6: `forall e, let (id, g') := addMatExpr empty m n e in MatEGraphConsistent g' -> forall e', extractMatExpr g' id = some e' -> evalMatExprAlg omega m n e' input = evalMatExprAlg omega m n e input`.
+<!-- CHECK:f19_n6_uses_nodeops --> The proof uses `NodeOps MatENodeOp` (N19.2) properties, particularly `replaceChildren_children` and `mapChildren_children`, to reason about tree reconstruction.
+<!-- CHECK:f19_n6_consumed_by_n7 --> The extraction soundness is invoked in N19.7 to justify the final pipeline output.
+
+#### Non-vacuity (BLOCKING)
+<!-- CHECK:f19_n6_nonvac_after_rewrite --> Non-vacuity `example`: start with `dft 8` in MatEGraph, apply one Cooley-Tukey breakdown (N19.3), then extract. Show `MatEGraphConsistent` holds and the extracted MatExpr evaluates to the same as `dft 8`. This exercises the full insert -> rewrite -> extract path. Compile without sorry.
+
+#### Edge Cases (ADVISORY)
+<!-- CHECK:f19_n6_edge_single_node --> Extraction from a single-node e-class is trivially sound (no merges, no rewrites).
+<!-- CHECK:f19_n6_edge_multi_rewrite --> After applying multiple breakdown rules (CT at levels 8 -> 4 -> 2), extraction still produces a correct MatExpr.
+
+---
+
+### N19.7 Rewire CrossEGraphProtocol (CRITICO)
+
+**Goal**: Modify `jointOptimize` to use `MatEGraph` with `BreakdownRules` as rewrite rules. The result is an extracted `MatExpr` (not a `FactorizationTree`). This `MatExpr` flows to `lowering_algebraic_correct` for verified code generation.
+
+#### Correctness (BLOCKING)
+<!-- CHECK:f19_n7_new_signature --> `jointOptimize` returns `(MatExpr alpha m n) x Nat x ArithmeticCostResponse` instead of `FactorizationTree x Nat x ArithmeticCostResponse`. The `MatExpr` is the optimized decomposition extracted from the MatEGraph.
+<!-- CHECK:f19_n7_uses_mategraph --> `jointOptimize` internally: (1) creates a `MatEGraph` via `addMatExpr` for the input DFT/NTT, (2) applies `allBreakdownRules` (from N19.3) via saturation, (3) extracts the optimized `MatExpr` via `extractMatExpr` (N19.4), (4) queries arithmetic costs from the bitwise e-graph.
+<!-- CHECK:f19_n7_pipeline_sound --> The end-to-end pipeline theorem: `jointOptimize_sound : forall n p omega input, IsPrimitiveRoot omega n -> input.length = n -> let (optimizedExpr, _, _) := jointOptimize n p in evalMatExprAlg omega m n optimizedExpr input = evalMatExprAlg omega n n (dft n) input`. The optimized MatExpr computes the same DFT as the original.
+<!-- CHECK:f19_n7_flows_to_lowering --> The `MatExpr` output of `jointOptimize` satisfies `IsWellFormedNTT` (from AlgebraicSemantics.lean), so it can be passed to `lowering_algebraic_correct`. Either: (a) the `IsWellFormedNTT` predicate is proven for all outputs of breakdown rules, or (b) `jointOptimize` checks the predicate and returns only well-formed results.
+<!-- CHECK:f19_n7_cost_from_arithmetic --> The cost component still queries `queryArithmeticCost` from the bitwise e-graph. The cross-e-graph protocol is preserved: algebraic level (MatEGraph) handles decomposition, arithmetic level (MixedEGraph) handles cost estimation.
+
+#### Structural (BLOCKING)
+<!-- CHECK:f19_n7_imports_n3 --> File imports the breakdown rules from N19.3.
+<!-- CHECK:f19_n7_imports_n4 --> File imports `extractMatExpr` from N19.4.
+<!-- CHECK:f19_n7_no_factorizationTree --> `jointOptimize` does NOT reference `FactorizationTree`, `exploreFact`, or `expandSubDFTs`. These are deleted in N19.8.
+<!-- CHECK:f19_n7_backward_compat_callers --> All callers of `jointOptimize` (e.g., `jointOptimizeToNTTPlan`, GuidedSaturation integration) compile with the new signature. Either they adapt to receive `MatExpr`, or a bridge adapter is provided.
+<!-- CHECK:f19_n7_smoke_tests --> At least 3 `#eval` or `example` smoke tests: (a) `jointOptimize 8 p` produces a decomposition with > 1 node, (b) `jointOptimize 1024 2013265921` completes without timeout, (c) cost is positive.
+
+#### Non-vacuity (BLOCKING)
+<!-- CHECK:f19_n7_nonvac_pipeline --> Non-vacuity `example`: `jointOptimize 8 2013265921` returns a `MatExpr` whose `nodeCount > 1` (it actually decomposed, not just returned the original dft). Compile without sorry.
+
+#### Edge Cases (ADVISORY)
+<!-- CHECK:f19_n7_edge_prime_2 --> `jointOptimize 2 p` returns the base case (dft2 kernel) without infinite recursion.
+<!-- CHECK:f19_n7_edge_n_eq_1 --> `jointOptimize 1 p` returns identity (DFT of size 1 is identity).
+<!-- CHECK:f19_n7_edge_non_power_of_2 --> `jointOptimize 6 p` either handles composite non-power-of-2 or returns the original DFT unchanged with documented limitation.
+
+---
+
+### N19.8 Delete MatOp (HOJA)
+
+**Goal**: Remove `MatOp`, `TransformId`, `FactorizationTree`, `exploreFact`, `expandSubDFTs` from MatNodeOps.lean. Verify no remaining references.
+
+#### Correctness (BLOCKING)
+<!-- CHECK:f19_n8_matop_deleted --> The `MatOp` inductive type is deleted from the codebase. `grep -r "MatOp" --include="*.lean"` in non-deleted source files returns zero hits (excluding comments explaining the deletion).
+<!-- CHECK:f19_n8_transformid_deleted --> The `TransformId` structure is deleted. No references remain.
+<!-- CHECK:f19_n8_factorizationtree_deleted --> The `FactorizationTree` structure is deleted. No references remain.
+<!-- CHECK:f19_n8_explorefact_deleted --> The `exploreFact` function is deleted. No references remain.
+<!-- CHECK:f19_n8_breakdown_rule_old_deleted --> The old `BreakdownRule` structure (which returns `FactorizationTree`) is replaced by the new rule format from N19.3 (which operates on `MatEGraph`).
+
+#### Structural (BLOCKING)
+<!-- CHECK:f19_n8_build_clean --> `lake build` succeeds with 0 errors after deletion. No dangling imports, no unresolved references.
+<!-- CHECK:f19_n8_no_orphan_theorems --> Theorems that referenced deleted types (e.g., `dft_transformId`, `base2_applicable`, `ct_produces_tree_8`, `base2_produces_leaf`) are either: (a) deleted, or (b) migrated to reference the new MatEGraph-based types. Zero orphan theorem references.
+<!-- CHECK:f19_n8_file_cleanup --> If `MatNodeOps.lean` becomes empty or near-empty after deletion, it is either removed entirely or repurposed for N19.3's breakdown rules. No empty files in the build.
+
+#### Non-vacuity (BLOCKING)
+<!-- CHECK:f19_n8_nonvac_build --> Non-vacuity: the full `lake build` completes successfully. This is the mechanical proof that all references are cleaned up.
+
+#### Edge Cases (ADVISORY)
+<!-- CHECK:f19_n8_edge_comments --> Comments referencing MatOp/FactorizationTree are updated or removed. No stale documentation.
+<!-- CHECK:f19_n8_edge_tests --> Any test files referencing deleted types are updated or removed.
+
+---
+
+### N19.9 CT Identity at MatExpr Level (CRITICO)
+
+**Goal**: Prove `evalMatExprAlg(fftCooleyTukey 2 n) = evalMatExprAlg(dft (2*n))`. This is the Cooley-Tukey correctness theorem at the algebraic level, using `ntt_coeff_generic_split` from GenericCorrectness.lean.
+
+#### Soundness (BLOCKING)
+<!-- CHECK:f19_n9_ct_identity --> Master theorem: `cooleyTukey_algebraic_correct : forall (F : Type) [Field F] (omega : F) (n : Nat) (hn : n > 0) (input : List F), IsPrimitiveRoot omega (2*n) -> input.length = 2*n -> evalMatExprAlg omega (2*n) (2*n) (fftCooleyTukey 2 n) input = evalMatExprAlg omega (2*n) (2*n) (dft (2*n)) input`. Proven without sorry.
+<!-- CHECK:f19_n9_uses_splitting --> The proof uses `ntt_coeff_generic_split` and/or `ntt_coeff_generic_split_upper` from `AmoLean/NTT/GenericCorrectness.lean`. These are the verified DFT splitting formulas: X_k = E_k + omega^k * O_k and X_{k+n/2} = E_k - omega^k * O_k.
+<!-- CHECK:f19_n9_unfolds_ct --> The proof unfolds `fftCooleyTukey 2 n` to its definition: `compose (kron (identity 2) (dft n)) (compose (twiddle (2*n) ...) (compose (perm stride) ...))` and shows each component matches the splitting formula.
+<!-- CHECK:f19_n9_connects_evalDFT --> The proof shows `evalMatExprAlg omega (dft N) input` equals the NTT specification `ntt_spec_generic omega input` (or a closely related form), bridging the matrix algebra with the polynomial evaluation.
+<!-- CHECK:f19_n9_elementwise --> The equality is shown pointwise (element-by-element) for all output indices `k in [0, 2*n)`. Each output element of the CT decomposition equals the corresponding element of the direct DFT.
+
+#### Structural (BLOCKING)
+<!-- CHECK:f19_n9_imports_generic --> The proof imports `AmoLean/NTT/GenericCorrectness.lean` for the splitting lemmas.
+<!-- CHECK:f19_n9_imports_algebraic --> The proof imports `AmoLean/Verification/AlgebraicSemantics.lean` for `evalMatExprAlg` and `fftCooleyTukey`.
+<!-- CHECK:f19_n9_consumed_by_n3 --> The theorem is used by N19.3 (BreakdownRules soundness) for the Cooley-Tukey rule's soundness proof. This is the mathematical core that the rewrite rule's soundness depends on.
+<!-- CHECK:f19_n9_no_new_axioms --> The proof introduces zero new axioms. `#print axioms cooleyTukey_algebraic_correct` shows only standard Lean/Mathlib axioms.
+
+#### Non-vacuity (BLOCKING)
+<!-- CHECK:f19_n9_nonvac_n4 --> Non-vacuity `example`: for `n = 4` (DFT-8), concrete omega (primitive 8th root of unity in ZMod 17 or similar small field), concrete input `[1,0,0,0,0,0,0,0]`. Verify both sides evaluate to the same list. Compile without sorry.
+<!-- CHECK:f19_n9_nonvac_n1 --> Non-vacuity `example`: for `n = 1` (DFT-2), degenerate case. `fftCooleyTukey 2 1` on `[a, b]` produces `[a+b, a-b]`. Compile without sorry.
+
+#### Edge Cases (ADVISORY)
+<!-- CHECK:f19_n9_edge_primitive_root --> The `IsPrimitiveRoot` hypothesis is essential. Without it, the twiddle factors are wrong and the identity does NOT hold. Verify the proof actually uses this hypothesis (not vacuously true).
+<!-- CHECK:f19_n9_edge_length_mismatch --> If `input.length != 2*n`, behavior is well-defined via `getD default` but the identity need not hold. The hypothesis `input.length = 2*n` is documented as necessary.
+
+---
+
+### N19.10 Integration E2E (HOJA)
+
+**Goal**: End-to-end: create `MatExpr(dft 8)` -> add to `MatEGraph` -> apply `BreakdownRules` -> extract optimized `MatExpr` -> lower via `lowering_algebraic_correct` -> verify output matches `ntt_spec_generic`.
+
+#### Correctness (BLOCKING)
+<!-- CHECK:f19_n10_e2e_theorem --> End-to-end theorem: `fase19_e2e : forall (F : Type) [Field F] (omega : F) (input : List F), IsPrimitiveRoot omega 8 -> input.length = 8 -> let optimized := jointOptimize_pipeline (dft 8) in let lowered := runSigmaAlg (lower optimized) input in lowered = ntt_spec_generic omega input`. Or a formulation that chains: (1) MatEGraph insertion soundness (N19.5), (2) rewrite soundness (N19.3 + N19.9), (3) extraction soundness (N19.6), (4) lowering correctness (lowering_algebraic_correct).
+<!-- CHECK:f19_n10_chain_explicit --> The proof explicitly chains the four soundness lemmas: `addMatExpr_sound -> breakdown_sound -> extractMatExpr_sound -> lowering_algebraic_correct`. Each link in the chain is a cited theorem, not an ad-hoc proof.
+<!-- CHECK:f19_n10_all_links_verified --> Every step in the chain is fully proven (no sorry). The composition is the master theorem for Fase 19.
+<!-- CHECK:f19_n10_ntt_spec_output --> The final output is shown equal to `ntt_spec_generic omega input` (the polynomial evaluation DFT spec from GenericNTT.lean), OR to `evalMatExprAlg omega (dft 8) input` (which is shown equal to `ntt_spec_generic` elsewhere). The connection to the user-facing spec is explicit.
+
+#### Structural (BLOCKING)
+<!-- CHECK:f19_n10_imports_all --> The E2E file imports modules from N19.1 through N19.9. It is the integration point that verifies all nodes compose correctly.
+<!-- CHECK:f19_n10_no_island --> Every theorem proven in Fase 19 (N19.1-N19.9) is transitively referenced by the E2E proof or by a function the E2E proof calls. No island nodes.
+<!-- CHECK:f19_n10_axiom_audit --> `#print axioms fase19_e2e` shows ONLY standard Lean/Mathlib axioms (propext, Quot.sound, Classical.choice, funext). Zero crypto axioms, zero custom axioms.
+
+#### Non-vacuity (BLOCKING)
+<!-- CHECK:f19_n10_nonvac_concrete --> Non-vacuity `example`: instantiate the E2E theorem with a concrete field (e.g., ZMod 17 with omega = 2, which is a primitive 8th root of unity since 2^8 = 256 = 15*17+1 = 1 mod 17), concrete input `[1, 2, 3, 4, 5, 6, 7, 8]`. Evaluate both sides concretely and verify equality. Compile without sorry.
+<!-- CHECK:f19_n10_nonvac_trivial_input --> Non-vacuity `example`: input = `[1, 0, 0, 0, 0, 0, 0, 0]` (impulse), verify output is the constant sequence (DFT of delta is all-1s). Compile without sorry.
+
+#### Edge Cases (ADVISORY)
+<!-- CHECK:f19_n10_edge_n_eq_2 --> E2E also works for DFT-2 (smallest non-trivial case). Verify with concrete values.
+<!-- CHECK:f19_n10_edge_n_eq_4 --> E2E also works for DFT-4 (exercises one level of CT decomposition). Verify with concrete values.
+<!-- CHECK:f19_n10_edge_performance --> The E2E proof elaborates in < 60 seconds. The extracted MatExpr for DFT-8 has reasonable `nodeCount` (< 50 nodes).
+
+---
+
+### Cross-Node Invariants (Fase 19 Global)
+
+These invariants must hold across all nodes simultaneously at phase close.
+
+#### Roundtrip Property (BLOCKING)
+<!-- CHECK:f19_global_roundtrip --> The composition of N19.5 + N19.6 gives the roundtrip: for any `MatExpr e`, `addMatExpr -> extractMatExpr` preserves `evalMatExprAlg`. Formally: `addMatExpr_sound` (N19.5) composed with `extractMatExpr_sound` (N19.6) implies `evalMatExprAlg(extracted) = evalMatExprAlg(original)`.
+
+#### Rewrite Soundness (BLOCKING)
+<!-- CHECK:f19_global_rewrite_sound --> The composition of N19.3 + N19.9 gives rewrite soundness: applying any breakdown rule to a `MatEGraphConsistent` e-graph produces a `MatEGraphConsistent` e-graph. The merged e-classes have equal semantic values because the CT identity (N19.9) justifies the merge.
+
+#### Pipeline Compositionality (BLOCKING)
+<!-- CHECK:f19_global_pipeline --> The full chain: `dft n -> MatEGraph -> breakdown rewrites -> extract MatExpr -> lower SigmaExpr -> evaluate` produces the same result as `ntt_spec_generic omega input`. Each arrow is backed by a proven theorem. No gaps.
+
+#### Clean Deletion (BLOCKING)
+<!-- CHECK:f19_global_no_dead_code --> After N19.8, `wiring_check.py --project . --files {all Fase 19 files}` reports 0 W1 (islands). Every new module has at least one external consumer.
+<!-- CHECK:f19_global_spec_audit --> `spec_audit.py --project . --pipeline-only` reports 0 T1 (vacuity) issues in Fase 19 files. No `True`, no `:= id`, no identity passes.
+
+#### Backward Compatibility (BLOCKING)
+<!-- CHECK:f19_global_build --> `lake build` completes with 0 errors. All prior phases (11-18) continue to compile.
+<!-- CHECK:f19_global_no_regression --> Existing theorems (full_pipeline_soundness, lowering_algebraic_correct, ntt_generic_eq_spec) are unmodified and still hold. Their axiom audits are unchanged.
+

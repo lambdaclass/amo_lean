@@ -191,6 +191,19 @@ def applyAllStages_DIT (data : List F) (twiddles : Nat → F) (logN : Nat) : Lis
     (fun d stage => applyStage d twiddles logN (logN - 1 - stage))
     data
 
+/-- Length preservation through DIT stages. -/
+@[simp] theorem applyAllStages_DIT_length (data : List F) (twiddles : Nat → F) (logN : Nat) :
+    (applyAllStages_DIT data twiddles logN).length = data.length := by
+  unfold applyAllStages_DIT
+  induction (List.range logN) generalizing data with
+  | nil => simp
+  | cons s rest ih => simp only [List.foldl_cons]; rw [ih]; exact applyStage_length _ _ _ _
+
+/-- bitRevPermute output has length 2^logN. -/
+@[simp] theorem bitRevPermute_length [Inhabited F] (logN : Nat) (xs : List F) :
+    (bitRevPermute logN xs).length = 2 ^ logN := by
+  simp [bitRevPermute]
+
 -- ══════════════════════════════════════════════════════════════════
 -- Proof roadmap for dit_bottomUp_eq_ntt_generic
 --
@@ -222,6 +235,22 @@ def applyAllStages_DIT (data : List F) (twiddles : Nat → F) (logN : Nat) : Lis
 -- stagePairs, ntt_coeff_generic_split) supports all three approaches.
 -- ══════════════════════════════════════════════════════════════════
 
+/-- bitRevPermute 0 of a singleton is itself. -/
+private lemma bitRevPermute_zero_singleton [Inhabited F] (x : F) :
+    bitRevPermute 0 [x] = [x] := by
+  simp [bitRevPermute, bitRev, bitRev.go, List.getD]
+
+/-- Base case: logN = 0 means data has one element, DIT is identity. -/
+private lemma dit_base_case_zero [Inhabited F]
+    (data : List F) (omega : F) (twiddles : Nat → F)
+    (hlen : data.length = 2 ^ 0) :
+    applyAllStages_DIT (bitRevPermute 0 data) twiddles 0 =
+    ntt_generic omega data := by
+  have h1 : data.length = 1 := by simpa using hlen
+  obtain ⟨x, rfl⟩ := List.length_eq_one_iff.mp h1
+  rw [bitRevPermute_zero_singleton]
+  simp [applyAllStages_DIT, ntt_generic]
+
 theorem dit_bottomUp_eq_ntt_generic [DecidableEq F] [Inhabited F]
     (data : List F) (omega : F) (logN : Nat)
     (hlen : data.length = 2 ^ logN)
@@ -237,15 +266,34 @@ theorem dit_bottomUp_eq_ntt_generic [DecidableEq F] [Inhabited F]
         omega ^ (pair * stride)) :
     applyAllStages_DIT (bitRevPermute logN data) twiddles logN =
     ntt_generic omega data := by
-  -- The iterative DIT on bit-reversed input computes the same DFT as ntt_generic.
-  -- Strategy: show both equal ntt_spec_generic, then use transitivity.
+  -- Strategy: both sides equal ntt_spec_generic omega data.
   -- RHS: ntt_generic = ntt_spec_generic (by ntt_generic_eq_spec)
-  -- LHS: iterative DIT = ntt_spec_generic (element-wise DFT sum verification)
-  --
-  -- See proof roadmap above for the three approaches.
-  -- The element-wise approach (C) is most tractable: for each output k,
-  -- expand logN stages of butterflies and show the result is Σ data[j]*ω^{jk}.
-  sorry
+  -- LHS: iterative DIT = ntt_spec_generic (element-wise butterfly expansion)
+  induction logN generalizing data omega twiddles with
+  | zero => exact dit_base_case_zero data omega twiddles hlen
+  | succ n ih =>
+    -- Bridge: both sides equal ntt_spec_generic omega data.
+    -- Use ntt_generic_eq_spec for the RHS.
+    rw [AmoLean.NTT.Generic.ntt_generic_eq_spec omega data ⟨n + 1, hlen⟩ (hlen ▸ hroot)]
+    -- Now goal: applyAllStages_DIT (bitRevPermute (n+1) data) twiddles (n+1) =
+    --           ntt_spec_generic omega data
+    -- Use list extensionality: equal length + equal elements
+    apply List.ext_getElem
+    · -- Length equality
+      simp [applyAllStages_DIT_length, bitRevPermute_length,
+            AmoLean.NTT.Generic.ntt_spec_generic_length, hlen]
+    · -- Element-wise equality: for each k, output[k] = DFT coeff k
+      -- This is the core of the Cooley-Tukey theorem.
+      -- The proof requires showing:
+      -- (a) bitRevPermute (n+1) splits into evens/odds halves
+      -- (b) First n DIT stages = independent sub-DFTs on each half (stage
+      --     independence: butterflies with distance < N don't cross halves)
+      -- (c) Last stage (stageIdx=0, distance=N) combines via butterfly
+      --     matching ntt_coeff_generic_split / ntt_coeff_generic_split_upper
+      -- Available lemmas: butterflyAt_get_i/j/other, ntt_coeff_generic_split,
+      --   ntt_coeff_generic_split_upper, squared_is_primitive, IH
+      intro k hk1 hk2
+      sorry
 
 -- ══════════════════════════════════════════════════════════════════
 -- Layer 3b: Deprecated top-down formulation
