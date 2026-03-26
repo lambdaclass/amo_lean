@@ -439,15 +439,23 @@ private lemma dit_last_stage_combine [DecidableEq F] [Inhabited F]
       ntt_generic (omega * omega) (evens data) ++ ntt_generic (omega * omega) (odds data)) :
     applyStage intermediate twiddles (n + 1) (n + 1 - 1 - n) =
     ntt_generic omega data := by
-  -- Step 1: Simplify stageIdx = n+1-1-n = 0
-  -- Step 2: Unfold ntt_generic for data.length ≥ 2
-  -- Step 3: Show element-wise equality using butterfly lemmas
-  -- The non-overlapping pairs (k, k+2^n) for k=0..2^n-1 each modify exactly
-  -- two positions, and no two pairs share a position.
-  -- foldl_butterflyAt_getElem_untouched handles untouched positions.
-  -- butterflyAt_get_i/j handle the touched positions.
-  -- htw at stageIdx=0 gives twiddles(k) = omega^k.
-  -- ntt_generic_unfold gives the target as upper ++ lower.
+  -- Rewrite intermediate
+  rw [h_int]
+  -- Unfold ntt_generic for data.length ≥ 2
+  have hlen2 : data.length ≥ 2 := by
+    rw [hlen]; calc (2 : Nat) = 2 ^ 1 := by norm_num
+      _ ≤ 2 ^ (n + 1) := Nat.pow_le_pow_right (by norm_num) (by omega)
+  rw [AmoLean.NTT.Generic.ntt_generic_unfold omega data hlen2]
+  -- Reduce have-bindings on RHS (L-249: simp only [] for zeta-reduction)
+  simp only []
+  -- Name E and O for clarity
+  set E := ntt_generic (omega * omega) (evens data)
+  set O := ntt_generic (omega * omega) (odds data)
+  -- The remaining sorry is: show the butterfly foldl on E++O at stageIdx=0
+  -- produces the upper ++ lower combination element-wise.
+  -- foldl_butterflyAt_getElem_untouched (PROVEN) handles untouched positions.
+  -- butterflyAt_get_i/j handle touched positions.
+  -- htw at stageIdx=0: twiddles(k) = omega^k for k < 2^n.
   sorry
 
 /-- bitRevPermute 0 of a singleton is itself. -/
