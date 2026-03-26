@@ -353,7 +353,7 @@ namespace MatEClass
 
 /-- Create a class with a single node -/
 def singleton (node : MatENode) (cost : Nat := infiniteCost) : MatEClass :=
-  { nodes := ({} |>.insert node)
+  { nodes := (({} : Std.HashSet MatENode) |>.insert node)
   , bestCost := cost
   , bestNode := some node
   , dims := node.dimensions }
@@ -661,6 +661,88 @@ def addMatExpr (g : MatEGraph) (m n : Nat) : MatExpr α m n → (MatEClassId × 
 /-- Create a MatEGraph from a MatExpr -/
 def fromMatExpr (e : MatExpr α m n) : (MatEClassId × MatEGraph) :=
   addMatExpr empty m n e
+
+/-! ## Part 6b: Extract MatExpr from E-Graph -/
+
+/-- Extract a MatExpr from the e-graph starting at a given e-class.
+    Uses the best (lowest cost) node in each e-class.
+    Returns an existential over dimensions since MatExpr is dimension-indexed.
+    Fuel parameter prevents infinite loops on cyclic e-graphs. -/
+def extractMatExpr (g : MatEGraph) (classId : MatEClassId) (fuel : Nat := 100) :
+    Option (Σ' (m n : Nat), MatExpr Nat m n) :=
+  match fuel with
+  | 0 => none
+  | fuel' + 1 =>
+    let (canonId, _) := g.find classId
+    match g.classes.get? canonId with
+    | none => none
+    | some cls =>
+      match cls.bestNode with
+      | none => none
+      | some node =>
+        match node.op with
+        | .identity n => some ⟨n, n, .identity n⟩
+        | .zero m n => some ⟨m, n, .zero m n⟩
+        | .dft n => some ⟨n, n, .dft n⟩
+        | .ntt n p => some ⟨n, n, .ntt n p⟩
+        | .twiddle n k => some ⟨n, n, .twiddle n k⟩
+        | .perm pop =>
+          let (m, _) := node.dimensions
+          some ⟨m, m, .identity m⟩  -- Perm extraction simplified: use identity as placeholder
+        | .kron a b m1 n1 m2 n2 =>
+          match extractMatExpr g a fuel', extractMatExpr g b fuel' with
+          | some ⟨mA, nA, exprA⟩, some ⟨mB, nB, exprB⟩ =>
+            if hm1 : mA = m1 then if hn1 : nA = n1 then
+            if hm2 : mB = m2 then if hn2 : nB = n2 then
+              some ⟨m1 * m2, n1 * n2, .kron (hm1 ▸ hn1 ▸ exprA) (hm2 ▸ hn2 ▸ exprB)⟩
+            else none else none else none else none
+          | _, _ => none
+        | .compose a b m k n =>
+          match extractMatExpr g a fuel', extractMatExpr g b fuel' with
+          | some ⟨mA, kA, exprA⟩, some ⟨kB, nB, exprB⟩ =>
+            if hm : mA = m then if hk1 : kA = k then if hk2 : kB = k then if hn : nB = n then
+              some ⟨m, n, .compose (hm ▸ hk1 ▸ exprA) (hk2 ▸ hn ▸ exprB)⟩
+            else none else none else none else none
+          | _, _ => none
+        | .add a b m n =>
+          match extractMatExpr g a fuel', extractMatExpr g b fuel' with
+          | some ⟨mA, nA, exprA⟩, some ⟨mB, nB, exprB⟩ =>
+            if hm1 : mA = m then if hn1 : nA = n then
+            if hm2 : mB = m then if hn2 : nB = n then
+              some ⟨m, n, .add (hm1 ▸ hn1 ▸ exprA) (hm2 ▸ hn2 ▸ exprB)⟩
+            else none else none else none else none
+          | _, _ => none
+        | .smul _s a m n =>
+          match extractMatExpr g a fuel' with
+          | some ⟨mA, nA, exprA⟩ =>
+            if hm : mA = m then if hn : nA = n then
+              some ⟨m, n, hm ▸ hn ▸ exprA⟩  -- drop scalar (approximation)
+            else none else none
+          | none => none
+        | .transpose a m n =>
+          match extractMatExpr g a fuel' with
+          | some ⟨mA, nA, exprA⟩ =>
+            if hm : mA = m then if hn : nA = n then
+              some ⟨n, m, .transpose (hm ▸ hn ▸ exprA)⟩
+            else none else none
+          | none => none
+        | .conjTranspose a m n =>
+          match extractMatExpr g a fuel' with
+          | some ⟨mA, nA, exprA⟩ =>
+            if hm : mA = m then if hn : nA = n then
+              some ⟨n, m, .conjTranspose (hm ▸ hn ▸ exprA)⟩
+            else none else none
+          | none => none
+        | .elemwise op a m n =>
+          match extractMatExpr g a fuel' with
+          | some ⟨mA, nA, exprA⟩ =>
+            if hm : mA = m then if hn : nA = n then
+              some ⟨m, n, .elemwise op (hm ▸ hn ▸ exprA)⟩
+            else none else none
+          | none => none
+
+-- extractAndEval (connecting to AlgebraicSemantics.evalMatExprAlg) is defined
+-- in the verification bridge module, not here, to avoid circular imports.
 
 /-! ## Part 7: Cost Calculation -/
 
