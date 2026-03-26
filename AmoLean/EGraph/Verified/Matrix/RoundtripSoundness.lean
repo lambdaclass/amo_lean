@@ -32,9 +32,13 @@ open AmoLean.Verification.Algebraic (evalMatExprAlg)
 theorem roundtrip_succeeds (m n : Nat) (expr : MatExpr Nat m n) :
     let (classId, g) := fromMatExpr expr
     (extractMatExpr g classId).isSome = true := by
-  sorry  -- By structural induction on MatExpr: each constructor is preserved
-         -- through addMatExpr (which creates a node) + extractMatExpr (which
-         -- reads the best node). On a fresh graph, the best node IS the only node.
+  sorry  -- Requires graph operation lemmas:
+         -- 1. g.add(node) creates a class with bestNode = some node
+         -- 2. g.find(id) returns a valid ID for which g.classes.get? succeeds
+         -- 3. HashMap.insert + get? interaction (insert then get = some)
+         -- These are data structure properties of MatEGraph's HashMap + UnionFind.
+         -- The 3 native_decide examples below demonstrate correctness empirically
+         -- for identity, dft, and kron (the constructors used by the NTT pipeline).
 
 /-- Semantic roundtrip: extracted expression evaluates identically.
     Requires [Field α] for evalMatExprAlg. Stated with sorry —
