@@ -67,15 +67,13 @@ def lowerMixedExprToLLE (e : MixedExpr) : LowLevelExpr :=
     .binOp .band (lowerMixedExprToLLE a) (.litInt ↑(2^w - 1 : Nat))
   | .kronUnpackHiE a w =>
     .binOp .bshr (lowerMixedExprToLLE a) (.litInt ↑w)
-  -- PENDING: These three reductions are currently identity passes.
-  -- They lower to just the input expression, discarding p/mu/m parameters.
-  -- The soundness proofs below correctly prove "output = input" for each,
-  -- which is trivially true but means no modular reduction happens.
-  -- To complete: lower to actual reduction operations in Trust-Lean IR.
-  -- See ARCHITECTURE.md for the plan to close these.
-  | .montyReduceE a _p _mu => lowerMixedExprToLLE a   -- TODO: actual Montgomery REDC
-  | .barrettReduceE a _p _m => lowerMixedExprToLLE a  -- TODO: actual Barrett reduction
-  | .harveyReduceE a _p => lowerMixedExprToLLE a      -- TODO: actual Harvey cond-sub
+  -- DEPRECATED: These three are identity passes at the LLE (expression) level.
+  -- LLE has no conditional (Stmt.ite), so reductions requiring branches can't
+  -- be expressed. Use lowerMixedExprFull (below) for the Stmt-level path that
+  -- correctly handles all three reductions via TrustLeanBridge lowerings.
+  | .montyReduceE a _p _mu => lowerMixedExprToLLE a   -- identity (use lowerMixedExprFull)
+  | .barrettReduceE a _p _m => lowerMixedExprToLLE a  -- identity (use lowerMixedExprFull)
+  | .harveyReduceE a _p => lowerMixedExprToLLE a      -- identity (use lowerMixedExprFull)
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 2: MixedExpr → Trust-Lean Stmt (with temporaries)

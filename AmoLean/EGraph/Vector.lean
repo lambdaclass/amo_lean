@@ -327,13 +327,55 @@ instance : NodeOps MatENode where
     cases op <;> simp [MatENode.mapChildren]
     all_goals (try rfl); all_goals (rename_i p; cases p <;> simp [MatENode.mapChildren])
   replaceChildren_children := by
-    intro op ids hlen; cases op with | mk op =>
-    cases op <;> simp [MatENode.children, MatENode.replaceChildren] at *
-    all_goals sorry  -- case analysis on PermOp + list length matching
+    intro op ids hlen
+    cases op with | mk op =>
+    cases op with
+    | identity | zero | dft | ntt | twiddle =>
+      simp [MatENode.children] at hlen; subst hlen; rfl
+    | perm p =>
+      cases p <;> simp [MatENode.children] at hlen
+      -- identity/stride/bitRev/swap: children = [], hlen : ids = []
+      all_goals (try (subst hlen; rfl))
+      -- compose/tensor: children = [p1, p2], hlen : ids.length = 2
+      all_goals (try (match ids, hlen with | [_, _], _ => rfl))
+      -- inverse: children = [p], hlen : ids.length = 1
+      all_goals (match ids, hlen with | [_], _ => rfl)
+    | kron | compose | add | smul =>
+      simp [MatENode.children] at hlen
+      match ids, hlen with | [_, _], _ => rfl
+    | transpose | conjTranspose | elemwise =>
+      simp [MatENode.children] at hlen
+      match ids, hlen with | [_], _ => rfl
   replaceChildren_sameShape := by
-    intro op ids hlen; cases op with | mk op =>
-    cases op <;> simp [MatENode.mapChildren, MatENode.replaceChildren] at *
-    all_goals sorry  -- case analysis on PermOp + list length matching
+    intro op ids hlen
+    cases op with | mk op =>
+    cases op with
+    | identity | zero | dft | ntt | twiddle =>
+      simp [MatENode.children] at hlen; subst hlen; rfl
+    | perm p =>
+      cases p with
+      | identity | stride | bitRev | swap =>
+        simp [MatENode.children] at hlen; subst hlen; rfl
+      | compose =>
+        simp [MatENode.children] at hlen
+        match ids, hlen with
+        | [_, _], _ => simp [MatENode.replaceChildren, MatENode.mapChildren]
+      | inverse =>
+        simp [MatENode.children] at hlen
+        match ids, hlen with
+        | [_], _ => simp [MatENode.replaceChildren, MatENode.mapChildren]
+      | tensor =>
+        simp [MatENode.children] at hlen
+        match ids, hlen with
+        | [_, _], _ => simp [MatENode.replaceChildren, MatENode.mapChildren]
+    | kron | compose | add | smul =>
+      simp [MatENode.children] at hlen
+      match ids, hlen with
+      | [_, _], _ => simp [MatENode.replaceChildren, MatENode.mapChildren]
+    | transpose | conjTranspose | elemwise =>
+      simp [MatENode.children] at hlen
+      match ids, hlen with
+      | [_], _ => simp [MatENode.replaceChildren, MatENode.mapChildren]
 
 /-! ## Part 2: Matrix E-Class -/
 

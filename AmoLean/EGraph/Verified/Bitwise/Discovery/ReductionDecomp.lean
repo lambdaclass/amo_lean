@@ -86,14 +86,29 @@ theorem barrett_quotient_le (cfg : BarrettConfig) (x : Nat) :
   -- Simplified: just note that (x*m*p) ≤ x*2^k, and (x*m)/2^k ≤ x*m/2^k,
   -- so (x*m)/2^k * p ≤ x*m*p/2^k ≤ x.
   -- Since all intermediate steps are Nat division, we bound step by step.
-  have : (x * cfg.m) / 2 ^ cfg.k ≤ x * cfg.m / 2 ^ cfg.k := le_refl _
-  have : x * cfg.m / 2 ^ cfg.k * cfg.p ≤ x := by
-    -- x * m * p / 2^k would suffice, but (a/b)*c can exceed a*c/b.
-    -- Direct: (x*m)/2^k * p. Since m*p ≤ 2^k: x*m ≤ x*2^k/p.
-    -- (x*m)/2^k ≤ x*m/2^k ≤ x*(2^k/p)/2^k ≤ x/p.
-    -- (x/p)*p ≤ x.
-    sorry -- Complex Nat division chain; provable via Nat.div_mul_le_self chain
-  omega
+  -- Proof: (x*m)/2^k * p ≤ x via the chain:
+  --   (x*m)/2^k ≤ (x*m)/(m*p)   [since m*p ≤ 2^k, Nat.div_le_div_left]
+  --   (x*m)/(m*p) = x/p          [cancel m, Nat.mul_div_mul_left]
+  --   (x/p)*p ≤ x                [Nat.div_mul_le_self]
+  have hm_pos : 0 < cfg.m := by
+    rw [cfg.hm]
+    apply Nat.div_pos
+    · -- 2^k ≥ p since 2^k ≥ p*p ≥ p*1 = p
+      calc cfg.p ≤ cfg.p * cfg.p := Nat.le_mul_of_pos_right _ cfg.hp
+        _ ≤ 2 ^ cfg.k := cfg.hk
+    · exact cfg.hp
+  -- Rewrite x*m as m*x for Nat.mul_div_mul_left
+  have key : (x * cfg.m) / 2 ^ cfg.k ≤ x / cfg.p := by
+    calc (x * cfg.m) / 2 ^ cfg.k
+        ≤ (x * cfg.m) / (cfg.m * cfg.p) := by
+          apply Nat.div_le_div_left hmp
+          exact Nat.mul_pos hm_pos cfg.hp
+      _ = x / cfg.p := by
+          rw [Nat.mul_comm x cfg.m]
+          exact Nat.mul_div_mul_left x cfg.p hm_pos
+  calc ((x * cfg.m) / 2 ^ cfg.k) * cfg.p
+      ≤ x / cfg.p * cfg.p := Nat.mul_le_mul_right _ key
+    _ ≤ x := Nat.div_mul_le_self x cfg.p
 
 /-- Derive a FieldFoldRule from Barrett configuration.
     The fold evaluates: x - ((x * m) >>> k) * p.

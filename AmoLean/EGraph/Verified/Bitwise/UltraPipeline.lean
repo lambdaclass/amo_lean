@@ -15,6 +15,7 @@
   Consumes EVERY Phase 22-27 module. Every import is exercised.
 -/
 import AmoLean.EGraph.Verified.Bitwise.RulerDiscovery
+import AmoLean.EGraph.Verified.Matrix.CrossEGraphBridge
 
 set_option autoImplicit false
 
@@ -106,7 +107,10 @@ def ultraPipeline (g : MixedEGraph)
 
   -- Phase 24: joint optimization analysis (uses real HardwareCost)
   let hw := if cfg.hwIsSimd then arm_neon_simd else arm_cortex_a76
-  let (_, jointCost, bfResp) := jointOptimize n p hw
+  let (_, jointCost, bfResp) := jointOptimize n p hw  -- legacy unverified path
+
+  -- Phase 24b: verified joint optimization (produces MatExpr for lowering_algebraic_correct)
+  let verifiedResult := AmoLean.EGraph.Verified.Matrix.CrossEGraphBridge.verifiedJointOptimize n p hw
 
   -- Phase 25: color-aware reduction preference
   let colorPref := preferredReduction cfg.targetColor
@@ -130,6 +134,7 @@ def ultraPipeline (g : MixedEGraph)
     s!"--- Phase 24: Joint ---\n" ++
     s!"Joint cost: {jointCost} cycles\n" ++
     s!"Butterfly cost: {bfResp.cycleCost}/bf\n" ++
+    s!"Verified path: {match verifiedResult with | some r => s!"{r.factorization.1}x{r.factorization.2.1} MatExpr, cost={r.totalCost}" | none => "unavailable"}\n" ++
     s!"--- Phase 25: Colors ---\n" ++
     s!"Color preference: {repr colorPref}\n" ++
     s!"Active color rules: {activeColorRules.length}\n" ++
