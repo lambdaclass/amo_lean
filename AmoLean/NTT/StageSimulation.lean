@@ -162,28 +162,79 @@ example : (stagePairs 2 1).map (fun p => (p.i, p.j)) = [(0, 1), (2, 3)] := by na
 end ConcreteExample
 
 -- ══════════════════════════════════════════════════════════════════
--- Layer 3: Bridge to ntt_generic (N18.4 core)
+-- Layer 3: DIT Bottom-Up NTT (correct formulation)
 -- ══════════════════════════════════════════════════════════════════
+
+/-- Bit-reverse an index: reverse the lowest `bits` bits. -/
+def bitRev (bits : Nat) (x : Nat) : Nat :=
+  let rec go (v : Nat) (result : Nat) : Nat → Nat
+    | 0 => result
+    | fuel + 1 => go (v / 2) (result * 2 + v % 2) fuel
+  go x 0 bits
+
+/-- Bit-reverse permute a list (generic over any type). -/
+def bitRevPermute {α : Type} [Inhabited α] (logN : Nat) (xs : List α) : List α :=
+  (List.range (2 ^ logN)).map fun i =>
+    xs.getD (bitRev logN i) default
+
+/-- Apply all NTT stages in bottom-up order (standard textbook DIT).
+    Stage 0: half=1 (adjacent pairs), Stage 1: half=2, ..., Stage logN-1: half=N/2.
+    This is the REVERSE of applyAllStages (which goes top-down). -/
+def applyAllStages_DIT (data : List F) (twiddles : Nat → F) (logN : Nat) : List F :=
+  (List.range logN).foldl
+    (fun d stage => applyStage d twiddles logN (logN - 1 - stage))
+    data
 
 open AmoLean.NTT.Generic (ntt_generic ntt_spec_generic)
 
-/-- The bridge theorem statement: applyAllStages on a list of length 2^logN
-    with correct twiddle factors produces the same result as ntt_generic.
+/-- **Main bridge theorem (corrected statement)**:
+    Bottom-up DIT on bit-reversed input = ntt_generic.
 
-    This is the key N18.4 deliverable. The proof connects:
-    - The imperative model (foldl over stages with List.set butterflies)
-    - The functional spec (recursive split-evens/odds merge)
+    This is the standard textbook result:
+    1. Bit-reverse the input (so adjacent elements become evens/odds pairs)
+    2. Apply butterfly stages from smallest stride (half=1) to largest (half=N/2)
+    3. The output is in natural order and equals the recursive DIT NTT
 
-    Proof strategy: strong induction on logN, using:
-    - ntt_generic_eq_spec (GenericCorrectness) for the functional side
-    - butterflyAt_get_i/j/other for the imperative side
-    - Stage index disjointness (each element in exactly one pair per stage)
+    Twiddle assignment for bottom-up DIT at stage s (where half = 2^s):
+      stride = 2^(logN - 1 - s)
+      twiddle(group, pair) = omega^(pair * stride) = omega^(pair * 2^(logN-1-s))
+    Note: twiddle does NOT depend on group index. -/
+theorem dit_bottomUp_eq_ntt_generic [DecidableEq F] [Inhabited F]
+    (data : List F) (omega : F) (logN : Nat)
+    (hlen : data.length = 2 ^ logN)
+    (hroot : IsPrimitiveRoot omega (2 ^ logN))
+    (twiddles : Nat → F)
+    (htw : ∀ stage group pair,
+      stage < logN →
+      let half := 2 ^ stage
+      let stride := 2 ^ (logN - 1 - stage)
+      group < 2 ^ logN / (2 * half) →
+      pair < half →
+      twiddles (stage * (2 ^ logN / 2) + group * half + pair) =
+        omega ^ (pair * stride)) :
+    applyAllStages_DIT (bitRevPermute logN data) twiddles logN =
+    ntt_generic omega data := by
+  sorry -- Proof by strong induction on logN.
+        -- Base (logN=0): both sides are [data[0]].
+        -- Step (logN=n+1): stage 0 (half=1) applies 2-point NTTs to adjacent
+        --   pairs of the bit-reversed input. After bit-reversal, adjacent pairs
+        --   (2i, 2i+1) contain (data[bitRev(2i)], data[bitRev(2i+1)]) which
+        --   correspond to the deepest recursion level of ntt_generic.
+        --   Stages 1..n build up larger NTTs by butterfly merging, matching
+        --   ntt_generic's recursive decomposition via ntt_coeff_generic_split.
+        --   Key lemmas: squared_is_primitive, twiddle_half_eq_neg_one,
+        --   ntt_coeff_generic_split, ntt_coeff_generic_split_upper.
 
-    NOTE: The twiddle function maps twiddle indices to field elements.
-    For a standard DIT NTT at stage s with pair index p in group g:
-    twiddle(stage*(n/2) + group*half + pair) = omega^(group * half + pair)
-    where omega is the primitive n-th root of unity. -/
-theorem applyAllStages_eq_ntt_generic [DecidableEq F]
+-- ══════════════════════════════════════════════════════════════════
+-- Layer 3b: Deprecated top-down formulation
+-- ══════════════════════════════════════════════════════════════════
+
+/-- **DEPRECATED**: The top-down applyAllStages with DIT butterfly is neither
+    standard DIT (which is bottom-up) nor standard DIF (which uses a different
+    butterfly). Use `dit_bottomUp_eq_ntt_generic` instead.
+    This theorem's statement was INCORRECT — empirically falsified for N=8
+    over BabyBear. Kept for reference only. -/
+theorem applyAllStages_eq_ntt_generic_INCORRECT [DecidableEq F]
     (data : List F) (omega : F) (logN : Nat)
     (hlen : data.length = 2 ^ logN)
     (hroot : IsPrimitiveRoot omega (2 ^ logN))
@@ -193,31 +244,9 @@ theorem applyAllStages_eq_ntt_generic [DecidableEq F]
       twiddles (stage * (2 ^ logN / 2) + group * 2 ^ (logN - 1 - stage) + pair) =
       omega ^ (group * 2 ^ (logN - 1 - stage) + pair)) :
     applyAllStages data twiddles logN = ntt_generic omega data := by
-  -- Base case: logN = 0 → data = [x], both sides return [x]
-  cases logN with
-  | zero =>
-    simp only [applyAllStages, List.range, List.foldl]
-    -- data.length = 2^0 = 1 → data = [data[0]]
-    have hlen1 : data.length = 1 := by simpa using hlen
-    match h : data with
-    | [] => simp at hlen1
-    | [x] =>
-      show applyAllStages [x] twiddles 0 = ntt_generic omega [x]
-      simp only [applyAllStages, ntt_generic]
-      rfl
-    | _ :: _ :: _ => simp at hlen1
-  | succ n =>
-    -- General case: logN = n+1
-    -- The iterative NTT applies (n+1) stages of butterflies.
-    -- ntt_generic recursively splits into evens/odds and merges.
-    -- Connecting these requires showing that stage 0 (with half = 2^n)
-    -- butterflies produce the same element pairing as ntt_generic's
-    -- evens/odds split, and that stages 1..n on each half correspond
-    -- to the recursive calls with omega^2.
-    -- This is a research-grade proof (~300 LOC) that we leave for a
-    -- dedicated formalization effort. The infrastructure (butterflyAt
-    -- lemmas, stage index structure, length preservation) is complete.
-    sorry
+  -- FALSIFIED: top-down DIT ≠ ntt_generic (verified over BabyBear N=8).
+  -- The correct formulation is dit_bottomUp_eq_ntt_generic.
+  sorry
 
 /-- Non-vacuity: the theorem statement is satisfiable (hypotheses are jointly consistent).
     We can't compute ntt_generic over Rat for N>2 (no primitive root), but we CAN
@@ -229,21 +258,25 @@ example (x : ℚ) : applyAllStages [x] (fun _ => (0 : ℚ)) 0 = [x] := by
 -- Layer 4: N18.6 — Compose into NTT correctness (bridge to ntt_spec)
 -- ══════════════════════════════════════════════════════════════════
 
-/-- The full NTT pipeline correctness: applyAllStages computes the DFT.
-    Combines N18.4 (applyAllStages = ntt_generic) with
-    GenericCorrectness (ntt_generic = ntt_spec_generic). -/
-theorem applyAllStages_eq_ntt_spec [DecidableEq F]
+/-- The full NTT pipeline correctness (corrected): DIT bottom-up on
+    bit-reversed input computes the DFT specification.
+    Combines dit_bottomUp_eq_ntt_generic with ntt_generic_eq_spec. -/
+theorem dit_bottomUp_eq_ntt_spec [DecidableEq F] [Inhabited F]
     (data : List F) (omega : F) (logN : Nat)
     (hlen : data.length = 2 ^ logN)
     (hroot : IsPrimitiveRoot omega (2 ^ logN))
-    (hlogN : 0 < logN)
     (twiddles : Nat → F)
     (htw : ∀ stage group pair,
-      stage < logN → group < 2 ^ stage → pair < 2 ^ (logN - 1 - stage) →
-      twiddles (stage * (2 ^ logN / 2) + group * 2 ^ (logN - 1 - stage) + pair) =
-      omega ^ (group * 2 ^ (logN - 1 - stage) + pair)) :
-    applyAllStages data twiddles logN = ntt_spec_generic omega data := by
-  rw [applyAllStages_eq_ntt_generic data omega logN hlen hroot twiddles htw]
+      stage < logN →
+      let half := 2 ^ stage
+      let stride := 2 ^ (logN - 1 - stage)
+      group < 2 ^ logN / (2 * half) →
+      pair < half →
+      twiddles (stage * (2 ^ logN / 2) + group * half + pair) =
+        omega ^ (pair * stride)) :
+    applyAllStages_DIT (bitRevPermute logN data) twiddles logN =
+    ntt_spec_generic omega data := by
+  rw [dit_bottomUp_eq_ntt_generic data omega logN hlen hroot twiddles htw]
   exact AmoLean.NTT.Generic.ntt_generic_eq_spec omega data
     ⟨logN, hlen⟩ (hlen ▸ hroot)
 
@@ -265,5 +298,14 @@ theorem applyAllStages_eq_ntt_spec [DecidableEq F]
 -- Pairs: (0,1), (2,3), (4,5), (6,7)
 #eval (stagePairs 3 2).map fun p => (p.i, p.j)
 -- expected: [(0, 1), (2, 3), (4, 5), (6, 7)]
+
+-- Bit-reverse permutation for N=8 (logN=3)
+-- bitRev 3: 0→0, 1→4, 2→2, 3→6, 4→1, 5→5, 6→3, 7→7
+#eval (List.range 8).map (bitRev 3)
+-- expected: [0, 4, 2, 6, 1, 5, 3, 7]
+
+-- bitRevPermute: [a,b,c,d,e,f,g,h] → [a,e,c,g,b,f,d,h]
+#eval bitRevPermute 3 ([0, 1, 2, 3, 4, 5, 6, 7] : List Nat)
+-- expected: [0, 4, 2, 6, 1, 5, 3, 7]
 
 end AmoLean.NTT.StageSimulation
