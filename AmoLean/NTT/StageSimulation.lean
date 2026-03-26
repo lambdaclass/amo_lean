@@ -162,6 +162,12 @@ example : (stagePairs 2 1).map (fun p => (p.i, p.j)) = [(0, 1), (2, 3)] := by na
 end ConcreteExample
 
 -- ══════════════════════════════════════════════════════════════════
+-- Layer 2b: Sub-lemmas for DIT correctness (invariant-based)
+-- ══════════════════════════════════════════════════════════════════
+
+open AmoLean.NTT.Generic (ntt_generic ntt_spec_generic)
+
+-- ══════════════════════════════════════════════════════════════════
 -- Layer 3: DIT Bottom-Up NTT (correct formulation)
 -- ══════════════════════════════════════════════════════════════════
 
@@ -185,20 +191,57 @@ def applyAllStages_DIT (data : List F) (twiddles : Nat → F) (logN : Nat) : Lis
     (fun d stage => applyStage d twiddles logN (logN - 1 - stage))
     data
 
-open AmoLean.NTT.Generic (ntt_generic ntt_spec_generic)
+-- Main bridge theorem: dit_bottomUp_eq_ntt_generic (below).
+-- Proof decomposed into 3 sub-lemmas:
 
-/-- **Main bridge theorem (corrected statement)**:
-    Bottom-up DIT on bit-reversed input = ntt_generic.
+/-- Stage invariant: after k bottom-up stages on bit-reversed input of length 2^logN,
+    the array contains 2^(logN-k) independent blocks of size 2^k, where each block
+    is the 2^k-point NTT of the corresponding subset of the original data. -/
+def stageInvariant (workData origData : List F) (omega : F)
+    (logN stagesCompleted : Nat) : Prop :=
+  let n := 2 ^ logN
+  let blockSize := 2 ^ stagesCompleted
+  let numBlocks := n / blockSize
+  workData.length = n ∧
+  ∀ b, b < numBlocks → ∀ k, k < blockSize →
+    workData.getD (b * blockSize + k) 0 =
+      (ntt_spec_generic (omega ^ (2 ^ (logN - stagesCompleted)))
+        (List.range blockSize |>.map fun j =>
+          origData.getD (bitRev logN (b * blockSize + j)) 0)
+      ).getD k 0
 
-    This is the standard textbook result:
-    1. Bit-reverse the input (so adjacent elements become evens/odds pairs)
-    2. Apply butterfly stages from smallest stride (half=1) to largest (half=N/2)
-    3. The output is in natural order and equals the recursive DIT NTT
+/-- After 0 stages, the invariant holds: each singleton is a 1-point NTT (identity). -/
+theorem stageInvariant_zero [Inhabited F] (data : List F) (omega : F) (logN : Nat)
+    (hlen : data.length = 2 ^ logN) :
+    stageInvariant (bitRevPermute logN data) data omega logN 0 := by
+  constructor
+  · -- Length: bitRevPermute preserves length = 2^logN
+    simp [bitRevPermute]
+  · -- Element-wise: each singleton block = 1-point NTT = identity
+    -- (bitRevPermute data)[b] = data[bitRev b] = ntt_spec_generic(_, [data[bitRev b]])[0]
+    -- since ntt_spec_generic on a singleton is the identity.
+    sorry
 
-    Twiddle assignment for bottom-up DIT at stage s (where half = 2^s):
-      stride = 2^(logN - 1 - s)
-      twiddle(group, pair) = omega^(pair * stride) = omega^(pair * 2^(logN-1-s))
-    Note: twiddle does NOT depend on group index. -/
+/-- Stage step: butterfly merge doubles block size (Cooley-Tukey identity).
+    Uses ntt_coeff_generic_split + ntt_coeff_generic_split_upper. -/
+theorem stageInvariant_step [DecidableEq F]
+    (workData origData : List F) (omega : F) (logN k : Nat) (hk : k < logN)
+    (twiddles : Nat → F)
+    (hInv : stageInvariant workData origData omega logN k)
+    (htw : ∀ group pair, group < 2 ^ logN / (2 * 2 ^ k) → pair < 2 ^ k →
+      twiddles ((logN - 1 - k) * (2 ^ logN / 2) + group * 2 ^ k + pair) =
+        omega ^ (pair * 2 ^ (logN - 1 - k))) :
+    stageInvariant (applyStage workData twiddles logN (logN - 1 - k))
+      origData omega logN (k + 1) := by
+  sorry
+
+/-- Final: invariant after all stages = full NTT spec. -/
+theorem stageInvariant_final (workData origData : List F) (omega : F) (logN : Nat)
+    (hlen : origData.length = 2 ^ logN)
+    (hInv : stageInvariant workData origData omega logN logN) :
+    workData = ntt_spec_generic omega origData := by
+  sorry
+
 theorem dit_bottomUp_eq_ntt_generic [DecidableEq F] [Inhabited F]
     (data : List F) (omega : F) (logN : Nat)
     (hlen : data.length = 2 ^ logN)
@@ -214,16 +257,16 @@ theorem dit_bottomUp_eq_ntt_generic [DecidableEq F] [Inhabited F]
         omega ^ (pair * stride)) :
     applyAllStages_DIT (bitRevPermute logN data) twiddles logN =
     ntt_generic omega data := by
-  sorry -- Proof by strong induction on logN.
-        -- Base (logN=0): both sides are [data[0]].
-        -- Step (logN=n+1): stage 0 (half=1) applies 2-point NTTs to adjacent
-        --   pairs of the bit-reversed input. After bit-reversal, adjacent pairs
-        --   (2i, 2i+1) contain (data[bitRev(2i)], data[bitRev(2i+1)]) which
-        --   correspond to the deepest recursion level of ntt_generic.
-        --   Stages 1..n build up larger NTTs by butterfly merging, matching
-        --   ntt_generic's recursive decomposition via ntt_coeff_generic_split.
-        --   Key lemmas: squared_is_primitive, twiddle_half_eq_neg_one,
-        --   ntt_coeff_generic_split, ntt_coeff_generic_split_upper.
+  -- Compose sub-lemmas: zero → step^logN → final → ntt_generic_eq_spec⁻¹
+  -- First show the iterative NTT equals ntt_spec_generic, then use ntt_generic_eq_spec.
+  suffices h : applyAllStages_DIT (bitRevPermute logN data) twiddles logN =
+      ntt_spec_generic omega data by
+    rw [h, ← AmoLean.NTT.Generic.ntt_generic_eq_spec omega data ⟨logN, hlen⟩ (hlen ▸ hroot)]
+  -- Now prove: iterative DIT = ntt_spec_generic via the invariant chain.
+  -- Step 1: stageInvariant_zero gives invariant at stage 0
+  -- Step 2: stageInvariant_step applied logN times gives invariant at stage logN
+  -- Step 3: stageInvariant_final converts invariant at stage logN to ntt_spec_generic
+  sorry
 
 -- ══════════════════════════════════════════════════════════════════
 -- Layer 3b: Deprecated top-down formulation
