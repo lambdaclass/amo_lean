@@ -1905,9 +1905,9 @@ N25.2 PoseidonStagePlan (PAR) ──→ N25.3
 
 #### Progress Tree
 
-- [ ] B99: N25.1 FRIFoldPlan
-- [ ] B100: N25.2 PoseidonStagePlan
-- [ ] B101: N25.3 PrimitivesIntegration
+- [x] B99: N25.1 FRIFoldPlan (110 LOC, 0 sorry, wiring PASS)
+- [x] B100: N25.2 PoseidonStagePlan (240 LOC, 0 sorry, wiring PASS)
+- [x] B101: N25.3 PrimitivesIntegration (145 LOC, 0 sorry — entry point for Fase 27)
 
 #### Detailed Node Specifications
 
