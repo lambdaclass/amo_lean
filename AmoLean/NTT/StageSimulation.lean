@@ -354,6 +354,31 @@ theorem bitRevPermute_split [Inhabited F] (n : Nat) (data : List F)
 -- stagePairs, ntt_coeff_generic_split) supports all three approaches.
 -- ══════════════════════════════════════════════════════════════════
 
+/-- butterflyAt on A ++ B when both indices are in the first half
+    decomposes as (butterflyAt A i j w) ++ B. -/
+private lemma butterflyAt_append_left (A B : List F) (i j : Nat) (w : F)
+    (hi : i < A.length) (hj : j < A.length) :
+    butterflyAt (A ++ B) i j w = butterflyAt A i j w ++ B := by
+  simp only [butterflyAt, List.length_append, hi, hj,
+             show i < A.length + B.length by omega,
+             show j < A.length + B.length by omega, dite_true]
+  rw [List.getElem_append_left hi, List.getElem_append_left hj]
+  rw [List.set_append_left _ _ (by omega : i < A.length),
+      List.set_append_left _ _ (by rw [List.length_set]; exact hj)]
+
+/-- butterflyAt on A ++ B when both indices are in the second half
+    decomposes as A ++ (butterflyAt B (i-|A|) (j-|A|) w). -/
+private lemma butterflyAt_append_right (A B : List F) (i j : Nat) (w : F)
+    (hi : A.length ≤ i) (hj : A.length ≤ j)
+    (hi' : i < A.length + B.length) (hj' : j < A.length + B.length) :
+    butterflyAt (A ++ B) i j w = A ++ butterflyAt B (i - A.length) (j - A.length) w := by
+  simp only [butterflyAt, List.length_append, hi', hj',
+             show i - A.length < B.length by omega,
+             show j - A.length < B.length by omega, dite_true]
+  rw [List.getElem_append_right hi, List.getElem_append_right hj]
+  rw [List.set_append_right _ _ (by omega : A.length ≤ i),
+      List.set_append_right _ _ hj]
+
 /-- Sub-lemma 1: The first n DIT stages on bitRevPermute (n+1) data produce
     ntt_generic (ω²) (evens data) ++ ntt_generic (ω²) (odds data).
     Butterflies at stageIdx ≥ 1 have distance < 2^n, so they don't cross the
@@ -382,13 +407,103 @@ private lemma dit_first_n_stages_independent [DecidableEq F] [Inhabited F]
       (fun d stage => applyStage d twiddles (n + 1) (n + 1 - 1 - stage))
       (bitRevPermute n (evens data) ++ bitRevPermute n (odds data)) =
     ntt_generic (omega * omega) (evens data) ++ ntt_generic (omega * omega) (odds data) := by
-  -- The first n stages use stageIdx = n, n-1, ..., 1.
-  -- At each stage, half = 2^(n - stageIdx) < 2^n, so butterflies stay within halves.
-  -- Each half independently processes a standalone DIT with appropriate twiddles.
-  -- By twiddle-value correspondence: big twiddle at index (s, g, p) has value
-  --   omega^(p * 2^(n-s)) = (omega²)^(p * 2^(n-1-s)) = sub-DFT twiddle value.
-  -- By IH: each half's result = ntt_generic (omega²) (evens/odds data).
-  sorry
+  -- Strategy: decompose foldl on A ++ B into independent sub-DITs via
+  -- butterflyAt_append_left/right, then apply IH on each half.
+  -- Half lengths
+  have hE_len : (evens data).length = 2 ^ n := evens_length_pow2 data (n + 1) (by omega) hlen
+  have hO_len : (odds data).length = 2 ^ n := odds_length_pow2 data (n + 1) (by omega) hlen
+  -- ω² is a primitive 2^n-th root (from ω being 2^(n+1)-th root)
+  have hroot_sq : IsPrimitiveRoot (omega * omega) (2 ^ n) := by
+    rw [show omega * omega = omega ^ 2 from by ring]
+    by_cases hn : n = 0
+    · subst hn; refine ⟨?_, fun k hk hk' => by omega⟩
+      show (omega ^ 2) ^ (2 ^ 0) = 1
+      simp only [Nat.pow_zero, pow_one]; exact hroot.pow_eq_one
+    · have h := AmoLean.NTT.squared_is_primitive
+        (show 2 ^ (n + 1) ≥ 4 by
+          calc 4 = 2 ^ 2 := by norm_num
+            _ ≤ 2 ^ (n + 1) := Nat.pow_le_pow_right (by norm_num) (by omega))
+        ⟨2 ^ n, by ring⟩ hroot
+      rwa [show 2 ^ (n + 1) / 2 = 2 ^ n from by omega] at h
+  -- Define sub-twiddles mapping sub-DIT indices → big-DIT values.
+  -- For sub-DIT at (stageIdx', g, p): the big DIT accesses twiddles at
+  -- (stageIdx'+1)*2^n + g*half + p, which has the same VALUE as needed.
+  -- Translation: big_idx = sub_idx + (sub_idx / 2^(n-1)) * 2^(n-1) + 2^n
+  let sub_tw : Nat → F := fun idx =>
+    if hn : n = 0 then 0
+    else twiddles (idx + (idx / 2 ^ (n - 1)) * 2 ^ (n - 1) + 2 ^ n)
+  -- Sub-twiddles satisfy the IH's htw condition
+  have htw_sub : ∀ stageIdx group pair, stageIdx < n →
+      let half := 2 ^ (n - 1 - stageIdx); let numGroups := 2 ^ stageIdx
+      group < numGroups → pair < half →
+      sub_tw (stageIdx * (2 ^ n / 2) + group * half + pair) =
+        (omega * omega) ^ (pair * numGroups) := by
+    intro stageIdx group pair hst
+    -- Zeta-reduce let bindings (L-676) to get clean propositions
+    simp only []
+    intro hg hp
+    -- Now hg : group < 2^stageIdx, hp : pair < 2^(n-1-stageIdx) — no let bindings
+    simp only [sub_tw]
+    split
+    · omega -- n = 0 contradicts stageIdx < n
+    · -- n ≥ 1: index arithmetic connecting sub to big
+      rename_i hn
+      -- 2^n / 2 = 2^(n-1) for n ≥ 1
+      have h_half : 2 ^ n / 2 = 2 ^ (n - 1) := by
+        conv_lhs => rw [show n = (n - 1) + 1 from by omega, Nat.pow_succ]
+        exact Nat.mul_div_cancel _ (by norm_num)
+      rw [h_half]
+      set sub_idx := stageIdx * 2 ^ (n - 1) + group * 2 ^ (n - 1 - stageIdx) + pair
+      set r := group * 2 ^ (n - 1 - stageIdx) + pair
+      -- remainder < 2^(n-1): (group+1) * half ≤ 2^stageIdx * half = 2^(n-1)
+      have hr_bound : r < 2 ^ (n - 1) := by
+        have key : 2 ^ stageIdx * 2 ^ (n - 1 - stageIdx) = 2 ^ (n - 1) := by
+          rw [← Nat.pow_add]; congr 1; omega
+        have h2 : group * 2 ^ (n - 1 - stageIdx) + 2 ^ (n - 1 - stageIdx) ≤
+            2 ^ stageIdx * 2 ^ (n - 1 - stageIdx) := by
+          rw [show group * 2 ^ (n - 1 - stageIdx) + 2 ^ (n - 1 - stageIdx) =
+               (group + 1) * 2 ^ (n - 1 - stageIdx) from by rw [Nat.add_mul, Nat.one_mul]]
+          exact Nat.mul_le_mul_right _ hg
+        rw [← key]; exact Nat.lt_of_lt_of_le (Nat.add_lt_add_left hp _) h2
+      -- sub_idx / 2^(n-1) = stageIdx (remainder < divisor)
+      have h_div : sub_idx / 2 ^ (n - 1) = stageIdx := by
+        have hsub : sub_idx = r + stageIdx * 2 ^ (n - 1) := by simp only [sub_idx, r]; omega
+        have h_pos : 0 < 2 ^ (n - 1) := Nat.pos_of_ne_zero (by omega)
+        rw [hsub, Nat.add_mul_div_right _ _ h_pos, Nat.div_eq_of_lt hr_bound, Nat.zero_add]
+      rw [h_div]
+      -- Index translation: sub_idx + stageIdx * 2^(n-1) + 2^n = big-DIT index at (stageIdx+1)
+      have h_idx : sub_idx + stageIdx * 2 ^ (n - 1) + 2 ^ n =
+          (stageIdx + 1) * (2 ^ (n + 1) / 2) + group * 2 ^ (n + 1 - 1 - (stageIdx + 1)) + pair := by
+        have h_pn1 : 2 ^ (n + 1) / 2 = 2 ^ n := by
+          conv_lhs => rw [Nat.pow_succ]; exact Nat.mul_div_cancel _ (by norm_num)
+        have h_2x : stageIdx * 2 ^ (n - 1) + stageIdx * 2 ^ (n - 1) = stageIdx * 2 ^ n := by
+          rw [← Nat.mul_two (stageIdx * _), Nat.mul_assoc,
+              show 2 ^ (n - 1) * 2 = 2 ^ n from by rw [← Nat.pow_succ]; congr 1; omega]
+        have h_succ : (stageIdx + 1) * 2 ^ n = stageIdx * 2 ^ n + 2 ^ n := Nat.succ_mul ..
+        simp only [sub_idx, h_pn1, show n + 1 - 1 - (stageIdx + 1) = n - 1 - stageIdx from by omega]
+        omega
+      -- Apply big htw at (stageIdx+1, group, pair) and convert value
+      rw [h_idx, htw (stageIdx + 1) group pair (by omega)
+        (Nat.lt_of_lt_of_le hg (Nat.pow_le_pow_right (by norm_num) (by omega)))
+        (by rw [show n + 1 - 1 - (stageIdx + 1) = n - 1 - stageIdx from by omega]; exact hp),
+        show pair * 2 ^ (stageIdx + 1) = 2 * (pair * 2 ^ stageIdx) from by ring,
+        pow_mul, show omega ^ 2 = omega * omega from by ring]
+  -- Core decomposition: the foldl on A ++ B = sub-DIT on A ++ sub-DIT on B.
+  -- Each stage's butterflies (stageIdx ≥ 1) have distance < 2^n,
+  -- so they stay within each half. The butterfly positions match the sub-DIT,
+  -- and twiddle values match by htw_sub.
+  have h_decomp :
+      (List.range n).foldl
+        (fun d stage => applyStage d twiddles (n + 1) (n + 1 - 1 - stage))
+        (bitRevPermute n (evens data) ++ bitRevPermute n (odds data)) =
+      applyAllStages_DIT (bitRevPermute n (evens data)) sub_tw n ++
+      applyAllStages_DIT (bitRevPermute n (odds data)) sub_tw n := by
+    sorry
+  -- Apply IH to each half
+  rw [h_decomp]
+  congr 1
+  · exact ih (evens data) (omega * omega) hE_len hroot_sq sub_tw htw_sub
+  · exact ih (odds data) (omega * omega) hO_len hroot_sq sub_tw htw_sub
 
 -- ══════════════════════════════════════════════════════════════════
 -- N2: Core lemma — foldl of disjoint butterflies is element-wise predictable
@@ -654,7 +769,65 @@ private lemma dit_last_stage_combine [DecidableEq F] [Inhabited F]
     -- for k = 0..2^n-1, with twiddles at index k.
     -- This is equivalent to: (List.range (2^n)).foldl (fun d j => butterflyAt d j (j+2^n) (twiddles j)) (E++O)
     -- Then apply foldl_range_butterflyAt_getElem_i/j + htw.
-    sorry
+    -- Twiddle correspondence at stageIdx=0: twiddles j = omega^j for j < 2^n
+    have htw_k : ∀ j, j < 2 ^ n → twiddles j = omega ^ j := by
+      intro j hj
+      have h := htw 0 0 j (by omega) (by omega) (by simpa using hj)
+      simp only [Nat.pow_zero, Nat.mul_one, Nat.zero_mul, Nat.zero_add] at h
+      exact h
+    -- Combined length
+    have hEOlen : (E ++ O).length = 2 * 2 ^ n := by
+      rw [List.length_append, hElen, hOlen]; omega
+    -- Connecting lemma: applyStage at stage 0 = foldl_range butterfly form
+    have key : applyStage (E ++ O) twiddles (n + 1) (n + 1 - 1 - n) =
+        (List.range (2 ^ n)).foldl (fun d j => butterflyAt d j (j + 2 ^ n) (twiddles j)) (E ++ O) := by
+      have h_eq : n + 1 - 1 - n = 0 := by omega
+      rw [h_eq]
+      simp only [applyStage, stagePairs, Nat.pow_zero, Nat.sub_zero, Nat.add_sub_cancel,
+                 List.range_one, List.flatMap_cons, List.flatMap_nil, List.append_nil,
+                 Nat.zero_mul, Nat.zero_add]
+      rw [List.foldl_map]
+    -- Work at Option level to avoid dependent motive issues (L-174)
+    suffices hsuff :
+        (applyStage (E ++ O) twiddles (n + 1) (n + 1 - 1 - n))[k]? =
+        (List.map (fun k => E[k]?.getD 0 + omega ^ k * O[k]?.getD 0) (List.range (2 ^ n)) ++
+         List.map (fun k => E[k]?.getD 0 - omega ^ k * O[k]?.getD 0) (List.range (2 ^ n)))[k]? by
+      rw [List.getElem?_eq_getElem hk1, List.getElem?_eq_getElem hk2] at hsuff
+      exact Option.some.inj hsuff
+    rw [key]
+    by_cases hk_lt : k < 2 ^ n
+    · -- Upper half: k < 2^n → butterfly position k gives E[k] + ω^k * O[k]
+      rw [List.getElem?_eq_getElem (by rw [foldl_range_butterflyAt_length,
+              List.length_append, hElen, hOlen]; omega),
+          foldl_range_butterflyAt_getElem_i (E ++ O) (2 ^ n) twiddles k hEOlen hk_lt,
+          List.getElem_append_left (show k < E.length by omega),
+          show (E ++ O)[k + 2 ^ n]'(by omega) = O[k]'(by omega) from by
+            rw [List.getElem_append_right (show E.length ≤ k + 2 ^ n by omega)]
+            congr 1; omega,
+          htw_k k hk_lt,
+          List.getElem?_append_left (by simp [List.length_map, List.length_range]; exact hk_lt),
+          List.getElem?_map, List.getElem?_range hk_lt, Option.map_some]
+      -- Goal: some (E[k] + ω^k * O[k]) = some (E[k]?.getD 0 + ω^k * O[k]?.getD 0)
+      simp only [List.getElem?_eq_getElem (show k < E.length by omega),
+                 List.getElem?_eq_getElem (show k < O.length by omega), Option.getD_some]
+    · -- Lower half: k ≥ 2^n → butterfly position k gives E[k'] - ω^k' * O[k']
+      have hk_ge : 2 ^ n ≤ k := by omega
+      have hk' : k - 2 ^ n < 2 ^ n := by omega
+      -- Rewrite k = (k - 2^n) + 2^n at getElem? level (no dependent proof issue)
+      conv_lhs => rw [show k = (k - 2 ^ n) + 2 ^ n from by omega]
+      rw [List.getElem?_eq_getElem (by rw [foldl_range_butterflyAt_length,
+              List.length_append, hElen, hOlen]; omega),
+          foldl_range_butterflyAt_getElem_j (E ++ O) (2 ^ n) twiddles (k - 2 ^ n) hEOlen hk',
+          List.getElem_append_left (show k - 2 ^ n < E.length by omega),
+          show (E ++ O)[(k - 2 ^ n) + 2 ^ n]'(by omega) = O[k - 2 ^ n]'(by omega) from by
+            rw [List.getElem_append_right (show E.length ≤ (k - 2 ^ n) + 2 ^ n by omega)]
+            congr 1; omega,
+          htw_k (k - 2 ^ n) hk',
+          List.getElem?_append_right (by simp [List.length_map, List.length_range]; exact hk_ge)]
+      simp only [List.length_map, List.length_range]
+      rw [List.getElem?_map, List.getElem?_range hk', Option.map_some]
+      simp only [List.getElem?_eq_getElem (show k - 2 ^ n < E.length by omega),
+                 List.getElem?_eq_getElem (show k - 2 ^ n < O.length by omega), Option.getD_some]
 
 /-- bitRevPermute 0 of a singleton is itself. -/
 private lemma bitRevPermute_zero_singleton [Inhabited F] (x : F) :
@@ -736,35 +909,6 @@ theorem dit_bottomUp_eq_ntt_generic [DecidableEq F] [Inhabited F]
       dit_first_n_stages_independent n data omega twiddles hlen hroot htw ih
     -- Sub-lemma 2: last stage butterfly combines E ++ O into ntt_generic omega data
     exact dit_last_stage_combine n data omega twiddles hlen hroot htw intermediate h_intermediate
-
--- ══════════════════════════════════════════════════════════════════
--- Layer 3b: Deprecated top-down formulation
--- ══════════════════════════════════════════════════════════════════
-
-/-- **DEPRECATED**: The top-down applyAllStages with DIT butterfly is neither
-    standard DIT (which is bottom-up) nor standard DIF (which uses a different
-    butterfly). Use `dit_bottomUp_eq_ntt_generic` instead.
-    This theorem's statement was INCORRECT — empirically falsified for N=8
-    over BabyBear. Kept for reference only. -/
-theorem applyAllStages_eq_ntt_generic_INCORRECT [DecidableEq F]
-    (data : List F) (omega : F) (logN : Nat)
-    (hlen : data.length = 2 ^ logN)
-    (hroot : IsPrimitiveRoot omega (2 ^ logN))
-    (twiddles : Nat → F)
-    (htw : ∀ stage group pair,
-      stage < logN → group < 2 ^ stage → pair < 2 ^ (logN - 1 - stage) →
-      twiddles (stage * (2 ^ logN / 2) + group * 2 ^ (logN - 1 - stage) + pair) =
-      omega ^ (group * 2 ^ (logN - 1 - stage) + pair)) :
-    applyAllStages data twiddles logN = ntt_generic omega data := by
-  -- FALSIFIED: top-down DIT ≠ ntt_generic (verified over BabyBear N=8).
-  -- The correct formulation is dit_bottomUp_eq_ntt_generic.
-  sorry
-
-/-- Non-vacuity: the theorem statement is satisfiable (hypotheses are jointly consistent).
-    We can't compute ntt_generic over Rat for N>2 (no primitive root), but we CAN
-    verify the hypotheses make sense for the trivial case N=1 (logN=0). -/
-example (x : ℚ) : applyAllStages [x] (fun _ => (0 : ℚ)) 0 = [x] := by
-  simp [applyAllStages]
 
 -- ══════════════════════════════════════════════════════════════════
 -- Layer 4: N18.6 — Compose into NTT correctness (bridge to ntt_spec)
