@@ -1922,13 +1922,26 @@ N25.3 BenchCodeGen (PAR, independent) ──→ N25.4 BenchRunner (HOJA)
 - Consumes: `pipeline_mixed_equivalent` from MixedPipeline.lean, `ultra_pipeline_soundness` from N25.1
 - De-risk: if projection is not clean (v2 modifies base state), may need adapter theorem. Check that `MultiRelMixed.saturate` with `nullFactory` produces same result as base `saturateF`
 
-**N25.3 PARALELO — BenchCodeGen** (~150 LOC)
-- File: `AmoLean/EGraph/Verified/Bitwise/UltraBenchGen.lean`
-- Purpose: Generate optimized Rust NTT code using `selectBestPlanExplored` (radix-4/mixed plans).
-- Uses: `MixedExprToRust.emitRustFunction`, `MatPlanExtraction.selectBestPlanExplored`, `NTTPlanCodeGen.lowerNTTFromPlan`
-- 4 fields: BabyBear (p=2013265921), Mersenne31 (p=2147483647), Goldilocks (p=2^64-2^32+1), KoalaBear (p=2130706433)
-- **Closed-loop test vectors** (QA amendment): generate input/output pairs from verified Lean spec, emit as `#[test]` modules in Rust, validate string-layer translation with `cargo test`
-- WARNING: codegen emission gap (L-XXX from memory) — match type widths (u32 vs u64), use field ops not raw arithmetic, no silent defaults
+**N25.3 PARALELO — BenchCodeGen (Verified C + Rust FFI)** (~200 LOC)
+- Files: `AmoLean/EGraph/Verified/Bitwise/UltraBenchGen.lean` + `Tests/interop/ultra_ffi/`
+- Purpose: Generate **verified C code** via Path A (VerifiedCodeGen → TrustLeanBridge → Trust-Lean backend), then wrap in Rust FFI for benchmarking.
+- **Architecture** (decision 2026-03-27: avoid unverified string emission):
+  ```
+  Path A (VERIFIED):
+  selectBestPlanExplored → NTTPlan → MixedExpr
+    → lowerMixedExprToLLE [theorem: lowerOp_correct]
+    → Trust-Lean Stmt [theorem: evalStmt_correct]
+    → Trust-Lean C backend → verified .c files
+
+  Rust FFI wrapper (trivial, ~30 LOC per field):
+  extern "C" { fn reduce_babybear(x: u64) -> u64; }
+  // Benchmark harness calls verified C kernel via FFI
+  ```
+- **Why NOT MixedExprToRust (Path B)**: String emission layer is NOT verified. Prior incident: 11/12 Rust + 9 C files defective despite correct proofs. Unacceptable for industry presentation.
+- **Why C + FFI**: Trust-Lean C backend is the only verified code emitter. Rust FFI wrapper is trivial (`extern "C"`) and auditable. The benchmark measures exactly the verified kernel.
+- 4 fields: BabyBear, Mersenne31, Goldilocks, KoalaBear
+- **Test vectors**: generate input/output pairs from Lean spec, validate C output matches before benchmarking
+- **Future**: Trust-Lean Rust backend (separate project) will eliminate the FFI layer
 
 **N25.4 HOJA — BenchRunner** (~100 LOC)
 - Extends: `scripts/benchmark.sh` + `Tests/interop/`
@@ -1953,7 +1966,8 @@ N25.3 BenchCodeGen (PAR, independent) ──→ N25.4 BenchRunner (HOJA)
 | N25.1 | ultra_pipeline_fuel_bound ≤ max of phase fuels | INVARIANT | P1 |
 | N25.2 | v2_implies_v1_soundness: Ultra result → base pipeline_mixed_equivalent | PRESERVATION | P0 |
 | N25.2 | v2_null_factory_eq_v1: Ultra with null factory = base saturation | EQUIVALENCE | P1 |
-| N25.3 | Generated Rust passes cargo test against Lean spec vectors | SOUNDNESS | P0 |
+| N25.3 | Generated C is formally verified (Path A: lowerOp_correct + evalStmt_correct chain) | SOUNDNESS | P0 |
+| N25.3 | Rust FFI wrapper matches C output on Lean spec test vectors | PRESERVATION | P0 |
 | N25.4 | BabyBear NTT ≥ 1.25× Plonky3 (mean, N=2^20) | OPTIMIZATION | P0 |
 | N25.5 | Non-vacuity: all hypotheses of ultra_pipeline_soundness jointly satisfiable | INVARIANT | P0 |
 | N25.5 | #print axioms ultra_pipeline_soundness = 0 custom axioms | SOUNDNESS | P0 |
