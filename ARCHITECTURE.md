@@ -1845,6 +1845,31 @@ N24.9 ──→ N24.10 DiscoveryTests (HOJA)
 
 ---
 
+### Known Limitations & Design Decisions (Autopsy 2026-03-27)
+
+**F1. E-matching evaluates on constant-collapsed environments (DESIGN)**
+`applyRulesF_preserves_cv` requires `env.witnessVal = env.constVal ∧ env.pubInputVal = env.constVal`. This is intentional: e-matching soundness is proven for a simplified evaluation model where all input sources collapse to constants (see `MixedEMatchSoundness.lean:712-716`, syntheticEnv construction). This enables pattern matching to use a single evaluation function. For full circuit evaluation with distinct witnesses/pubInputs, the e-graph results are trusted via `pipeline_mixed_equivalent` which operates at the UF root level.
+
+**F2. VerifiedCodeGen has two lowering paths (21/21 constructors covered)**
+The autopsy flagged 7 "uncovered" MixedNodeOp constructors in `lowerMixedExprToLLE`. This is a measurement artifact: the 3 reduction constructors (montyReduceE, barrettReduceE, harveyReduceE) require conditionals (`Stmt.ite`) which LowLevelExpr cannot express. They are covered by `lowerMixedExprFull` (VerifiedCodeGen.lean:96-123) which delegates to TrustLeanBridge's `lowerHarveyReduce`, `lowerMontyReduce`, `lowerBarrettReduce` — all producing verified Stmt with Stmt.ite. Total coverage: 21/21 constructors across both paths.
+
+**F3. ConsistentValuation constructible incrementally (non-vacuity validated)**
+`full_pipeline_soundness` assumes initial ConsistentValuation. This CAN be constructed via `empty_consistent` + `merge_consistent` chain (SemanticSpec.lean:110-115, MixedSemanticSpec.lean:46-123). Non-vacuity example in `Tests/NonVacuity/PipelineCV.lean`.
+
+**F4. roundtrip_succeeds sorry (BLOCKED, dead code)**
+`RoundtripSoundness.lean:154` has `sorry`. Blocker: `MatUnionFind.find` is `partial` (no equation lemmas). The theorem is used by nobody — superseded by 8 concrete `native_decide` examples in the same file (lines 163-206). Resolving requires either: (a) making `find` total with fuel, or (b) proving equation lemmas for the partial function.
+
+**F5. NTT field invertibility (LOW, covered by [Field F])**
+`dit_bottomUp_eq_ntt_spec` requires `[Field F]` (top-level variable), which includes multiplicative inversion. `IsPrimitiveRoot` is a lightweight monoid property that does NOT require field structure, but the field constraint is inherited from the file-level variable declaration. Non-vacuity example in `Tests/NonVacuity/NTTDIT.lean`.
+
+**F6. pipeline_mixed_equivalent name clarification**
+This theorem proves: "if two e-classes have the same UF root AND extraction succeeds for both, the results are semantically equivalent." It does NOT prove that saturation produces the UF equivalence — that is the job of `saturateMixedF_preserves_consistent`. The name reflects post-saturation extraction correctness.
+
+**F7. full_pipeline_soundness outputs existential (soundness, not optimality)**
+The conclusion `∃ v_sat, ConsistentValuation ... ∧ evalExpr expr env = v_sat root` proves soundness: the extracted expression evaluates correctly. It does NOT prove optimality (that the extraction is cost-minimal). Optimality is a property of the cost model, not the soundness chain.
+
+---
+
 ### Fase 25: Pipeline Soundness + Benchmarks — v3.3.1
 
 **Goal**: Compose `ultra_pipeline_soundness` (Fases 22-24), bridge backward compat to v1 pipeline, generate + benchmark optimized NTT code with radix-4/mixed plans vs Plonky3.
