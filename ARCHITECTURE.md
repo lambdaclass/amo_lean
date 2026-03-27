@@ -1845,6 +1845,121 @@ N24.9 ──→ N24.10 DiscoveryTests (HOJA)
 
 ---
 
+### Fase 25: Pipeline Soundness + Benchmarks — v3.3.1
+
+**Goal**: Compose `ultra_pipeline_soundness` (Fases 22-24), bridge backward compat to v1 pipeline, generate + benchmark optimized NTT code with radix-4/mixed plans vs Plonky3.
+
+**Lessons applied**: L-513 (compositional proofs ~30 LOC), L-311 (three-part contract), L-338 (fuel via max not sum), L-572 (three-tier bridge), codegen emission gap (match type widths, no silent defaults)
+
+**Key infrastructure reused**: UltraPipeline.lean (237 LOC), MixedPipeline.lean (`pipeline_mixed_equivalent`, `compose_sound`), ReductionComposition.lean (`compose_sound`), MixedExprToRust.lean, StageSimulation.lean (`dit_bottomUp_eq_ntt_spec`, 0 sorry), benchmark.sh, 15+ existing bench files
+
+**New files** (4):
+- `AmoLean/EGraph/Verified/Bitwise/UltraSoundness.lean` — Master composition theorem
+- `AmoLean/EGraph/Verified/Bitwise/UltraBridge.lean` — v2 → v1 backward compat bridge
+- `AmoLean/EGraph/Verified/Bitwise/UltraBenchGen.lean` — Rust NTT code generation with radix-4/mixed plans
+- `Tests/NonVacuity/UltraPipeline.lean` — Non-vacuity + mixed-radix integration tests
+
+**Modified files** (1): `scripts/benchmark.sh` (add hyperfine + radix-4 profiles)
+
+#### DAG (v3.3.1)
+
+```
+N25.1 UltraSoundness (FUND) ──→ N25.2 v2Bridge (CRIT) ──→ N25.5 IntegrationTests (HOJA)
+N25.3 BenchCodeGen (PAR, independent) ──→ N25.4 BenchRunner (HOJA)
+```
+
+| Node | Name | Type | LOC | Deps | File |
+|------|------|------|-----|------|------|
+| N25.1 | UltraSoundness | FUND | ~300 | Fases 22-24 | Bitwise/UltraSoundness.lean |
+| N25.2 | v2BridgeTheorem | CRIT | ~200 | N25.1 | Bitwise/UltraBridge.lean |
+| N25.3 | BenchCodeGen | PAR | ~150 | — | Bitwise/UltraBenchGen.lean |
+| N25.4 | BenchRunner | HOJA | ~100 | N25.3 | scripts/ + Tests/interop/ |
+| N25.5 | IntegrationTests | HOJA | ~100 | N25.1, N25.2 | Tests/NonVacuity/UltraPipeline.lean |
+| **Total** | | | **~850** | | |
+
+#### Blocks
+
+| Block | Nodes | Execution |
+|-------|-------|-----------|
+| B99 | N25.1 | FUND sequential (de-risk sketch first) |
+| B100 | N25.2 | CRIT sequential (after B99) |
+| B101 | N25.3 | PAR (independent, parallel with B99-B100) |
+| B102 | N25.4, N25.5 | HOJA (after B100 + B101) |
+
+#### Progress Tree
+
+- [ ] B99: N25.1 UltraSoundness
+- [ ] B100: N25.2 v2BridgeTheorem
+- [ ] B101: N25.3 BenchCodeGen
+- [ ] B102: N25.4 BenchRunner | N25.5 IntegrationTests
+
+#### Detailed Node Specifications
+
+**N25.1 FUNDACIONAL — UltraSoundness** (~300 LOC)
+- File: `AmoLean/EGraph/Verified/Bitwise/UltraSoundness.lean`
+- Purpose: Master composition theorem `ultra_pipeline_soundness` threading Fases 22-24.
+- **Intermediate state formalization** (QA amendment):
+  - `Post_F22_Valid` : MRCV preserved after multi-relation colored saturation
+  - `Post_F23_Valid` : NTT plan semantically equivalent to DFT spec (via `dit_bottomUp_eq_ntt_spec`)
+  - `Post_F24_Valid` : Discovery engine preserves CCV (via `threePhaseSaturateF_preserves_consistent`)
+- **Composition pattern**: Dependent threading (L-513), NOT flat conjunction. Each state feeds the next:
+  ```
+  initial_state → saturate(MRCV) → Post_F22_Valid
+  Post_F22_Valid → extractPlan(semantic) → Post_F23_Valid
+  Post_F23_Valid → discover(CCV) → Post_F24_Valid
+  Post_F24_Valid → output_correct
+  ```
+- Fuel: compose via `max` (L-338), not sum
+- Three-part contract (L-311): fuel availability + result semantics + frame preservation
+- De-risk: sketch as chain of implications between intermediate states BEFORE full proof. If composition is intractable (>3 sessions), fallback to `native_decide` for BabyBear N=16 + documented sorry
+- Theorems: `ultra_pipeline_soundness`, `ultra_pipeline_fuel_bound`
+
+**N25.2 CRITICO — v2BridgeTheorem** (~200 LOC)
+- File: `AmoLean/EGraph/Verified/Bitwise/UltraBridge.lean`
+- Purpose: Prove backward compatibility — Ultra pipeline (v2: bounds+colors+discovery) implies existing `pipeline_mixed_equivalent` (v1).
+- `v2_implies_v1_soundness`: any expression optimized by Ultra pipeline is also valid under the base pipeline
+- Pattern: projection — v2 state contains v1 state as sub-structure. The extra fields (bounds, colors, discovery rules) are refinements that don't invalidate base equivalences
+- Consumes: `pipeline_mixed_equivalent` from MixedPipeline.lean, `ultra_pipeline_soundness` from N25.1
+- De-risk: if projection is not clean (v2 modifies base state), may need adapter theorem. Check that `MultiRelMixed.saturate` with `nullFactory` produces same result as base `saturateF`
+
+**N25.3 PARALELO — BenchCodeGen** (~150 LOC)
+- File: `AmoLean/EGraph/Verified/Bitwise/UltraBenchGen.lean`
+- Purpose: Generate optimized Rust NTT code using `selectBestPlanExplored` (radix-4/mixed plans).
+- Uses: `MixedExprToRust.emitRustFunction`, `MatPlanExtraction.selectBestPlanExplored`, `NTTPlanCodeGen.lowerNTTFromPlan`
+- 4 fields: BabyBear (p=2013265921), Mersenne31 (p=2147483647), Goldilocks (p=2^64-2^32+1), KoalaBear (p=2130706433)
+- **Closed-loop test vectors** (QA amendment): generate input/output pairs from verified Lean spec, emit as `#[test]` modules in Rust, validate string-layer translation with `cargo test`
+- WARNING: codegen emission gap (L-XXX from memory) — match type widths (u32 vs u64), use field ops not raw arithmetic, no silent defaults
+
+**N25.4 HOJA — BenchRunner** (~100 LOC)
+- Extends: `scripts/benchmark.sh` + `Tests/interop/`
+- **Statistical methodology** (QA amendment): `hyperfine --warmup 3 --min-runs 10` for all comparisons, report mean/stddev/min/max
+- Targets: BabyBear NTT +25-30% vs Plonky3, Goldilocks +15-20%, KoalaBear +20-25%
+- N = 2^20 for all benchmarks (production-relevant size)
+- Compare against: Plonky3 `Radix2Bowers::dft_batch` (the fastest known Plonky3 NTT)
+- Output: CSV results + summary in BENCHMARKS.md
+
+**N25.5 HOJA — IntegrationTests** (~100 LOC)
+- File: `Tests/NonVacuity/UltraPipeline.lean`
+- Non-vacuity example: BabyBear N=1024 (pure radix-4 path, covers `ultra_pipeline_soundness` hypotheses)
+- **Mixed-radix test** (QA amendment): N=512 (radix-4 + radix-2 mixed path) to exercise `mkMixedRadixPlan` logic
+- `#print axioms ultra_pipeline_soundness` = 0 custom axioms
+- `#print axioms v2_implies_v1_soundness` = 0 custom axioms
+
+#### Formal Properties (v3.3.1)
+
+| Nodo | Propiedad | Tipo | Prioridad |
+|------|-----------|------|-----------|
+| N25.1 | ultra_pipeline_soundness threads all three invariants (MRCV, semantic, CCV) | SOUNDNESS | P0 |
+| N25.1 | ultra_pipeline_fuel_bound ≤ max of phase fuels | INVARIANT | P1 |
+| N25.2 | v2_implies_v1_soundness: Ultra result → base pipeline_mixed_equivalent | PRESERVATION | P0 |
+| N25.2 | v2_null_factory_eq_v1: Ultra with null factory = base saturation | EQUIVALENCE | P1 |
+| N25.3 | Generated Rust passes cargo test against Lean spec vectors | SOUNDNESS | P0 |
+| N25.4 | BabyBear NTT ≥ 1.25× Plonky3 (mean, N=2^20) | OPTIMIZATION | P0 |
+| N25.5 | Non-vacuity: all hypotheses of ultra_pipeline_soundness jointly satisfiable | INVARIANT | P0 |
+| N25.5 | #print axioms ultra_pipeline_soundness = 0 custom axioms | SOUNDNESS | P0 |
+
+---
+
 ## Version History
 
 | Version | Date | Highlights |
