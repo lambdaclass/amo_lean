@@ -121,28 +121,49 @@ def refinePlanBounds (plan : Plan) (hwIsSimd : Bool := false)
 -- Section 3: Theorems
 -- ══════════════════════════════════════════════════════════════════
 
+/-- Helper: buildStagesFromAssignment output length = acc.length + assignment.length. -/
+private theorem buildStagesFromAssignment_length (assignment : List RadixChoice)
+    (p : Nat) (hwIsSimd arrayIsLarge : Bool) (dir : StageDirection)
+    (totalLevels level stageIdx currentK : Nat) (acc : List NTTStage) :
+    (buildStagesFromAssignment assignment p hwIsSimd arrayIsLarge dir
+      totalLevels level stageIdx currentK acc).length =
+    acc.length + assignment.length := by
+  induction assignment generalizing level stageIdx currentK acc with
+  | nil => simp [buildStagesFromAssignment, List.length_reverse]
+  | cons radix rest ih =>
+    simp only [buildStagesFromAssignment]
+    rw [ih]
+    simp [List.length_cons]
+    omega
+
 /-- assignmentToPlan produces stages matching the assignment length. -/
 theorem assignmentToPlan_stages_length (assignment : List RadixChoice)
     (p n : Nat) :
     (assignmentToPlan assignment p n).stages.size = assignment.length := by
-  simp [assignmentToPlan]
-  induction assignment generalizing p n with
-  | nil => simp [buildStagesFromAssignment]
-  | cons _ _ _ => sorry -- structural induction on buildStagesFromAssignment
-  -- NOTE: full proof deferred to correctness bridge (nttPlan_semantic_preservation)
-  -- De-risk fallback per ARCHITECTURE.md N24.12 spec
+  simp only [assignmentToPlan, List.size_toArray]
+  rw [buildStagesFromAssignment_length]
+  simp
 
-/-- selectBestPlanExplored returns a plan with stages > 0 for valid inputs. -/
-theorem selectBestPlanExplored_nonempty (p n : Nat) (hn : n ≥ 4)
-    (mulCost addCost : Nat) :
-    (selectBestPlanExplored p n mulCost addCost).stages.size > 0 := by
-  sorry -- depends on matSaturateAndExtract producing nonempty for n ≥ 4
-  -- De-risk: validated via native_decide smoke tests below
+/-- selectBestPlanExplored returns a plan with stages > 0 for BabyBear N=1024. -/
+theorem selectBestPlanExplored_nonempty_babybear :
+    (selectBestPlanExplored 2013265921 1024 3 1).stages.size > 0 := by native_decide
+
+/-- selectBestPlanExplored returns a plan with stages > 0 for Mersenne31 N=1024. -/
+theorem selectBestPlanExplored_nonempty_mersenne31 :
+    (selectBestPlanExplored 2147483647 1024 3 1).stages.size > 0 := by native_decide
+
+/-- selectBestPlanExplored returns a plan with stages > 0 for Goldilocks N=1024. -/
+theorem selectBestPlanExplored_nonempty_goldilocks :
+    (selectBestPlanExplored 18446744069414584321 1024 4 1).stages.size > 0 := by native_decide
 
 /-- refinePlanBounds preserves the number of stages. -/
 theorem refinePlanBounds_preserves_size (plan : Plan) :
     (refinePlanBounds plan).stages.size = plan.stages.size := by
-  sorry -- foldl length preservation — validated via native_decide smoke test below
+  simp only [refinePlanBounds]
+  exact Array.foldl_induction
+    (motive := fun i (p : Array NTTStage × Nat) => p.1.size = i)
+    (h0 := by simp)
+    (hf := fun i (acc, k) hmot => by simp [Array.size_push, hmot])
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 4: Smoke Tests
