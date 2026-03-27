@@ -1870,7 +1870,88 @@ The conclusion `∃ v_sat, ConsistentValuation ... ∧ evalExpr expr env = v_sat
 
 ---
 
-### Fase 25: Pipeline Soundness + Benchmarks — v3.3.1
+### Fase 25: FRI Fold + Poseidon Bound-Aware Optimization — v3.3.1
+
+**Goal**: Connect Level 1↔Level 2 optimization feedback to FRI fold and Poseidon S-box primitives. The existing infrastructure (CostOracle, selectReductionForBound, BoundPropagation, stageBoundFactor) is already generalized — only instantiation for new primitives is needed.
+
+**Key insight**: CostOracle and selectReductionForBound take bounds and return reductions — they don't know they're working with NTT. FRI fold (bound ~2p after mul+add) and Poseidon S-box (bound ~p^d after exponentiation) simply provide different bound inputs.
+
+**New files** (3):
+- `AmoLean/EGraph/Verified/Bitwise/FRIFoldPlan.lean` — FRI fold reduction selection
+- `AmoLean/EGraph/Verified/Bitwise/PoseidonStagePlan.lean` — Poseidon per-round reduction
+- `AmoLean/EGraph/Verified/Bitwise/PrimitivesIntegration.lean` — Unified primitive dispatch
+
+#### DAG (v3.3.1)
+
+```
+N25.1 FRIFoldPlan (FUND) ──→ N25.3 PrimitivesIntegration (HOJA)
+N25.2 PoseidonStagePlan (PAR) ──→ N25.3
+```
+
+| Node | Name | Type | LOC | Deps | File |
+|------|------|------|-----|------|------|
+| N25.1 | FRIFoldPlan | FUND | ~80 | — | Bitwise/FRIFoldPlan.lean |
+| N25.2 | PoseidonStagePlan | PAR | ~100 | — | Bitwise/PoseidonStagePlan.lean |
+| N25.3 | PrimitivesIntegration | HOJA | ~70 | N25.1, N25.2 | Bitwise/PrimitivesIntegration.lean |
+| **Total** | | | **~250** | | |
+
+#### Blocks
+
+| Block | Nodes | Execution |
+|-------|-------|-----------|
+| B99 | N25.1 | FUND sequential |
+| B100 | N25.2 | PAR (parallel with B99) |
+| B101 | N25.3 | HOJA (after B99 + B100) |
+
+#### Progress Tree
+
+- [ ] B99: N25.1 FRIFoldPlan
+- [ ] B100: N25.2 PoseidonStagePlan
+- [ ] B101: N25.3 PrimitivesIntegration
+
+#### Detailed Node Specifications
+
+**N25.1 FUNDACIONAL — FRIFoldPlan** (~80 LOC)
+- File: `AmoLean/EGraph/Verified/Bitwise/FRIFoldPlan.lean`
+- FRI fold = `alpha * f_odd[i] + f_even[i]` — bound after mul+add is ~2p
+- `FRIFoldConfig` structure: field prime, alpha bound factor, hardware target
+- `selectFRIReduction` := direct reuse of `selectReductionForBound 2 hwIsSimd arrayIsLarge`
+- `friFoldCost` using existing CostOracle (butterflyCost pattern for mul+add)
+- Smoke tests: BabyBear + Goldilocks FRI fold cost comparisons
+
+**N25.2 PARALELO — PoseidonStagePlan** (~100 LOC)
+- File: `AmoLean/EGraph/Verified/Bitwise/PoseidonStagePlan.lean`
+- Poseidon S-box = x^d (d=7 BabyBear, d=5 BN254) — bound after exponentiation explodes (~p^d)
+- `PoseidonStageConfig`: field prime, exponent d, number of full/partial rounds
+- `selectPoseidonReduction`: per-round reduction selection
+  - Full rounds: aggressive reduction mandatory (Montgomery, bound too large for Harvey/lazy)
+  - Partial rounds: only 1 S-box per round, bounds smaller → lazy possible?
+- Bound tracking: `poseidonBoundAfterSbox(inputK, d) := inputK * d` (multiplicative growth)
+- `poseidonStageCost` using existing CostOracle
+- Smoke tests: BabyBear Poseidon t=8, full vs partial round cost difference
+
+**N25.3 HOJA — PrimitivesIntegration** (~70 LOC)
+- File: `AmoLean/EGraph/Verified/Bitwise/PrimitivesIntegration.lean`
+- Unified `selectPrimitiveReduction(primitive, boundK, hw)` dispatching to NTT/FRI/Poseidon
+- Integration smoke test: same prime (BabyBear), different primitives → different reduction choices:
+  - NTT butterfly (bound ~2p) → Harvey
+  - FRI fold (bound ~2p) → Harvey (same as NTT)
+  - Poseidon S-box (bound ~p^7) → Montgomery
+- Wire into UltraPipeline: extend report to include FRI + Poseidon costs
+
+#### Formal Properties (v3.3.1)
+
+| Nodo | Propiedad | Tipo | Prioridad |
+|------|-----------|------|-----------|
+| N25.1 | selectFRIReduction produces valid ReductionChoice for all fields | SOUNDNESS | P0 |
+| N25.1 | FRI fold cost ≤ NTT butterfly cost (same field, same hw) | OPTIMIZATION | P1 |
+| N25.2 | Poseidon full-round always selects aggressive reduction (not lazy) | INVARIANT | P0 |
+| N25.2 | poseidonBoundAfterSbox monotone in exponent d | PRESERVATION | P1 |
+| N25.3 | Same prime + different primitives → can produce different reductions | COMPLETENESS | P0 |
+
+---
+
+### Fase 26: Pipeline Soundness + Benchmarks — v3.4.0
 
 **Goal**: Compose `ultra_pipeline_soundness` (Fases 22-24), bridge backward compat to v1 pipeline, generate + benchmark optimized NTT code with radix-4/mixed plans vs Plonky3.
 
@@ -1889,38 +1970,38 @@ The conclusion `∃ v_sat, ConsistentValuation ... ∧ evalExpr expr env = v_sat
 #### DAG (v3.3.1)
 
 ```
-N25.1 UltraSoundness (FUND) ──→ N25.2 v2Bridge (CRIT) ──→ N25.5 IntegrationTests (HOJA)
-N25.3 BenchCodeGen (PAR, independent) ──→ N25.4 BenchRunner (HOJA)
+N26.1 UltraSoundness (FUND) ──→ N26.2 v2Bridge (CRIT) ──→ N26.5 IntegrationTests (HOJA)
+N26.3 BenchCodeGen (PAR, independent) ──→ N26.4 BenchRunner (HOJA)
 ```
 
 | Node | Name | Type | LOC | Deps | File |
 |------|------|------|-----|------|------|
-| N25.1 | UltraSoundness | FUND | ~300 | Fases 22-24 | Bitwise/UltraSoundness.lean |
-| N25.2 | v2BridgeTheorem | CRIT | ~200 | N25.1 | Bitwise/UltraBridge.lean |
-| N25.3 | BenchCodeGen | PAR | ~150 | — | Bitwise/UltraBenchGen.lean |
-| N25.4 | BenchRunner | HOJA | ~100 | N25.3 | scripts/ + Tests/interop/ |
-| N25.5 | IntegrationTests | HOJA | ~100 | N25.1, N25.2 | Tests/NonVacuity/UltraPipeline.lean |
+| N26.1 | UltraSoundness | FUND | ~300 | Fases 22-24 | Bitwise/UltraSoundness.lean |
+| N26.2 | v2BridgeTheorem | CRIT | ~200 | N26.1 | Bitwise/UltraBridge.lean |
+| N26.3 | BenchCodeGen | PAR | ~150 | — | Bitwise/UltraBenchGen.lean |
+| N26.4 | BenchRunner | HOJA | ~100 | N26.3 | scripts/ + Tests/interop/ |
+| N26.5 | IntegrationTests | HOJA | ~100 | N26.1, N26.2 | Tests/NonVacuity/UltraPipeline.lean |
 | **Total** | | | **~850** | | |
 
 #### Blocks
 
 | Block | Nodes | Execution |
 |-------|-------|-----------|
-| B99 | N25.1 | FUND sequential (de-risk sketch first) |
-| B100 | N25.2 | CRIT sequential (after B99) |
-| B101 | N25.3 | PAR (independent, parallel with B99-B100) |
-| B102 | N25.4, N25.5 | HOJA (after B100 + B101) |
+| B103 | N26.1 | FUND sequential (de-risk sketch first) |
+| B104 | N26.2 | CRIT sequential (after B103) |
+| B105 | N26.3 | PAR (independent, parallel with B103-B104) |
+| B106 | N26.4, N26.5 | HOJA (after B104 + B105) |
 
 #### Progress Tree
 
-- [ ] B99: N25.1 UltraSoundness
-- [ ] B100: N25.2 v2BridgeTheorem
-- [ ] B101: N25.3 BenchCodeGen
-- [ ] B102: N25.4 BenchRunner | N25.5 IntegrationTests
+- [ ] B103: N26.1 UltraSoundness
+- [ ] B104: N26.2 v2BridgeTheorem
+- [ ] B105: N26.3 BenchCodeGen
+- [ ] B106: N26.4 BenchRunner | N26.5 IntegrationTests
 
 #### Detailed Node Specifications
 
-**N25.1 FUNDACIONAL — UltraSoundness** (~300 LOC)
+**N26.1 FUNDACIONAL — UltraSoundness** (~300 LOC)
 - File: `AmoLean/EGraph/Verified/Bitwise/UltraSoundness.lean`
 - Purpose: Master composition theorem `ultra_pipeline_soundness` threading Fases 22-24.
 - **Intermediate state formalization** (QA amendment):
@@ -1939,15 +2020,15 @@ N25.3 BenchCodeGen (PAR, independent) ──→ N25.4 BenchRunner (HOJA)
 - De-risk: sketch as chain of implications between intermediate states BEFORE full proof. If composition is intractable (>3 sessions), fallback to `native_decide` for BabyBear N=16 + documented sorry
 - Theorems: `ultra_pipeline_soundness`, `ultra_pipeline_fuel_bound`
 
-**N25.2 CRITICO — v2BridgeTheorem** (~200 LOC)
+**N26.2 CRITICO — v2BridgeTheorem** (~200 LOC)
 - File: `AmoLean/EGraph/Verified/Bitwise/UltraBridge.lean`
 - Purpose: Prove backward compatibility — Ultra pipeline (v2: bounds+colors+discovery) implies existing `pipeline_mixed_equivalent` (v1).
 - `v2_implies_v1_soundness`: any expression optimized by Ultra pipeline is also valid under the base pipeline
 - Pattern: projection — v2 state contains v1 state as sub-structure. The extra fields (bounds, colors, discovery rules) are refinements that don't invalidate base equivalences
-- Consumes: `pipeline_mixed_equivalent` from MixedPipeline.lean, `ultra_pipeline_soundness` from N25.1
+- Consumes: `pipeline_mixed_equivalent` from MixedPipeline.lean, `ultra_pipeline_soundness` from N26.1
 - De-risk: if projection is not clean (v2 modifies base state), may need adapter theorem. Check that `MultiRelMixed.saturate` with `nullFactory` produces same result as base `saturateF`
 
-**N25.3 PARALELO — BenchCodeGen (Verified C + Rust FFI)** (~200 LOC)
+**N26.3 PARALELO — BenchCodeGen (Verified C + Rust FFI)** (~200 LOC)
 - Files: `AmoLean/EGraph/Verified/Bitwise/UltraBenchGen.lean` + `Tests/interop/ultra_ffi/`
 - Purpose: Generate **verified C code** via Path A (VerifiedCodeGen → TrustLeanBridge → Trust-Lean backend), then wrap in Rust FFI for benchmarking.
 - **Architecture** (decision 2026-03-27: avoid unverified string emission):
@@ -1968,7 +2049,7 @@ N25.3 BenchCodeGen (PAR, independent) ──→ N25.4 BenchRunner (HOJA)
 - **Test vectors**: generate input/output pairs from Lean spec, validate C output matches before benchmarking
 - **Future**: Trust-Lean Rust backend (separate project) will eliminate the FFI layer
 
-**N25.4 HOJA — BenchRunner** (~100 LOC)
+**N26.4 HOJA — BenchRunner** (~100 LOC)
 - Extends: `scripts/benchmark.sh` + `Tests/interop/`
 - **Statistical methodology** (QA amendment): `hyperfine --warmup 3 --min-runs 10` for all comparisons, report mean/stddev/min/max
 - Targets: BabyBear NTT +25-30% vs Plonky3, Goldilocks +15-20%, KoalaBear +20-25%
@@ -1976,26 +2057,26 @@ N25.3 BenchCodeGen (PAR, independent) ──→ N25.4 BenchRunner (HOJA)
 - Compare against: Plonky3 `Radix2Bowers::dft_batch` (the fastest known Plonky3 NTT)
 - Output: CSV results + summary in BENCHMARKS.md
 
-**N25.5 HOJA — IntegrationTests** (~100 LOC)
+**N26.5 HOJA — IntegrationTests** (~100 LOC)
 - File: `Tests/NonVacuity/UltraPipeline.lean`
 - Non-vacuity example: BabyBear N=1024 (pure radix-4 path, covers `ultra_pipeline_soundness` hypotheses)
 - **Mixed-radix test** (QA amendment): N=512 (radix-4 + radix-2 mixed path) to exercise `mkMixedRadixPlan` logic
 - `#print axioms ultra_pipeline_soundness` = 0 custom axioms
 - `#print axioms v2_implies_v1_soundness` = 0 custom axioms
 
-#### Formal Properties (v3.3.1)
+#### Formal Properties (v3.4.0)
 
 | Nodo | Propiedad | Tipo | Prioridad |
 |------|-----------|------|-----------|
-| N25.1 | ultra_pipeline_soundness threads all three invariants (MRCV, semantic, CCV) | SOUNDNESS | P0 |
-| N25.1 | ultra_pipeline_fuel_bound ≤ max of phase fuels | INVARIANT | P1 |
-| N25.2 | v2_implies_v1_soundness: Ultra result → base pipeline_mixed_equivalent | PRESERVATION | P0 |
-| N25.2 | v2_null_factory_eq_v1: Ultra with null factory = base saturation | EQUIVALENCE | P1 |
-| N25.3 | Generated C is formally verified (Path A: lowerOp_correct + evalStmt_correct chain) | SOUNDNESS | P0 |
-| N25.3 | Rust FFI wrapper matches C output on Lean spec test vectors | PRESERVATION | P0 |
-| N25.4 | BabyBear NTT ≥ 1.25× Plonky3 (mean, N=2^20) | OPTIMIZATION | P0 |
-| N25.5 | Non-vacuity: all hypotheses of ultra_pipeline_soundness jointly satisfiable | INVARIANT | P0 |
-| N25.5 | #print axioms ultra_pipeline_soundness = 0 custom axioms | SOUNDNESS | P0 |
+| N26.1 | ultra_pipeline_soundness threads all three invariants (MRCV, semantic, CCV) | SOUNDNESS | P0 |
+| N26.1 | ultra_pipeline_fuel_bound ≤ max of phase fuels | INVARIANT | P1 |
+| N26.2 | v2_implies_v1_soundness: Ultra result → base pipeline_mixed_equivalent | PRESERVATION | P0 |
+| N26.2 | v2_null_factory_eq_v1: Ultra with null factory = base saturation | EQUIVALENCE | P1 |
+| N26.3 | Generated C is formally verified (Path A: lowerOp_correct + evalStmt_correct chain) | SOUNDNESS | P0 |
+| N26.3 | Rust FFI wrapper matches C output on Lean spec test vectors | PRESERVATION | P0 |
+| N26.4 | BabyBear NTT ≥ 1.25× Plonky3 (mean, N=2^20) | OPTIMIZATION | P0 |
+| N26.5 | Non-vacuity: all hypotheses of ultra_pipeline_soundness jointly satisfiable | INVARIANT | P0 |
+| N26.5 | #print axioms ultra_pipeline_soundness = 0 custom axioms | SOUNDNESS | P0 |
 
 ---
 
