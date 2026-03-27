@@ -2018,13 +2018,13 @@ N26.6 ──→ N26.7 IntegrationTests (HOJA)
 
 #### Progress Tree
 
-- [ ] B107: N26.1 ReduceSpecAxiom
-- [ ] B108: N26.2 BitwiseVocabulary
-- [ ] B109: N26.3 ExplosionControl (GATE)
-- [ ] B110: N26.4 CandidateExtraction
-- [ ] B111: N26.5 TacticVerification
-- [ ] B112: N26.6 DiscoveryRunner
-- [ ] B113: N26.7 IntegrationTests
+- [x] B107: N26.1 ReduceSpecAxiom (382 LOC, 0 sorry)
+- [x] B108: N26.2 BitwiseVocabulary (205 LOC, 0 sorry)
+- [x] B109: N26.3 ExplosionControl (215 LOC, 0 sorry)
+- [x] B110: N26.4 CostBiasedExtract (199 LOC, 0 sorry)
+- [x] B111: N26.5 VerificationOracle (119 LOC, 0 sorry)
+- [x] B112: N26.6 DiscoveryRunner (153 LOC, 0 sorry)
+- [x] B113: N26.7 IntegrationTests (115 LOC, 0 sorry)
 
 #### Detailed Node Specifications
 
