@@ -1781,16 +1781,16 @@ N24.9 ──→ N24.10 DiscoveryTests (HOJA)
 
 #### Progress Tree
 
-- [ ] B89: N24.1 ShiftAddGen
-- [ ] B90: N24.2 CongruenceGen
-- [ ] B91: N24.3 LazyReduction | N24.6 RuleScoring | N24.7 GrowthPrediction
-- [ ] B92: N24.4 ShadowGraph
-- [ ] B93: N24.5 GuidedSaturation
-- [ ] B94: N24.8 TreewidthDP
+- [x] B89: N24.1 ShiftAddGen (229 LOC, 17 decls, 0 sorry — wiring PASS)
+- [x] B90: N24.2 CongruenceGen (210 LOC, 12 decls, 0 sorry — wired to GuidedSaturation.phase2CongruenceRules)
+- [x] B91: N24.3 LazyReduction (290 LOC) | N24.6 RuleScoring (199 LOC) | N24.7 GrowthPrediction (213 LOC) — all 0 sorry, wiring PASS
+- [x] B92: N24.4 ShadowGraph (241 LOC, 25 decls, 0 sorry — W2 advisory: 2 dead fields, W4: infinityCost redefined)
+- [x] B93: N24.5 GuidedSaturation (281 LOC, 21 decls, 0 sorry — W2 advisory: 6 GuidedResult fields unread, W4: phase1Rules/phaseSafeFuel redefined)
+- [x] B94: N24.8 TreewidthDP (195 LOC, 18 decls, 0 sorry — W2 advisory: DPEntry.bestChild unread)
 - [ ] B97: N24.11 MatEGraphStep (two-layer connection — see gap analysis above)
 - [ ] B98: N24.12 MatPlanExtraction (MatEGraph → NTTPlan + correctness bridge)
-- [ ] B95: N24.9 DiscoveryPipeline (extended: composes MatEGraph → Guided → Extract)
-- [ ] B96: N24.10 DiscoveryTests
+- [ ] B95: N24.9 DiscoveryPipeline (192 LOC exists, advisory: 5 dead fields — needs N24.11/N24.12 integration)
+- [ ] B96: N24.10 DiscoveryTests (178 LOC exists — ReductionDecomp.lean (214 LOC) orphaned, not in DAG)
 
 #### Detailed Node Specifications — N24.11, N24.12 (Two-Layer Connection)
 
