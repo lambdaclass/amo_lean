@@ -456,6 +456,39 @@ private lemma foldl_butterfly_flatMap_map_congr
       congr 1
       exact ih_h (fun g hg p hp => h' g hg p (by omega)) acc'
 
+omit [DecidableEq F] in
+/-- Generalized foldl congruence for flatMap/map butterfly pairs.
+    Allows BOTH the pair constructors AND the step functions to differ,
+    as long as they agree pointwise. Used for the second-half decomposition
+    where the step function involves index shifting. -/
+private lemma foldl_butterfly_congr_gen
+    (midGroup half : Nat) (mk1 mk2 : Nat → Nat → ButterflyPair)
+    (f1 f2 : List F → ButterflyPair → List F) (acc : List F)
+    (h : ∀ g, g < midGroup → ∀ p, p < half → ∀ d : List F,
+      f1 d (mk1 g p) = f2 d (mk2 g p)) :
+    ((List.range midGroup).flatMap (fun g => (List.range half).map (mk1 g))).foldl f1 acc =
+    ((List.range midGroup).flatMap (fun g => (List.range half).map (mk2 g))).foldl f2 acc := by
+  induction midGroup generalizing acc with
+  | zero => simp
+  | succ m ih =>
+    simp only [List.range_succ, List.flatMap_append, List.flatMap_cons, List.flatMap_nil,
+               List.append_nil, List.foldl_append]
+    rw [ih acc (fun g hg p hp d => h g (by omega) p hp d)]; clear ih
+    suffices ∀ (half' : Nat) (h' : ∀ g, g < m + 1 → ∀ p, p < half' → ∀ d : List F,
+          f1 d (mk1 g p) = f2 d (mk2 g p)) (acc' : List F),
+        ((List.range half').map (mk1 m)).foldl f1 acc' =
+        ((List.range half').map (mk2 m)).foldl f2 acc' from this half h _
+    intro half'; induction half' with
+    | zero => intro _ _; simp
+    | succ h_val ih_h =>
+      intro h' acc'
+      simp only [List.range_succ, List.map_append, List.map_cons, List.map_nil,
+                 List.foldl_append, List.foldl_cons, List.foldl_nil]
+      rw [h' m (by omega) h_val (by omega)]
+      congr 1
+      exact ih_h (fun g hg p hp d => h' g hg p (by omega) d) _
+
+set_option maxHeartbeats 800000 in
 /-- Sub-lemma 1: The first n DIT stages on bitRevPermute (n+1) data produce
     ntt_generic (ω²) (evens data) ++ ntt_generic (ω²) (odds data).
     Butterflies at stageIdx ≥ 1 have distance < 2^n, so they don't cross the
@@ -576,10 +609,117 @@ private lemma dit_first_n_stages_independent [DecidableEq F] [Inhabited F]
       A.length = 2 ^ n → B.length = 2 ^ n → stageIdx ≥ 1 → stageIdx ≤ n →
       applyStage (A ++ B) twiddles (n + 1) stageIdx =
       applyStage A sub_tw n (stageIdx - 1) ++ applyStage B sub_tw n (stageIdx - 1) := by
-    -- Full proof via foldl_butterfly_flatMap_map_congr.
-    -- Tested standalone. Integration requires careful handling of context let-bindings
-    -- from htw/htw_sub (which have let half/numGroups). Use simp only [] to zeta-reduce.
-    sorry
+    intro A B stageIdx hA hB hst1 hstn
+    simp only [applyStage, stagePairs]
+    set half := 2 ^ (n - stageIdx) with half_def
+    set midGroup := 2 ^ (stageIdx - 1) with midGroup_def
+    -- Arithmetic setup
+    have hng : 2 ^ stageIdx = midGroup + midGroup := by
+      rw [midGroup_def, ← Nat.two_mul, Nat.mul_comm]
+      show 2 ^ stageIdx = 2 ^ (stageIdx - 1) * 2
+      rw [← Nat.pow_succ]; congr 1; omega
+    have h_half_big : 2 ^ (n + 1 - 1 - stageIdx) = half := by congr 1
+    have h_half_sub : 2 ^ (n - 1 - (stageIdx - 1)) = half := by congr 1; omega
+    have h_mg2h : midGroup * 2 * half = 2 ^ n := by
+      rw [midGroup_def, half_def]
+      have : 2 ^ (stageIdx - 1) * 2 = 2 ^ stageIdx := by rw [← Nat.pow_succ]; congr 1; omega
+      rw [this, ← Nat.pow_add]; congr 1; omega
+    have h_pn1 : 2 ^ (n + 1) / 2 = 2 ^ n := by omega
+    have h_pn : 2 ^ n / 2 = 2 ^ (n - 1) := by
+      conv_lhs => rw [show n = (n - 1) + 1 from by omega, Nat.pow_succ]
+      exact Nat.mul_div_cancel _ (by norm_num)
+    -- Twiddle value equality (first-half groups)
+    have htw_eq : ∀ g p, g < midGroup → p < half →
+        twiddles (stageIdx * 2 ^ n + g * half + p) =
+        sub_tw ((stageIdx - 1) * 2 ^ (n - 1) + g * half + p) := by
+      intro g p hg hp
+      have h1 := htw stageIdx g p (by omega); simp only [] at h1; rw [h_half_big] at h1
+      have h1' := h1 (by rw [hng]; omega) hp; rw [h_pn1] at h1'
+      have h2 := htw_sub (stageIdx - 1) g p (by omega); simp only [] at h2; rw [h_half_sub] at h2
+      have h2' := h2 (by omega) hp; rw [h_pn] at h2'
+      rw [h1', h2', show omega * omega = omega ^ 2 from by ring, ← pow_mul]; congr 1
+      have : 2 ^ (stageIdx - 1) * 2 = 2 ^ stageIdx := by rw [← Nat.pow_succ]; congr 1; omega
+      rw [← this, Nat.mul_comm (2 ^ (stageIdx - 1)) 2, Nat.mul_left_comm]
+    -- Twiddle value equality (second-half groups: midGroup + g)
+    have htw_eq2 : ∀ g p, g < midGroup → p < half →
+        twiddles (stageIdx * 2 ^ n + (midGroup + g) * half + p) =
+        sub_tw ((stageIdx - 1) * 2 ^ (n - 1) + g * half + p) := by
+      intro g p hg hp
+      have h1 := htw stageIdx (midGroup + g) p (by omega); simp only [] at h1
+      rw [h_half_big] at h1
+      have h1' := h1 (by rw [hng]; omega) hp; rw [h_pn1] at h1'
+      have h2 := htw_sub (stageIdx - 1) g p (by omega); simp only [] at h2; rw [h_half_sub] at h2
+      have h2' := h2 (by omega) hp; rw [h_pn] at h2'
+      rw [h1', h2', show omega * omega = omega ^ 2 from by ring, ← pow_mul]; congr 1
+      have : 2 ^ (stageIdx - 1) * 2 = 2 ^ stageIdx := by rw [← Nat.pow_succ]; congr 1; omega
+      rw [← this, Nat.mul_comm (2 ^ (stageIdx - 1)) 2, Nat.mul_left_comm]
+    -- ═══ LHS decomposition: split stagePairs into first/second half groups ═══
+    conv_lhs => rw [h_half_big]
+    rw [hng, List.range_add, List.flatMap_append]
+    simp only [List.flatMap_map]
+    rw [List.foldl_append]
+    -- First half: all indices < A.length
+    have h_first_within : ∀ bp ∈ (List.range midGroup).flatMap (fun g =>
+        (List.range half).map (fun p =>
+          (⟨g * 2 * half + p, g * 2 * half + p + half,
+            stageIdx * (2 ^ (n + 1) / 2) + g * half + p⟩ : ButterflyPair))),
+        bp.i < A.length ∧ bp.j < A.length := by
+      intro bp hbp
+      simp only [List.mem_flatMap, List.mem_range, List.mem_map] at hbp
+      obtain ⟨g, hg, p, hp, rfl⟩ := hbp
+      constructor <;> (simp only []; rw [hA]; nlinarith [h_mg2h])
+    rw [foldl_butterflyPairs_append_left _ _ A B h_first_within]
+    set A' := ((List.range midGroup).flatMap (fun g =>
+      (List.range half).map (fun p =>
+        (⟨g * 2 * half + p, g * 2 * half + p + half,
+          stageIdx * (2 ^ (n + 1) / 2) + g * half + p⟩ : ButterflyPair)))).foldl
+      (fun d bp => butterflyAt d bp.i bp.j (twiddles bp.twiddleIdx)) A with hA'_def
+    have hA'_len : A'.length = 2 ^ n := by rw [hA'_def, foldl_butterflyAt_length, hA]
+    -- Second half: all indices ≥ A'.length (Lean normalizes g+midGroup to midGroup+g)
+    have h_second_within : ∀ bp ∈ (List.range midGroup).flatMap (fun g =>
+        (List.range half).map (fun p =>
+          (⟨(midGroup + g) * 2 * half + p, (midGroup + g) * 2 * half + p + half,
+            stageIdx * (2 ^ (n + 1) / 2) + (midGroup + g) * half + p⟩ : ButterflyPair))),
+        A'.length ≤ bp.i ∧ A'.length ≤ bp.j ∧
+        bp.i < A'.length + B.length ∧ bp.j < A'.length + B.length := by
+      intro bp hbp
+      simp only [List.mem_flatMap, List.mem_range, List.mem_map] at hbp
+      obtain ⟨g, hg, p, hp, rfl⟩ := hbp
+      simp only []; rw [hA'_len, hB]
+      refine ⟨by nlinarith [h_mg2h], by nlinarith [h_mg2h],
+              by nlinarith [h_mg2h, hng], by nlinarith [h_mg2h, hng]⟩
+    rw [foldl_butterflyPairs_append_right _ _ A' B h_second_within]
+    -- ═══ Match each half with the sub-DIT ═══
+    congr 1
+    · -- First half: foldl_butterfly_flatMap_map_congr (same i,j; twiddle values match)
+      rw [hA'_def]; conv_rhs => rw [h_half_sub]
+      exact foldl_butterfly_flatMap_map_congr midGroup half
+        (fun g p => ⟨g * 2 * half + p, g * 2 * half + p + half,
+          stageIdx * (2 ^ (n + 1) / 2) + g * half + p⟩)
+        (fun g p => ⟨g * 2 * half + p, g * 2 * half + p + half,
+          (stageIdx - 1) * (2 ^ n / 2) + g * half + p⟩)
+        twiddles sub_tw A
+        (fun g hg p hp => ⟨rfl, rfl, by
+          simp only [ButterflyPair.twiddleIdx]; rw [h_pn1, h_pn]; exact htw_eq g p hg hp⟩)
+    · -- Second half: foldl_butterfly_congr_gen (shifted indices + twiddle values match)
+      conv_rhs => rw [h_half_sub]
+      exact foldl_butterfly_congr_gen midGroup half
+        (fun g p => ⟨(midGroup + g) * 2 * half + p, (midGroup + g) * 2 * half + p + half,
+          stageIdx * (2 ^ (n + 1) / 2) + (midGroup + g) * half + p⟩)
+        (fun g p => ⟨g * 2 * half + p, g * 2 * half + p + half,
+          (stageIdx - 1) * (2 ^ n / 2) + g * half + p⟩)
+        (fun d bp => butterflyAt d (bp.i - A'.length) (bp.j - A'.length) (twiddles bp.twiddleIdx))
+        (fun d bp => butterflyAt d bp.i bp.j (sub_tw bp.twiddleIdx)) B
+        (fun g hg p hp d => by
+          simp only [ButterflyPair.i, ButterflyPair.j, ButterflyPair.twiddleIdx]
+          have h_shift : (midGroup + g) * 2 * half = 2 ^ n + g * 2 * half := by
+            rw [← h_mg2h]; ring
+          rw [show (midGroup + g) * 2 * half + p - A'.length = g * 2 * half + p from by
+                rw [hA'_len]; omega,
+              show (midGroup + g) * 2 * half + p + half - A'.length = g * 2 * half + p + half from by
+                rw [hA'_len]; omega,
+              h_pn1, h_pn]
+          congr 1; exact htw_eq2 g p hg hp)
   -- L6: Multi-stage decomposition by induction (L-123, L-584)
   have h_decomp :
       (List.range n).foldl
