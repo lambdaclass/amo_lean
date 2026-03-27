@@ -3,6 +3,7 @@ import AmoLean.EGraph.Verified.Bitwise.Discovery.GrowthPrediction
 import AmoLean.EGraph.Verified.Bitwise.Discovery.LazyReduction
 import AmoLean.EGraph.Verified.Bitwise.Discovery.GuidedSaturation
 import AmoLean.EGraph.Verified.Bitwise.Discovery.TreewidthDP
+import AmoLean.EGraph.Verified.Bitwise.Discovery.ReductionDecomp
 import AmoLean.EGraph.Verified.Bitwise.Discovery.MatPlanExtraction
 import AmoLean.EGraph.Verified.Bitwise.SolinasRuleGen
 
@@ -195,6 +196,11 @@ example : predictGrowth .babybear 10 ≥ 10 := by
 /-- MatEGraph exploration finds an optimal plan for BabyBear N=1024. -/
 example :
   (MatPlanExtraction.selectBestPlanExplored 2013265921 1024 3 1).stages.size > 0 := by
+  native_decide
+
+/-- Barrett + Solinas rules combined for BabyBear. -/
+example :
+  (ReductionDecomp.generateAllReductionRules 2013265921).length ≥ 1 := by
   native_decide
 
 end AmoLean.EGraph.Verified.Bitwise.Discovery
