@@ -1790,7 +1790,7 @@ N24.9 ──→ N24.10 DiscoveryTests (HOJA)
 - [x] B97: N24.11 MatEGraphStep (250 LOC, 0 sorry — CostOracle + radix assignment exploration + Fibonacci growth bound)
 - [x] B98: N24.12 MatPlanExtraction (175 LOC, 3 sorry de-risk — assignmentToPlan + selectBestPlanExplored + refinePlanBounds)
 - [x] B95: N24.9 DiscoveryPipeline (192 LOC, 0 sorry — imports MatPlanExtraction, totalRuleCount fixed for phase2CongruenceRules)
-- [ ] B96: N24.10 DiscoveryTests (178 LOC exists — ReductionDecomp.lean (214 LOC) orphaned, not in DAG)
+- [x] B96: N24.10 DiscoveryTests (178 LOC) + ReductionDecomp (214 LOC) wired to Pipeline — 959 jobs, 0 errors
 
 #### Detailed Node Specifications — N24.11, N24.12 (Two-Layer Connection)
 
