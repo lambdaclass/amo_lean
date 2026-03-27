@@ -1951,7 +1951,176 @@ N25.2 PoseidonStagePlan (PAR) ──→ N25.3
 
 ---
 
-### Fase 26: Pipeline Soundness + Benchmarks — v3.4.0
+### Fase 26: Spec-Driven Reduction Discovery — v3.4.0
+
+**Goal**: E-graph discovers modular reduction implementations from specification `reduce(x) ≡ x mod p`, potentially better than Barrett/Montgomery/Solinas for specific primes.
+
+**Novel contribution**: First verified framework where an e-graph discovers modular reduction algorithms from specification, not from hand-coded rules. Uses the Herbie model: domain axioms + operator vocabulary + cost-optimal extraction.
+
+**Architecture**:
+```
+Spec Axiom: reduce(x) = x % p (e-class equivalence)
+    ↓
+Bitwise Vocabulary (templates + pre-computed constants per prime)
+    ↓
+Guided Saturation (4-phase, dynamic pruning via best-found cost)
+    ↓
+Top-K Candidate Extraction (HardwareCost ranking)
+    ↓
+Tactic Verification (tri-state: Verified | FailedToVerify | Rejected)
+    ↓
+Ranked verified implementations
+```
+
+**Lessons applied**: L-505 (explosion → SaturationConfig limits), L-690 (SHI integrity), L-513 (compositional proofs)
+
+**New files** (7):
+- `AmoLean/EGraph/Verified/Bitwise/Discovery/ReduceSpecAxiom.lean`
+- `AmoLean/EGraph/Verified/Bitwise/Discovery/BitwiseVocabulary.lean`
+- `AmoLean/EGraph/Verified/Bitwise/Discovery/SpecDrivenSaturation.lean`
+- `AmoLean/EGraph/Verified/Bitwise/Discovery/CandidateExtraction.lean`
+- `AmoLean/EGraph/Verified/Bitwise/Discovery/TacticVerification.lean`
+- `AmoLean/EGraph/Verified/Bitwise/Discovery/SpecDrivenRunner.lean`
+- `Tests/NonVacuity/SpecDrivenDiscovery.lean`
+
+#### DAG (v3.4.0)
+
+```
+N26.1 ReduceSpecAxiom (FUND) ──→ N26.3 ExplosionControl (CRIT)
+N26.2 BitwiseVocabulary (FUND) ──→ N26.3
+N26.3 ──→ N26.4 CandidateExtraction (CRIT) ──→ N26.6 DiscoveryRunner (HOJA)
+N26.5 TacticVerification (PAR) ──→ N26.6
+N26.6 ──→ N26.7 IntegrationTests (HOJA)
+```
+
+| Node | Name | Type | LOC | Deps |
+|------|------|------|-----|------|
+| N26.1 | ReduceSpecAxiom | FUND | ~150 | — |
+| N26.2 | BitwiseVocabulary | FUND | ~200 | — |
+| N26.3 | ExplosionControl | CRIT | ~250 | N26.1, N26.2 |
+| N26.4 | CandidateExtraction | CRIT | ~200 | N26.3 |
+| N26.5 | TacticVerification | PAR | ~150 | — |
+| N26.6 | DiscoveryRunner | HOJA | ~150 | N26.4, N26.5 |
+| N26.7 | IntegrationTests | HOJA | ~100 | N26.6 |
+| **Total** | | | **~1200** | |
+
+#### Blocks
+
+| Block | Nodes | Execution |
+|-------|-------|-----------|
+| B107 | N26.1 | FUND sequential (de-risk: CV preservation sketch) |
+| B108 | N26.2 | FUND sequential (de-risk: 1 rule soundness proof) |
+| B109 | N26.3 | CRIT sequential (after B107+B108) — **GATE** |
+| B110 | N26.4 | CRIT sequential (after B109) |
+| B111 | N26.5 | PAR (parallel with B109-B110) |
+| B112 | N26.6 | HOJA (after B110+B111) |
+| B113 | N26.7 | HOJA (after B112) |
+
+#### Progress Tree
+
+- [ ] B107: N26.1 ReduceSpecAxiom
+- [ ] B108: N26.2 BitwiseVocabulary
+- [ ] B109: N26.3 ExplosionControl (GATE)
+- [ ] B110: N26.4 CandidateExtraction
+- [ ] B111: N26.5 TacticVerification
+- [ ] B112: N26.6 DiscoveryRunner
+- [ ] B113: N26.7 IntegrationTests
+
+#### Detailed Node Specifications
+
+**N26.1 FUNDACIONAL — ReduceSpecAxiom** (~150 LOC)
+- File: `AmoLean/EGraph/Verified/Bitwise/Discovery/ReduceSpecAxiom.lean`
+- `ReduceSpec` structure: prime p, input bound (`x < 2^w`), word width w
+- `insertReduceSpec : ReduceSpec → MixedEGraph → MixedEGraph` — inserts e-class equivalence `reduce(x) ↔ x % p`
+- **Arithmetic domain**: `Nat` with explicit bounds (`x < 2^w`). Proofs use Nat arithmetic + `Nat.mod`. Lifting bridge to `BitVec w` as future work.
+- Theorem: `insertReduceSpec_preserves_cv`
+- De-risk: sketch insertion + CV preservation before full proof
+
+**N26.2 FUNDACIONAL — BitwiseVocabulary** (~200 LOC)
+- File: `AmoLean/EGraph/Verified/Bitwise/Discovery/BitwiseVocabulary.lean`
+- **Templates** (parametric, instantiated per-run by N26.6):
+  - Shift decomposition: `x = (x >> k) * 2^k + (x & (2^k - 1))`
+  - Mask identity: `x & (2^w - 1) = x % 2^w`
+  - Conditional subtraction: `if x ≥ p then x - p else x`
+  - Barrett skeleton: `x - floor(x * m / 2^k) * p` (parametric in m, k)
+  - Montgomery skeleton: `(x + (x * mu % R) * p) / R` (parametric in mu, R)
+  - Add/Sub modular: `(a + b) % p`, `(a - b + p) % p`
+- Templates take `(p, w, constants)` parameters. Constants pre-computed in N26.6, NOT during saturation.
+- Each instantiated rule: `MixedSoundRule` with proven soundness on Nat with bounds
+- De-risk: prove soundness of 1 rule (shift decomposition) before implementing all
+
+**N26.3 CRITICO — ExplosionControl** (~250 LOC) — **GATE**
+- File: `AmoLean/EGraph/Verified/Bitwise/Discovery/SpecDrivenSaturation.lean`
+- Extends `GuidedSaturation` with spec-driven 4-phase saturation:
+  - Phase 0 (fuel 0-3): Insert spec axiom only
+  - Phase 1 (fuel 3-10): Algebraic rules (existing 12)
+  - Phase 2 (fuel 10-30): Field-specific + vocabulary rules
+  - Phase 3 (fuel 30-40): Bitwise decomposition (CSD + shifts)
+- **Dynamic pruning** (QA amendment): once a complete reduction (no `reduce` subterms) is found, its cost becomes the pruning bound. Before first solution: `known_best_cost * 1.5`.
+- `GrowthPrediction`: abort if predicted nodes > 5000
+- Theorem: `specDrivenSaturateF_preserves_consistent`
+- De-risk: test with BabyBear that saturation terminates within fuel and produces ≥1 candidate
+
+**N26.4 CRITICO — CandidateExtraction** (~200 LOC)
+- File: `AmoLean/EGraph/Verified/Bitwise/Discovery/CandidateExtraction.lean`
+- `extractTopK : MixedEGraph → Nat → HardwareCost → Array MixedExpr`
+- Extracts TOP-K candidates (K=10 default), each a different bitwise implementation of `x % p`
+- Cost ranking per hardware target (ARM scalar, NEON, AVX2)
+- Theorem: extracted candidates semantically equivalent to spec (inherited from CV)
+
+**N26.5 PARALELO — TacticVerification** (~150 LOC)
+- File: `AmoLean/EGraph/Verified/Bitwise/Discovery/TacticVerification.lean`
+- **Tri-state result** (QA amendment):
+  ```
+  Verified(expr, cost)       — tactic proved candidate(x) % p = x % p
+  FailedToVerify(expr, cost) — tactic failed, logged for manual inspection
+  Rejected(reason)           — structurally invalid
+  ```
+- Tactic cascade: `[native_decide, omega, ring, norm_num, simp [Nat.mod]]`
+- `FailedToVerify` candidates logged, not silently dropped
+- Smoke: known Solinas/Barrett/Montgomery all classify as `Verified`
+
+**N26.6 HOJA — DiscoveryRunner** (~150 LOC)
+- File: `AmoLean/EGraph/Verified/Bitwise/Discovery/SpecDrivenRunner.lean`
+- **Constant pre-computation** (QA amendment): given `(p, w)`, computes:
+  - Barrett: `m = floor(2^k / p)` for k ∈ {w, 2w}
+  - Montgomery: `mu = -p^{-1} mod 2^w`, `R = 2^w`
+  - Solinas: if `p = 2^a - c`, extract `(a, c)`
+- Instantiates vocabulary templates → concrete `MixedSoundRule` list
+- End-to-end: `discoverReduction(p, hw) → List VerificationResult`
+- Comparison table: discovered vs known costs
+
+**N26.7 HOJA — IntegrationTests** (~100 LOC)
+- File: `Tests/NonVacuity/SpecDrivenDiscovery.lean`
+- Non-vacuity: `discoverReduction` produces ≥1 `Verified` for BabyBear
+- Comparison: discovered cost ≤ known best (or document why)
+- `#print axioms`: 0 custom axioms on `VerificationResult.verified`
+
+#### Formal Properties (v3.4.0)
+
+| Nodo | Propiedad | Tipo | Prioridad |
+|------|-----------|------|-----------|
+| N26.1 | insertReduceSpec_preserves_cv | PRESERVATION | P0 |
+| N26.2 | All vocabulary rules sound on Nat with bounds | SOUNDNESS | P0 |
+| N26.3 | specDrivenSaturateF_preserves_consistent | SOUNDNESS | P0 |
+| N26.3 | Dynamic pruning tightens monotonically | INVARIANT | P1 |
+| N26.4 | Extracted candidates equivalent to spec (inherited from CV) | SOUNDNESS | P0 |
+| N26.5 | Known algorithms (Solinas/Barrett/Montgomery) all verify | COMPLETENESS | P0 |
+| N26.6 | discoverReduction produces ≥1 verified for all 4 ZK primes | COMPLETENESS | P0 |
+| N26.7 | 0 custom axioms on VerificationResult.verified | SOUNDNESS | P0 |
+
+#### Discovery Targets
+
+| Prime | Known best | Discovery target |
+|-------|-----------|-----------------|
+| BabyBear (2^31 - 2^27 + 1) | Solinas fold (6 cycles ARM) | ≤ 6 cycles or novel |
+| Mersenne31 (2^31 - 1) | Solinas fold (3 cycles ARM) | ≤ 3 cycles or novel |
+| Goldilocks (2^64 - 2^32 + 1) | Solinas fold (8 cycles ARM) | ≤ 8 cycles or novel |
+| KoalaBear (2^31 - 2^24 + 1) | Solinas fold (5 cycles ARM) | ≤ 5 cycles or novel |
+
+---
+
+### Fase 27: Pipeline Soundness + Benchmarks — v3.5.0
 
 **Goal**: Compose `ultra_pipeline_soundness` (Fases 22-24), bridge backward compat to v1 pipeline, generate + benchmark optimized NTT code with radix-4/mixed plans vs Plonky3.
 
@@ -1970,38 +2139,38 @@ N25.2 PoseidonStagePlan (PAR) ──→ N25.3
 #### DAG (v3.3.1)
 
 ```
-N26.1 UltraSoundness (FUND) ──→ N26.2 v2Bridge (CRIT) ──→ N26.5 IntegrationTests (HOJA)
-N26.3 BenchCodeGen (PAR, independent) ──→ N26.4 BenchRunner (HOJA)
+N27.1 UltraSoundness (FUND) ──→ N27.2 v2Bridge (CRIT) ──→ N27.5 IntegrationTests (HOJA)
+N27.3 BenchCodeGen (PAR, independent) ──→ N27.4 BenchRunner (HOJA)
 ```
 
 | Node | Name | Type | LOC | Deps | File |
 |------|------|------|-----|------|------|
-| N26.1 | UltraSoundness | FUND | ~300 | Fases 22-24 | Bitwise/UltraSoundness.lean |
-| N26.2 | v2BridgeTheorem | CRIT | ~200 | N26.1 | Bitwise/UltraBridge.lean |
-| N26.3 | BenchCodeGen | PAR | ~150 | — | Bitwise/UltraBenchGen.lean |
-| N26.4 | BenchRunner | HOJA | ~100 | N26.3 | scripts/ + Tests/interop/ |
-| N26.5 | IntegrationTests | HOJA | ~100 | N26.1, N26.2 | Tests/NonVacuity/UltraPipeline.lean |
+| N27.1 | UltraSoundness | FUND | ~300 | Fases 22-24 | Bitwise/UltraSoundness.lean |
+| N27.2 | v2BridgeTheorem | CRIT | ~200 | N27.1 | Bitwise/UltraBridge.lean |
+| N27.3 | BenchCodeGen | PAR | ~150 | — | Bitwise/UltraBenchGen.lean |
+| N27.4 | BenchRunner | HOJA | ~100 | N27.3 | scripts/ + Tests/interop/ |
+| N27.5 | IntegrationTests | HOJA | ~100 | N27.1, N27.2 | Tests/NonVacuity/UltraPipeline.lean |
 | **Total** | | | **~850** | | |
 
 #### Blocks
 
 | Block | Nodes | Execution |
 |-------|-------|-----------|
-| B103 | N26.1 | FUND sequential (de-risk sketch first) |
-| B104 | N26.2 | CRIT sequential (after B103) |
-| B105 | N26.3 | PAR (independent, parallel with B103-B104) |
-| B106 | N26.4, N26.5 | HOJA (after B104 + B105) |
+| B114 | N27.1 | FUND sequential (de-risk sketch first) |
+| B115 | N27.2 | CRIT sequential (after B114) |
+| B116 | N27.3 | PAR (independent, parallel with B114-B115) |
+| B117 | N27.4, N27.5 | HOJA (after B115 + B116) |
 
 #### Progress Tree
 
-- [ ] B103: N26.1 UltraSoundness
-- [ ] B104: N26.2 v2BridgeTheorem
-- [ ] B105: N26.3 BenchCodeGen
-- [ ] B106: N26.4 BenchRunner | N26.5 IntegrationTests
+- [ ] B114: N27.1 UltraSoundness
+- [ ] B115: N27.2 v2BridgeTheorem
+- [ ] B116: N27.3 BenchCodeGen
+- [ ] B117: N27.4 BenchRunner | N27.5 IntegrationTests
 
 #### Detailed Node Specifications
 
-**N26.1 FUNDACIONAL — UltraSoundness** (~300 LOC)
+**N27.1 FUNDACIONAL — UltraSoundness** (~300 LOC)
 - File: `AmoLean/EGraph/Verified/Bitwise/UltraSoundness.lean`
 - Purpose: Master composition theorem `ultra_pipeline_soundness` threading Fases 22-24.
 - **Intermediate state formalization** (QA amendment):
@@ -2020,15 +2189,15 @@ N26.3 BenchCodeGen (PAR, independent) ──→ N26.4 BenchRunner (HOJA)
 - De-risk: sketch as chain of implications between intermediate states BEFORE full proof. If composition is intractable (>3 sessions), fallback to `native_decide` for BabyBear N=16 + documented sorry
 - Theorems: `ultra_pipeline_soundness`, `ultra_pipeline_fuel_bound`
 
-**N26.2 CRITICO — v2BridgeTheorem** (~200 LOC)
+**N27.2 CRITICO — v2BridgeTheorem** (~200 LOC)
 - File: `AmoLean/EGraph/Verified/Bitwise/UltraBridge.lean`
 - Purpose: Prove backward compatibility — Ultra pipeline (v2: bounds+colors+discovery) implies existing `pipeline_mixed_equivalent` (v1).
 - `v2_implies_v1_soundness`: any expression optimized by Ultra pipeline is also valid under the base pipeline
 - Pattern: projection — v2 state contains v1 state as sub-structure. The extra fields (bounds, colors, discovery rules) are refinements that don't invalidate base equivalences
-- Consumes: `pipeline_mixed_equivalent` from MixedPipeline.lean, `ultra_pipeline_soundness` from N26.1
+- Consumes: `pipeline_mixed_equivalent` from MixedPipeline.lean, `ultra_pipeline_soundness` from N27.1
 - De-risk: if projection is not clean (v2 modifies base state), may need adapter theorem. Check that `MultiRelMixed.saturate` with `nullFactory` produces same result as base `saturateF`
 
-**N26.3 PARALELO — BenchCodeGen (Verified C + Rust FFI)** (~200 LOC)
+**N27.3 PARALELO — BenchCodeGen (Verified C + Rust FFI)** (~200 LOC)
 - Files: `AmoLean/EGraph/Verified/Bitwise/UltraBenchGen.lean` + `Tests/interop/ultra_ffi/`
 - Purpose: Generate **verified C code** via Path A (VerifiedCodeGen → TrustLeanBridge → Trust-Lean backend), then wrap in Rust FFI for benchmarking.
 - **Architecture** (decision 2026-03-27: avoid unverified string emission):
@@ -2049,7 +2218,7 @@ N26.3 BenchCodeGen (PAR, independent) ──→ N26.4 BenchRunner (HOJA)
 - **Test vectors**: generate input/output pairs from Lean spec, validate C output matches before benchmarking
 - **Future**: Trust-Lean Rust backend (separate project) will eliminate the FFI layer
 
-**N26.4 HOJA — BenchRunner** (~100 LOC)
+**N27.4 HOJA — BenchRunner** (~100 LOC)
 - Extends: `scripts/benchmark.sh` + `Tests/interop/`
 - **Statistical methodology** (QA amendment): `hyperfine --warmup 3 --min-runs 10` for all comparisons, report mean/stddev/min/max
 - Targets: BabyBear NTT +25-30% vs Plonky3, Goldilocks +15-20%, KoalaBear +20-25%
@@ -2057,26 +2226,26 @@ N26.3 BenchCodeGen (PAR, independent) ──→ N26.4 BenchRunner (HOJA)
 - Compare against: Plonky3 `Radix2Bowers::dft_batch` (the fastest known Plonky3 NTT)
 - Output: CSV results + summary in BENCHMARKS.md
 
-**N26.5 HOJA — IntegrationTests** (~100 LOC)
+**N27.5 HOJA — IntegrationTests** (~100 LOC)
 - File: `Tests/NonVacuity/UltraPipeline.lean`
 - Non-vacuity example: BabyBear N=1024 (pure radix-4 path, covers `ultra_pipeline_soundness` hypotheses)
 - **Mixed-radix test** (QA amendment): N=512 (radix-4 + radix-2 mixed path) to exercise `mkMixedRadixPlan` logic
 - `#print axioms ultra_pipeline_soundness` = 0 custom axioms
 - `#print axioms v2_implies_v1_soundness` = 0 custom axioms
 
-#### Formal Properties (v3.4.0)
+#### Formal Properties (v3.5.0)
 
 | Nodo | Propiedad | Tipo | Prioridad |
 |------|-----------|------|-----------|
-| N26.1 | ultra_pipeline_soundness threads all three invariants (MRCV, semantic, CCV) | SOUNDNESS | P0 |
-| N26.1 | ultra_pipeline_fuel_bound ≤ max of phase fuels | INVARIANT | P1 |
-| N26.2 | v2_implies_v1_soundness: Ultra result → base pipeline_mixed_equivalent | PRESERVATION | P0 |
-| N26.2 | v2_null_factory_eq_v1: Ultra with null factory = base saturation | EQUIVALENCE | P1 |
-| N26.3 | Generated C is formally verified (Path A: lowerOp_correct + evalStmt_correct chain) | SOUNDNESS | P0 |
-| N26.3 | Rust FFI wrapper matches C output on Lean spec test vectors | PRESERVATION | P0 |
-| N26.4 | BabyBear NTT ≥ 1.25× Plonky3 (mean, N=2^20) | OPTIMIZATION | P0 |
-| N26.5 | Non-vacuity: all hypotheses of ultra_pipeline_soundness jointly satisfiable | INVARIANT | P0 |
-| N26.5 | #print axioms ultra_pipeline_soundness = 0 custom axioms | SOUNDNESS | P0 |
+| N27.1 | ultra_pipeline_soundness threads all three invariants (MRCV, semantic, CCV) | SOUNDNESS | P0 |
+| N27.1 | ultra_pipeline_fuel_bound ≤ max of phase fuels | INVARIANT | P1 |
+| N27.2 | v2_implies_v1_soundness: Ultra result → base pipeline_mixed_equivalent | PRESERVATION | P0 |
+| N27.2 | v2_null_factory_eq_v1: Ultra with null factory = base saturation | EQUIVALENCE | P1 |
+| N27.3 | Generated C is formally verified (Path A: lowerOp_correct + evalStmt_correct chain) | SOUNDNESS | P0 |
+| N27.3 | Rust FFI wrapper matches C output on Lean spec test vectors | PRESERVATION | P0 |
+| N27.4 | BabyBear NTT ≥ 1.25× Plonky3 (mean, N=2^20) | OPTIMIZATION | P0 |
+| N27.5 | Non-vacuity: all hypotheses of ultra_pipeline_soundness jointly satisfiable | INVARIANT | P0 |
+| N27.5 | #print axioms ultra_pipeline_soundness = 0 custom axioms | SOUNDNESS | P0 |
 
 ---
 
