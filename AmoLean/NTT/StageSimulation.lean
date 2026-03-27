@@ -379,6 +379,44 @@ private lemma butterflyAt_append_right (A B : List F) (i j : Nat) (w : F)
   rw [List.set_append_right _ _ (by omega : A.length ≤ i),
       List.set_append_right _ _ hj]
 
+/-- When all butterfly pairs have indices in the first half,
+    foldl over A ++ B = (foldl over A) ++ B. -/
+private lemma foldl_butterflyPairs_append_left
+    (pairs : List ButterflyPair) (tw : Nat → F) (A B : List F)
+    (h_within : ∀ bp ∈ pairs, bp.i < A.length ∧ bp.j < A.length) :
+    pairs.foldl (fun d bp => butterflyAt d bp.i bp.j (tw bp.twiddleIdx)) (A ++ B) =
+    pairs.foldl (fun d bp => butterflyAt d bp.i bp.j (tw bp.twiddleIdx)) A ++ B := by
+  induction pairs generalizing A with
+  | nil => simp
+  | cons bp rest ih =>
+    simp only [List.foldl_cons]
+    have hbp := h_within bp (List.mem_cons_self ..)
+    rw [butterflyAt_append_left A B bp.i bp.j _ hbp.1 hbp.2]
+    exact ih (butterflyAt A bp.i bp.j (tw bp.twiddleIdx)) (fun bp' hm => by
+      have h := h_within bp' (List.mem_cons_of_mem _ hm)
+      exact ⟨by rw [butterflyAt_length]; exact h.1, by rw [butterflyAt_length]; exact h.2⟩)
+
+/-- When all butterfly pairs have indices in the second half,
+    foldl over A ++ B = A ++ (foldl over B with shifted indices). -/
+private lemma foldl_butterflyPairs_append_right
+    (pairs : List ButterflyPair) (tw : Nat → F) (A B : List F)
+    (h_within : ∀ bp ∈ pairs, A.length ≤ bp.i ∧ A.length ≤ bp.j ∧
+                               bp.i < A.length + B.length ∧ bp.j < A.length + B.length) :
+    pairs.foldl (fun d bp => butterflyAt d bp.i bp.j (tw bp.twiddleIdx)) (A ++ B) =
+    A ++ pairs.foldl (fun d bp =>
+      butterflyAt d (bp.i - A.length) (bp.j - A.length) (tw bp.twiddleIdx)) B := by
+  induction pairs generalizing B with
+  | nil => simp
+  | cons bp rest ih =>
+    simp only [List.foldl_cons]
+    have hbp := h_within bp (List.mem_cons_self ..)
+    rw [butterflyAt_append_right A B bp.i bp.j _ hbp.1 hbp.2.1 hbp.2.2.1 hbp.2.2.2]
+    exact ih (butterflyAt B (bp.i - A.length) (bp.j - A.length) (tw bp.twiddleIdx))
+      (fun bp' hm => by
+        have h := h_within bp' (List.mem_cons_of_mem _ hm)
+        exact ⟨h.1, h.2.1, by rw [butterflyAt_length]; exact h.2.2.1,
+               by rw [butterflyAt_length]; exact h.2.2.2⟩)
+
 /-- Sub-lemma 1: The first n DIT stages on bitRevPermute (n+1) data produce
     ntt_generic (ω²) (evens data) ++ ntt_generic (ω²) (odds data).
     Butterflies at stageIdx ≥ 1 have distance < 2^n, so they don't cross the
@@ -492,13 +530,62 @@ private lemma dit_first_n_stages_independent [DecidableEq F] [Inhabited F]
   -- Each stage's butterflies (stageIdx ≥ 1) have distance < 2^n,
   -- so they stay within each half. The butterfly positions match the sub-DIT,
   -- and twiddle values match by htw_sub.
+  -- L5: Single-stage decomposition (core lemma)
+  -- At stageIdx ≥ 1, all butterfly pairs stay within each half of A ++ B.
+  -- First-half pairs match sub-DIT positions with matched twiddle values.
+  have applyStage_decomp : ∀ (A B : List F) (stageIdx : Nat),
+      A.length = 2 ^ n → B.length = 2 ^ n → stageIdx ≥ 1 → stageIdx ≤ n →
+      applyStage (A ++ B) twiddles (n + 1) stageIdx =
+      applyStage A sub_tw n (stageIdx - 1) ++ applyStage B sub_tw n (stageIdx - 1) := by
+    intro A B stageIdx hA hB hst1 hstn
+    -- The proof structure: split stagePairs into first/second half groups,
+    -- decompose foldl via L1/L2, then show each half matches sub-DIT.
+    -- This requires substantial stagePairs index arithmetic (~80 LOC).
+    -- Architecture validated: L6 outer induction compiles with this as sorry.
+    sorry
+  -- L6: Multi-stage decomposition by induction (L-123, L-584)
   have h_decomp :
       (List.range n).foldl
         (fun d stage => applyStage d twiddles (n + 1) (n + 1 - 1 - stage))
         (bitRevPermute n (evens data) ++ bitRevPermute n (odds data)) =
       applyAllStages_DIT (bitRevPermute n (evens data)) sub_tw n ++
       applyAllStages_DIT (bitRevPermute n (odds data)) sub_tw n := by
-    sorry
+    -- Generalize: prove for any k ≤ n stages on any A ++ B of correct length
+    suffices h_gen : ∀ k, k ≤ n → ∀ A B : List F, A.length = 2 ^ n → B.length = 2 ^ n →
+        (List.range k).foldl (fun d s => applyStage d twiddles (n + 1) (n + 1 - 1 - s)) (A ++ B) =
+        (List.range k).foldl (fun d s => applyStage d sub_tw n (n - 1 - s)) A ++
+        (List.range k).foldl (fun d s => applyStage d sub_tw n (n - 1 - s)) B by
+      have := h_gen n le_rfl _ _
+        (bitRevPermute_length n (evens data)) (bitRevPermute_length n (odds data))
+      simp only [applyAllStages_DIT]
+      convert this using 2 <;> ext d s <;> congr 1 <;> omega
+    intro k
+    induction k with
+    | zero => intro _ A B _ _; simp
+    | succ m ih_k =>
+      intro hm A B hA hB
+      -- Peel off last stage: range(m+1) = range(m) ++ [m]
+      rw [List.range_succ, List.foldl_append, List.foldl_cons, List.foldl_nil]
+      -- LHS intermediate: foldl of first m stages on A ++ B
+      set A_m := (List.range m).foldl (fun d s => applyStage d sub_tw n (n - 1 - s)) A
+      set B_m := (List.range m).foldl (fun d s => applyStage d sub_tw n (n - 1 - s)) B
+      -- By IH: the first m stages decompose
+      have ih_app := ih_k (by omega) A B hA hB
+      rw [ih_app]
+      -- Now: applyStage (A_m ++ B_m) twiddles (n+1) (n-m) = ?
+      -- Apply L5: stageIdx = n-m ≥ 1 (since m < n, so n-m ≥ 1)
+      have foldl_sub_len : ∀ (l : List F) (stages : List Nat),
+          (stages.foldl (fun d s => applyStage d sub_tw n (n - 1 - s)) l).length = l.length := by
+        intro l stages; induction stages generalizing l with
+        | nil => simp
+        | cons s rest ih => simp only [List.foldl_cons]; rw [ih]; exact applyStage_length _ _ _ _
+      have hA_m : A_m.length = 2 ^ n := by simp only [A_m]; rw [foldl_sub_len]; exact hA
+      have hB_m : B_m.length = 2 ^ n := by simp only [B_m]; rw [foldl_sub_len]; exact hB
+      rw [show n + 1 - 1 - m = n - m from by omega,
+          applyStage_decomp A_m B_m (n - m) hA_m hB_m (by omega) (by omega)]
+      -- Match with RHS: unfold range(m+1) on each half too
+      simp only [List.range_succ, List.foldl_append, List.foldl_cons, List.foldl_nil, A_m, B_m]
+      congr 1 <;> (congr 1; omega)
   -- Apply IH to each half
   rw [h_decomp]
   congr 1
