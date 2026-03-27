@@ -649,10 +649,11 @@ private lemma dit_last_stage_combine [DecidableEq F] [Inhabited F]
     -- k < 2^(n+1)
     have hk_bound : k < 2 ^ (n + 1) := by
       rw [applyStage_length, List.length_append, hElen, hOlen] at hk1; omega
-    -- TODO: connect applyStage to the foldl_range form, then use
-    -- foldl_range_butterflyAt_getElem_i/j for the LHS, and
-    -- List.getElem_append_left/right + List.getElem_map for the RHS.
-    -- htw at stageIdx=0: twiddles(k) = omega^(k * 1) = omega^k.
+    -- Connect applyStage to foldl_range form.
+    -- applyStage uses stagePairs (n+1) 0 which generates pairs (k, k+2^n, k)
+    -- for k = 0..2^n-1, with twiddles at index k.
+    -- This is equivalent to: (List.range (2^n)).foldl (fun d j => butterflyAt d j (j+2^n) (twiddles j)) (E++O)
+    -- Then apply foldl_range_butterflyAt_getElem_i/j + htw.
     sorry
 
 /-- bitRevPermute 0 of a singleton is itself. -/
