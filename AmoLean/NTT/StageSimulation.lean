@@ -528,8 +528,52 @@ private lemma foldl_range_butterflyAt_getElem_j
     ((List.range N).foldl (fun d j => butterflyAt d j (j + N) (tw j)) acc)[k + N]'
       (by rw [foldl_range_butterflyAt_length]; omega) =
     acc[k]'(by omega) - tw k * acc[k + N]'(by omega) := by
-  -- Same structure as _getElem_i but for the j-position of butterflyAt_get_j
-  sorry
+  -- Same structure as _getElem_i, using butterflyAt_get_j and k+N for position
+  have hk_bound : k < acc.length := by omega
+  have hkN_bound : k + N < acc.length := by omega
+  suffices hsuff : ∀ m, k < m → m ≤ N →
+      ((List.range m).foldl (fun d j => butterflyAt d j (j + N) (tw j)) acc)[k + N]? =
+      some (acc[k]'hk_bound - tw k * acc[k + N]'hkN_bound) by
+    have h := hsuff N hk le_rfl
+    rw [List.getElem?_eq_getElem (by rw [foldl_range_butterflyAt_length]; omega)] at h
+    exact Option.some.inj h
+  intro m
+  induction m with
+  | zero => intro hk'; omega
+  | succ p ihp =>
+    intro hkp hpN
+    rw [List.range_succ, List.foldl_append, List.foldl_cons, List.foldl_nil]
+    set acc' := (List.range p).foldl (fun d j => butterflyAt d j (j + N) (tw j)) acc
+    have hacc' : acc'.length = acc.length := foldl_range_butterflyAt_length acc p N tw
+    by_cases hkp' : k = p
+    · -- k = p: butterfly at (k, k+N) touches k+N at .j position
+      subst hkp'
+      rw [List.getElem?_eq_getElem (by rw [butterflyAt_length, hacc']; omega)]
+      congr 1
+      rw [butterflyAt_get_j acc' k (k + N) (tw k) (by rw [hacc']; omega) (by rw [hacc']; omega) (by omega)]
+      have hk_unch : acc'[k]? = acc[k]? :=
+        foldl_range_butterflyAt_untouched acc k N tw k (by omega) (by omega)
+          (fun j hj => by omega) (fun j hj => by omega)
+      have hkN_unch : acc'[k + N]? = acc[k + N]? :=
+        foldl_range_butterflyAt_untouched acc k N tw (k + N) (by omega) (by omega)
+          (fun j hj => by omega) (fun j hj => by omega)
+      rw [List.getElem?_eq_getElem (by rw [hacc']; omega),
+          List.getElem?_eq_getElem (by omega)] at hk_unch
+      rw [List.getElem?_eq_getElem (by rw [hacc']; omega),
+          List.getElem?_eq_getElem (by omega)] at hkN_unch
+      congr 1
+      · exact Option.some.inj hk_unch
+      · congr 1; exact Option.some.inj hkN_unch
+    · -- k < p: butterfly at (p, p+N) doesn't touch k+N (since p ≠ k, p+N ≠ k+N)
+      have hk_lt_p : k < p := by omega
+      rw [show (butterflyAt acc' p (p + N) (tw p))[k + N]? = acc'[k + N]? from by
+            rw [List.getElem?_eq_getElem (by rw [butterflyAt_length, hacc']; omega),
+                List.getElem?_eq_getElem (by rw [hacc']; omega)]
+            congr 1
+            exact butterflyAt_get_other acc' p (p + N) (k + N) (tw p)
+              (by rw [hacc']; omega) (by rw [hacc']; omega)
+              (by omega) (by omega) (by rw [hacc']; omega)]
+      exact ihp hk_lt_p (by omega)
 
 /-- Sub-lemma 2: The last DIT stage (stageIdx = 0, distance = 2^n) applies
     butterfly operations across the two halves, combining E and O into
