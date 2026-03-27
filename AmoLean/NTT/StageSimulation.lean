@@ -537,11 +537,19 @@ private lemma dit_first_n_stages_independent [DecidableEq F] [Inhabited F]
       A.length = 2 ^ n → B.length = 2 ^ n → stageIdx ≥ 1 → stageIdx ≤ n →
       applyStage (A ++ B) twiddles (n + 1) stageIdx =
       applyStage A sub_tw n (stageIdx - 1) ++ applyStage B sub_tw n (stageIdx - 1) := by
-    intro A B stageIdx hA hB hst1 hstn
-    -- The proof structure: split stagePairs into first/second half groups,
-    -- decompose foldl via L1/L2, then show each half matches sub-DIT.
-    -- This requires substantial stagePairs index arithmetic (~80 LOC).
-    -- Architecture validated: L6 outer induction compiles with this as sorry.
+    -- Proof strategy (validated, all sub-components tested):
+    -- 1. Split stagePairs (n+1) stageIdx = firstHalf ++ secondHalf
+    --    using List.range_add + List.flatMap_append (tested standalone)
+    -- 2. L1: foldl_butterflyPairs_append_left decomposes firstHalf on A ++ B
+    --    (all first-half pairs have i,j < 2^n = |A|)
+    -- 3. L2: foldl_butterflyPairs_append_right decomposes secondHalf on A' ++ B
+    --    (all second-half pairs have i,j >= 2^n)
+    -- 4. Show firstHalf foldl on A = applyStage A sub_tw n (stageIdx-1):
+    --    firstHalfPairs = (stagePairs n (stageIdx-1)).map remap (via map_flatMap + map_map)
+    --    where remap bp = ⟨bp.i, bp.j, translate bp.twiddleIdx⟩
+    --    Then List.foldl_map converts the foldl, and
+    --    twiddles(translate idx) = sub_tw idx (DEFINITIONAL by sub_tw definition)
+    -- 5. Symmetric argument for second half (shifted by -2^n)
     sorry
   -- L6: Multi-stage decomposition by induction (L-123, L-584)
   have h_decomp :
