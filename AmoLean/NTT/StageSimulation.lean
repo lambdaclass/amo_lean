@@ -431,35 +431,94 @@ private lemma foldl_range_butterflyAt_length (acc : List F) (N offset : Nat) (tw
     rw [List.range_succ, List.foldl_append, List.foldl_cons, List.foldl_nil,
         butterflyAt_length, ih]
 
+/-- Untouched position for range-based butterfly foldl (Option form, L-174).
+    Position p is unchanged if no j in [0, rangeSize) touches p. -/
+private lemma foldl_range_butterflyAt_untouched
+    (acc : List F) (rangeSize offset : Nat) (tw : Nat → F) (p : Nat)
+    (hp : p < acc.length)
+    (hbound : rangeSize + offset ≤ acc.length)
+    (hdisjI : ∀ j < rangeSize, j ≠ p)
+    (hdisjJ : ∀ j < rangeSize, j + offset ≠ p) :
+    ((List.range rangeSize).foldl (fun d j => butterflyAt d j (j + offset) (tw j)) acc)[p]? =
+    acc[p]? := by
+  induction rangeSize generalizing acc with
+  | zero => simp
+  | succ m ih =>
+    rw [List.range_succ, List.foldl_append, List.foldl_cons, List.foldl_nil]
+    set acc' := (List.range m).foldl (fun d j => butterflyAt d j (j + offset) (tw j)) acc
+    have hacc' : acc'.length = acc.length := foldl_range_butterflyAt_length acc m offset tw
+    -- At getElem? level, no motive issue (L-174)
+    rw [show (butterflyAt acc' m (m + offset) (tw m))[p]? = acc'[p]? from by
+          rw [List.getElem?_eq_getElem (by rw [butterflyAt_length, hacc']; exact hp),
+              List.getElem?_eq_getElem (by rw [hacc']; exact hp)]
+          congr 1
+          exact butterflyAt_get_other acc' m (m + offset) p (tw m)
+            (by rw [hacc']; omega) (by rw [hacc']; omega)
+            ((hdisjI m (by omega)).symm) ((hdisjJ m (by omega)).symm)
+            (by rw [hacc']; exact hp)]
+    exact ih acc hp (by omega) (fun j hj => hdisjI j (by omega)) (fun j hj => hdisjJ j (by omega))
+
 /-- After a foldl of butterflyAt at disjoint pairs (j, j+N) for j=0..N-1,
-    position k < N has: acc[k] + tw(k) * acc[k+N]. -/
+    position k < N has: acc[k] + tw(k) * acc[k+N].
+    Uses getElem? (Option) to avoid dependent rewrite motive issues (L-174). -/
 private lemma foldl_range_butterflyAt_getElem_i
     (acc : List F) (N : Nat) (tw : Nat → F) (k : Nat)
     (hlen : acc.length = 2 * N) (hk : k < N) :
     ((List.range N).foldl (fun d j => butterflyAt d j (j + N) (tw j)) acc)[k]'
       (by rw [foldl_range_butterflyAt_length]; omega) =
     acc[k]'(by omega) + tw k * acc[k + N]'(by omega) := by
-  -- Decouple range size from offset: prove a stronger statement by induction
-  -- on a range parameter `m` that goes from k+1 to N, with N fixed as offset.
-  -- Peel from the right: at each step, either k=m (butterfly touches k) or k<m (IH).
-  suffices h : ∀ m, k < m → m ≤ N →
-      ((List.range m).foldl (fun d j => butterflyAt d j (j + N) (tw j)) acc)[k]'
-        (by rw [foldl_range_butterflyAt_length]; omega) =
-      acc[k]'(by omega) + tw k * acc[k + N]'(by omega) from
-    h N hk le_rfl
+  -- Strategy (L-174): use getElem? to avoid dependent rewrite motives.
+  -- Prove at Option level, then extract via Option.some.inj.
+  have hk_bound : k < acc.length := by omega
+  have hkN_bound : k + N < acc.length := by omega
+  -- Suffices: same statement at Option level
+  suffices hsuff : ∀ m, k < m → m ≤ N →
+      ((List.range m).foldl (fun d j => butterflyAt d j (j + N) (tw j)) acc)[k]? =
+      some (acc[k]'hk_bound + tw k * acc[k + N]'hkN_bound) by
+    have h := hsuff N hk le_rfl
+    rw [List.getElem?_eq_getElem (by rw [foldl_range_butterflyAt_length]; omega)] at h
+    exact Option.some.inj h
   intro m
   induction m with
   | zero => intro hk'; omega
   | succ p ihp =>
     intro hkp hpN
-    -- The proof requires unfolding the foldl at step p and using
-    -- butterflyAt_get_other (k ≠ p case) or butterflyAt_get_i (k = p case).
-    -- Dependent type motives in [k]'(proof) block direct rw.
-    -- The mathematical argument is clear:
-    -- foldl over range (p+1) = butterflyAt (foldl over range p) p (p+N) (tw p)
-    -- If k=p: positions k, k+N untouched by range-p foldl → butterfly gives result
-    -- If k<p: IH gives result for range-p foldl → butterfly preserves it
-    sorry
+    rw [List.range_succ, List.foldl_append, List.foldl_cons, List.foldl_nil]
+    set acc' := (List.range p).foldl (fun d j => butterflyAt d j (j + N) (tw j)) acc
+    have hacc' : acc'.length = acc.length := foldl_range_butterflyAt_length acc p N tw
+    by_cases hkp' : k = p
+    · -- k = p: this butterfly touches k
+      subst hkp'
+      -- Use getElem? (L-174) to bridge to butterflyAt_get_i
+      rw [List.getElem?_eq_getElem (by rw [butterflyAt_length, hacc']; omega)]
+      congr 1
+      rw [butterflyAt_get_i acc' k (k + N) (tw k) (by rw [hacc']; omega) (by rw [hacc']; omega) (by omega)]
+      -- acc'[k] = acc[k] and acc'[k+N] = acc[k+N] via foldl_range_untouched
+      have hk_unch : acc'[k]? = acc[k]? :=
+        foldl_range_butterflyAt_untouched acc k N tw k (by omega) (by omega)
+          (fun j hj => by omega) (fun j hj => by omega)
+      have hkN_unch : acc'[k + N]? = acc[k + N]? :=
+        foldl_range_butterflyAt_untouched acc k N tw (k + N) (by omega) (by omega)
+          (fun j hj => by omega) (fun j hj => by omega)
+      -- Extract from Option equality
+      rw [List.getElem?_eq_getElem (by rw [hacc']; omega),
+          List.getElem?_eq_getElem (by omega)] at hk_unch
+      rw [List.getElem?_eq_getElem (by rw [hacc']; omega),
+          List.getElem?_eq_getElem (by omega)] at hkN_unch
+      congr 1
+      · exact Option.some.inj hk_unch
+      · congr 1; exact Option.some.inj hkN_unch
+    · -- k < p: IH gives the result, last butterfly doesn't touch k
+      have hk_lt_p : k < p := by omega
+      -- butterflyAt at (p, p+N) doesn't touch k (L-174: work at getElem?)
+      rw [show (butterflyAt acc' p (p + N) (tw p))[k]? = acc'[k]? from by
+            rw [List.getElem?_eq_getElem (by rw [butterflyAt_length, hacc']; omega),
+                List.getElem?_eq_getElem (by rw [hacc']; omega)]
+            congr 1
+            exact butterflyAt_get_other acc' p (p + N) k (tw p)
+              (by rw [hacc']; omega) (by rw [hacc']; omega)
+              (by omega) (by omega) (by rw [hacc']; omega)]
+      exact ihp hk_lt_p (by omega)
 
 /-- After a foldl of butterflyAt at disjoint pairs (j, j+N) for j=0..N-1,
     position k+N has: acc[k] - tw(k) * acc[k+N]. -/
@@ -469,7 +528,7 @@ private lemma foldl_range_butterflyAt_getElem_j
     ((List.range N).foldl (fun d j => butterflyAt d j (j + N) (tw j)) acc)[k + N]'
       (by rw [foldl_range_butterflyAt_length]; omega) =
     acc[k]'(by omega) - tw k * acc[k + N]'(by omega) := by
-  -- Same strategy as _getElem_i but for the j-position
+  -- Same structure as _getElem_i but for the j-position of butterflyAt_get_j
   sorry
 
 /-- Sub-lemma 2: The last DIT stage (stageIdx = 0, distance = 2^n) applies
