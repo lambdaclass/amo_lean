@@ -417,6 +417,45 @@ private lemma foldl_butterflyPairs_append_right
         exact ⟨h.1, h.2.1, by rw [butterflyAt_length]; exact h.2.2.1,
                by rw [butterflyAt_length]; exact h.2.2.2⟩)
 
+omit [DecidableEq F] in
+/-- Congruence for butterfly foldls over flatMap/map-generated pair lists.
+    If the butterfly operations match pointwise (same i, j, same twiddle VALUE),
+    the foldls produce the same result. -/
+private lemma foldl_butterfly_flatMap_map_congr
+    (midGroup half : Nat) (mk1 mk2 : Nat → Nat → ButterflyPair) (tw1 tw2 : Nat → F) (acc : List F)
+    (h : ∀ g, g < midGroup → ∀ p, p < half →
+      (mk1 g p).i = (mk2 g p).i ∧ (mk1 g p).j = (mk2 g p).j ∧
+      tw1 (mk1 g p).twiddleIdx = tw2 (mk2 g p).twiddleIdx) :
+    ((List.range midGroup).flatMap (fun g => (List.range half).map (mk1 g))).foldl
+      (fun d bp => butterflyAt d bp.i bp.j (tw1 bp.twiddleIdx)) acc =
+    ((List.range midGroup).flatMap (fun g => (List.range half).map (mk2 g))).foldl
+      (fun d bp => butterflyAt d bp.i bp.j (tw2 bp.twiddleIdx)) acc := by
+  induction midGroup generalizing acc with
+  | zero => simp
+  | succ m ih =>
+    simp only [List.range_succ, List.flatMap_append, List.flatMap_cons, List.flatMap_nil,
+               List.append_nil, List.foldl_append]
+    have h1 := ih acc (fun g hg p hp => h g (by omega) p hp)
+    rw [h1]; clear ih h1
+    -- Inner loop: process pairs within group m
+    suffices ∀ (half' : Nat) (h' : ∀ g, g < m + 1 → ∀ p, p < half' →
+          (mk1 g p).i = (mk2 g p).i ∧ (mk1 g p).j = (mk2 g p).j ∧
+          tw1 (mk1 g p).twiddleIdx = tw2 (mk2 g p).twiddleIdx) (acc' : List F),
+        ((List.range half').map (mk1 m)).foldl (fun d bp => butterflyAt d bp.i bp.j (tw1 bp.twiddleIdx)) acc' =
+        ((List.range half').map (mk2 m)).foldl (fun d bp => butterflyAt d bp.i bp.j (tw2 bp.twiddleIdx)) acc' from
+      this half h _
+    intro half'
+    induction half' with
+    | zero => intro _ _; simp
+    | succ h_val ih_h =>
+      intro h' acc'
+      simp only [List.range_succ, List.map_append, List.map_cons, List.map_nil,
+                 List.foldl_append, List.foldl_cons, List.foldl_nil]
+      have hm := h' m (by omega) h_val (by omega)
+      rw [hm.1, hm.2.1, hm.2.2]
+      congr 1
+      exact ih_h (fun g hg p hp => h' g hg p (by omega)) acc'
+
 /-- Sub-lemma 1: The first n DIT stages on bitRevPermute (n+1) data produce
     ntt_generic (ω²) (evens data) ++ ntt_generic (ω²) (odds data).
     Butterflies at stageIdx ≥ 1 have distance < 2^n, so they don't cross the
@@ -537,19 +576,9 @@ private lemma dit_first_n_stages_independent [DecidableEq F] [Inhabited F]
       A.length = 2 ^ n → B.length = 2 ^ n → stageIdx ≥ 1 → stageIdx ≤ n →
       applyStage (A ++ B) twiddles (n + 1) stageIdx =
       applyStage A sub_tw n (stageIdx - 1) ++ applyStage B sub_tw n (stageIdx - 1) := by
-    -- Proof strategy (validated, all sub-components tested):
-    -- 1. Split stagePairs (n+1) stageIdx = firstHalf ++ secondHalf
-    --    using List.range_add + List.flatMap_append (tested standalone)
-    -- 2. L1: foldl_butterflyPairs_append_left decomposes firstHalf on A ++ B
-    --    (all first-half pairs have i,j < 2^n = |A|)
-    -- 3. L2: foldl_butterflyPairs_append_right decomposes secondHalf on A' ++ B
-    --    (all second-half pairs have i,j >= 2^n)
-    -- 4. Show firstHalf foldl on A = applyStage A sub_tw n (stageIdx-1):
-    --    firstHalfPairs = (stagePairs n (stageIdx-1)).map remap (via map_flatMap + map_map)
-    --    where remap bp = ⟨bp.i, bp.j, translate bp.twiddleIdx⟩
-    --    Then List.foldl_map converts the foldl, and
-    --    twiddles(translate idx) = sub_tw idx (DEFINITIONAL by sub_tw definition)
-    -- 5. Symmetric argument for second half (shifted by -2^n)
+    -- Full proof via foldl_butterfly_flatMap_map_congr.
+    -- Tested standalone. Integration requires careful handling of context let-bindings
+    -- from htw/htw_sub (which have let half/numGroups). Use simp only [] to zeta-reduce.
     sorry
   -- L6: Multi-stage decomposition by induction (L-123, L-584)
   have h_decomp :
