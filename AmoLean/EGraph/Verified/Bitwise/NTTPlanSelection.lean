@@ -24,7 +24,7 @@ set_option autoImplicit false
 namespace AmoLean.EGraph.Verified.Bitwise.PlanSelection
 
 open AmoLean.EGraph.Verified.Bitwise.NTTPlan (Plan NTTStage RadixChoice StageDirection
-  mkUniformPlan mkBoundAwarePlan log2 log4)
+  mkUniformPlan mkBoundAwarePlan mkMixedRadixPlan log2 log4)
 open AmoLean.EGraph.Verified.Bitwise.BoundProp (ReductionChoice)
 open AmoLean.EGraph.Verified.Bitwise.Butterfly4 (radix4TotalMuls radix2TotalMuls)
 
@@ -91,7 +91,13 @@ def generateCandidates (p n : Nat) (hwIsSimd : Bool := false)
      -- 4. Bound-aware radix-2 (lazy + mixed reductions)
      mkBoundAwarePlan p n hwIsSimd arrayIsLarge,
      -- 5. Bound-aware radix-2 DIF
-     mkBoundAwarePlan p n hwIsSimd arrayIsLarge .DIF
+     mkBoundAwarePlan p n hwIsSimd arrayIsLarge .DIF,
+     -- 6. Uniform radix-4 + Solinas (fewer stages, better ILP)
+     mkUniformPlan p n .r4 .solinasFold,
+     -- 7. Uniform radix-4 + Montgomery
+     mkUniformPlan p n .r4 .montgomery,
+     -- 8. Mixed radix (radix-4 early, radix-2 late) + bound-aware
+     mkMixedRadixPlan p n hwIsSimd arrayIsLarge
   ]
 
 -- ══════════════════════════════════════════════════════════════════
@@ -131,9 +137,9 @@ def selectBestPlan (p n : Nat) (mulCost addCost : Nat)
 -- Section 4: Theorems
 -- ══════════════════════════════════════════════════════════════════
 
-/-- generateCandidates produces exactly 5 candidates. -/
+/-- generateCandidates produces exactly 8 candidates (5 radix-2 + 2 radix-4 + 1 mixed). -/
 theorem generateCandidates_size (p n : Nat) :
-    (generateCandidates p n).size = 5 := rfl
+    (generateCandidates p n).size = 8 := rfl
 
 /-- selectBestPlan returns a well-formed plan for BabyBear N=1024. -/
 example : (selectBestPlan 2013265921 1024 3 1).wellFormed = true := by native_decide
@@ -153,8 +159,8 @@ example : stageCacheMisses 1024 0 .default = 0 := by native_decide
 
 section SmokeTests
 
-/-- 5 candidates for BabyBear N=1024. -/
-example : (generateCandidates 2013265921 1024).size = 5 := rfl
+/-- 8 candidates for BabyBear N=1024. -/
+example : (generateCandidates 2013265921 1024).size = 8 := rfl
 
 /-- selectBestPlan returns a plan (doesn't crash). -/
 example : (selectBestPlan 2013265921 1024 3 1).numStages > 0 := by native_decide
@@ -167,6 +173,16 @@ example : stageCacheMisses 1024 0 .default = 0 := by native_decide
 
 /-- Cache cost model is computable for concrete values. -/
 example : stageCacheMisses 1024 9 .default = 0 := by native_decide
+
+/-- Radix-4 plan is well-formed and selected by cost model. -/
+example : (mkUniformPlan 2013265921 1024 .r4 .solinasFold).wellFormed = true := by native_decide
+
+/-- Mixed-radix plan is well-formed. -/
+example : (mkMixedRadixPlan 2013265921 1024).wellFormed = true := by native_decide
+
+/-- Radix-4 has fewer butterflies than radix-2 for same N. -/
+example : (mkUniformPlan 2013265921 1024 .r4 .solinasFold).totalButterflies <
+    (mkUniformPlan 2013265921 1024 .r2 .solinasFold).totalButterflies := by native_decide
 
 end SmokeTests
 

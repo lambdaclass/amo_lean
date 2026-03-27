@@ -1710,6 +1710,27 @@ N23.6 ──→ N23.8 CostIntegration (HOJA)
 4. Lazy Reduction with verified `maxAbsValue` interval analysis
 5. Shadow Graph operational (outside TCB) — extraction still verified via extractF_correct
 
+#### Architectural Gap: MatEGraph ↔ MixedEGraph Two-Layer Connection
+
+**Problem identified** (2026-03-27): The project has two optimization levels that should feed each other but are currently disconnected:
+
+- **Level 1 (algorithmic)**: `NTTFactorizationRules.lean` defines 5 strategies (`radix2DIT`, `radix2DIF`, `radix4DIT`, `splitRadix`, `kroneckerPacked`) as `MatRewriteRule` over `MatENodeOp`. These rules describe how to decompose NTT into stages with different factorizations.
+- **Level 2 (arithmetic)**: `MixedEGraph` + `MultiRelMixed` + `BoundPropagation` fully optimize each butterfly's modular reduction (Solinas/Montgomery/Harvey/lazy) with bound tracking.
+
+**What's missing**: Level 1 has rule definitions but **no saturation loop** (no `MatEGraph` executor). Plan generation in `NTTPlanSelection.generateCandidates` is hardcoded to 5 candidates (all radix-2). Consequence: `Butterfly4Bridge` (200 LOC, proven cost savings) is never used in practice. The two-layer feedback loop — where Level 2 cost information guides Level 1 factorization choices — does not exist.
+
+**Evidence**:
+- `NTTFactorizationRules.lean:allNTTFactorizationRules` → 4 rules defined, never executed
+- `NTTPlanSelection.lean:generateCandidates` → 5 hardcoded candidates, 0 radix-4
+- `Butterfly4Bridge.lean` → complete, proven, zero consumers
+- `MatENodeOp` (in Vector.lean) → 12-constructor inductive type, no e-graph operations
+
+**Solution**: Extend Fase 24 with two new nodes (N24.11, N24.12) that implement the MatEGraph saturation loop and extraction to NTTPlan. GuidedSaturation's `threePhaseSaturateF` pattern is reusable (parametric in step functions and fuel), but requires new step functions over `MatENodeOp` and a cost oracle that queries Level 2.
+
+**Quick win (independent, ~100 LOC)**: Extend `generateCandidates` to include radix-4 and mixed-radix plans. This activates `Butterfly4Bridge` and captures ~80% of the value without the full MatEGraph machinery. Can be done at any time without waiting for Fase 24 integration.
+
+**Dependency**: The correctness bridge `nttPlan_semantic_preservation` depends on the butterfly foldl lemmas being proven in `StageSimulation.lean` (`dit_bottomUp_eq_ntt_generic`, `dit_bottomUp_eq_ntt_spec`).
+
 #### DAG (v3.3.0)
 
 ```
@@ -1720,7 +1741,10 @@ N24.4 ShadowGraph (FUND) ──→ N24.5
 N24.6 RuleScoring (PAR) ──→ N24.5
 N24.7 GrowthPrediction (PAR) ──→ N24.5
 N24.8 TreewidthDP (CRIT) ──→ N24.9 DiscoveryPipeline (HOJA)
-N24.5 ──→ N24.9
+N24.5 ──→ N24.11 MatEGraphStep (FUND)
+N24.11 ──→ N24.12 MatPlanExtraction (CRIT)
+N24.12 ──→ N24.9
+N24.8 ──→ N24.9
 N24.9 ──→ N24.10 DiscoveryTests (HOJA)
 ```
 
@@ -1734,9 +1758,11 @@ N24.9 ──→ N24.10 DiscoveryTests (HOJA)
 | N24.6 | RuleScoring | PAR | ~200 | — |
 | N24.7 | GrowthPrediction | PAR | ~200 | — |
 | N24.8 | TreewidthDP | CRIT | ~500 | — |
-| N24.9 | DiscoveryPipeline | HOJA | ~300 | N24.5, N24.8 |
+| N24.9 | DiscoveryPipeline | HOJA | ~300 | N24.8, N24.12 |
 | N24.10 | DiscoveryTests | HOJA | ~250 | N24.9 |
-| **Total** | | | **~2,900** | |
+| N24.11 | MatEGraphStep | FUND | ~300 | N24.5 |
+| N24.12 | MatPlanExtraction | CRIT | ~200 | N24.11 |
+| **Total** | | | **~3,400** | |
 
 #### Blocks
 
@@ -1748,7 +1774,9 @@ N24.9 ──→ N24.10 DiscoveryTests (HOJA)
 | B92 | N24.4 | FUND sequential |
 | B93 | N24.5 | CRIT sequential (after all B89-B92) |
 | B94 | N24.8 | CRIT sequential (independent) |
-| B95 | N24.9 | HOJA sequential (after B93+B94) |
+| B97 | N24.11 | FUND sequential (after B93) |
+| B98 | N24.12 | CRIT sequential (after B97) |
+| B95 | N24.9 | HOJA sequential (after B94+B98) |
 | B96 | N24.10 | HOJA sequential |
 
 #### Progress Tree
@@ -1759,8 +1787,61 @@ N24.9 ──→ N24.10 DiscoveryTests (HOJA)
 - [ ] B92: N24.4 ShadowGraph
 - [ ] B93: N24.5 GuidedSaturation
 - [ ] B94: N24.8 TreewidthDP
-- [ ] B95: N24.9 DiscoveryPipeline
+- [ ] B97: N24.11 MatEGraphStep (two-layer connection — see gap analysis above)
+- [ ] B98: N24.12 MatPlanExtraction (MatEGraph → NTTPlan + correctness bridge)
+- [ ] B95: N24.9 DiscoveryPipeline (extended: composes MatEGraph → Guided → Extract)
 - [ ] B96: N24.10 DiscoveryTests
+
+#### Detailed Node Specifications — N24.11, N24.12 (Two-Layer Connection)
+
+**N24.11 FUNDACIONAL — MatEGraphStep** (~300 LOC)
+- File: `AmoLean/EGraph/Verified/Bitwise/Discovery/MatEGraphStep.lean`
+- Purpose: Saturation loop for `MatRewriteRule` over `MatENodeOp`, connecting algorithmic-level NTT factorization exploration to the arithmetic-level MixedEGraph.
+- **What exists already** (reuse, not rewrite):
+  - `MatENodeOp` inductive type (12 constructors: identity, dft, ntt, twiddle, perm, kron, compose, add, smul, transpose, conjTranspose, elemwise) — in `Vector.lean`
+  - `MatRewriteRule` structure (name, canApply, description) — in `NTTFactorizationRules.lean`
+  - `allNTTFactorizationRules` (4 rules: radix2DIT, radix2DIF, radix4DIT, kroneckerPack) — in `NTTFactorizationRules.lean`
+  - `threePhaseSaturateF` pattern (parametric in step functions) — in `GuidedSaturation.lean`
+  - `GrowthPrediction.maxNodesBound` (reusable for any rule set) — in `GrowthPrediction.lean`
+- **What needs to be built**:
+  1. `MatEGraph` type: lightweight hashcons over `MatENodeOp` e-classes (NOT the full MixedEGraph — matrix operations are coarser-grained, ~50-200 nodes max for a single NTT)
+  2. `matApplyRule : MatEGraph → MatRewriteRule → MatEGraph` — single rule application (match + rewrite)
+  3. `matSaturateStep : MatEGraph → MatEGraph` — apply all matching rules, rebuild
+  4. `matSaturateF : MatEGraph → Nat → MatEGraph` — fuel-bounded loop using `threePhaseSaturateF` pattern
+  5. Cost oracle: `matNodeCost : MatENodeOp → Level2CostQuery → Nat` — queries Level 2 (MixedEGraph + BoundPropagation) for the arithmetic cost of implementing a specific factorization
+- **Key design decision**: The cost oracle is the feedback channel. When the MatEGraph evaluates "radix-4 DIT for stage 3", it asks Level 2: "what's the cheapest reduction strategy for a radix-4 butterfly with input bound k=3 on ARM NEON?" Level 2 answers using `selectReductionForBound` + `reductionCost`. This makes algorithmic choices cost-aware without duplicating the arithmetic cost model.
+- **Growth control**: MatEGraph is small (NTT of size 2^20 has ~20 stages, each stage has ~5 factorization options → ~100 nodes max). Explosion risk is LOW compared to MixedEGraph. Still use `maxNodesBound` as safety check.
+- **De-risk**: Implement `matSaturateF` with a single phase first (no three-phase structure). Three-phase only if rule interactions require phasing (unlikely at this granularity).
+- Theorems: `matSaturateF_terminates`, `matSaturateF_preserves_valid` (valid = all e-classes represent semantically equivalent NTT factorizations)
+
+**N24.12 CRITICO — MatPlanExtraction** (~200 LOC)
+- File: `AmoLean/EGraph/Verified/Bitwise/Discovery/MatPlanExtraction.lean`
+- Purpose: Extract optimal `NTTPlan` from a saturated `MatEGraph`, replacing the 5 hardcoded candidates in `generateCandidates`.
+- **What exists already** (reuse):
+  - `NTTPlan.Plan` structure with per-stage `NTTStage` (radix, reduction, direction, bounds) — in `NTTPlan.lean`
+  - `mkBoundAwarePlan` (constructs plan with per-stage bound tracking) — in `NTTPlan.lean`
+  - `extractF_correct` / `extractILP_correct` (extraction correctness for MixedEGraph) — pattern reusable
+  - `TreewidthDP` (polynomial extraction for tw≤15) — in `Discovery/TreewidthDP.lean`
+- **What needs to be built**:
+  1. `matExtract : MatEGraph → (MatENodeOp → Nat) → NTTPlan.Plan` — greedy extraction with cost function
+  2. `matExtractDP : MatEGraph → NiceTree → NTTPlan.Plan` — DP extraction via TreewidthDP (optional, for large NTTs)
+  3. `refinePlanWithBounds : NTTPlan.Plan → BoundRuleFactory → NTTPlan.Plan` — post-extraction bound refinement: for each stage in the extracted plan, query BoundPropagation for optimal reduction choice
+  4. `matExtract_correct` theorem: extracted plan is semantically equivalent to the original NTT specification
+- **Integration with existing pipeline**: Replace `generateCandidates` call in `NTTPlanSelection.selectBestPlan` with: (1) build MatEGraph from NTT spec, (2) saturate with `matSaturateF`, (3) extract with `matExtract`, (4) refine with `refinePlanWithBounds`. Backward compat: `generateCandidates` becomes a fallback when MatEGraph is not available or fuel=0.
+- **Correctness bridge**: `nttPlan_semantic_preservation` — the master theorem connecting algorithmic plan to NTT spec. Depends on `StageSimulation.dit_bottomUp_eq_ntt_generic` (proven) and butterfly foldl lemmas (in progress by another agent). This is the HIGH-risk deliverable; if intractable, fallback to `native_decide` for BabyBear N≤16 + documented sorry.
+- De-risk: `matExtract` greedy first, DP only if extraction quality is poor.
+
+**Quick Win (independent of N24.11/N24.12, ~100 LOC)**:
+- File: `NTTPlanSelection.lean` (modify `generateCandidates`)
+- Add radix-4 and mixed-radix candidates:
+  ```lean
+  mkUniformPlan p n .r4 .solinasFold,        -- radix-4 + Solinas
+  mkUniformPlan p n .r4 .montgomery,          -- radix-4 + Montgomery
+  mkMixedRadixPlan p n hwIsSimd arrayIsLarge, -- radix-4 early, radix-2 late
+  ```
+- This activates `Butterfly4Bridge` (currently orphaned) and captures ~80% of the radix-4 value
+- Can be done ANY time, does not depend on Fase 24 integration
+- Does NOT replace N24.11/N24.12 — enumeration is not exploration, but is sufficient for 3-4 prime fields
 
 ---
 

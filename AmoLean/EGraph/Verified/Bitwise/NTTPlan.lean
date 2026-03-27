@@ -145,6 +145,45 @@ def mkBoundAwarePlan (p n : Nat) (hwIsSimd : Bool := false)
   let stages := buildBoundAwareStages numStages p hwIsSimd arrayIsLarge dir 0 1 []
   { stages := stages.toArray, field := p, size := n }
 
+/-- Build stages with mixed radix: radix-4 for early stages (covers 2 levels each),
+    radix-2 for late stages (covers 1 level each). Uses bound-aware reduction.
+    Strategy: radix-4 while ≥4 levels remain AND in first half of levels. -/
+private def buildMixedRadixStages (totalLevels p : Nat)
+    (hwIsSimd arrayIsLarge : Bool) (dir : StageDirection)
+    (level : Nat) (stageIdx : Nat) (currentK : Nat)
+    (acc : List NTTStage) : List NTTStage :=
+  if level ≥ totalLevels then acc.reverse
+  else
+    let remaining := totalLevels - level
+    let useR4 := remaining ≥ 4 && level * 2 < totalLevels
+    let radix := if useR4 then RadixChoice.r4 else RadixChoice.r2
+    let canLazy := lazyReductionSafe (currentK + 1) p
+    let mustReduce := remaining ≤ 2
+    let red :=
+      if canLazy && !mustReduce then ReductionChoice.lazy
+      else selectReductionForBound (currentK + 1) hwIsSimd arrayIsLarge
+    let outputK := stageBoundFactor currentK red
+    let stg : NTTStage :=
+      { stageIdx := stageIdx, radix := radix, reduction := red, direction := dir,
+        inputBoundK := currentK, outputBoundK := outputK }
+    if useR4 then
+      buildMixedRadixStages totalLevels p hwIsSimd arrayIsLarge dir
+        (level + 2) (stageIdx + 1) outputK (stg :: acc)
+    else
+      buildMixedRadixStages totalLevels p hwIsSimd arrayIsLarge dir
+        (level + 1) (stageIdx + 1) outputK (stg :: acc)
+  termination_by totalLevels - level
+
+/-- Mixed-radix plan: radix-4 for early stages, radix-2 for late stages.
+    Combines ILP benefits of radix-4 (fewer stages, better pipelining) with
+    simplicity of radix-2 for cache-hostile late stages.
+    Activates Butterfly4Bridge (previously orphaned). -/
+def mkMixedRadixPlan (p n : Nat) (hwIsSimd : Bool := false)
+    (arrayIsLarge : Bool := false) (dir : StageDirection := .DIT) : Plan :=
+  let totalLevels := log2 n
+  let stages := buildMixedRadixStages totalLevels p hwIsSimd arrayIsLarge dir 0 0 1 []
+  { stages := stages.toArray, field := p, size := n }
+
 -- ══════════════════════════════════════════════════════════════════
 -- Section 3: Plan Cost
 -- ══════════════════════════════════════════════════════════════════
@@ -236,6 +275,25 @@ example : (mkBoundAwarePlan 2013265921 1024).boundsConsistent = true := by nativ
 
 /-- Plan validates: output bounded. -/
 example : (mkBoundAwarePlan 2013265921 1024).outputFullyBounded = true := by native_decide
+
+/-- Uniform radix-4 plan for BabyBear N=1024 has 5 stages. -/
+example : (mkUniformPlan 2013265921 1024 .r4 .solinasFold).numStages = 5 := by native_decide
+
+/-- Uniform radix-4 plan is well-formed. -/
+example : (mkUniformPlan 2013265921 1024 .r4 .solinasFold).wellFormed = true := by native_decide
+
+/-- Radix-4 plan has fewer total butterflies than radix-2. -/
+example : (mkUniformPlan 2013265921 1024 .r4 .solinasFold).totalButterflies <
+    (mkUniformPlan 2013265921 1024 .r2 .solinasFold).totalButterflies := by native_decide
+
+/-- Mixed-radix plan uses both radix-4 and radix-2 stages. -/
+example :
+  let plan := mkMixedRadixPlan 2013265921 1024
+  plan.stages.any (fun s => s.radix == .r4) &&
+  plan.stages.any (fun s => s.radix == .r2) = true := by native_decide
+
+/-- Mixed-radix plan is well-formed. -/
+example : (mkMixedRadixPlan 2013265921 1024).wellFormed = true := by native_decide
 
 end SmokeTests
 
