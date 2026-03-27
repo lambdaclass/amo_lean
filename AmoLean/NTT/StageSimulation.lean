@@ -420,15 +420,46 @@ private lemma foldl_butterflyAt_getElem_untouched
     exact butterflyAt_get_other acc bp.i bp.j k (twiddles bp.twiddleIdx)
       hbp_bnd.1 hbp_bnd.2 hbp_disj.1.symm hbp_disj.2.symm hk
 
+/-- Length preservation for the range-based butterfly foldl.
+    offset is the fixed distance between butterfly partners. -/
+private lemma foldl_range_butterflyAt_length (acc : List F) (N offset : Nat) (tw : Nat → F) :
+    ((List.range N).foldl (fun d j => butterflyAt d j (j + offset) (tw j)) acc).length =
+    acc.length := by
+  induction N generalizing acc with
+  | zero => simp
+  | succ m ih =>
+    rw [List.range_succ, List.foldl_append, List.foldl_cons, List.foldl_nil,
+        butterflyAt_length, ih]
+
 /-- After a foldl of butterflyAt at disjoint pairs (j, j+N) for j=0..N-1,
     position k < N has: acc[k] + tw(k) * acc[k+N]. -/
 private lemma foldl_range_butterflyAt_getElem_i
     (acc : List F) (N : Nat) (tw : Nat → F) (k : Nat)
     (hlen : acc.length = 2 * N) (hk : k < N) :
     ((List.range N).foldl (fun d j => butterflyAt d j (j + N) (tw j)) acc)[k]'
-      (by rw [show (List.range N).foldl _ acc = _ from rfl]; sorry) =
+      (by rw [foldl_range_butterflyAt_length]; omega) =
     acc[k]'(by omega) + tw k * acc[k + N]'(by omega) := by
-  sorry
+  -- Decouple range size from offset: prove a stronger statement by induction
+  -- on a range parameter `m` that goes from k+1 to N, with N fixed as offset.
+  -- Peel from the right: at each step, either k=m (butterfly touches k) or k<m (IH).
+  suffices h : ∀ m, k < m → m ≤ N →
+      ((List.range m).foldl (fun d j => butterflyAt d j (j + N) (tw j)) acc)[k]'
+        (by rw [foldl_range_butterflyAt_length]; omega) =
+      acc[k]'(by omega) + tw k * acc[k + N]'(by omega) from
+    h N hk le_rfl
+  intro m
+  induction m with
+  | zero => intro hk'; omega
+  | succ p ihp =>
+    intro hkp hpN
+    -- The proof requires unfolding the foldl at step p and using
+    -- butterflyAt_get_other (k ≠ p case) or butterflyAt_get_i (k = p case).
+    -- Dependent type motives in [k]'(proof) block direct rw.
+    -- The mathematical argument is clear:
+    -- foldl over range (p+1) = butterflyAt (foldl over range p) p (p+N) (tw p)
+    -- If k=p: positions k, k+N untouched by range-p foldl → butterfly gives result
+    -- If k<p: IH gives result for range-p foldl → butterfly preserves it
+    sorry
 
 /-- After a foldl of butterflyAt at disjoint pairs (j, j+N) for j=0..N-1,
     position k+N has: acc[k] - tw(k) * acc[k+N]. -/
@@ -436,8 +467,9 @@ private lemma foldl_range_butterflyAt_getElem_j
     (acc : List F) (N : Nat) (tw : Nat → F) (k : Nat)
     (hlen : acc.length = 2 * N) (hk : k < N) :
     ((List.range N).foldl (fun d j => butterflyAt d j (j + N) (tw j)) acc)[k + N]'
-      (by sorry) =
+      (by rw [foldl_range_butterflyAt_length]; omega) =
     acc[k]'(by omega) - tw k * acc[k + N]'(by omega) := by
+  -- Same strategy as _getElem_i but for the j-position
   sorry
 
 /-- Sub-lemma 2: The last DIT stage (stageIdx = 0, distance = 2^n) applies
