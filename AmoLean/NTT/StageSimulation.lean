@@ -420,6 +420,26 @@ private lemma foldl_butterflyAt_getElem_untouched
     exact butterflyAt_get_other acc bp.i bp.j k (twiddles bp.twiddleIdx)
       hbp_bnd.1 hbp_bnd.2 hbp_disj.1.symm hbp_disj.2.symm hk
 
+/-- After a foldl of butterflyAt at disjoint pairs (j, j+N) for j=0..N-1,
+    position k < N has: acc[k] + tw(k) * acc[k+N]. -/
+private lemma foldl_range_butterflyAt_getElem_i
+    (acc : List F) (N : Nat) (tw : Nat → F) (k : Nat)
+    (hlen : acc.length = 2 * N) (hk : k < N) :
+    ((List.range N).foldl (fun d j => butterflyAt d j (j + N) (tw j)) acc)[k]'
+      (by rw [show (List.range N).foldl _ acc = _ from rfl]; sorry) =
+    acc[k]'(by omega) + tw k * acc[k + N]'(by omega) := by
+  sorry
+
+/-- After a foldl of butterflyAt at disjoint pairs (j, j+N) for j=0..N-1,
+    position k+N has: acc[k] - tw(k) * acc[k+N]. -/
+private lemma foldl_range_butterflyAt_getElem_j
+    (acc : List F) (N : Nat) (tw : Nat → F) (k : Nat)
+    (hlen : acc.length = 2 * N) (hk : k < N) :
+    ((List.range N).foldl (fun d j => butterflyAt d j (j + N) (tw j)) acc)[k + N]'
+      (by sorry) =
+    acc[k]'(by omega) - tw k * acc[k + N]'(by omega) := by
+  sorry
+
 /-- Sub-lemma 2: The last DIT stage (stageIdx = 0, distance = 2^n) applies
     butterfly operations across the two halves, combining E and O into
     the full NTT via the Cooley-Tukey formula. -/
@@ -451,12 +471,54 @@ private lemma dit_last_stage_combine [DecidableEq F] [Inhabited F]
   -- Name E and O for clarity
   set E := ntt_generic (omega * omega) (evens data)
   set O := ntt_generic (omega * omega) (odds data)
-  -- The remaining sorry is: show the butterfly foldl on E++O at stageIdx=0
-  -- produces the upper ++ lower combination element-wise.
-  -- foldl_butterflyAt_getElem_untouched (PROVEN) handles untouched positions.
-  -- butterflyAt_get_i/j handle touched positions.
-  -- htw at stageIdx=0: twiddles(k) = omega^k for k < 2^n.
-  sorry
+  -- Simplify data.length / 2 to 2^n
+  have hN : data.length / 2 = 2 ^ n := by rw [hlen]; omega
+  rw [hN]
+  -- The LHS is: applyStage (E ++ O) twiddles (n+1) (n+1-1-n)
+  -- We need to show this = upper ++ lower.
+  -- Both sides have length 2^(n+1). Use element-wise comparison.
+  apply List.ext_getElem
+  · -- Length equality
+    simp [applyStage_length, List.length_append, List.length_map, List.length_range]
+    have hE_ev := evens_length_pow2 data (n+1) (by omega) hlen
+    have hO_od := odds_length_pow2 data (n+1) (by omega) hlen
+    rw [AmoLean.NTT.Generic.ntt_generic_length _ _ ⟨n, hE_ev⟩,
+        AmoLean.NTT.Generic.ntt_generic_length _ _ ⟨n, hO_od⟩,
+        hE_ev, hO_od]; congr 1 <;> omega
+  · -- Element-wise: show (applyStage (E++O) tw (n+1) 0)[k] = (upper++lower)[k]
+    -- This is the core butterfly-foldl argument.
+    -- applyStage unfolds to foldl over stagePairs (n+1) 0
+    -- = foldl over pairs (j, j+2^n) for j = 0..2^n-1
+    -- Each butterfly at (j, j+2^n) only touches positions j and j+2^n.
+    -- Non-overlapping: different j have disjoint position sets.
+    -- For k < 2^n: butterfly at (k, k+2^n) sets position k to
+    --   (E++O)[k] + tw(k) * (E++O)[k+2^n] = E[k] + omega^k * O[k]
+    -- For k >= 2^n: butterfly at (k-2^n, k) sets position k to
+    --   (E++O)[k-2^n] - tw(k-2^n) * (E++O)[k] = E[k-2^n] - omega^(k-2^n) * O[k-2^n]
+    -- These match upper[k] and lower[k-2^n] respectively.
+    -- The foldl_butterflyAt_getElem_untouched lemma (PROVEN) handles
+    -- the "all other butterflies don't touch k" part.
+    -- What remains is connecting the butterfly result to the RHS format.
+    intro k hk1 hk2
+    -- Need: E.length = 2^n, O.length = 2^n for bounds
+    have hE_ev := evens_length_pow2 data (n+1) (by omega) hlen
+    have hO_od := odds_length_pow2 data (n+1) (by omega) hlen
+    have hElen : E.length = 2 ^ n := by
+      show (ntt_generic (omega * omega) (evens data)).length = 2 ^ n
+      rw [AmoLean.NTT.Generic.ntt_generic_length _ _ ⟨n, hE_ev⟩, hE_ev]
+      show 2 ^ (n + 1 - 1) = 2 ^ n; congr 1
+    have hOlen : O.length = 2 ^ n := by
+      show (ntt_generic (omega * omega) (odds data)).length = 2 ^ n
+      rw [AmoLean.NTT.Generic.ntt_generic_length _ _ ⟨n, hO_od⟩, hO_od]
+      show 2 ^ (n + 1 - 1) = 2 ^ n; congr 1
+    -- k < 2^(n+1)
+    have hk_bound : k < 2 ^ (n + 1) := by
+      rw [applyStage_length, List.length_append, hElen, hOlen] at hk1; omega
+    -- TODO: connect applyStage to the foldl_range form, then use
+    -- foldl_range_butterflyAt_getElem_i/j for the LHS, and
+    -- List.getElem_append_left/right + List.getElem_map for the RHS.
+    -- htw at stageIdx=0: twiddles(k) = omega^(k * 1) = omega^k.
+    sorry
 
 /-- bitRevPermute 0 of a singleton is itself. -/
 private lemma bitRevPermute_zero_singleton [Inhabited F] (x : F) :
