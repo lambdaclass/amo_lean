@@ -51,6 +51,20 @@ def canonicalize (g : DirectedRelGraph) (find : EClassId → EClassId) : Directe
     if acc.hasDirectEdge src' dst' then acc
     else acc.addEdge src' dst') DirectedRelGraph.empty
 
+/-- Check if `dst` is reachable from `src` via a path. Fuel-bounded BFS. -/
+def hasPath (g : DirectedRelGraph) (src dst : EClassId) (fuel : Nat := 100) : Bool :=
+  go [src] {} fuel
+where
+  go : List EClassId → Std.HashSet EClassId → Nat → Bool
+    | [], _, _ => false
+    | _, _, 0 => false
+    | cur :: rest, visited, fuel + 1 =>
+      if cur == dst then true
+      else if visited.contains cur then go rest visited fuel
+      else
+        let succs := g.successors cur
+        go (rest ++ succs) (visited.insert cur) fuel
+
 theorem empty_noEdges : DirectedRelGraph.empty.numEdges = 0 := rfl
 
 theorem addEdge_numEdges (g : DirectedRelGraph) (src dst : EClassId) :

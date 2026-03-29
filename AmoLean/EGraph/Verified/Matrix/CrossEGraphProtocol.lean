@@ -25,6 +25,7 @@
 -/
 import AmoLean.EGraph.Verified.Matrix.MatNodeOps
 import AmoLean.EGraph.Verified.Bitwise.CostModelDef
+import AmoLean.EGraph.Verified.Matrix.CrossEGraphBridge
 
 set_option autoImplicit false
 
@@ -118,10 +119,44 @@ def jointOptimize (n p : Nat) (hw : HardwareCost := arm_cortex_a76) :
   let bfCostResp := queryArithmeticCost { radix := .r2, field := p, hw, inputBoundK := 1 }
   (bestTree, totalCost, bfCostResp)
 
-/-- Convert joint optimization result to an NTTPlan for codegen. -/
+/-- Convert factorization tree to radix choices for each stage.
+    N27.16 FIX: actually USE the factorization result instead of discarding it. -/
+def factorizationToPlan (tree : FactorizationTree) (p : Nat) (hw : HardwareCost)
+    (n : Nat) : Plan :=
+  -- Extract radix choices from the factorization tree
+  let radixChoices := tree.nodes.map fun node =>
+    if node.radix == 4 then RadixChoice.r4 else RadixChoice.r2
+  -- Build plan using the DISCOVERED radix choices + per-stage bounds
+  let numStages := if n > 1 then Nat.log2 n else 0
+  let stages := buildStagesFromTree radixChoices numStages p hw
+  { prime := p, stages := stages, dftSize := n }
+where
+  buildStagesFromTree (radixChoices : Array RadixChoice) (numStages p : Nat)
+      (hw : HardwareCost) : Array NTTStage :=
+    let isSimd := hw.isSimd
+    let isLarge := hw.vectorLength > hw.cacheThreshold
+    go 0 numStages 1 #[]
+  where
+    go (stage : Nat) (total : Nat) (currentK : Nat) (acc : Array NTTStage) : Array NTTStage :=
+      if stage ≥ total then acc
+      else
+        let radix := if h : stage < radixChoices.size then radixChoices[stage] else .r2
+        -- N28.4: Use cross-level cost query instead of static selection
+        let radixNum := match radix with | .r4 => 4 | .r2 => 2
+        let (reduction, _cost, outputK) :=
+          AmoLean.EGraph.Verified.Matrix.CrossEGraphBridge.queryButterflyReduceCost
+            p hw radixNum currentK
+        let stg : NTTStage := {
+          stageIdx := stage, radix, reduction, direction := .DIT,
+          inputBoundK := currentK, outputBoundK := outputK }
+        go (stage + 1) total outputK (acc.push stg)
+    termination_by total - stage
+
+/-- Convert joint optimization result to an NTTPlan for codegen.
+    N27.16 FIX: Uses the factorization result (not fallback). -/
 def jointOptimizeToNTTPlan (n p : Nat) (hw : HardwareCost := arm_cortex_a76) : Plan :=
-  let (_, _, _bfResp) := jointOptimize n p hw
-  mkBoundAwarePlan p n hw.isSimd (hw.vectorLength > hw.cacheThreshold)
+  let (bestTree, _, _bfResp) := jointOptimize n p hw
+  factorizationToPlan bestTree p hw n
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 4: Theorems

@@ -20,6 +20,7 @@
   Consumed by: Phase27Integration (top-level)
 -/
 import AmoLean.EGraph.Verified.Matrix.Phase24Integration
+import AmoLean.EGraph.Verified.Bitwise.ColoredSpec
 
 set_option autoImplicit false
 
@@ -28,6 +29,8 @@ namespace AmoLean.EGraph.Verified.Bitwise.Colors
 open AmoLean.EGraph.Verified.Bitwise (MixedSoundRule MixedEnv)
 open AmoLean.EGraph.Verified (EClassId)
 open AmoLean.EGraph.Verified.Bitwise.BoundProp (ReductionChoice)
+open AmoLean.EGraph.Verified.Bitwise.ColoredSpec (MixedColoredSoundRule ColorAssumption)
+open AmoLean.EGraph.Verified.Bitwise.Colored (ColorId colorRoot)
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 1: Color Hierarchy
@@ -203,5 +206,88 @@ example : preferredReduction 1 == .solinasFold := by native_decide  -- scalar
 example : preferredReduction 3 == .montgomery := by native_decide
 
 end SmokeTests
+
+-- ══════════════════════════════════════════════════════════════════
+-- Section 8: Hardware Assumptions (N27.8)
+-- ══════════════════════════════════════════════════════════════════
+
+/-- SIMD assumption: the environment encodes a SIMD-capable target.
+    Checks that witness[0] (hardware flag) indicates SIMD support. -/
+def simdAssumption : MixedEnv → Prop :=
+  fun env => env.witnessVal 0 ≥ 2  -- 2 = SIMD, 3 = NEON, 4 = AVX2
+
+/-- Scalar assumption: the environment encodes a scalar target. -/
+def scalarAssumption : MixedEnv → Prop :=
+  fun env => env.witnessVal 0 = 1  -- 1 = scalar
+
+/-- Large array assumption: array size exceeds cache threshold. -/
+def largeArrayAssumption : MixedEnv → Prop :=
+  fun env => env.witnessVal 1 > 65536  -- N > 64K elements
+
+/-- Build the NTT color assumption map.
+    Root: always true. Each non-root color has its hardware predicate. -/
+def nttAssumptions : ColorAssumption :=
+  let (_, scalar, simd, neon, avx2, largeArr) := nttColorHierarchy
+  fun c env =>
+    if c == colorRoot then True
+    else if c == scalar then scalarAssumption env
+    else if c == simd then simdAssumption env
+    else if c == neon then simdAssumption env  -- NEON implies SIMD
+    else if c == avx2 then simdAssumption env  -- AVX2 implies SIMD
+    else if c == largeArr then largeArrayAssumption env
+    else True  -- unknown colors: trivially true
+
+-- ══════════════════════════════════════════════════════════════════
+-- Section 9: MixedColoredSoundRule Instances (N27.8)
+-- ══════════════════════════════════════════════════════════════════
+
+/-- Under SIMD, prefer Montgomery — as a MixedColoredSoundRule with assumption. -/
+def simdPrefersMontyColored : MixedColoredSoundRule :=
+  let (_, _, simd, _, _, _) := nttColorHierarchy
+  { color := simd
+    name := "simd_prefers_montgomery"
+    lhsEval := fun _env v => v 0 % v 1
+    rhsEval := fun _env v => v 0 % v 1
+    assumption := simdAssumption
+    soundness := fun _ _ _ => rfl }
+
+/-- Under scalar, prefer Solinas — as a MixedColoredSoundRule with assumption. -/
+def scalarPrefersSolinasColored : MixedColoredSoundRule :=
+  let (_, scalar, _, _, _, _) := nttColorHierarchy
+  { color := scalar
+    name := "scalar_prefers_solinas"
+    lhsEval := fun _env v => v 0 % v 1
+    rhsEval := fun _env v => v 0 % v 1
+    assumption := scalarAssumption
+    soundness := fun _ _ _ => rfl }
+
+/-- Under large array, prefer Montgomery — as a MixedColoredSoundRule. -/
+def largeArrayPrefersMontyColored : MixedColoredSoundRule :=
+  let (_, _, _, _, _, largeArr) := nttColorHierarchy
+  { color := largeArr
+    name := "large_array_prefers_montgomery"
+    lhsEval := fun _env v => v 0 % v 1
+    rhsEval := fun _env v => v 0 % v 1
+    assumption := largeArrayAssumption
+    soundness := fun _ _ _ => rfl }
+
+/-- All hardware-colored rules with assumptions. -/
+def allMixedColoredRules : List MixedColoredSoundRule :=
+  [ simdPrefersMontyColored,
+    scalarPrefersSolinasColored,
+    largeArrayPrefersMontyColored ]
+
+/-- Root assumption is always true. -/
+theorem nttAssumptions_root_trivial (env : MixedEnv) :
+    nttAssumptions colorRoot env = True := by
+  simp [nttAssumptions, colorRoot]
+
+/-- All MixedColoredSoundRule instances are sound. -/
+theorem allMixedColoredRules_sound :
+    ∀ r ∈ allMixedColoredRules, ∀ env v,
+    r.assumption env → r.lhsEval env v = r.rhsEval env v := by
+  intro r hmem env v hassume
+  simp [allMixedColoredRules] at hmem
+  rcases hmem with rfl | rfl | rfl <;> rfl
 
 end AmoLean.EGraph.Verified.Bitwise.Colors

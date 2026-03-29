@@ -16,6 +16,9 @@
   Every import is exercised. Every function is called.
 -/
 import AmoLean.EGraph.Verified.Bitwise.CrossRelNTT
+import AmoLean.EGraph.Verified.Bitwise.Discovery.Ruler.MixedEval
+import AmoLean.EGraph.Verified.Bitwise.MixedEGraphBuilder
+import AmoLean.EGraph.Verified.Bitwise.ReductionAlternativeRules
 
 set_option autoImplicit false
 
@@ -66,7 +69,7 @@ def optimizeNTTWithBounds
   let s := mkNTTState g
   -- Step 2: saturate with DYNAMIC factory (reads current DAG each iteration)
   let factory := mkFieldFactory p 0
-  let s' := saturate rules factory cfg s
+  let s' := saturate rules [] factory cfg s
   -- Step 3: analyze bounds for per-stage reduction schedule
   let analysis := nttStageBoundAnalysis {
     numStages, prime := p, hwIsSimd, arrayIsLarge }
@@ -100,7 +103,7 @@ theorem stage_bound_correct (inputK : Nat) (red : ReductionChoice) :
 /-- Backward compat: with nullFactory, saturate does equality-only. -/
 theorem nullFactory_is_eqOnly (rules : List (MixedEMatch.RewriteRule MixedNodeOp))
     (s : State) :
-    saturate rules nullFactory { Config.default with totalFuel := 0 } s = s := rfl
+    saturate rules [] nullFactory { Config.default with totalFuel := 0 } s = s := rfl
 
 /-- mkNTTState creates exactly 1 relation DAG. -/
 theorem mkNTTState_has_bound_dag (g : MixedEGraph) :
@@ -117,6 +120,11 @@ theorem sentinel_roundtrip (k : Nat) :
 theorem initial_state_consistent (v : EClassId → Nat) :
     DirectedRelConsistency DirectedRelGraph.empty (fun a b => a ≤ b) v :=
   empty_consistent_rel _ v
+
+/-- relStep preserves baseGraph (consumed by downstream for CCV). -/
+theorem relStep_base_stable (factory : BoundRuleFactory) (s : State) :
+    (MultiRel.relStep factory s).baseGraph = s.baseGraph :=
+  BoundProp.relStep_preserves_baseGraph factory s
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 4: End-to-End Smoke Tests
@@ -164,5 +172,88 @@ example (s : State) : relStep nullFactory s = s := rfl
 example : (babyBearFactory (State.empty.addRelation "bounds")).length = 2 := rfl
 
 end SmokeTests
+
+-- ══════════════════════════════════════════════════════════════════
+-- Section 5: Ruler Feedback Integration (N28.3)
+-- ══════════════════════════════════════════════════════════════════
+
+open AmoLean.EGraph.Verified.Bitwise.Discovery.Ruler (applyDiscoveredRules DetectedRelation)
+open AmoLean.EGraph.Verified.Bitwise.Discovery.Ruler.MixedEval (discoverMixedRules mixedEvalOp)
+open AmoLean.EGraph.Verified.Bitwise.ColoredSpec (MixedColoredSoundRule)
+open AmoLean.EGraph.Verified.Bitwise.MixedExtract (MixedExpr)
+open AmoLean.EGraph.Verified.Bitwise.ReductionAlternativeRules (reductionAlternativeRules)
+
+/-- Create a seeded e-graph with reduceGate(witness(0), p) AND all reduction
+    alternatives as SEPARATE classes. This is critical for coloredStep:
+    the alternatives must exist as distinct classes so coloredStep can merge
+    them under the appropriate hardware color (not at root level). -/
+def mkSeedEGraph (p : Nat) : MixedEGraph :=
+  let input : MixedExpr := .witnessE 0
+  -- Seed: reduceGate(x, p)
+  let (_, g0) := MixedEGraphBuilder.addMixedExpr (AmoLean.EGraph.VerifiedExtraction.EGraph.empty) (.reduceE input p)
+  -- Alternative 1: montyReduce(x, p, mu) — separate class
+  let mu := if p == 2013265921 then 0x88000001  -- BabyBear mu
+            else if p == 2147483647 then 0x80000001  -- Mersenne31 mu
+            else p  -- fallback
+  let (_, g1) := MixedEGraphBuilder.addMixedExpr g0 (.montyReduceE input p mu)
+  -- Alternative 2: harveyReduce(x, p) — separate class
+  let (_, g2) := MixedEGraphBuilder.addMixedExpr g1 (.harveyReduceE input p)
+  -- Alternative 3: barrettReduce(x, p, m) — separate class
+  let m := 2 ^ 62 / (if p > 0 then p else 1)
+  let (_, g3) := MixedEGraphBuilder.addMixedExpr g2 (.barrettReduceE input p m)
+  g3
+
+/-- Semantic match step: apply Ruler-discovered rules by scanning the e-graph
+    for classes where both sides of the relation evaluate equally. -/
+def semanticMatchStep (discoveredRules : List DetectedRelation) (s : State) : State :=
+  let classIds := s.baseGraph.classes.toList.map (·.1)
+  let getVal : EClassId → Nat := fun id => id
+  let merges := applyDiscoveredRules mixedEvalOp discoveredRules classIds getVal
+  if merges.isEmpty then s
+  else
+    let g' := merges.foldl (fun g pair =>
+      AmoLean.EGraph.VerifiedExtraction.EGraph.merge g pair.1 pair.2) s.baseGraph
+    let g'' := MixedSaturation.rebuildF g' 10
+    { s with baseGraph := g'' }
+
+/-- Full pipeline with ALL capabilities on REAL data.
+    Architecture: e-graph is seeded with reduceGate + montyReduce + barrettReduce +
+    harveyReduce as SEPARATE classes. Reduction alternatives are NOT passed to eqStep
+    (they'd merge at root level). Instead, coloredStep merges them under hardware colors.
+
+    1. Seed e-graph with all reduction alternatives as separate classes
+    2. Discover rules via Ruler (with reduction vocabulary)
+    3. Saturate: eq (algebraic only) + colored (hardware merges) + relational (bounds) + cross
+    4. Apply semantic match from Ruler-discovered rules
+    5. Analyze stage bounds -/
+def optimizeNTTFull
+    (p : Nat) (numStages : Nat)
+    (g : MixedEGraph := mkSeedEGraph p)
+    (eqRules : List (MixedEMatch.RewriteRule MixedNodeOp) := [])
+    (coloredRules : List MixedColoredSoundRule := [])
+    (hwIsSimd : Bool := false) (arrayIsLarge : Bool := false)
+    (cfg : Config := Config.default) :
+    State × List (Nat × ReductionChoice × Nat) :=
+  -- Step 0: Discover rules via Ruler (with reduction ops in vocabulary)
+  let discovered := discoverMixedRules { maxDepth := 1, maxIterations := 2 }
+  -- Step 1: Create multi-relation state from SEEDED graph (has separate reduction classes)
+  let s := mkNTTState g
+  -- Step 2: Saturate — eqRules are algebraic ONLY, NOT reduction alternatives
+  --   coloredStep merges reduction alternatives under hardware colors
+  --   relStep propagates bounds, crossStep promotes antisymmetries
+  let factory := mkFieldFactory p 0
+  let s' := saturate eqRules coloredRules factory cfg s
+  -- Step 3: Apply Ruler-discovered rules via semantic matching
+  let s'' := semanticMatchStep discovered.rules s'
+  -- Step 4: Analyze bounds
+  let analysis := nttStageBoundAnalysis {
+    numStages, prime := p, hwIsSimd, arrayIsLarge }
+  (s'', analysis)
+
+-- Smoke test: optimizeNTTFull with REAL seeded e-graph
+#eval do
+  let p := 2013265921  -- BabyBear
+  let (s, analysis) := optimizeNTTFull p 10
+  IO.println s!"Full pipeline: {s.numNodes} nodes, {s.numRelations} DAGs, {s.totalRelEdges} bound edges, {analysis.length} stages"
 
 end AmoLean.EGraph.Verified.Bitwise.BoundIntegration

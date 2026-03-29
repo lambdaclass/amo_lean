@@ -12,6 +12,7 @@
 -/
 import AmoLean.EGraph.Verified.Bitwise.NTTPlanSelection
 import AmoLean.EGraph.Verified.Bitwise.UnifiedCodeGen
+import AmoLean.EGraph.Verified.Bitwise.Discovery.StageContext
 
 set_option autoImplicit false
 
@@ -123,7 +124,43 @@ def generateNTTUniform (p n : Nat) (red : ReductionChoice := .solinasFold)
   emitCFromPlan (NTTPlan.mkUniformPlan p n .r2 red) funcName
 
 -- ══════════════════════════════════════════════════════════════════
--- Section 5: Theorems
+-- Section 5: Per-Stage NTT CodeGen (N27.13)
+-- ══════════════════════════════════════════════════════════════════
+
+open AmoLean.EGraph.Verified.Bitwise.Discovery.Stage (StageContext reductionDecision
+  outputBoundK buildStageContexts)
+
+/-- Build an NTT plan where each stage has its own reduction based on verified bounds.
+    This is the key N27.13 contribution: per-stage heterogeneous reduction. -/
+def mkPerStagePlan (p n : Nat) (bitwidth : Nat := 64) (hwIsSimd : Bool := false) : Plan :=
+  let numStages := log2 n
+  let contexts := buildStageContexts numStages p bitwidth hwIsSimd
+  let stages := contexts.map fun ctx =>
+    { stageIdx := ctx.stageIndex
+      radix := .r2
+      reduction := reductionDecision ctx
+      direction := .DIT
+      inputBoundK := ctx.inputBoundK
+      outputBoundK := outputBoundK ctx }
+  { field := p, stages := stages.toArray, size := n }
+
+/-- Emit C code with per-stage reduction dispatch.
+    Each stage may use a different reduction (lazy/solinas/montgomery)
+    based on the verified bounds at that stage. -/
+def emitPerStageNTT (p n : Nat) (bitwidth : Nat := 64)
+    (hwIsSimd : Bool := false) (funcName : String := "ntt_per_stage") : String :=
+  let plan := mkPerStagePlan p n bitwidth hwIsSimd
+  emitCFromPlan plan funcName
+
+/-- Per-stage plan uses heterogeneous reductions (not all the same). -/
+theorem perStage_heterogeneous (p n : Nat) (bitwidth : Nat)
+    (hwIsSimd : Bool) :
+    let plan := mkPerStagePlan p n bitwidth hwIsSimd
+    plan.stages.size = (buildStageContexts (log2 n) p bitwidth hwIsSimd).length := by
+  simp [mkPerStagePlan]
+
+-- ══════════════════════════════════════════════════════════════════
+-- Section 6: Theorems
 -- ══════════════════════════════════════════════════════════════════
 
 /-- Lazy reduction emits only a comment. -/

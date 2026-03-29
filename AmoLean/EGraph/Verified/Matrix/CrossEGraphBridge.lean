@@ -70,6 +70,49 @@ def verifiedJointOptimize (n p : Nat) (hw : HardwareCost) :
       totalCost := totalCost
     }
 
+-- ══════════════════════════════════════════════════════════════════
+-- N27.15: Cross-Level Cost Queries
+-- ══════════════════════════════════════════════════════════════════
+
+open AmoLean.EGraph.Verified.Bitwise.BoundProp (ReductionChoice)
+
+/-- Query the per-butterfly reduction cost for a specific stage context.
+    This is the cross-level bridge: the algorithmic level (MatEGraph) asks
+    the implementation level (Mixed e-graph) "what does a butterfly cost
+    with the optimal reduction for this stage on this hardware?"
+
+    Returns (reductionChoice, cost, outputBoundK). -/
+def queryButterflyReduceCost (p : Nat) (hw : HardwareCost)
+    (radix : Nat) (inputBoundK : Nat) (bitwidth : Nat := 64) :
+    ReductionChoice × Nat × Nat :=
+  let isSimd := hw.isSimd
+  let isLarge := false  -- default; can be parameterized
+  let reduction := selectReductionForBound inputBoundK isSimd isLarge
+  let bfCost := reductionCost reduction inputBoundK isSimd
+  -- Scale cost by radix (radix-4 has more ops per butterfly)
+  let scaledCost := bfCost * (if radix == 4 then 3 else 1)
+  let outputK := match reduction with
+    | .lazy => inputBoundK + 1
+    | .solinasFold => 2
+    | .montgomery => 1
+    | .harvey => 2
+  (reduction, scaledCost, outputK)
+
+/-- Query costs for ALL stages of an NTT, propagating bounds. -/
+def queryAllStageCosts (p n : Nat) (hw : HardwareCost) (radix : Nat := 2)
+    (bitwidth : Nat := 64) : List (Nat × ReductionChoice × Nat × Nat) :=
+  let numStages := if n > 1 then Nat.log2 n else 0
+  go 0 numStages 1 []
+where
+  go (stage : Nat) (total : Nat) (currentK : Nat)
+      (acc : List (Nat × ReductionChoice × Nat × Nat)) :
+      List (Nat × ReductionChoice × Nat × Nat) :=
+    if stage ≥ total then acc.reverse
+    else
+      let (red, cost, nextK) := queryButterflyReduceCost p hw radix currentK bitwidth
+      go (stage + 1) total nextK ((stage, red, cost, nextK) :: acc)
+  termination_by total - stage
+
 -- Smoke tests
 #eval do
   match verifiedJointOptimize 8 2013265921 arm_cortex_a76 with

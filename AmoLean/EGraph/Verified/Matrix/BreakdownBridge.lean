@@ -106,16 +106,35 @@ def optimizeNTTFactorization (n : Nat) (fuel : Nat := 10) :
   -- Extract the best factorization
   extractMatExpr g rootId
 where
-  /-- Recursively apply breakdown rules to expand sub-DFTs. -/
+  /-- Recursively apply breakdown rules to expand sub-DFTs.
+      N27.14: Now iterates over sub-DFTs and expands them recursively. -/
   applyBreakdownRulesRecursive (g : MatEGraph) (rootId : MatEClassId)
       (n : Nat) (fuel : Nat) : MatEGraph :=
     match fuel with
     | 0 => g
     | fuel' + 1 =>
       let g1 := saturateBreakdowns g rootId n
-      -- TODO: iterate over sub-DFTs in the e-graph and expand them too
-      -- For now, single-level expansion
-      g1
+      -- Extract sub-DFT sizes from the e-graph nodes
+      let subDFTs := extractSubDFTSizes g1
+      -- Recursively expand each sub-DFT
+      subDFTs.foldl (fun g' (subId, subN) =>
+        if subN > 1 then
+          let g'' := saturateBreakdowns g' subId subN
+          applyBreakdownRulesRecursive g'' subId subN fuel'
+        else g'
+      ) g1
+  /-- Extract sub-DFT class IDs and their sizes from the e-graph. -/
+  extractSubDFTSizes (g : MatEGraph) : List (MatEClassId × Nat) :=
+    g.classes.toList.filterMap fun (cid, eclass) =>
+      -- Check if any node in this class is a DFT node
+      let dftSize := eclass.nodes.fold (fun acc node =>
+        match node.op with
+        | .dft n => if n > 1 then some n else acc
+        | _ => acc
+      ) (none : Option Nat)
+      match dftSize with
+      | some n => some (cid, n)
+      | none => none
 
 -- Smoke test: CT factorization of DFT(8)
 #eval do

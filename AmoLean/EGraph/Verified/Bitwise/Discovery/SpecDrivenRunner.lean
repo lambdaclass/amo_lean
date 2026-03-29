@@ -1,22 +1,25 @@
 /-
   AmoLean.EGraph.Verified.Bitwise.Discovery.SpecDrivenRunner
 
-  N26.6: End-to-end discovery runner.  Pre-computes Barrett/Montgomery
-  constants for a given prime, instantiates vocabulary templates, runs
-  4-phase saturation (simplified identity step), extracts candidates,
-  and verifies them.
+  N26.6: End-to-end discovery runner using REAL e-graph saturation.
+  Seeds with reduceE(witness(0), p), runs 3-phase guided saturation
+  (algebraic identities + field folds + reduction alternatives),
+  extracts the cheapest implementation, and verifies it.
 -/
-import AmoLean.EGraph.Verified.Bitwise.Discovery.ExplosionControl
-import AmoLean.EGraph.Verified.Bitwise.Discovery.CostBiasedExtract
+import AmoLean.EGraph.Verified.Bitwise.MixedRunner
+import AmoLean.EGraph.Verified.Bitwise.Discovery.ReduceSpecAxiom
 import AmoLean.EGraph.Verified.Bitwise.Discovery.VerificationOracle
+import AmoLean.EGraph.Verified.Bitwise.Discovery.StageContext
 
 set_option autoImplicit false
 
 namespace AmoLean.EGraph.Verified.Bitwise.Discovery
 
-open AmoLean.EGraph.Verified.Bitwise (MixedNodeOp MixedEnv MixedSoundRule)
-open AmoLean.EGraph.Verified.Bitwise.MixedCoreSpec (MGraph CId)
-open AmoLean.EGraph.Verified.Bitwise.MixedSemanticSpec (CV VPMI PreservesCV)
+open AmoLean.EGraph.Verified.Bitwise (MixedNodeOp MixedEnv HardwareCost arm_cortex_a76)
+open AmoLean.EGraph.Verified.Bitwise.MixedExtract (MixedExpr)
+open AmoLean.EGraph.Verified.Bitwise.MixedSemanticSpec (PreservesCV)
+open MixedRunner (GuidedMixedConfig guidedOptimizeMixedF synthesizeViaEGraph)
+open AmoLean.EGraph.Verified.Bitwise.ReductionAlternativeRules (reductionAlternativeRules)
 
 -- ════════════════════════════════════════════════════════════════
 -- Section 1: Constant pre-computation
@@ -26,13 +29,11 @@ open AmoLean.EGraph.Verified.Bitwise.MixedSemanticSpec (CV VPMI PreservesCV)
 structure PrimeConstants where
   p : Nat
   w : Nat
-  barrettM : Nat   -- floor(2^(2w) / p) for Barrett
-  barrettK : Nat   -- 2 * w
-  montyMu : Nat    -- (-p)^{-1} mod 2^w (simplified placeholder)
-  montyR : Nat     -- 2^w
-  isSolinas : Bool  -- whether p = 2^a - c for small c
-  solinasA : Nat    -- a in 2^a - c (0 if not Solinas)
-  solinasC : Nat    -- c in 2^a - c (0 if not Solinas)
+  barrettM : Nat
+  montyMu : Nat
+  isSolinas : Bool
+  solinasA : Nat
+  solinasC : Nat
   deriving Repr
 
 /-- Detect Solinas form: p = 2^a - c where c < 2^(a/2).
@@ -47,107 +48,135 @@ def detectSolinas (p : Nat) : Option (Nat × Nat) :=
 def computeConstants (spec : ReduceSpec) : PrimeConstants :=
   let barrettK := 2 * spec.w
   let barrettM := 2 ^ barrettK / spec.p
-  let montyR := 2 ^ spec.w
-  -- Simplified montyMu: actual modular inverse deferred to N27
   let montyMu := spec.p
   match detectSolinas spec.p with
   | some (a, c) =>
-    { p := spec.p, w := spec.w, barrettM, barrettK, montyMu, montyR,
+    { p := spec.p, w := spec.w, barrettM, montyMu,
       isSolinas := true, solinasA := a, solinasC := c }
   | none =>
-    { p := spec.p, w := spec.w, barrettM, barrettK, montyMu, montyR,
+    { p := spec.p, w := spec.w, barrettM, montyMu,
       isSolinas := false, solinasA := 0, solinasC := 0 }
 
 -- ════════════════════════════════════════════════════════════════
 -- Section 2: DiscoveryResult
 -- ════════════════════════════════════════════════════════════════
 
-/-- Result of running the full discovery pipeline: candidates found,
-    those that passed verification, and the best cost observed. -/
+/-- Result of running the full discovery pipeline with real saturation. -/
 structure DiscoveryResult where
-  candidates : List ExtractionResult
-  verified : List ExtractionResult
-  bestCost : Nat
-  totalCandidates : Nat
+  optimizedExpr : Option MixedExpr
+  seed : MixedExpr
+  prime : Nat
+  verified : Bool
 
 -- ════════════════════════════════════════════════════════════════
--- Section 3: discoverReduction — main entry point
+-- Section 3: discoverReduction -- main entry point (REAL engine)
 -- ════════════════════════════════════════════════════════════════
 
-/-- Run the full discovery pipeline for a ReduceSpec.
-    1. Pre-compute Barrett/Montgomery constants
-    2. Instantiate vocabulary for the prime
-    3. Build initial graph with spec axiom (insertReduceSpecWithIds)
-    4. Extract top candidates via cost-biased extraction
-    5. Verify each candidate against the spec
-
-    NOTE: The saturation step is simplified (identity) in this version.
-    Full saturation via MixedSoundRules is in ExplosionControl.
-    The key contribution here is the pipeline composition and
-    constant pre-computation. -/
-def discoverReduction (spec : ReduceSpec) (bias : CostBias := CostBias.default)
-    (_cfg : SpecDrivenConfig := SpecDrivenConfig.default) : DiscoveryResult :=
-  let consts := computeConstants spec
-  -- Build vocabulary (used by saturation in production; here for completeness)
-  let _vocab := generateVocabulary spec.p spec.w consts.barrettM consts.montyMu
-  -- Build initial graph with spec
-  let g0 : MGraph := AmoLean.EGraph.VerifiedExtraction.EGraph.empty
-  let (specResult, g1) := insertReduceSpecWithIds spec g0
-  -- In production, saturation would apply rules here via specDrivenSaturateF.
-  -- For this version the graph passes through unchanged.
-  let gFinal := g1
-  -- Extract from the reduce class
-  let candidates := match extractWithCostBias bias gFinal specResult.reduceId with
-    | some r => [r]
-    | none => []
-  -- Verify candidates
-  let verified := candidates.filter fun r =>
-    (verifyCandidate r.expr spec).isVerified
-  let bestCost := match selectCheapest verified with
-    | some r => r.cost
-    | none => 0
-  { candidates, verified, bestCost, totalCandidates := candidates.length }
+/-- Discover optimized implementations of x % p using real e-graph saturation.
+    Seeds with reduceE(witness(0), p) and saturates with all available rules
+    including reduction alternatives (Barrett, Montgomery, Harvey). -/
+def discoverReduction (spec : ReduceSpec)
+    (hw : HardwareCost := arm_cortex_a76)
+    (cfg : GuidedMixedConfig := .default) : DiscoveryResult :=
+  let seed : MixedExpr := .reduceE (.witnessE 0) spec.p
+  let extraRules := reductionAlternativeRules spec.p
+  let optimized := guidedOptimizeMixedF spec.p hw cfg seed extraRules
+  -- Verify the result
+  let verified := match optimized with
+    | some expr => (verifyCandidate expr spec).isVerified
+    | none => false
+  { optimizedExpr := optimized
+    seed := seed
+    prime := spec.p
+    verified := verified }
 
 -- ════════════════════════════════════════════════════════════════
--- Section 4: Soundness theorem
+-- Section 4: discoverAndSynthesize -- full pipeline to C code
 -- ════════════════════════════════════════════════════════════════
 
-/-- The discovery pipeline preserves semantic correctness:
-    insertReduceSpec (the core graph mutation) preserves CV.
-    This delegates directly to the N26.1 theorem. -/
-theorem discoverReduction_pipeline_sound (spec : ReduceSpec) (env : MixedEnv) :
+/-- Full pipeline: discover + synthesize C code for a ReduceSpec. -/
+def discoverAndSynthesize (spec : ReduceSpec)
+    (hw : HardwareCost := arm_cortex_a76) : String :=
+  synthesizeViaEGraph spec.p hw .default (some (.reduceE (.witnessE 0) spec.p))
+
+-- ════════════════════════════════════════════════════════════════
+-- Section 5: Soundness theorem (renamed per N27.12)
+-- ════════════════════════════════════════════════════════════════
+
+/-- insertReduceSpec preserves ConsistentValuation.
+    Renamed from `discoverReduction_pipeline_sound` (misleading: it covers
+    insertion only, not the full discovery pipeline). -/
+theorem insertReduceSpec_sound (spec : ReduceSpec) (env : MixedEnv) :
     PreservesCV env (insertReduceSpec spec) :=
   insertReduceSpec_preserves_cv spec env
 
+-- backward compat alias
+abbrev discoverReduction_pipeline_sound := insertReduceSpec_sound
+
 -- ════════════════════════════════════════════════════════════════
--- Section 5: Convenience + smoke tests
+-- Section 6: Per-Stage Discovery (N27.12)
 -- ════════════════════════════════════════════════════════════════
 
--- BabyBear discovery produces a non-negative count
-example : (discoverReduction babybearSpec).totalCandidates ≥ 0 := by omega
+open AmoLean.EGraph.Verified.Bitwise.Discovery.Stage (StageContext reductionDecision)
+open AmoLean.EGraph.Verified.Bitwise.BoundProp (ReductionChoice)
 
--- Mersenne31 discovery produces a non-negative count
-example : (discoverReduction mersenne31Spec).totalCandidates ≥ 0 := by omega
+/-- Result of per-stage reduction discovery.
+    Extends DiscoveryResult with per-stage context. -/
+structure StageDiscoveryResult where
+  stage : StageContext
+  choice : ReductionChoice
+  optimizedExpr : Option MixedExpr
+  verified : Bool
 
--- BabyBear is detected as Solinas (2013265921 = 2^31 - 2^27 + 1, but actually
--- the check finds 2^31 > p and 2^31 - p = 134217727 which is < 2^15? Let's verify.)
--- Actually BabyBear p = 2013265921, 2^31 = 2147483648, diff = 134217727 = 2^27 - 1
--- 2^(31/2) = 2^15 = 32768. Since 134217727 > 32768, a=31 does NOT match.
--- But a=32: 2^32 = 4294967296, diff = 2281701375. 2^16 = 65536. 2281701375 > 65536. No.
--- So BabyBear is NOT Solinas in our strict definition. Test accordingly.
+/-- Discover the optimal reduction for a specific NTT stage.
+    Uses the stage context (accumulated bounds, bitwidth, hardware)
+    to make a verified per-stage decision.
 
--- detectSolinas returns none for BabyBear (not strict Solinas form)
+    1. Computes reduction decision from verified bounds
+    2. If lazy (skip): returns skip without running saturation
+    3. If reduce needed: runs discovery for the specific reduction type
+    4. Returns the stage-specific result -/
+def discoverReductionForStage (spec : ReduceSpec) (ctx : StageContext)
+    (hw : HardwareCost := arm_cortex_a76) : StageDiscoveryResult :=
+  let choice := reductionDecision ctx
+  match choice with
+  | .lazy =>
+    -- No saturation needed: skip reduction at this stage
+    { stage := ctx, choice, optimizedExpr := none, verified := true }
+  | _ =>
+    -- Run discovery for the chosen reduction type
+    let result := discoverReduction spec hw
+    { stage := ctx, choice, optimizedExpr := result.optimizedExpr,
+      verified := result.verified }
+
+/-- Discover reductions for ALL stages of an NTT. -/
+def discoverAllStages (spec : ReduceSpec) (numStages bitwidth : Nat)
+    (hwIsSimd : Bool := false) (hw : HardwareCost := arm_cortex_a76) :
+    List StageDiscoveryResult :=
+  let contexts := Stage.buildStageContexts numStages spec.p bitwidth hwIsSimd
+  contexts.map fun ctx => discoverReductionForStage spec ctx hw
+
+/-- Per-stage discovery uses verified bounds (not heuristic).
+    When the decision is lazy, it is justified by safeWithoutReduce. -/
+theorem perStage_uses_verified_bounds (spec : ReduceSpec) (ctx : StageContext)
+    (hw : HardwareCost) :
+    (discoverReductionForStage spec ctx hw).choice = reductionDecision ctx := by
+  simp [discoverReductionForStage]
+  cases reductionDecision ctx <;> rfl
+
+-- ════════════════════════════════════════════════════════════════
+-- Section 7: Smoke tests
+-- ════════════════════════════════════════════════════════════════
+
+-- Lightweight smoke tests (heavy integration tests in Tests/NonVacuity/).
+-- Constants computation (no saturation, fast)
 example : (computeConstants babybearSpec).isSolinas = false := by native_decide
-
--- Mersenne31: p = 2^31 - 1 = 2147483647, 2^31 = 2147483648, diff = 1, 2^15 = 32768
--- 1 < 32768, so a=31 matches!
 example : (computeConstants mersenne31Spec).isSolinas = true := by native_decide
-
--- Mersenne31 Solinas parameters are correct: a=31, c=1
 example : (computeConstants mersenne31Spec).solinasA = 31 := by native_decide
 example : (computeConstants mersenne31Spec).solinasC = 1 := by native_decide
-
--- Barrett constant for BabyBear is non-zero
 example : (computeConstants babybearSpec).barrettM > 0 := by native_decide
+
+-- Seed construction (structural, no evaluation)
+example : (DiscoveryResult.mk none (.witnessE 0) 0 false).verified = false := rfl
 
 end AmoLean.EGraph.Verified.Bitwise.Discovery

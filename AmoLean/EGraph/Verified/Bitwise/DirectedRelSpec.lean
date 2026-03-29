@@ -59,7 +59,98 @@ theorem addEdge_preserves_consistency {Val : Type} (drg : DirectedRelGraph)
   · exact hcon x y (by simp [DirectedRelGraph.hasDirectEdge, DirectedRelGraph.successors, hxy])
 
 -- ══════════════════════════════════════════════════════════════════
--- Section 2: Antisymmetry Promotion (Cross-Layer Rule)
+-- Section 2: Relation Properties
+-- ══════════════════════════════════════════════════════════════════
+
+def IsReflexive {Val : Type} (R : Val → Val → Prop) : Prop := ∀ x, R x x
+def IsTransitive {Val : Type} (R : Val → Val → Prop) : Prop := ∀ x y z, R x y → R y z → R x z
+def IsAntisymmetric {Val : Type} (R : Val → Val → Prop) : Prop := ∀ x y, R x y → R y x → x = y
+def IsPreorder {Val : Type} (R : Val → Val → Prop) : Prop := IsReflexive R ∧ IsTransitive R
+def IsPartialOrder {Val : Type} (R : Val → Val → Prop) : Prop := IsPreorder R ∧ IsAntisymmetric R
+
+-- ══════════════════════════════════════════════════════════════════
+-- Section 3: Path Transitivity
+-- ══════════════════════════════════════════════════════════════════
+
+private theorem go_implies_relation {Val : Type} (drg : DirectedRelGraph)
+    (R : Val → Val → Prop) (v : EClassId → Val)
+    (hcon : DirectedRelConsistency drg R v)
+    (htrans : IsTransitive R)
+    (hrefl : IsReflexive R)
+    (b : EClassId) :
+    ∀ (fuel : Nat) (queue : List EClassId) (visited : Std.HashSet EClassId),
+    DirectedRelGraph.hasPath.go drg b queue visited fuel = true →
+    ∃ c ∈ queue, R (v c) (v b) := by
+  intro fuel
+  induction fuel with
+  | zero =>
+    intro queue visited hgo
+    cases queue <;> simp_all [DirectedRelGraph.hasPath.go]
+  | succ n ih =>
+    intro queue visited hgo
+    match hq : queue with
+    | [] => simp [DirectedRelGraph.hasPath.go] at hgo
+    | cur :: rest =>
+      unfold DirectedRelGraph.hasPath.go at hgo
+      by_cases hcur : cur == b
+      · have := beq_iff_eq.mp hcur
+        subst this
+        exact ⟨cur, .head rest, hrefl (v cur)⟩
+      · simp [hcur] at hgo
+        split at hgo
+        · obtain ⟨c, hc_mem, hcR⟩ := ih rest visited hgo
+          exact ⟨c, List.mem_cons_of_mem _ hc_mem, hcR⟩
+        · obtain ⟨c, hc_mem, hcR⟩ := ih (rest ++ drg.successors cur) (visited.insert cur) hgo
+          rw [List.mem_append] at hc_mem
+          rcases hc_mem with hc_rest | hc_succ
+          · exact ⟨c, List.mem_cons_of_mem _ hc_rest, hcR⟩
+          · have hedge : drg.hasDirectEdge cur c := by
+              simp [DirectedRelGraph.hasDirectEdge, hc_succ]
+            exact ⟨cur, .head rest,
+              htrans (v cur) (v c) (v b) (hcon cur c hedge) hcR⟩
+
+/-- If R is transitive+reflexive and the graph is R-consistent, then a path
+    from a to b implies R(v(a), v(b)). -/
+theorem hasPath_implies_relation {Val : Type} (drg : DirectedRelGraph)
+    (R : Val → Val → Prop) (v : EClassId → Val)
+    (hcon : DirectedRelConsistency drg R v)
+    (htrans : IsTransitive R)
+    (hrefl : IsReflexive R)
+    (a b : EClassId) (fuel : Nat)
+    (hpath : drg.hasPath a b fuel = true) :
+    R (v a) (v b) := by
+  simp only [DirectedRelGraph.hasPath] at hpath
+  obtain ⟨c, hc_mem, hcR⟩ := go_implies_relation drg R v hcon htrans hrefl b fuel [a] {} hpath
+  simp at hc_mem
+  subst hc_mem
+  exact hcR
+
+/-- Combining bidirectional paths with antisymmetry: a→b ∧ b→a → v(a) = v(b). -/
+theorem bidirectional_path_implies_eq {Val : Type} (drg : DirectedRelGraph)
+    (R : Val → Val → Prop) (v : EClassId → Val)
+    (hcon : DirectedRelConsistency drg R v)
+    (hpo : IsPartialOrder R)
+    (a b : EClassId) (fuel : Nat)
+    (hab : drg.hasPath a b fuel = true)
+    (hba : drg.hasPath b a fuel = true) :
+    v a = v b := by
+  have hrefl := hpo.1.1
+  have htrans := hpo.1.2
+  have hanti := hpo.2
+  exact hanti (v a) (v b)
+    (hasPath_implies_relation drg R v hcon htrans hrefl a b fuel hab)
+    (hasPath_implies_relation drg R v hcon htrans hrefl b a fuel hba)
+
+/-- Equality implies any reflexive relation. Layer 1 informs Layer 3. -/
+theorem equality_implies_relation {Val : Type}
+    (R : Val → Val → Prop) (v : EClassId → Val)
+    (hrefl : IsReflexive R) (a b : EClassId)
+    (heq : v a = v b) :
+    R (v a) (v b) := by
+  rw [heq]; exact hrefl (v b)
+
+-- ══════════════════════════════════════════════════════════════════
+-- Section 4: Antisymmetry Promotion (Cross-Layer Rule)
 -- ══════════════════════════════════════════════════════════════════
 
 /-- If R is antisymmetric and we have R(v(a),v(b)) and R(v(b),v(a)),
