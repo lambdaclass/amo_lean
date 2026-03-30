@@ -53,10 +53,13 @@ structure StageContext where
 def reductionDecision (ctx : StageContext) : ReductionChoice :=
   -- Always reduce at last stage
   if ctx.stageIndex + 1 = ctx.totalStages then .solinasFold
-  -- Check if we can skip reduction
+  -- Check if we can skip reduction (bounds fit in word width)
   else if (ctx.inputBoundK + 1) * ctx.prime < 2 ^ ctx.bitwidth then .lazy
-  -- Must reduce: choose based on hardware
+  -- Small bounds after previous reduction: Harvey is cheapest (3 cycles)
+  else if ctx.inputBoundK ≤ 2 then .harvey
+  -- SIMD: Montgomery stays in u32 lanes (no widening penalty)
   else if ctx.hwIsSimd then .montgomery
+  -- Default scalar: Solinas fold
   else .solinasFold
 
 /-- Output bound after applying the reduction decision. -/
@@ -105,7 +108,9 @@ theorem lazy_implies_safe (ctx : StageContext)
   · contradiction
   · split at hlazy
     · rename_i _ h; exact h
-    · split at hlazy <;> contradiction
+    · split at hlazy
+      · contradiction
+      · split at hlazy <;> contradiction
 
 /-- Output bound is always ≤ max(inputBound + 1, 2). -/
 theorem outputBoundK_le_max (ctx : StageContext) :

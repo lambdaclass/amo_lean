@@ -105,12 +105,35 @@ def lowerNTTFromPlan (plan : Plan) : Stmt :=
 -- Section 4: Full codegen pipeline
 -- ══════════════════════════════════════════════════════════════════
 
+/-- Emit C helper function preamble: cond_sub, solinas_fold, monty_redc.
+    These are used by the plan-based NTT codegen. -/
+def emitHelperPreamble (p : Nat) (elemType : String := "uint32_t") : String :=
+  s!"#include <stdint.h>
+#include <stddef.h>
+static inline {elemType} cond_sub({elemType} x, {elemType} p) \{
+    return (x >= p) ? x - p : x;
+}
+static inline {elemType} solinas_fold({elemType} x, int k, {elemType} c) \{
+    return (({elemType})(x >> k) * c) + (x & (({elemType})(1u << k) - 1));
+}
+static inline {elemType} monty_redc({elemType} x, {elemType} p, {elemType} mu) \{
+    {elemType} m = (x * mu) & 0xFFFFFFFF;
+    uint64_t s = (uint64_t)x + (uint64_t)m * p;
+    {elemType} q = ({elemType})(s >> 32);
+    return (q >= p) ? q - p : q;
+}
+#define data_load(arr, i) (arr[i])
+#define data_store(arr, i, v) (arr[i] = (v))
+"
+
 /-- Emit C function from a Plan. -/
 def emitCFromPlan (plan : Plan) (funcName : String) : String :=
   let body := lowerNTTFromPlan plan
-  let header := s!"void {funcName}(uint32_t* data, const uint32_t* twiddles, size_t n) \{\n"
+  let elemType := if plan.field > 2^32 then "uint64_t" else "uint32_t"
+  let preamble := emitHelperPreamble plan.field elemType
+  let header := s!"void {funcName}({elemType}* data, const {elemType}* twiddles, size_t n) \{\n"
   let cBody := cScalarEmitter.emitStmt 1 body
-  header ++ cBody ++ "\n}\n"
+  preamble ++ "\n" ++ header ++ cBody ++ "\n}\n"
 
 /-- Top-level: select best plan and generate C. -/
 def generateNTTFromPlan (p n mulCost addCost : Nat)

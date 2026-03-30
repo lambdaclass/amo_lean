@@ -89,6 +89,15 @@ def lazyReductionSavings (analysis : List (Nat × ReductionChoice × Nat)) : Nat
   analysis.foldl (fun acc (_, red, _) =>
     if red == .lazy then acc + 1 else acc) 0
 
+/-- FRI fold bound analysis: after alpha * b, the result is < p * p.
+    After add (a + alpha*b), result is < p + p*p = p(1+p).
+    Need to reduce if p(1+p) > word_max.
+    For 31-bit primes: p(1+p) < 2^31 * 2^31 = 2^62 < 2^64. Fits in u64.
+    For Goldilocks: p(1+p) ≈ 2^128. Needs u128 and reduction after mul. -/
+def friFoldReductionChoice (p : Nat) (bitwidth : Nat := 64) : ReductionChoice :=
+  if p * (1 + p) < 2^bitwidth then .lazy  -- no reduction needed
+  else .solinasFold  -- need to reduce after mul
+
 -- ══════════════════════════════════════════════════════════════════
 -- Section 3: Bound-Informed Cost
 -- ══════════════════════════════════════════════════════════════════

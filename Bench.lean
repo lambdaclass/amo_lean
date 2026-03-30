@@ -15,10 +15,15 @@
 -/
 import AmoLean.EGraph.Verified.Bitwise.CostModelDef
 import AmoLean.EGraph.Verified.Bitwise.VerifiedCodeGen
+import AmoLean.EGraph.Verified.Bitwise.OptimizedNTTPipeline
+import AmoLean.EGraph.Verified.Bitwise.CrossRelNTT
+import AmoLean.EGraph.Verified.Bitwise.NTTPlanCodeGen
 
 open AmoLean.EGraph.Verified.Bitwise
 open AmoLean.EGraph.Verified.Bitwise.VerifiedCodeGen (emitC emitSolinasFoldC lowerMixedExprToLLE)
 open AmoLean.EGraph.Verified.Bitwise.MixedExtract (MixedExpr)
+open AmoLean.EGraph.Verified.Bitwise.OptimizedNTTPipeline (FieldConfig optimizedNTTC genOptimizedBenchC costReport babybearConfig koalabearConfig mersenne31Config goldilocksConfig)
+open AmoLean.EGraph.Verified.Bitwise.CrossRelNTT (nttStageBoundAnalysis NTTBoundConfig)
 
 -- ═══════════════════════════════════════════════════════════════════
 -- Section 1: Types
@@ -79,6 +84,14 @@ def fieldData : FieldChoice → FieldData
       name := "Goldilocks", p := "0xFFFFFFFF00000001ULL", pNat := 18446744069414584321,
       c := "0xFFFFFFFFULL", cNat := 4294967295, mu := "0ULL", k := 64,
       generator := "7", elemType := "uint64_t", wideType := "__uint128_t" }
+
+/-- Convert Bench FieldData to pipeline FieldConfig. -/
+def fieldDataToConfig (fd : FieldData) : FieldConfig :=
+  if fd.pNat == 2013265921 then babybearConfig
+  else if fd.pNat == 2130706433 then koalabearConfig
+  else if fd.pNat == 2147483647 then mersenne31Config
+  else if fd.pNat == 18446744069414584321 then goldilocksConfig
+  else babybearConfig  -- fallback
 
 def autoIters (logN : Nat) : Nat :=
   if logN ≤ 12 then 1000
@@ -555,8 +568,9 @@ def runOneBenchC (hw : HardwareCost) (fd : FieldData) (prim : PrimChoice)
     explainStrategy hw prim fd
     IO.println ""
 
+  let fc := fieldDataToConfig fd
   let code := match prim with
-    | .ntt => genNTTBenchC fd logN iters
+    | .ntt => genOptimizedBenchC fc logN iters hw
     | _ => genLinearBenchC fd prim logN iters
 
   let srcPath := "/tmp/amobench.c"
@@ -712,8 +726,9 @@ def main (args : List String) : IO Unit := do
         for lang in cfg.langs do
           let langStr := match lang with | .c => "C" | .rust => "Rust"
           if lang == .c then
+            let fdConfig := fieldDataToConfig fd
             let code := match prim with
-              | .ntt => genNTTBenchC fd logN iters
+              | .ntt => genOptimizedBenchC fdConfig logN iters hw
               | _ => genLinearBenchC fd prim logN iters
             IO.FS.writeFile ⟨"/tmp/amobench.c"⟩ code
             let comp ← IO.Process.output { cmd := "cc", args := #["-O2", "-o", "/tmp/amobench", "/tmp/amobench.c"] }

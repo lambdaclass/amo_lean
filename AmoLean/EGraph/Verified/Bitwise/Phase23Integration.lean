@@ -50,8 +50,9 @@ def fullPipeline (g : MixedEGraph)
     (eqRules : List (MixedEMatch.RewriteRule MixedNodeOp))
     (p n mulCost addCost : Nat) (hwIsSimd : Bool := false)
     (funcName : String := "ntt_optimized") : String × String :=
-  -- Phase 22: bound-aware saturation
-  let (_, analysis) := optimizeNTTWithBounds g eqRules p (log2 n) hwIsSimd
+  -- Phase 22: use nttStageBoundAnalysis directly (optimizeNTTWithBounds saturates
+  -- an e-graph whose result is discarded — the analysis only uses NTTBoundConfig)
+  let analysis := nttStageBoundAnalysis { numStages := log2 n, prime := p, hwIsSimd }
   -- Phase 23: plan selection + codegen
   let planC := generateNTTFromPlan p n mulCost addCost hwIsSimd funcName
   -- Also generate savings report

@@ -57,7 +57,11 @@ def mkNTTState (g : MixedEGraph) : State :=
 
     The factory creates fresh bound rules each iteration by calling
     `mkFieldFactory p`, which reads the CURRENT DAG to build lookups.
-    This is the fix for the frozen-lookup problem. -/
+    This is the fix for the frozen-lookup problem.
+
+    NOTE: The e-graph saturation result (State) is currently unused by callers —
+    `nttStageBoundAnalysis` only reads NTTBoundConfig, not the saturated state.
+    Prefer calling `nttStageBoundAnalysis` directly for bound analysis. -/
 def optimizeNTTWithBounds
     (g : MixedEGraph)
     (rules : List (MixedEMatch.RewriteRule MixedNodeOp))
