@@ -22,7 +22,7 @@ import AmoLean.EGraph.Verified.Bitwise.NTTPlanCodeGen
 open AmoLean.EGraph.Verified.Bitwise
 open AmoLean.EGraph.Verified.Bitwise.VerifiedCodeGen (emitC emitSolinasFoldC lowerMixedExprToLLE)
 open AmoLean.EGraph.Verified.Bitwise.MixedExtract (MixedExpr)
-open AmoLean.EGraph.Verified.Bitwise.OptimizedNTTPipeline (FieldConfig optimizedNTTC genOptimizedBenchC costReport babybearConfig koalabearConfig mersenne31Config goldilocksConfig)
+open AmoLean.EGraph.Verified.Bitwise.OptimizedNTTPipeline (FieldConfig optimizedNTTC genOptimizedBenchC genOptimizedBenchRust costReport babybearConfig koalabearConfig mersenne31Config goldilocksConfig)
 open AmoLean.EGraph.Verified.Bitwise.CrossRelNTT (nttStageBoundAnalysis NTTBoundConfig)
 
 -- ═══════════════════════════════════════════════════════════════════
@@ -747,8 +747,9 @@ def main (args : List String) : IO Unit := do
             else
               IO.println s!"  {fd.name}  2^{logN}  {langStr}  PARSE ERROR: {run.stdout.trim}"
           else
+            let fdConfigRust := fieldDataToConfig fd
             let code := match prim with
-              | .ntt => genNTTBenchRust fd logN iters
+              | .ntt => genOptimizedBenchRust fdConfigRust logN iters hw
               | _ => genLinearBenchRust fd prim logN iters
             IO.FS.writeFile ⟨"/tmp/amobench.rs"⟩ code
             let comp ← IO.Process.output { cmd := "rustc", args := #["-O", "/tmp/amobench.rs", "-o", "/tmp/amobench_rs"] }

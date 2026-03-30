@@ -419,6 +419,257 @@ def genOptimizedBenchC (fc : FieldConfig) (logN iters : Nat)
   optimizedNTTC fc hw logN iters
 
 -- ══════════════════════════════════════════════════════════════════
+-- Section 5b: Rust Code Emission Helpers
+-- ══════════════════════════════════════════════════════════════════
+
+private def rustElemType (fc : FieldConfig) : String :=
+  if fc.k == 64 then "u64" else "u32"
+
+private def rustWideType (fc : FieldConfig) : String :=
+  if fc.k == 64 then "u128" else "u64"
+
+private def rustPLit (fc : FieldConfig) : String :=
+  s!"{fc.pNat}_{rustElemType fc}"
+
+/-- Generate Solinas reduction as `amo_reduce` in Rust.
+    31-bit: canonical mod (LLVM reciprocal multiply).
+    64-bit (Goldilocks): hand-written 128-bit Solinas fold. -/
+def genSolinasReduceRust (fc : FieldConfig) : String :=
+  if fc.k == 64 then
+    s!"#[inline(always)]
+fn amo_reduce(x: u128) -> u64 \{
+    let lo = x as u64;
+    let hi = (x >> 64) as u64;
+    let hh = hi >> 32;
+    let hl = hi & 0xFFFFFFFF_u64;
+    let (t0, borrow) = lo.overflowing_sub(hh);
+    let t0 = if borrow \{ t0.wrapping_sub(0xFFFFFFFF_u64) } else \{ t0 };
+    let t1 = hl.wrapping_mul(0xFFFFFFFF_u64);
+    let (result, carry) = t0.overflowing_add(t1);
+    if carry || result >= {fc.pNat}_u64 \{ result.wrapping_sub({fc.pNat}_u64) } else \{ result }
+}"
+  else
+    let et := rustElemType fc
+    let wt := rustWideType fc
+    s!"#[inline(always)]
+fn amo_reduce(x: {wt}) -> {et} \{
+    (x % {fc.pNat}_{wt}) as {et}
+}"
+
+/-- Generate Montgomery REDC as `amo_reduce` in Rust (for e-graph Montgomery selection). -/
+def genMontyReduceAsAmoRust (fc : FieldConfig) : String :=
+  if fc.k == 64 then
+    -- Goldilocks: same Solinas-like algorithm
+    genSolinasReduceRust fc
+  else
+    let muNat := fc.muLit.replace "0x" "" |>.replace "U" ""
+    s!"#[inline(always)]
+fn amo_reduce(x: u64) -> u32 \{
+    let t = x.wrapping_mul(0x{muNat}_u64) as u32;
+    let u = t as u64 * {fc.pNat}_u64;
+    let d = x.wrapping_sub(u);
+    let hi = (d >> 32) as u32;
+    if x < u \{ hi.wrapping_add({fc.pNat}_u32) } else \{ hi }
+}"
+
+/-- Generate Montgomery REDC as `p3_reduce` in Rust (Plonky3 reference). -/
+def genMontyReduceRust (fc : FieldConfig) : String :=
+  if fc.k == 64 then
+    s!"#[inline(always)]
+fn p3_reduce(x: u128) -> u64 \{
+    let lo = x as u64;
+    let hi = (x >> 64) as u64;
+    let hh = hi >> 32;
+    let hl = hi & 0xFFFFFFFF_u64;
+    let (t0, borrow) = lo.overflowing_sub(hh);
+    let t0 = if borrow \{ t0.wrapping_sub(0xFFFFFFFF_u64) } else \{ t0 };
+    let t1 = hl.wrapping_mul(0xFFFFFFFF_u64);
+    let (result, carry) = t0.overflowing_add(t1);
+    if carry || result >= {fc.pNat}_u64 \{ result.wrapping_sub({fc.pNat}_u64) } else \{ result }
+}"
+  else
+    let muNat := fc.muLit.replace "0x" "" |>.replace "U" ""
+    s!"#[inline(always)]
+fn p3_reduce(x: u64) -> u32 \{
+    let t = x.wrapping_mul(0x{muNat}_u64) as u32;
+    let u = t as u64 * {fc.pNat}_u64;
+    let d = x.wrapping_sub(u);
+    let hi = (d >> 32) as u32;
+    if x < u \{ hi.wrapping_add({fc.pNat}_u32) } else \{ hi }
+}"
+
+/-- Plonky3-style butterfly in Rust (Montgomery every stage). -/
+def genP3ButterflyRust (fc : FieldConfig) : String :=
+  let et := rustElemType fc
+  let wt := rustWideType fc
+  let pLit := rustPLit fc
+  if fc.k == 64 then
+    s!"#[inline(always)]
+fn p3_bf(a: &mut {et}, b: &mut {et}, w: {et}) \{
+    let oa = *a; let wb = p3_reduce(w as {wt} * *b as {wt});
+    let (s, ov) = oa.overflowing_add(wb);
+    *a = if ov || s >= {pLit} \{ s.wrapping_sub({pLit}) } else \{ s };
+    *b = if oa >= wb \{ oa - wb } else \{ {pLit} - wb + oa };
+}"
+  else
+    s!"#[inline(always)]
+fn p3_bf(a: &mut {et}, b: &mut {et}, w: {et}) \{
+    let oa = *a; let wb = p3_reduce(w as {wt} * *b as {wt});
+    let s = oa.wrapping_add(wb);
+    *a = if s >= {pLit} \{ s - {pLit} } else \{ s };
+    *b = if oa >= wb \{ oa - wb } else \{ {pLit} - wb + oa };
+}"
+
+-- ══════════════════════════════════════════════════════════════════
+-- Section 5c: optimizedNTTRust — Full Rust benchmark with pipeline
+-- ══════════════════════════════════════════════════════════════════
+
+/-- Generate a complete NTT benchmark Rust program using the optimization pipeline.
+    Exact mirror of `optimizedNTTC`:
+    1. optimizeReduction: e-graph selects strategy
+    2. nttStageBoundAnalysis: per-stage lazy/reduce schedule
+    3. Two butterfly functions: lazy (no reduce) + reduce
+    4. Per-stage dispatch NTT loop
+    5. P3 (Montgomery uniform) reference
+    6. Timing harness with CSV output -/
+def optimizedNTTRust (fc : FieldConfig) (hw : HardwareCost) (logN iters : Nat)
+    (cfg : GuidedMixedConfig := .default) : String :=
+  let n := 2^logN
+  let et := rustElemType fc
+  let wt := rustWideType fc
+  let pLit := rustPLit fc
+  -- Step 1: Run the e-graph optimization pipeline
+  let optResult := optimizeReduction fc hw cfg
+  -- Step 2: Generate the reduction function based on e-graph result
+  let amoReduce := match optResult.strategyName with
+    | "Montgomery REDC" => genMontyReduceAsAmoRust fc
+    | _ => genSolinasReduceRust fc
+  -- Step 3: Run bound analysis for per-stage schedule
+  let boundCfg : NTTBoundConfig := {
+    numStages := logN, prime := fc.pNat,
+    hwIsSimd := hw.isSimd, arrayIsLarge := 2^logN > 4096 }
+  let stageAnalysis := nttStageBoundAnalysis boundCfg
+  let lazyCount := lazyReductionSavings stageAnalysis
+  -- Step 4: Build schedule array
+  let scheduleArr := stageAnalysis.map fun (_, red, _) =>
+    match red with | .lazy => "false" | _ => "true"
+  let scheduleRust := s!"let schedule: [bool; {logN}] = [{String.intercalate ", " scheduleArr}];"
+  -- Step 5: Generate butterfly functions (lazy + reduce)
+  let lazyBf :=
+    if fc.k == 64 then
+      s!"#[inline(always)]
+fn amo_bf_lazy(a: &mut {et}, b: &mut {et}, w: {et}) \{
+    let wb = (w as {wt}).wrapping_mul(*b as {wt}) as {et};
+    let oa = *a;
+    *a = oa.wrapping_add(wb);
+    *b = oa.wrapping_sub(wb).wrapping_add({pLit});
+}"
+    else
+      s!"#[inline(always)]
+fn amo_bf_lazy(a: &mut {et}, b: &mut {et}, w: {et}) \{
+    let wb = (w as {wt} * *b as {wt}) as {et};
+    let oa = *a;
+    *a = oa.wrapping_add(wb);
+    *b = oa.wrapping_sub(wb).wrapping_add({pLit});
+}"
+  let reduceBf :=
+    if fc.k == 64 then
+      s!"#[inline(always)]
+fn amo_bf_reduce(a: &mut {et}, b: &mut {et}, w: {et}) \{
+    let wb_r = amo_reduce((w as {wt}).wrapping_mul(*b as {wt}));
+    let oa = *a;
+    let (s, ov) = oa.overflowing_add(wb_r);
+    *a = if ov || s >= {pLit} \{ s.wrapping_sub({pLit}) } else \{ s };
+    *b = if oa >= wb_r \{ oa - wb_r } else \{ {pLit} - wb_r + oa };
+}"
+    else
+      s!"#[inline(always)]
+fn amo_bf_reduce(a: &mut {et}, b: &mut {et}, w: {et}) \{
+    let wb_r = amo_reduce(w as {wt} * *b as {wt});
+    let oa = *a;
+    let s = oa.wrapping_add(wb_r);
+    *a = if s >= {pLit} \{ s - {pLit} } else \{ s };
+    *b = if oa >= wb_r \{ oa - wb_r } else \{ {pLit} - wb_r + oa };
+}"
+  let montyReduce := genMontyReduceRust fc
+  let p3Bf := genP3ButterflyRust fc
+  -- Step 6: Assemble the complete Rust benchmark
+  s!"// AMO-Lean Optimized NTT Benchmark (Rust)
+// Field: {fc.name} (p = {fc.pNat})
+// E-graph selected: {optResult.strategyName}
+// Per-stage schedule: {lazyCount} lazy + {logN - lazyCount} reduce
+// Hardware target: mul32={hw.mul32}, add={hw.add}, shift={hw.shift}
+
+{amoReduce}
+
+{lazyBf}
+
+{reduceBf}
+
+{montyReduce}
+
+{p3Bf}
+
+fn main() \{
+    let n: usize = {n};
+    let logn: usize = {logN};
+    let iters: usize = {iters};
+    let tw_sz = n * logn;
+    let tw: Vec<{et}> = (0..tw_sz).map(|i| ((i as {wt} * 7 + 31) % {fc.pNat}_{wt}) as {et}).collect();
+    let orig: Vec<{et}> = (0..n).map(|i| ((i as {wt} * 1000000007) % {fc.pNat}_{wt}) as {et}).collect();
+
+    // Warmup
+    let mut d = orig.clone();
+    {scheduleRust}
+    for st in 0..logn \{ let h = 1usize << (logn-st-1);
+      for g in 0..(1usize<<st) \{ for p in 0..h \{
+        let i=g*2*h+p; let j=i+h; let w=tw[(st*(n/2)+g*h+p)%tw_sz];
+        let (l,r) = d.split_at_mut(j);
+        if schedule[st] \{ amo_bf_reduce(&mut l[i], &mut r[0], w); }
+        else \{ amo_bf_lazy(&mut l[i], &mut r[0], w); }
+      }}}
+    std::hint::black_box(&d);
+
+    // AMO benchmark ({lazyCount} lazy + {logN - lazyCount} reduce stages)
+    let start = std::time::Instant::now();
+    for _ in 0..iters \{
+      let mut d = orig.clone();
+      for st in 0..logn \{ let h = 1usize << (logn-st-1);
+        for g in 0..(1usize<<st) \{ for p in 0..h \{
+          let i=g*2*h+p; let j=i+h; let w=tw[(st*(n/2)+g*h+p)%tw_sz];
+          let (l,r) = d.split_at_mut(j);
+          if schedule[st] \{ amo_bf_reduce(&mut l[i], &mut r[0], w); }
+          else \{ amo_bf_lazy(&mut l[i], &mut r[0], w); }
+        }}}
+      std::hint::black_box(&d);
+    }
+    let amo_us = start.elapsed().as_secs_f64() / iters as f64 * 1e6;
+
+    // P3 benchmark (Montgomery every stage)
+    let start = std::time::Instant::now();
+    for _ in 0..iters \{
+      let mut d = orig.clone();
+      for st in 0..logn \{ let h = 1usize << (logn-st-1);
+        for g in 0..(1usize<<st) \{ for p in 0..h \{
+          let i=g*2*h+p; let j=i+h; let w=tw[(st*(n/2)+g*h+p)%tw_sz];
+          let (l,r) = d.split_at_mut(j); p3_bf(&mut l[i], &mut r[0], w);
+        }}}
+      std::hint::black_box(&d);
+    }
+    let p3_us = start.elapsed().as_secs_f64() / iters as f64 * 1e6;
+
+    let melem = {n}_f64 / (amo_us / 1e6) / 1e6;
+    println!(\"\{:.1},\{:.1},\{:.1},\{:+.1}\", amo_us, p3_us, melem, (1.0 - amo_us/p3_us)*100.0);
+}
+"
+
+/-- Drop-in replacement for Bench.lean's `genNTTBenchRust`.
+    Uses the full optimization pipeline (e-graph + bound analysis + per-stage dispatch). -/
+def genOptimizedBenchRust (fc : FieldConfig) (logN iters : Nat)
+    (hw : HardwareCost := arm_cortex_a76) : String :=
+  optimizedNTTRust fc hw logN iters
+
+-- ══════════════════════════════════════════════════════════════════
 -- Section 6: Verified NTT Code Emission (Trust-Lean Path A)
 -- ══════════════════════════════════════════════════════════════════
 
