@@ -18,6 +18,8 @@
   References:
   - SPIRAL: "Automatic Implementation of Signal Processing Algorithms"
   - Fiat-Crypto: "Simple High-Level Code For Cryptographic Arithmetic"
+
+  **UNTRUSTED (Path B)**: For verified codegen, use AmoLean.Bridge.VerifiedPipeline.
 -/
 
 import AmoLean.Sigma.Expand

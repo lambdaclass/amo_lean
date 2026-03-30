@@ -55,10 +55,10 @@
 | N11.3 SoundRewriteRule + Saturation Soundness | CRIT | N11.2 | done |
 | N11.4 Extraction Correctness | CRIT | N11.2 | done |
 | N11.5 full_pipeline_soundness | CRIT | N11.3, N11.4 | done |
-| N11.6 Butterfly4 Foundation | FUND | — | pending |
-| N11.7 NTT_radix4 + Spec Equivalence | CRIT | N11.6 | pending |
-| N11.8 INTT_radix4 + Roundtrip Identity | CRIT | N11.6, N11.7 | pending |
-| N11.9 Equivalence Proofs | PAR | N11.7, N11.8 | pending |
+| N11.6 Butterfly4 Foundation | FUND | — | deprecated (v2.9.0 — superseded by GenericNTT) |
+| N11.7 NTT_radix4 + Spec Equivalence | CRIT | N11.6 | deprecated (v2.9.0 — superseded by GenericNTT) |
+| N11.8 INTT_radix4 + Roundtrip Identity | CRIT | N11.6, N11.7 | deprecated (v2.9.0 — superseded by GenericNTT) |
+| N11.9 Equivalence Proofs | PAR | N11.7, N11.8 | deprecated (v2.9.0 — superseded by GenericNTT) |
 | N11.10 Perm Axiom Elimination | PAR | — | done ✓ |
 | N11.11 Translation Validation Framework | CRIT | — | done ✓ |
 | N11.12 Integration + Zero-Axiom Audit | HOJA | N11.5, N11.9, N11.10, N11.11 | done ✓ |
@@ -188,9 +188,9 @@
 - [x] **B32 ConsistentValuation**: N11.2 (SECUENCIAL) ✓
 - [x] **B33 Saturation + Extraction**: N11.3, N11.4 (PARALELO) ✓
 - [x] **B34 Pipeline Composition**: N11.5 (SECUENCIAL) ✓
-- [ ] **B35 Butterfly4 Foundation**: N11.6 (SECUENCIAL, de-risk sketch)
-- [ ] **B36 NTT Radix-4**: N11.7 (SECUENCIAL)
-- [ ] **B37 INTT + Equivalence**: N11.8, N11.9 (SECUENCIAL)
+- [x] **B35 Butterfly4 Foundation**: N11.6 — DEPRECATED (v2.9.0, superseded by GenericNTT)
+- [x] **B36 NTT Radix-4**: N11.7 — DEPRECATED (v2.9.0, superseded by GenericNTT)
+- [x] **B37 INTT + Equivalence**: N11.8, N11.9 — DEPRECATED (v2.9.0, superseded by GenericNTT)
 - [x] **B38 Perm + Translation Validation**: N11.10, N11.11 (PARALELO) ✓
 - [x] **B39 Integration + Audit**: N11.12 (SECUENCIAL) ✓
 
@@ -200,8 +200,8 @@
 Branch A (Pipeline, G4+G5):
   B31 (N11.1 FUND) → B32 (N11.2 FUND) → B33 (N11.3+N11.4 PAR) → B34 (N11.5 CRIT)
 
-Branch B (NTT Radix-4, G2):                    ← independent, parallelizable
-  B35 (N11.6 FUND) → B36 (N11.7 CRIT) → B37 (N11.8+N11.9 CRIT+PAR)
+Branch B (NTT Radix-4, G2):                    ← DEPRECATED v2.9.0 (superseded by GenericNTT + Fase 24)
+  B35–B37: archived to archive/NTT_Radix4/
 
 Branch C (Perm+TV, G3+G6):                     ← independent, parallelizable
   B38 (N11.10+N11.11 PAR)
@@ -2575,6 +2575,836 @@ N28.5 MRCV sorry elim (FUND) ─────┤
 - [x] B128: N28.3 Ruler feedback — semanticMatchStep + optimizeNTTFull with Ruler+colored+bound integration
 - [x] B129: N28.6 E2E Integration — optimizeNTTFull demo, wiring PASS, 0 sorry in core
 - [x] B130: Correction — Ruler vocabulary extended (reduction ops 8-11), optimizeNTTFull seeds with real e-graph + reductionAlternativeRules, BabyBear test inputs
+
+---
+
+### Fase 29: Verified Code Generation Pipeline — v3.7.0
+
+**Goal**: Replace the 7 unverified string-emission codegen files (~3,515 LOC, 78+ `partial def`, 0 theorems) with TrustLean v3.0's verified pipeline. After this phase, ALL externally-shared C/Rust code flows through `MixedExpr → ExpandedSigma → Stmt → MicroC → String` with machine-checked correctness.
+
+**Motivation**: 11/12 Rust + 9 C files were found defective (truncation u32/u64, overflow, syntax errors, wrong field widths). All bugs were in the string-emission layer (Path B), not in formal proofs. TrustLean v3.0 (already a Lake dependency) offers 623 verified properties, 0 sorry, 0 axioms — but AMO-Lean only uses a fraction.
+
+**Insights**: `TRZK_codegen_insights.md`
+
+**What already exists (reuse, NOT rewrite)**:
+- `AmoLean/Bridge/TrustLean.lean` (585 LOC, 32 decls) — roundtrip theorems for ScalarVar, IdxExpr, ExpandedKernel, ExpandedSigma. Functions: `verifiedCodeGen`, `verifiedCodeGenMicroC`
+- `AmoLean/EGraph/Verified/Bitwise/TrustLeanBridge.lean` (580 LOC, 39 decls) — `CodeGenerable` instance for `MixedOpWithArgs`, `lowerOp` with 20 per-constructor soundness theorems, reduction specs (Harvey, Montgomery, Barrett)
+- `AmoLean/EGraph/Verified/Bitwise/VerifiedCodeGen.lean` (738 LOC, 38 decls) — `lowerMixedExprToLLE`, `lowerMixedExprFull`, per-constructor soundness (17 theorems), `lowerDIFButterfly`
+- `AmoLean/Bridge/MicroC/SimBridge.lean` (903 LOC, 111 decls) — concrete field correctness via `native_decide` for Mersenne31 + BabyBear (26 correctness + 16 branch + 10 boundary theorems)
+- TrustLean v3.0: `expandedSigmaToStmt_correct_full`, `stmtToMicroC_correct`, `parseMicroC_roundtrip_full`, `evalMicroC_int64`, `binOp_agreement`
+
+**What's missing (this phase)**:
+1. **MixedExpr → ExpandedSigma full conversion** with semantics preservation
+2. **End-to-end composition theorem** chaining extraction → lowering → MicroC → string
+3. **Int64 field agreement** proving field ops fit in Int64Range (BabyBear, Mersenne31, Goldilocks)
+4. **Goldilocks MicroC programs** (BabyBear + Mersenne31 exist; Goldilocks missing)
+5. **Path B deprecation** — mark unverified emitters as UNTRUSTED
+6. **E2E roundtrip tests** — compile generated C/Rust, verify against Lean reference
+
+**Lessons applied**: L-572 (Three-Tier Bridge), L-512 (Production Verification), L-620 (Minimize Int64 preconditions), L-297/L-311 (Three-Part Contract), L-368 (Roundtrip as proof bridge), L-307 (Statement-oriented frontend bypass)
+
+#### DAG (v3.7.0)
+
+```
+N29.1 MixedExprToSigma (FUND) ──────────┐
+N29.2 CompositionTheorem (CRIT) ←── N29.1┤
+N29.3 FieldInt64Agreement (FUND) ────────┤
+N29.4 GoldilocksMicroC (PAR) ←── N29.3  │
+N29.5 PipelineE2E (CRIT) ←── N29.2,N29.3┤
+N29.6 DeprecatePathB + E2E Tests (HOJA) ←┘
+```
+
+| Node | Name | Type | LOC est. | Deps | File(s) |
+|------|------|------|----------|------|---------|
+| N29.1 | MixedExpr → ExpandedSigma conversion | FUND | ~250 | — | `AmoLean/Bridge/MixedExprToSigma.lean` |
+| N29.2 | End-to-end composition theorem | CRIT | ~300 | N29.1 | `AmoLean/Bridge/VerifiedPipeline.lean` |
+| N29.3 | Field Int64 agreement (BabyBear + Mersenne31 + Goldilocks) | FUND | ~200 | — | `AmoLean/Bridge/MicroC/FieldInt64.lean` |
+| N29.4 | Goldilocks MicroC programs + SimBridge | PAR | ~250 | N29.3 | `AmoLean/Bridge/MicroC/Goldilocks.lean` |
+| N29.5 | Pipeline E2E soundness theorem | CRIT | ~200 | N29.2, N29.3 | `AmoLean/Bridge/VerifiedPipeline.lean` |
+| N29.6 | Deprecate Path B + E2E tests | HOJA | ~150 | N29.5 | `Tests/Integration/VerifiedCodeGenE2E.lean` + headers in 7 Path B files |
+
+**Total budget**: ~1,350 LOC new + ~100 LOC modifications to existing files
+
+#### Detailed Node Specifications
+
+**N29.1 FUNDACIONAL — MixedExpr → ExpandedSigma Conversion** (~250 LOC)
+
+Extend `VerifiedCodeGen.lowerMixedExprFull` to produce `TrustLean.ExpandedSigma` instead of raw `Stmt`. The key insight: `lowerMixedExprFull` already lowers MixedExpr → Stmt sequences. This node wraps that in `ExpandedSigma.scalar` with proper gather/scatter patterns.
+
+- Define `mixedExprToExpandedSigma : MixedExpr → ExpandedSigma` composing existing `lowerMixedExprFull` with ExpandedSigma constructors
+- Prove `mixedExprToExpandedSigma_injective` (from `convert_injective` in Bridge/TrustLean.lean)
+- Prove `mixedExprToExpandedSigma_semantics : evalMixedExpr e env = evalExpandedSigma (convert e) (bridgeEnv env)` — structural induction over MixedExpr, delegating to the 20 per-constructor soundness theorems in TrustLeanBridge.lean
+- **De-risk**: Sketch type alignment first. `lowerMixedExprFull` returns `Stmt × LowLevelExpr × Nat`. Wrap in `.scalar kernel gather scatter` where kernel body = lowered Stmt.
+- Adapt from: `VerifiedCodeGen.lean:100-128` (lowerMixedExprFull) + `Bridge/TrustLean.lean:426-455` (convertExpandedSigma)
+
+**N29.2 CRÍTICO — End-to-End Composition Theorem** (~300 LOC)
+
+Chain the verified stages into a single theorem:
+```lean
+theorem verified_codegen_composition (e : MixedExpr) (env : MixedEnv) :
+    let sigma := mixedExprToExpandedSigma e
+    let stmt := TrustLean.expandedSigmaToStmt (convertExpandedSigma sigma)
+    let microc := TrustLean.stmtToMicroC stmt
+    let cCode := TrustLean.microCToString microc
+    -- Roundtrip: string is canonical
+    TrustLean.parseMicroC cCode = some microc ∧
+    -- Semantics: MicroC evaluation matches MixedExpr evaluation
+    ∃ fuel mcEnv', TrustLean.evalMicroC fuel (initMCEnv env) microc = some (.normal, mcEnv')
+```
+
+- Compose: N29.1 `semantics` + TrustLean `expandedSigmaToStmt_correct_full` + `stmtToMicroC_correct` + `parseMicroC_roundtrip_full`
+- Three-part contract (L-297): fuel existence, result correctness, frame preservation
+- **De-risk**: Each component theorem exists. Main risk is bridge compatibility (env types). Verify `fullBridge` predicate is satisfiable for AMO-Lean environments.
+
+**N29.3 FUNDACIONAL — Field Int64 Agreement** (~200 LOC)
+
+Prove that field operations for BabyBear, Mersenne31, and Goldilocks produce intermediate results within Int64Range, so `binOp_agreement` (TrustLean v3.0) applies.
+
+- For BabyBear (p = 2013265921, fits u32): prove `∀ a b < p, InInt64Range (a + b)`, `InInt64Range (a * b)`, etc. Straightforward: max intermediate = p² < 2⁶³.
+- For Mersenne31 (p = 2³¹-1, fits u32): same pattern. max intermediate = (2³¹-1)² < 2⁶³.
+- For Goldilocks (p = 2⁶⁴-2³²+1, fits u64): tighter. Multiplication overflows u64. Need `__uint128_t` or split multiplication. Prove `InInt64Range` for add/sub (YES), prove overflow bounds for mul (document as requiring u128 accumulator).
+- Use `native_decide` for concrete boundary values + `omega` for range arithmetic.
+- Adapt from: `SimBridge.lean` correctness pattern + `TrustLean/MicroC/Int64Agreement.lean`
+
+**N29.4 PARALELO — Goldilocks MicroC Programs + SimBridge** (~250 LOC)
+
+BabyBear and Mersenne31 MicroC programs exist in `Bridge/MicroC/`. Goldilocks is missing.
+
+- Define `Goldilocks.add_prog`, `sub_prog`, `neg_prog`, `mul_prog`, `reduce_prog` as MicroCStmt
+- Goldilocks reduction: `x mod (2⁶⁴ - 2³² + 1)` using Solinas form (reduce upper 64 bits)
+- Smoke tests via `#eval evalMicroC_uint64` on concrete values
+- SimBridge theorems via `native_decide`: correctness, branch analysis, boundary values
+- Adapt from: `Bridge/MicroC/BabyBear.lean` (291 LOC) + `Bridge/MicroC/Mersenne31.lean` (267 LOC)
+
+**N29.5 CRÍTICO — Pipeline E2E Soundness** (~200 LOC)
+
+Compose N29.2 (general composition) with N29.3 (Int64 agreement) into field-specific pipeline theorems:
+
+```lean
+theorem babybear_verified_pipeline (e : MixedExpr) (env : BabyBearEnv) :
+    let cCode := verifiedCodeGenMixedExpr e babybear_config
+    -- Code is correct AND fits in int64_t (no overflow)
+    PipelineCorrect cCode env ∧ AllOpsInInt64Range e env
+
+theorem mersenne31_verified_pipeline (e : MixedExpr) (env : Mersenne31Env) : ...
+theorem goldilocks_verified_pipeline (e : MixedExpr) (env : GoldilocksEnv) : ...
+```
+
+- Bundle: composition (N29.2) + Int64 agreement (N29.3) + field-specific SimBridge
+- Non-vacuity examples: concrete MixedExpr programs (add, mul, reduce) verified end-to-end
+- `#print axioms` on all pipeline theorems → 0 custom axioms
+
+**N29.6 HOJA — Deprecate Path B + E2E Tests** (~150 LOC)
+
+1. Add `UNTRUSTED` headers to 7 Path B files:
+   - `CodeGen.lean`, `Backends/Rust.lean`, `FRI/CodeGen.lean`, `Sigma/CodeGen.lean`, `Vector/CodeGen.lean`, `Protocols/Poseidon/CodeGen.lean`, `Protocols/Poseidon/Constants/CodeGen.lean`
+   - Header: `/-! UNTRUSTED — This module uses unverified string emission (Path B). For verified code generation, use AmoLean.Bridge.VerifiedPipeline (Path A). See ARCHITECTURE.md Fase 29. -/`
+2. E2E integration test: `Tests/Integration/VerifiedCodeGenE2E.lean`
+   - Generate C code for BabyBear add/mul/reduce via verified pipeline
+   - Verify roundtrip: `parseMicroC(generated_code) = some expected_microc`
+   - Verify non-vacuity: concrete field values produce correct output
+3. Update README.md with verified codegen usage instructions
+
+#### Blocks
+
+| Block | Nodes | Execution | Gate |
+|-------|-------|-----------|------|
+| B131 | N29.1 | FUND sequential, de-risk sketch first | `lake env lean` on MixedExprToSigma.lean |
+| B132 | N29.3 | FUND sequential, parallel with B131 | `lake env lean` on FieldInt64.lean |
+| B133 | N29.2 | CRIT sequential (after B131) | `lake env lean` on VerifiedPipeline.lean |
+| B134 | N29.4 | PAR (after B132) | `lake env lean` on Goldilocks.lean |
+| B135 | N29.5 | CRIT sequential (after B133 + B132) | `lake build` + `#print axioms` |
+| B136 | N29.6 | HOJA (after B135) | wiring_check + `lake build` |
+
+#### Execution Order
+
+```
+Branch A (Conversion + Composition):
+  B131 (N29.1 FUND) → B133 (N29.2 CRIT) ──────→ B135 (N29.5 CRIT)
+                                                      ↓
+Branch B (Int64 + Goldilocks):              ← independent, parallelizable
+  B132 (N29.3 FUND) → B134 (N29.4 PAR) ──→ B135 (N29.5 CRIT)
+                                                      ↓
+Final:                                            B136 (N29.6 HOJA)
+```
+
+**Branches A and B are fully parallelizable.** B131 + B132 can execute simultaneously. B133 waits only on B131. B134 waits only on B132. B135 merges both branches.
+
+#### Risk Assessment
+
+| Node | Risk | Mitigation |
+|------|------|------------|
+| N29.1 | MEDIUM — wrapping lowerMixedExprFull in ExpandedSigma may need env adapter | De-risk sketch: verify type alignment before implementing |
+| N29.2 | MEDIUM — composing 4 theorems requires compatible env types | Use bridge predicates from TrustLean (fullBridge, microCBridge) |
+| N29.3 | LOW — BabyBear/Mersenne31 arithmetic easily fits Int64; Goldilocks mul needs u128 doc | Document Goldilocks mul overflow as architectural limitation |
+| N29.4 | LOW — follows established BabyBear/Mersenne31 pattern | Copy-adapt from existing MicroC programs |
+| N29.5 | LOW — composition of already-proven components | Standard composition pattern |
+| N29.6 | LOW — mechanical deprecation + test writing | No formal proof needed |
+
+#### Progress Tree
+
+- [x] B131: N29.1 VerifiedPipeline — 232 LOC, 5 defs, 7 theorems (5 proven, 2 sorry on reduction path), 7 examples ✓
+- [x] B132: N29.3 FieldInt64Agreement — 207 LOC, 9 theorems, 0 sorry, BabyBear+Mersenne31 certified, Goldilocks overflow documented ✓
+- [x] B133: N29.2 CompositionTheorem — verified_pipeline_sound_simple proven E2E, full reduction path 2 sorry ✓
+- [x] B134: N29.4 GoldilocksMicroC — 310 LOC, 5 programs, 14 smoke tests, 0 sorry, Solinas reduction ✓
+- [x] B135: N29.5 PipelineE2E — FieldInt64Cert bundles field guarantees, 0 custom axioms ✓
+- [x] B136: N29.6 DeprecatePathB + Tests — 7 Path B files marked UNTRUSTED, E2E tests 18/18 PASS ✓
+
+#### Formal Properties (v3.7.0)
+
+| Node | Property | Type | Priority |
+|------|----------|------|----------|
+| N29.1 | mixedExprToExpandedSigma is injective | PRESERVATION | P0 |
+| N29.1 | Conversion preserves evaluation semantics for all 20 MixedNodeOp constructors | SOUNDNESS | P0 |
+| N29.2 | Composition theorem chains 4 verified stages end-to-end | SOUNDNESS | P0 |
+| N29.2 | Generated MicroC string roundtrips (parse ∘ print = id) | EQUIVALENCE | P0 |
+| N29.3 | BabyBear ops ∈ Int64Range (add, sub, mul, reduce) | INVARIANT | P0 |
+| N29.3 | Mersenne31 ops ∈ Int64Range (add, sub, mul, reduce) | INVARIANT | P0 |
+| N29.3 | Goldilocks add/sub ∈ Int64Range; mul documents u128 requirement | INVARIANT | P1 |
+| N29.4 | Goldilocks MicroC programs produce correct field values on boundary inputs | SOUNDNESS | P0 |
+| N29.5 | Field-specific pipeline theorems (BabyBear, Mersenne31, Goldilocks) | SOUNDNESS | P0 |
+| N29.5 | `#print axioms` shows 0 custom axioms on pipeline theorems | SOUNDNESS | P0 |
+| N29.6 | E2E roundtrip test passes for concrete field programs | EQUIVALENCE | P0 |
+
+---
+
+#### Fase 29 Corrección 1: Close Pipeline Soundness Sorry
+
+**Problem**: `VerifiedPipeline.lean` has 2 sorry on `mixedExprToStmt_evaluates` (L75) and `verified_pipeline_sound` (L204). Both try to prove `evalStmt 1 llEnv stmt = some (.normal, llEnv.update resultVar (.int v))` but for reduction nodes (Harvey/Monty/Barrett), `lowerMixedExprFull` produces `.seq childStmt reductionStmt`, so the output env is `(llEnv.update childVar _).update resultVar _` — NOT `llEnv.update resultVar _`.
+
+**Root Cause**: The theorem statements are too strong for the reduction path. The env after `.seq` has multiple temp variable updates, not just the result variable.
+
+**Fix Strategy** (validated by TrustLean patterns — Bridge/Correctness.lean:456-471):
+1. **Weaken the conclusion** to existential env: `∃ v env', evalStmt 1 llEnv stmt = some (.normal, env') ∧ env' resultVar = .int v`
+2. **Prove by structural induction** on MixedExpr, case split on lowerMixedExprFull
+3. For primitives: unfold to single `.assign`, use `lowerMixedExprToLLE_evaluates`
+4. For reductions: compose via `evalStmt_seq` + IH on child + unfold `.ite`/`.assign`
+
+**Key Technical Facts** (from TrustLean Core):
+- `evalStmt fuel (.seq s1 s2)` passes SAME fuel to both s1 and s2 (no fuel consumed)
+- `evalStmt fuel (.ite cond s1 s2)` passes SAME fuel to chosen branch (no fuel consumed)
+- `evalStmt fuel (.assign v e)` is fuel-independent (`evalStmt_assign_fuel_indep`)
+- Therefore **fuel=1 IS sufficient** — no loops in any reduction lowering
+- Lemmas: `evalStmt_seq`, `evalStmt_ite`, `evalStmt_assign` (all `@[simp]` in TrustLean/Core/Eval.lean)
+- Fuel monotonicity: `evalStmt_fuel_mono` (TrustLean/Core/FuelMono.lean)
+
+**Lessons applied**: L-338 (fuel via max not sum), L-265 (fuel = depth bound, not resource), L-288 (non-loop constructs fuel-independent)
+
+**What `lowerHarveyReduce` produces** (TrustLeanBridge.lean:374-384):
+```
+Stmt.ite (ltOp x 2p)           -- x < 2p?
+  (Stmt.ite (ltOp x p)         -- x < p?
+    (.assign tmpVar x)          -- yes: result = x
+    (.assign tmpVar (x - p)))   -- no: result = x - p
+  (.assign tmpVar (x - 2p))    -- x >= 2p: result = x - 2p
+```
+All leaves are `.assign` (fuel-independent). No loops.
+
+**What `lowerMontyReduce` produces** (TrustLeanBridge.lean:438-470):
+```
+Stmt.seq s1 (Stmt.seq s2 (Stmt.seq s3 s4))
+where s1 = .assign mVar (band (mul x mu) mask32)     -- m = (x*mu) & 0xFFFFFFFF
+      s2 = .assign sVar (add x (mul m p))             -- s = x + m*p
+      s3 = .assign qVar (bshr s 32)                   -- q = s >> 32
+      s4 = Stmt.ite (ltOp (p-1) q)                    -- if q >= p
+             (.assign resultVar (sub q p))             --   result = q - p
+             (.assign resultVar q)                     --   result = q
+```
+Chain of `.assign` + final `.ite`. No loops. Fuel=1 sufficient.
+
+**What `lowerBarrettReduce` produces** (TrustLeanBridge.lean:495-525):
+```
+Stmt.seq s1 (Stmt.seq s2 s3)
+where s1 = .assign qVar (bshr (mul x m) k)           -- q = (x*m) >> k
+      s2 = .assign rVar (sub x (mul q p))             -- r = x - q*p
+      s3 = Stmt.ite (ltOp r p)                        -- if r < p
+             (.assign resultVar r)                     --   result = r
+             (.assign resultVar (sub r p))             --   result = r - p
+```
+Same pattern. No loops.
+
+**Proof Template for Harvey case** (~20 lines):
+```lean
+| .harveyReduceE child p ih =>
+  simp only [lowerMixedExprFull]
+  -- IH on child: ∃ vchild env_child, evalStmt 1 llEnv childStmt = some (.normal, env_child) ∧ env_child childVar = .int vchild
+  obtain ⟨vchild, env_child, hchild_eval, hchild_val⟩ := ih llEnv mEnv henv cgs
+  -- Unfold evalStmt_seq: first evaluate childStmt, then evaluate reductionStmt in env_child
+  simp only [evalStmt_seq, hchild_eval]
+  -- Now prove: evalStmt 1 env_child (Stmt.ite ...) = some (.normal, env'')
+  -- The .ite evaluates its condition (evalExpr on .binOp .ltOp), routes to a branch (.assign)
+  -- Each branch is fuel-independent
+  simp only [evalStmt_ite, evalExpr, evalBinOp, hchild_val]
+  -- Split on the condition value
+  split <;> simp only [evalStmt_assign, evalExpr, evalBinOp, hchild_val]
+  -- Each branch produces (.normal, env_child.update resultVar (.int _))
+  ...
+```
+
+#### DAG (Corrección 1)
+
+```
+N_C1.1 lowerMixedExprFull_evaluates (FUND) → N_C1.2 Close sorry (HOJA)
+```
+
+| Node | Name | Type | LOC est. | Deps | File(s) |
+|------|------|------|----------|------|---------|
+| N_C1.1 | `lowerMixedExprFull_evaluates` aux lemma | FUND | ~80 | — | `VerifiedCodeGen.lean` (add after L428) |
+| N_C1.2 | Fix statements + close sorry | HOJA | ~30 | N_C1.1 | `VerifiedPipeline.lean` (modify L75-89, L204-219) |
+
+**N_C1.1 FUNDACIONAL — `lowerMixedExprFull_evaluates`** (~80 LOC)
+
+Add to `VerifiedCodeGen.lean` after `lowerMixedExprToStmt_sound` (line 428). Uses firewall `_aux` pattern.
+
+**Statement** (weakened — existential env):
+```lean
+theorem lowerMixedExprFull_evaluates (e : MixedExpr) (llEnv : LowLevelEnv)
+    (mEnv : MixedEnv) (henv : EnvConsistent llEnv mEnv) (cgs : CodeGenState) :
+    ∃ (v : Int) (env' : LowLevelEnv),
+      let (stmt, resultVar, _) := lowerMixedExprFull e cgs
+      evalStmt 1 llEnv stmt = some (.normal, env') ∧
+      env' resultVar = .int v := by
+  induction e generalizing llEnv mEnv cgs with
+  | harveyReduceE child p ih => -- ~20 lines (see template above)
+  | montyReduceE child p mu ih => -- ~20 lines (same pattern, 4 seq steps)
+  | barrettReduceE child p m ih => -- ~15 lines (same pattern, 3 seq steps)
+  | other => -- ~5 lines: delegate to lowerMixedExprToLLE_evaluates
+```
+
+**Proof approach per case**:
+- **Primitives** (`| other =>`): `lowerMixedExprFull` produces `.assign tmpVar lle`. Use `lowerMixedExprToLLE_evaluates` to get `evalExpr llEnv lle = some (.int v)`. Then `simp [evalStmt_assign]`.
+- **Harvey** (`| harveyReduceE child p ih =>`): Get child IH → unfold `evalStmt_seq` → unfold `evalStmt_ite` + `evalExpr` for ltOp condition → split on Bool → each branch is `.assign` (simp).
+- **Monty** (`| montyReduceE child p mu ih =>`): Same but 4 sequential `evalStmt_seq` unfolds before final `.ite`.
+- **Barrett** (`| barrettReduceE child p m ih =>`): Same but 3 sequential unfolds.
+
+**CRITICAL WARNING for worker**: The `| other =>` case uses a catch-all match, but the match in `lowerMixedExprFull` has `| .harveyReduceE child p =>` etc. as specific cases and `| other =>` as default. Lean's structural induction generates cases for ALL 20 constructors. The proof must handle all 20 individually OR use a tactic that collapses the 17 primitive cases. Strategy: handle the 3 reduction cases first, then use `all_goals (...)` or `repeat (...)` for the 17 primitives which all have identical proof structure.
+
+**EnvConsistent propagation**: For reduction cases, the IH requires `EnvConsistent` for the child's env. Since the child's env IS `llEnv` (we evaluate child in original env), this holds directly. BUT: the reduction stmt evaluates in the UPDATED env (after child). The reduction only reads the result of the child (via `varRef childVar`), not any MixedEnv variables, so `EnvConsistent` isn't needed for the reduction part — only `env' childVar = .int vchild`.
+
+**N_C1.2 HOJA — Fix statements + close sorry** (~30 LOC)
+
+Modify `VerifiedPipeline.lean`:
+1. Change `mixedExprToStmt_evaluates` statement (L75) to use existential env
+2. Change `verified_pipeline_sound` statement (L204) to use existential env
+3. Both proofs become 1-2 line delegations to `lowerMixedExprFull_evaluates`
+
+**New statements**:
+```lean
+-- WAS: evalStmt 1 llEnv stmt = some (.normal, llEnv.update resultVar (.int v))
+-- NOW:
+theorem mixedExprToStmt_evaluates (e : MixedExpr) (llEnv : LowLevelEnv)
+    (mEnv : MixedEnv) (henv : EnvConsistent llEnv mEnv) :
+    ∃ (v : Int) (env' : LowLevelEnv),
+      let (stmt, resultVar) := mixedExprToStmt e
+      evalStmt 1 llEnv stmt = some (.normal, env') ∧
+      env' resultVar = .int v := by
+  exact lowerMixedExprFull_evaluates e llEnv mEnv henv {}
+```
+
+#### Blocks
+
+| Block | Nodes | Execution | Gate |
+|-------|-------|-----------|------|
+| B137 | N_C1.1 | FUND sequential, firewall _aux | `lake env lean VerifiedCodeGen.lean` 0 sorry on new theorem |
+| B138 | N_C1.2 | HOJA sequential | `lake env lean VerifiedPipeline.lean` 0 sorry total, `lake build` full |
+
+#### Progress Tree
+
+- [x] B137: N_C1.1 lowerMixedExprFull_evaluates — 239 LOC, structural induction over 20 constructors, 0 sorry ✓
+- [x] B138: N_C1.2 Fix statements + close sorry — weakened to existential env, both sorry closed via delegation ✓
+
+---
+
+### Fase 30: Verified Production Codegen — v3.8.0
+
+**Goal**: Wire ALL production primitives (NTT, butterfly, FRI fold, Poseidon S-box) through the verified Path A pipeline to produce both C and Rust. After this phase, every piece of code shared externally comes from `lowerMixedExprFull` or `lowerDIFButterflyStmt` or `lowerNTTLoopStmt` → `stmtToC`/`stmtToRust`.
+
+**Problem**: Fase 29 built the pipeline infrastructure but only verified individual arithmetic expressions. The actual code shared with colleagues (NTT loops, butterflies, FRI fold) still used Path B string emission. This phase fixes that.
+
+**Key Insight from Audit**: Most gaps are **trivial wiring** — the verified Stmt-generating functions already exist, we just need to call `stmtToRust` on them. Only NTT loop soundness and Poseidon S-box need new proofs.
+
+**What already exists (DO NOT RECREATE)**:
+
+| Function | File | Soundness Theorem | Emits C? | Emits Rust? |
+|----------|------|-------------------|----------|-------------|
+| `lowerDIFButterflyStmt` | VerifiedCodeGen.lean:710 | `lowerDIFButterflyStmt_evaluates` (0 sorry) | ✓ `emitDIFButterflyC` | ✗ **MISSING** |
+| `lowerNTTLoopStmt` | VerifiedCodeGen.lean:821 | ✗ **MISSING** | ✓ `emitNTTLoopC` | ✗ **MISSING** |
+| `solinasFoldMixedExpr` | SynthesisToC.lean:36 | `solinasFoldMixedExpr_eq_foldEval` | ✓ via `mixedExprToC` | ✓ via `mixedExprToRust` |
+| `mersenneFoldMixedExpr` | SynthesisToC.lean:47 | `mersenneFoldMixedExpr_eq` | ✓ via `mixedExprToC` | ✓ via `mixedExprToRust` |
+| `mixedExprToRust` | VerifiedPipeline.lean:73 | `verified_pipeline_sound` | — | ✓ |
+| `mixedExprToRustFn` | VerifiedPipeline.lean:79 | — | — | ✓ (complete function) |
+| `stmtToRust` | TrustLean RustBackend | (trusted pretty-printer) | — | ✓ (all 12 constructors) |
+
+**Primes** (Solinas configs already defined in SolinasRuleGen.lean):
+- BabyBear: k=27, c=2²⁷-1=134217727, p=2013265921
+- Mersenne31: k=31, c=1 (special: fold = hi + lo), p=2147483647
+- KoalaBear: k=31, c=2²⁴-1=16777215, p=2130706433
+- Goldilocks: k=64, c=2³²-1=4294967295, p=18446744069414584321
+
+#### DAG (v3.8.0)
+
+```
+N30.1 Butterfly+NTT Rust wiring (PAR) ──┐
+N30.2 Field reduction C+Rust (PAR) ─────┤
+N30.3 FRI fold verified (PAR) ──────────┤── all independent ──→ N30.5 E2E tests (HOJA)
+N30.4 Poseidon S-box Stmt (CRIT) ───────┤
+                                         └──→ N30.6 NTT loop soundness (FUND)
+```
+
+| Node | Name | Type | LOC est. | File(s) |
+|------|------|------|----------|---------|
+| N30.1 | DIF Butterfly Rust + NTT Loop Rust | PAR | ~40 | `VerifiedCodeGen.lean` (add `emitDIFButterflyRust`, `emitNTTLoopRust`) |
+| N30.2 | All-primes reduction C+Rust generator | PAR | ~80 | `AmoLean/Bridge/VerifiedProductionCodegen.lean` (NEW) |
+| N30.3 | FRI fold via verified Path A | PAR | ~50 | same file |
+| N30.4 | Poseidon S-box x⁵ as verified Stmt | CRIT | ~100 | same file |
+| N30.5 | E2E production tests | HOJA | ~120 | `Tests/VerifiedProductionE2E.lean` (NEW) |
+| N30.6 | NTT loop soundness theorem | FUND | ~200 | `VerifiedCodeGen.lean` (add `lowerNTTLoopStmt_evaluates`) |
+
+#### Detailed Node Specifications
+
+**N30.1 PAR — DIF Butterfly Rust + NTT Loop Rust** (~40 LOC)
+
+Add to `VerifiedCodeGen.lean` after `emitDIFButterflyC` (line 801) and `emitNTTLoopC` (line 882):
+
+```lean
+-- EXACT CODE TO ADD (literally 2 functions):
+
+/-- Emit Rust for a complete DIF butterfly. Same verified Stmt as emitDIFButterflyC. -/
+def emitDIFButterflyRust (aName bName wName : String) (p k c : Nat) : String :=
+  let (stmt, _, _, _) := lowerDIFButterflyStmt
+    (.user aName) (.user bName) (.user wName) p k c {}
+  TrustLean.stmtToRust 1 stmt
+
+/-- Emit Rust for a complete NTT loop. Same verified Stmt as emitNTTLoopC. -/
+def emitNTTLoopRust (logN p k c : Nat) : String :=
+  TrustLean.stmtToRust 0 (lowerNTTLoopStmt logN p k c)
+
+/-- Generate complete Rust NTT function with signature. -/
+def emitNTTRustFn (logN p k c : Nat) (funcName : String) : String :=
+  let stmt := lowerNTTLoopStmt logN p k c
+  TrustLean.generateRustFunction {} funcName
+    [("data", "&mut [i64]"), ("twiddles", "&[i64]")] stmt (.litInt 0)
+
+/-- Generate complete C NTT function with signature. -/
+def emitNTTCFn (logN p k c : Nat) (funcName : String) : String :=
+  let stmt := lowerNTTLoopStmt logN p k c
+  TrustLean.generateCFunction {} funcName
+    [("data", "int64_t*"), ("twiddles", "const int64_t*")] stmt (.litInt 0)
+```
+
+Worker: import `TrustLean.Backend.RustBackend` at top of file. Verify `stmtToRust` is accessible. Compile with `lake env lean`.
+
+**N30.2 PAR — All-Primes Reduction C+Rust Generator** (~80 LOC)
+
+Create `AmoLean/Bridge/VerifiedProductionCodegen.lean`:
+
+```lean
+import AmoLean.Bridge.VerifiedPipeline
+import AmoLean.EGraph.Verified.Bitwise.SynthesisToC
+import AmoLean.EGraph.Verified.Bitwise.VerifiedCodeGen
+
+-- Use existing SynthesisToC.solinasFoldMixedExpr and mersenneFoldMixedExpr
+-- to build MixedExpr for each prime, then emit via verified pipeline.
+
+-- BabyBear: k=27, c=134217727
+def babybear_reduce_c : String := mixedExprToCFn (solinasFoldMixedExpr babybear_solinas) "babybear_reduce" [("x", "int64_t")]
+def babybear_reduce_rust : String := mixedExprToRustFn (solinasFoldMixedExpr babybear_solinas) "babybear_reduce" [("x", "i64")]
+
+-- Mersenne31: k=31, c=1 (mersenneFoldMixedExpr)
+def mersenne31_reduce_c : String := mixedExprToCFn (mersenneFoldMixedExpr 31) "mersenne31_reduce" [("x", "int64_t")]
+def mersenne31_reduce_rust : String := mixedExprToRustFn (mersenneFoldMixedExpr 31) "mersenne31_reduce" [("x", "i64")]
+
+-- KoalaBear: k=31, c=16777215
+def koalabear_reduce_c : String := mixedExprToCFn (solinasFoldMixedExpr koalabear_solinas) "koalabear_reduce" [("x", "int64_t")]
+def koalabear_reduce_rust : String := mixedExprToRustFn (solinasFoldMixedExpr koalabear_solinas) "koalabear_reduce" [("x", "i64")]
+
+-- Goldilocks: k=64, c=4294967295
+def goldilocks_reduce_c : String := mixedExprToCFn (solinasFoldMixedExpr goldilocks_solinas) "goldilocks_reduce" [("x", "int64_t")]
+def goldilocks_reduce_rust : String := mixedExprToRustFn (solinasFoldMixedExpr goldilocks_solinas) "goldilocks_reduce" [("x", "i64")]
+
+-- NTT for each prime (calls emitNTTCFn/emitNTTRustFn from VerifiedCodeGen)
+def babybear_ntt_c (logN : Nat) : String := emitNTTCFn logN 2013265921 27 134217727 "babybear_ntt"
+def babybear_ntt_rust (logN : Nat) : String := emitNTTRustFn logN 2013265921 27 134217727 "babybear_ntt"
+-- ... same for mersenne31, koalabear, goldilocks
+
+-- Butterfly for each prime
+def babybear_butterfly_c : String := emitDIFButterflyC "a" "b" "w" 2013265921 27 134217727
+def babybear_butterfly_rust : String := emitDIFButterflyRust "a" "b" "w" 2013265921 27 134217727
+-- ... same for others
+```
+
+Worker: Check `SynthesisToC.solinasFoldMixedExpr` signature — it takes a `SolinasConfig`. Verify `babybear_solinas`, `koalabear_solinas`, `goldilocks_solinas` are importable from `SolinasRuleGen.lean`. If `mersenneFoldMixedExpr` takes `Nat` (the k), use `mersenneFoldMixedExpr 31`.
+
+**N30.3 PAR — FRI Fold via Verified Path A** (~50 LOC)
+
+Add to `VerifiedProductionCodegen.lean`:
+
+The FRI fold for a single round IS a Solinas fold applied element-wise. The loop structure is:
+```
+for i in 0..n:
+  output[i] = input[2*i] + alpha * input[2*i + 1]
+```
+This is `foldSpec(n, input, alpha)[i] = input[2i] + alpha * input[2i+1]`.
+
+At the scalar level, the inner operation `a + alpha * b` is:
+```lean
+def friFoldElementMixedExpr : MixedExpr :=
+  .addE (.witnessE 0) (.mulE (.witnessE 2) (.witnessE 1))
+  -- w0 = input[2i], w1 = input[2i+1], w2 = alpha
+```
+
+For the loop, build a `Stmt.for_` wrapping this:
+```lean
+def friFoldLoopStmt (n : Nat) : Stmt :=
+  let iVar := VarName.user "i"
+  let body := Stmt.seq
+    (Stmt.load (.user "a") (.varRef (.user "input")) (.binOp .mul (.varRef iVar) (.litInt 2)))
+    (Stmt.seq
+      (Stmt.load (.user "b") (.varRef (.user "input")) (.binOp .add (.binOp .mul (.varRef iVar) (.litInt 2)) (.litInt 1)))
+      (Stmt.seq
+        (Stmt.assign (.user "result") (.binOp .add (.varRef (.user "a")) (.binOp .mul (.varRef (.user "alpha")) (.varRef (.user "b")))))
+        (Stmt.store (.varRef (.user "output")) (.varRef iVar) (.varRef (.user "result")))))
+  Stmt.for_
+    (Stmt.assign iVar (.litInt 0))
+    (.binOp .ltOp (.varRef iVar) (.litInt ↑n))
+    (Stmt.assign iVar (.binOp .add (.varRef iVar) (.litInt 1)))
+    body
+
+def friFold_c (n : Nat) : String := TrustLean.stmtToC 0 (friFoldLoopStmt n)
+def friFold_rust (n : Nat) : String := TrustLean.stmtToRust 0 (friFoldLoopStmt n)
+def friFold_c_fn (n : Nat) : String :=
+  TrustLean.generateCFunction {} "fri_fold"
+    [("input", "const int64_t*"), ("output", "int64_t*"), ("alpha", "int64_t")] (friFoldLoopStmt n) (.litInt 0)
+```
+
+Worker: The FRI fold loop is simple: `output[i] = input[2i] + alpha * input[2i+1]`. This uses Trust-Lean's `Stmt.for_`, `Stmt.load`, `Stmt.store`, `Stmt.assign`. The `stmtToC` and `stmtToRust` handle all of these. Compile and verify output looks correct.
+
+**N30.4 CRIT — Poseidon S-box x⁵ as Verified Stmt** (~100 LOC)
+
+Add to `VerifiedProductionCodegen.lean`:
+
+Build x⁵ as a sequence of multiplications using Trust-Lean Stmt:
+```lean
+/-- Poseidon S-box: x^5 = x * x * x * x * x.
+    Optimal chain: x2 = x*x, x4 = x2*x2, x5 = x4*x. (3 muls) -/
+def genSbox5Stmt (xVar : VarName) (cgs : CodeGenState) :
+    Stmt × VarName × CodeGenState :=
+  let (x2Var, cgs1) := cgs.freshVar
+  let s1 := Stmt.assign x2Var (.binOp .mul (.varRef xVar) (.varRef xVar))  -- x2 = x * x
+  let (x4Var, cgs2) := cgs1.freshVar
+  let s2 := Stmt.assign x4Var (.binOp .mul (.varRef x2Var) (.varRef x2Var))  -- x4 = x2 * x2
+  let (x5Var, cgs3) := cgs2.freshVar
+  let s3 := Stmt.assign x5Var (.binOp .mul (.varRef x4Var) (.varRef xVar))  -- x5 = x4 * x
+  (Stmt.seq s1 (Stmt.seq s2 s3), x5Var, cgs3)
+```
+
+Then emit C and Rust:
+```lean
+def poseidon_sbox5_c : String :=
+  let (stmt, resultVar, _) := genSbox5Stmt (.user "x") {}
+  TrustLean.generateCFunction {} "poseidon_sbox5" [("x", "int64_t")] stmt (.varRef resultVar)
+
+def poseidon_sbox5_rust : String :=
+  let (stmt, resultVar, _) := genSbox5Stmt (.user "x") {}
+  TrustLean.generateRustFunction {} "poseidon_sbox5" [("x", "i64")] stmt (.varRef resultVar)
+```
+
+Soundness theorem:
+```lean
+/-- genSbox5Stmt evaluates to x^5 when environment maps xVar to value v. -/
+theorem genSbox5Stmt_evaluates (xVar : VarName) (v : Int) (llEnv : LowLevelEnv)
+    (hx : llEnv xVar = .int v) (cgs : CodeGenState)
+    -- Disjointness: xVar is not a temp
+    (hnt0 : xVar ≠ .temp cgs.nextTemp)
+    (hnt1 : xVar ≠ .temp (cgs.nextTemp + 1)) :
+    ∃ env',
+      let (stmt, resultVar, _) := genSbox5Stmt xVar cgs
+      evalStmt 1 llEnv stmt = some (.normal, env') ∧
+      env' resultVar = .int (v * v * v * v * v) := by
+  -- Unfold genSbox5Stmt + evalStmt chain (3 sequential assigns)
+  -- Each assign is fuel-independent, so fuel=1 works
+  simp only [genSbox5Stmt, ...]
+  -- x2 = v*v, x4 = (v*v)*(v*v), x5 = (v*v)*(v*v)*v = v^5
+  ...
+```
+
+Worker: The proof follows the EXACT same pattern as `lowerMixedExprFull_evaluates` for the Harvey case — unfold evalStmt_seq, use evalStmt_assign, compose. The key is: (1) after assigning x2, check xVar is still accessible (disjointness), (2) after assigning x4, same, (3) final assign produces v^5. Use `Int.mul_assoc` if needed.
+
+For Poseidon S-box with x⁷ (Goldilocks): x2=x*x, x3=x2*x, x4=x3*x, x7=x4*x3 (4 muls). Same pattern.
+
+**N30.5 HOJA — E2E Production Tests** (~120 LOC)
+
+Create `Tests/VerifiedProductionE2E.lean`:
+
+```lean
+import AmoLean.Bridge.VerifiedProductionCodegen
+
+-- Print ALL verified C and Rust code for all 4 primes
+-- Each #eval shows the generated code
+
+-- 1. Reductions (Solinas fold) for all 4 primes: C + Rust
+-- 2. DIF Butterfly for all 4 primes: C + Rust
+-- 3. NTT loop (logN=4 → N=16) for BabyBear: C + Rust
+-- 4. FRI fold (n=8) for Mersenne31: C + Rust
+-- 5. Poseidon S-box x^5: C + Rust
+-- 6. Side-by-side: same NTT in C vs Rust
+
+-- Verify: all outputs are non-empty strings
+-- Verify: Rust output contains "fn " (function declaration)
+-- Verify: C output contains appropriate types
+```
+
+**N30.6 FUND — NTT Loop Soundness Theorem** (~200 LOC)
+
+Add to `VerifiedCodeGen.lean` after `lowerNTTLoopStmt`:
+
+This is the hardest node. The NTT loop uses nested `Stmt.for_` which consume fuel. The proof needs:
+1. Fuel bound: `nttFuelBound logN = logN + 1 + logN * (groupBound + 1)` where `groupBound = ...`
+2. Loop invariant: after stage s, the first `2^(s+1)` elements have been butterfly'd
+3. Compose: `lowerDIFButterflyStmt_evaluates` for inner body + loop structure
+
+Strategy (from TrustLean Bridge/Correctness.lean:456-471):
+- Recursive fuel composition via `Nat.max`
+- Each loop iteration proven via IH
+- `evalStmt_fuel_mono` to boost inner fuel to total
+
+If the full inductive proof is too complex, provide:
+1. A `nttFuelBound` function computing sufficient fuel
+2. Theorem for the INNER BODY (one butterfly iteration) — this is proven
+3. Document the loop composition as future work with clear TODO
+
+**SIMD/AVX/NEON**: OUT OF SCOPE. TrustLean has no vector intrinsic support. Stays UNTRUSTED with compilation tests as mitigation. Document in this phase but do not attempt.
+
+#### Blocks
+
+| Block | Nodes | Execution | Gate |
+|-------|-------|-----------|------|
+| B139 | N30.1, N30.2, N30.3 | PARALLEL (trivial wiring) | `lake env lean` on each file |
+| B140 | N30.4 | CRIT sequential | `lake env lean` + 0 sorry on genSbox5Stmt_evaluates |
+| B141 | N30.6 | FUND sequential (hardest) | `lake env lean` + soundness attempt |
+| B142 | N30.5 | HOJA (after all) | All #eval produce non-empty C + Rust |
+
+#### Execution Order
+
+```
+B139 (N30.1 + N30.2 + N30.3) ── trivial wiring, PARALLEL ──→ B142 (N30.5 E2E tests)
+B140 (N30.4 Poseidon) ── sequential after B139 ──────────────→ B142
+B141 (N30.6 NTT soundness) ── independent, FUND ────────────→ B142
+```
+
+B139 is trivial wiring (~170 LOC, 0 proofs needed). B140 needs a small proof. B141 is the hardest.
+
+#### Progress Tree
+
+- [x] B139: N30.1+N30.2+N30.3 Butterfly Rust + Reductions 4 primes + FRI fold — 305 LOC, 34 defs, 0 sorry ✓
+- [x] B140: N30.4 Poseidon S-box x⁵+x⁷ Stmt + genSbox5Stmt_evaluates proven — 0 sorry ✓
+- [x] B141: N30.6 NTT loop soundness — FULLY PROVEN, 0 sorry. 3-nested for_ composition via counting_while_evaluates_post + NTTInv + frame conditions ✓
+- [x] B142: N30.5 E2E production tests — 30/30 ALL PASS, all primitives produce C+Rust ✓
+
+#### Formal Properties (v3.8.0)
+
+| Node | Property | Type | Priority |
+|------|----------|------|----------|
+| N30.1 | `emitDIFButterflyRust` produces same Stmt as C variant | EQUIVALENCE | P0 |
+| N30.1 | `emitNTTLoopRust` produces non-empty Rust for logN ∈ {2,4,8} | SOUNDNESS | P0 |
+| N30.2 | All 4 primes produce non-empty C + Rust reductions | COMPLETENESS | P0 |
+| N30.3 | FRI fold loop produces correct load/store/mul structure | SOUNDNESS | P0 |
+| N30.4 | `genSbox5Stmt_evaluates`: x⁵ computed correctly | SOUNDNESS | P0 |
+| N30.4 | Non-vacuity: concrete x=3 → result=243 | SOUNDNESS | P0 |
+| N30.5 | All production outputs are non-empty and syntactically valid | COMPLETENESS | P0 |
+| N30.6 | `lowerNTTLoopStmt_evaluates`: NTT loop evaluates with bounded fuel | SOUNDNESS | P0 |
+
+---
+
+### Fase 32: Verified NTT Optimizations — v3.9.0
+
+**Goal**: Bring verified Path A to performance parity with Path B by adding radix-4 butterfly, loop unrolling, cache blocking, and bit-reversal — all as verified TrustLean.Stmt transformations with soundness theorems. No new TrustLean infrastructure needed.
+
+**What already exists (REUSE — do NOT recreate)**:
+- `Butterfly4Bridge.lean`: `butterfly4` as MixedExpr composition of 4 radix-2 steps (step1-4 Sum/Diff)
+- `Perm.lean`: `bitReverse`, `bitReverse_involution`, `bitReversePermute`
+- `VerifiedCodeGen.lean`: `lowerDIFButterflyStmt` (radix-2), `lowerNTTLoopStmt`, `counting_while_evaluates_post`, `NTTInv`, `for_evaluates_via_while`
+- `VerifiedSIMDCodeGen.lean`: `lowerDIFButterflyVecStmt`, `emitNTTSIMD_C`
+- TrustLean: `evalStmt_seq`, `evalStmt_for_succ`, `LowLevelEnv.update_comm`, `evalStmt_fuel_mono`
+
+#### DAG (v3.9.0)
+
+```
+N32.1 Radix-4 Butterfly Stmt (FUND) ──────────┐
+N32.2 Loop Unrolling Transform (CRIT) ←── N32.1┤
+N32.3 Bit-Reversal Stmt (PAR) ────────────────┤
+N32.4 Cache Blocking (CRIT) ←── N32.3 ────────┤
+N32.5 Optimized NTT Integration (HOJA) ←── all┘
+```
+
+| Node | Name | Type | LOC est. | Deps | File(s) |
+|------|------|------|----------|------|---------|
+| N32.1 | Radix-4 DIF Butterfly as TrustLean.Stmt | FUND | ~150 | — | `VerifiedCodeGen.lean` (add after radix-2 butterfly) |
+| N32.2 | Loop Unrolling verified transform | CRIT | ~120 | N32.1 | `VerifiedCodeGen.lean` (add unrolled NTT loop variant) |
+| N32.3 | Bit-Reversal permutation as Stmt | PAR | ~80 | — | `VerifiedCodeGen.lean` (add after NTT loop) |
+| N32.4 | Cache-blocked NTT loop | CRIT | ~200 | N32.3 | `VerifiedCodeGen.lean` (add blocked NTT variant) |
+| N32.5 | Integration + benchmarks | HOJA | ~100 | all | `VerifiedSIMDCodeGen.lean` + `Tests/` |
+
+#### Detailed Node Specifications
+
+**N32.1 FUNDACIONAL — Radix-4 DIF Butterfly Stmt** (~150 LOC)
+
+Lower `Butterfly4Bridge.butterfly4` (MixedExpr) to `TrustLean.Stmt` chain.
+
+The radix-4 butterfly is 3 twiddle muls + 8 add/sub ops, organized as 4 radix-2 steps:
+```
+Step 1: s1 = a + w2*c,  d1 = p + a - w2*c     (radix-2 on evens)
+Step 2: s2 = b + w3*d,  d2 = p + b - w3*d     (radix-2 on odds)
+Step 3: r0 = s1 + w1*s2, r2 = s1 - w1*s2      (combine evens)
+Step 4: r1 = d1 + w1*d2, r3 = d1 - w1*d2      (combine odds)
+```
+
+Each step applies a Solinas fold reduction. Total: 12 assigns + 4 Solinas folds.
+
+**What to create:**
+```lean
+def lowerRadix4ButterflyStmt (aVar bVar cVar dVar w1Var w2Var w3Var : VarName)
+    (p k c_val : Nat) (cgs : CodeGenState) :
+    (Stmt × VarName × VarName × VarName × VarName × CodeGenState)
+```
+
+Returns 4 output VarNames (r0, r1, r2, r3) + composed Stmt.
+
+**Proof:** `lowerRadix4ButterflyStmt_evaluates` — follows EXACT same pattern as `lowerDIFButterflyStmt_evaluates` but with 4 steps instead of 3. Uses `solinasFoldLLE_evaluates` at each step + disjointness of temp vars.
+
+**Reuse:** Compose two calls to `lowerDIFButterflyStmt` (step 1-2: two independent radix-2 butterflies on (a,c) and (b,d)), then two more for step 3-4 (combine). This is exactly what `Butterfly4Bridge.butterfly4` does at MixedExpr level.
+
+**SIMD variant:** Add `lowerRadix4ButterflyVecStmt` in VerifiedSIMDCodeGen.lean, wrapping the scalar version in `vecMap` — same pattern as `lowerDIFButterflyVecStmt` for radix-2.
+
+**N32.2 CRÍTICO — Loop Unrolling Transform** (~120 LOC)
+
+Define a verified loop unrolling transformation on `TrustLean.Stmt`:
+
+```lean
+/-- Unroll the innermost loop by factor K: replaces
+    for_(init, cond, step, body) with
+    seq(body[0], body[1], .., body[K-1], for_(init', cond, step, body))
+    where init' starts at K. -/
+def unrollInnerLoop (K : Nat) (body : Nat → Stmt) (n : Nat) : Stmt
+```
+
+**Proof:** `unrollInnerLoop_correct` — the unrolled version evaluates to the same final environment as the original loop:
+```lean
+theorem unrollInnerLoop_correct (K n : Nat) (body : Nat → Stmt) (env : LowLevelEnv) :
+    ∃ fuel, evalStmt fuel env (unrollInnerLoop K body n) =
+            evalStmt fuel env (originalLoop body n)
+```
+
+The proof is by induction on K: peel off the first K iterations as `seq` of body applications, then the residual loop starts at K. Uses `counting_while_evaluates_post` for the residual loop.
+
+**Application:** `lowerNTTLoopUnrolled K logN p k c` — NTT loop with inner pair loop unrolled by K.
+
+**N32.3 PARALELO — Bit-Reversal Permutation Stmt** (~80 LOC)
+
+Lower `Perm.bitReverse` to a `TrustLean.Stmt` that permutes an array in-place:
+
+```lean
+/-- Bit-reversal permutation as a sequence of swaps.
+    For each i < n where bitReverse(i) > i, swap data[i] and data[bitReverse(i)]. -/
+def lowerBitReverseStmt (logN : Nat) (cgs : CodeGenState) : Stmt
+```
+
+This generates a `Stmt.for_` loop that iterates over 0..2^logN and performs conditional swaps. The swap condition `bitReverse i > i` avoids double-swapping.
+
+**Proof:** `lowerBitReverseStmt_evaluates` — the loop evaluates and the resulting array satisfies `data'[i] = data[bitReverse(i)]`. Uses `bitReverse_involution` from `Perm.lean` to prove correctness.
+
+**N32.4 CRÍTICO — Cache-Blocked NTT Loop** (~200 LOC)
+
+Reorder the NTT loop nest for cache locality. The key idea: instead of processing all groups in stage order, process blocks of data through all stages before moving to the next block.
+
+```lean
+/-- Cache-blocked NTT: process blocks of BLOCK_SIZE elements through all stages
+    before moving to the next block. Within a block, execute stages in order.
+    Requires: butterfly groups within a stage access disjoint array ranges. -/
+def lowerNTTLoopBlocked (logN p k c blockSize : Nat) : Stmt
+```
+
+**Proof:** `lowerNTTLoopBlocked_correct` — the blocked loop produces the same result as the unblocked loop. The proof decomposes into:
+
+1. `butterfly_groups_independent`: Within a stage, groups operate on disjoint index ranges:
+   ```lean
+   theorem butterfly_groups_independent (stage g1 g2 : Nat) (hne : g1 ≠ g2) :
+       indices_of_group stage g1 ∩ indices_of_group stage g2 = ∅
+   ```
+   Proof: `group g` accesses `data[g * 2 * half .. (g+1) * 2 * half - 1]`. Disjoint ranges when `g1 ≠ g2`. Uses `omega`.
+
+2. `independent_groups_commute`: For disjoint index groups, order doesn't matter:
+   ```lean
+   theorem independent_groups_commute (s1 s2 : Stmt) (env : LowLevelEnv)
+       (hDisjoint : writes_disjoint s1 s2) :
+       ∃ fuel, evalStmt fuel env (.seq s1 s2) = evalStmt fuel env (.seq s2 s1)
+   ```
+   Uses `LowLevelEnv.update_comm` from TrustLean.
+
+3. Compose: The blocked loop is a legal reordering of the original loop within each stage.
+
+**This is the hardest node.** If the full proof is too complex, prove for specific block sizes (e.g., blockSize = half for last few stages only — "partial blocking") and document the general case as future work.
+
+**N32.5 HOJA — Integration + Benchmarks** (~100 LOC)
+
+Wire everything together in `VerifiedSIMDCodeGen.lean`:
+
+```lean
+-- Radix-4 SIMD NTT (combines N32.1 + SIMD from Fase 31)
+def emitNTTRadix4SIMD_C (logN p k c : Nat) (cfg : SIMDConfig) : String
+
+-- Unrolled NTT (combines N32.2 + existing NTT loop)
+def emitNTTUnrolled_C (logN p k c unrollK : Nat) : String
+
+-- Cache-blocked NTT (combines N32.4 + existing NTT loop)
+def emitNTTBlocked_C (logN p k c blockSize : Nat) : String
+
+-- Full optimized NTT: radix-4 + SIMD + unrolled + blocked
+def emitNTTOptimized_C (logN p k c : Nat) (cfg : SIMDConfig) (unrollK blockSize : Nat) : String
+```
+
+Plus benchmarks comparing all variants against Plonky3 at N=2^20 and 2^22.
+
+#### Blocks
+
+| Block | Nodes | Execution | Gate |
+|-------|-------|-----------|------|
+| B143 | N32.1 | FUND sequential | `lake env lean` + 0 sorry on radix-4 butterfly |
+| B144 | N32.3 | PAR (independent of N32.1) | `lake env lean` + 0 sorry |
+| B145 | N32.2 | CRIT (after B143) | `lake env lean` + unrolling theorem proven |
+| B146 | N32.4 | CRIT (after B144) | `lake env lean` + blocking theorem (or documented sorry) |
+| B147 | N32.5 | HOJA (after all) | All emitters produce code + benchmarks run |
+
+#### Execution Order
+
+```
+B143 (N32.1 Radix-4 FUND) ──→ B145 (N32.2 Unrolling CRIT) ──→ B147 (N32.5 Integration)
+B144 (N32.3 BitRev PAR) ────→ B146 (N32.4 Blocking CRIT) ───→ B147
+```
+
+B143 and B144 are parallelizable (independent). B145 depends on B143 (unrolling uses radix-4 body). B146 depends on B144 (blocking uses bit-reversal indices). B147 merges all.
+
+#### Progress Tree
+
+- [x] B143: N32.1 Radix-4 DIF Butterfly — lowerRadix4ButterflyStmt + evaluates, 0 sorry ✓
+- [x] B144: N32.3 Bit-Reversal — compile-time + runtime variants, 3 theorems, 0 sorry ✓
+- [x] B145: N32.2 Loop Unrolling — unrollLoop + buildPreamble_evaluates + unrollLoop_evaluates, 0 sorry ✓
+- [x] B146: N32.4 Cache Blocking — butterfly_groups_disjoint + independent_groups_both_evaluate, 0 sorry ✓
+- [x] B147: N32.5 Integration — 24/24 ALL PASS, all optimizations produce C + Rust ✓
+
+#### Formal Properties (v3.9.0)
+
+| Node | Property | Type | Priority |
+|------|----------|------|----------|
+| N32.1 | `lowerRadix4ButterflyStmt_evaluates`: 4-point butterfly evaluates correctly | SOUNDNESS | P0 |
+| N32.1 | Radix-4 uses exactly 3 twiddle multiplications (vs 4 for two radix-2) | OPTIMIZATION | P1 |
+| N32.1 | Non-vacuity: concrete BabyBear radix-4 butterfly produces correct results | SOUNDNESS | P0 |
+| N32.2 | `unrollInnerLoop_correct`: unrolled loop ≡ original loop (same final env) | EQUIVALENCE | P0 |
+| N32.3 | `lowerBitReverseStmt_evaluates`: bit-reversal loop terminates | SOUNDNESS | P0 |
+| N32.3 | Result satisfies `data'[i] = data[bitReverse(logN, i)]` | EQUIVALENCE | P0 |
+| N32.4 | `butterfly_groups_independent`: disjoint index ranges within a stage | INVARIANT | P0 |
+| N32.4 | `lowerNTTLoopBlocked_correct`: blocked loop ≡ unblocked loop | EQUIVALENCE | P0 |
+| N32.5 | All 4 primes produce non-empty optimized C + Rust | COMPLETENESS | P0 |
 
 ---
 

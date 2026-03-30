@@ -16,6 +16,8 @@
   References:
   - docs/option-a/DESIGN_DECISIONS.md
   - docs/option-a/PROBLEMS.md
+
+  **UNTRUSTED (Path B)**: For verified codegen, use AmoLean.Bridge.VerifiedPipeline.
 -/
 
 import AmoLean.Vector.Basic

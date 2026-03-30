@@ -40,6 +40,70 @@ This section is written ONCE and not modified during execution.
 - Doc comments on all public defs/theorems
 - Consistent naming with OptiSat/SuperTensor conventions
 
+## Verification Criteria (Fase 29 — Verified Code Generation Pipeline)
+
+### Mechanical Health (Fase 29 — Global)
+<!-- CHECK:f29_zero_sorry --> Zero sorry/admit in ALL Fase 29 files
+<!-- CHECK:f29_zero_axiom --> Zero custom axioms (#print axioms shows only Lean/Mathlib/TrustLean)
+<!-- CHECK:f29_build --> `lake build` 0 errors, 0 warnings
+<!-- CHECK:f29_no_simp_star --> No `simp [*]` in new code (only `simp only [...]`)
+<!-- CHECK:f29_no_partial --> No new `partial def` in Fase 29 code (eliminating, not adding)
+<!-- CHECK:f29_elaboration --> Elaboration time <10s per theorem in FUND/CRIT nodes
+
+### N29.1 MixedExprToSigma (FUNDACIONAL)
+<!-- CHECK:n29_1_injective --> `mixedExprToExpandedSigma_injective` proven (no sorry)
+<!-- CHECK:n29_1_semantics --> Semantics preservation proven for ALL 20 MixedNodeOp constructors
+<!-- CHECK:n29_1_type_align --> Return type compatible with `TrustLean.convertExpandedSigma`
+<!-- CHECK:n29_1_non_vacuity --> Non-vacuity example: concrete MixedExpr roundtrips through conversion
+
+### N29.2 CompositionTheorem (CRITICO)
+<!-- CHECK:n29_2_chain --> Theorem chains 4 stages: conversion → expandedSigmaToStmt → stmtToMicroC → microCToString
+<!-- CHECK:n29_2_roundtrip --> Roundtrip clause: parseMicroC(generated) = some microc
+<!-- CHECK:n29_2_semantics --> Semantics clause: evalMicroC matches evalMixedExpr
+<!-- CHECK:n29_2_three_part --> Three-part contract (L-297): fuel + result + frame
+
+### N29.3 FieldInt64Agreement (FUNDACIONAL)
+<!-- CHECK:n29_3_babybear --> BabyBear: all ops proven ∈ Int64Range
+<!-- CHECK:n29_3_mersenne --> Mersenne31: all ops proven ∈ Int64Range
+<!-- CHECK:n29_3_goldilocks --> Goldilocks: add/sub proven ∈ Int64Range; mul overflow documented
+<!-- CHECK:n29_3_native --> Uses `native_decide` for boundary values + `omega` for range arithmetic
+
+### N29.4 GoldilocksMicroC (PARALELO)
+<!-- CHECK:n29_4_programs --> All 5 MicroC programs defined (add, sub, neg, mul, reduce)
+<!-- CHECK:n29_4_simbridge --> Correctness theorems via native_decide for boundary values
+<!-- CHECK:n29_4_branch --> Branch analysis theorems (both branches of each conditional)
+
+### N29.5 PipelineE2E (CRITICO)
+<!-- CHECK:n29_5_babybear --> babybear_verified_pipeline theorem proven
+<!-- CHECK:n29_5_mersenne --> mersenne31_verified_pipeline theorem proven
+<!-- CHECK:n29_5_goldilocks --> goldilocks_verified_pipeline theorem proven (with mul caveat)
+<!-- CHECK:n29_5_axiom_audit --> `#print axioms` on all pipeline theorems → 0 custom axioms
+<!-- CHECK:n29_5_non_vacuity --> Non-vacuity: concrete programs verified end-to-end
+
+### N29.6 DeprecatePathB (HOJA)
+<!-- CHECK:n29_6_headers --> All 7 Path B files have UNTRUSTED header
+<!-- CHECK:n29_6_e2e_test --> E2E test file compiles and passes
+<!-- CHECK:n29_6_roundtrip --> At least 3 concrete programs roundtrip-tested
+
+### Cross-Node Invariants (Fase 29)
+<!-- CHECK:f29_no_path_b --> No new code uses Path B (string emission) for external output
+<!-- CHECK:f29_wiring --> All new modules imported by at least one consumer (no islands)
+<!-- CHECK:f29_trustlean_compat --> All theorems compose with TrustLean v3.0 without conversion sorry
+
+### Fase 29 Corrección 1: Close Pipeline Soundness Sorry
+
+<!-- CHECK:c1_zero_sorry --> Zero sorry in VerifiedPipeline.lean after fix
+<!-- CHECK:c1_zero_sorry_vcg --> Zero new sorry in VerifiedCodeGen.lean
+<!-- CHECK:c1_build --> `lake build` 0 errors after changes
+<!-- CHECK:c1_no_sorry_regression --> `grep -rn sorry AmoLean/Bridge/VerifiedPipeline.lean` returns 0 matches (excluding comments)
+<!-- CHECK:c1_induction --> `lowerMixedExprFull_evaluates` uses structural induction on MixedExpr (not sorry/native_decide)
+<!-- CHECK:c1_all_constructors --> Proof covers all 20 MixedExpr constructors (3 reduction + 17 primitive)
+<!-- CHECK:c1_fuel_1 --> Fuel=1 used throughout (no fuel inflation)
+<!-- CHECK:c1_statement_weakened --> Both theorems use existential env (not `llEnv.update resultVar`)
+<!-- CHECK:c1_existing_preserved --> `verified_pipeline_sound_simple` and all examples still compile
+
+---
+
 ## Verification Criteria by Node (Fase 18 — Generic VerifiedCodeGen Architecture)
 
 ### Mechanical Health (Fase 18 — Global)

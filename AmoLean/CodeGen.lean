@@ -3,6 +3,10 @@
 
   Este archivo muestra cómo generar código C desde expresiones
   optimizadas. Es un preview de la fase de code extraction.
+
+  **UNTRUSTED** — This module uses unverified string emission (Path B).
+  For verified code generation, use `AmoLean.Bridge.VerifiedPipeline` (Path A).
+  See ARCHITECTURE.md Fase 29.
 -/
 
 import AmoLean.Basic

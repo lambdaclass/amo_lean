@@ -27,6 +27,8 @@
   References:
   - ADR-004: CodeGen strategy (layered approach)
   - Poseidon2 paper: S-box = x^5 in BN254
+
+  **UNTRUSTED (Path B)**: For verified codegen, use AmoLean.Bridge.VerifiedPipeline.
 -/
 
 import AmoLean.Sigma.Basic

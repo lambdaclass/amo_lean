@@ -28,6 +28,8 @@
   References:
   - FRI Protocol: Ben-Sasson et al. "Fast Reed-Solomon IOP of Proximity"
   - Fiat-Shamir: Canetti et al. "Fiat-Shamir From Public-Key Encryption"
+
+  **UNTRUSTED (Path B)**: For verified codegen, use AmoLean.Bridge.VerifiedPipeline.
 -/
 
 import AmoLean.FRI.Transcript
