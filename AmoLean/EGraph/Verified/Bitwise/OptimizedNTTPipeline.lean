@@ -22,8 +22,9 @@ import AmoLean.EGraph.Verified.Bitwise.CostModelDef
 import AmoLean.EGraph.Verified.Bitwise.CostIntegration
 import AmoLean.EGraph.Verified.Bitwise.VerifiedCodeGen
 import AmoLean.EGraph.Verified.Bitwise.NTTPlanSelection
-import AmoLean.EGraph.Verified.Bitwise.NTTPlanCodeGen
 import AmoLean.EGraph.Verified.Bitwise.CrossRelNTT
+import AmoLean.EGraph.Verified.Bitwise.VerifiedPlanCodeGen
+import AmoLean.EGraph.Verified.Bitwise.VerifiedSIMDCodeGen
 import AmoLean.Bridge.VerifiedPipeline
 
 set_option autoImplicit false
@@ -43,17 +44,23 @@ open AmoLean.EGraph.Verified.Bitwise
 open AmoLean.EGraph.Verified.Bitwise.MixedExtract (MixedExpr)
 open AmoLean.EGraph.Verified.Bitwise.VerifiedCodeGen
   (emitC emitCStmt emitSolinasFoldC lowerMixedExprFull emitDIFButterflyC
+   emitDIFButterflyRust
    emitNTTCFn emitNTTRustFn emitNTTLoopC lowerNTTLoopStmt solinasFoldLLE)
 open AmoLean.Bridge.VerifiedPipeline
   (mixedExprToC mixedExprToRust mixedExprToCFn mixedExprToRustFn verifiedPipeline)
+open AmoLean.EGraph.Verified.Bitwise.TrustLeanBridge
+  (lowerSolinasFold lowerMontyReduce lowerHarveyReduce)
 open MixedRunner
   (guidedOptimizeMixedF synthesizeViaEGraph GuidedMixedConfig
    mkSolinasFoldSeed mkCanonicalInput)
 open AmoLean.EGraph.Verified.Bitwise.PlanSelection (selectBestPlan CacheConfig)
-open AmoLean.EGraph.Verified.Bitwise.PlanCodeGen (emitCFromPlan generateNTTFromPlan)
+-- NTTPlanCodeGen/UnifiedCodeGen removed: replaced by VerifiedPlanCodeGen (Plan D Phase 2)
 open AmoLean.EGraph.Verified.Bitwise.ReductionAlternativeRules (reductionAlternativeRules)
 open AmoLean.EGraph.Verified.Bitwise.CrossRelNTT (nttStageBoundAnalysis NTTBoundConfig lazyReductionSavings)
-open AmoLean.EGraph.Verified.Bitwise.BoundProp (ReductionChoice)
+-- ReductionChoice now used internally by VerifiedPlanCodeGen
+open AmoLean.EGraph.Verified.Bitwise.VerifiedPlanCodeGen (emitCFromPlanVerified emitRustFromPlanVerified)
+open AmoLean.EGraph.Verified.Bitwise.VerifiedSIMDCodeGen
+  (lowerNTTFromPlanSIMD lowerNTTFromPlanSIMDRust neonConfig avx2Config SIMDConfig)
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 1: Field Configuration (replaces Bench.lean FieldData)
@@ -74,6 +81,7 @@ structure FieldConfig where
   genLit    : String        -- primitive root of unity
   elemType  : String        -- C type for array elements
   wideType  : String        -- C type for wide intermediates
+  muNat     : Nat           -- Montgomery inverse mu (p^(-1) mod 2^32)
   solinas   : Option SolinasConfig  -- Solinas config (none for Mersenne)
   isMersenne : Bool := false
 
@@ -83,7 +91,7 @@ def babybearConfig : FieldConfig :=
     cNat := 134217727, cLit := "134217727U", muLit := "0x88000001U",
     k := 31, b := 27, genLit := "31",
     elemType := "uint32_t", wideType := "uint64_t",
-    solinas := some babybear_solinas }
+    muNat := 2281701377, solinas := some babybear_solinas }
 
 /-- KoalaBear: p = 2^31 - 2^24 + 1 = 2130706433. -/
 def koalabearConfig : FieldConfig :=
@@ -91,7 +99,7 @@ def koalabearConfig : FieldConfig :=
     cNat := 16777215, cLit := "16777215U", muLit := "0x81000001U",
     k := 31, b := 24, genLit := "3",
     elemType := "uint32_t", wideType := "uint64_t",
-    solinas := some koalabear_solinas }
+    muNat := 2164260865, solinas := some koalabear_solinas }
 
 /-- Mersenne31: p = 2^31 - 1 = 2147483647 (true Mersenne). -/
 def mersenne31Config : FieldConfig :=
@@ -99,7 +107,7 @@ def mersenne31Config : FieldConfig :=
     cNat := 1, cLit := "1U", muLit := "0x7FFFFFFFU",
     k := 31, b := 0, genLit := "7",
     elemType := "uint32_t", wideType := "uint64_t",
-    solinas := none, isMersenne := true }
+    muNat := 2147483647, solinas := none, isMersenne := true }
 
 /-- Goldilocks: p = 2^64 - 2^32 + 1 = 18446744069414584321. -/
 def goldilocksConfig : FieldConfig :=
@@ -108,7 +116,7 @@ def goldilocksConfig : FieldConfig :=
     cNat := 4294967295, cLit := "0xFFFFFFFFULL", muLit := "0ULL",
     k := 64, b := 32, genLit := "7",
     elemType := "uint64_t", wideType := "__uint128_t",
-    solinas := some goldilocks_solinas }
+    muNat := 0, solinas := some goldilocks_solinas }
 
 /-- All supported fields. -/
 def allFields : List FieldConfig :=
@@ -163,15 +171,79 @@ def optimizeReduction (fc : FieldConfig) (hw : HardwareCost)
 -- Section 3: Code Emission (Steps 2-6)
 -- ══════════════════════════════════════════════════════════════════
 
-/-- Generate an optimized C reduction function from e-graph output.
-    Uses Path A: MixedExpr -> lowerMixedExprFull -> stmtToC.
-    This is the VERIFIED path, not string emission. -/
-def optimizedButterflyC (fc : FieldConfig) (hw : HardwareCost)
-    (cfg : GuidedMixedConfig := .default) : String :=
-  let result := optimizeReduction fc hw cfg
-  -- Use the verified pipeline: MixedExpr -> Stmt -> C
-  mixedExprToCFn result.optimizedExpr
-    s!"amo_reduce_{fc.name.toLower}" [("x", "int64_t")]
+-- ══════════════════════════════════════════════════════════════════
+-- Section 3a: Verified Code Emission (TrustLean.Stmt path)
+-- ══════════════════════════════════════════════════════════════════
+
+/-- Generate temp variable declarations for C (int64_t t0, t1, ...). -/
+private def cTempDecls (numTemps : Nat) : String :=
+  if numTemps == 0 then "" else
+  "  int64_t " ++ String.intercalate ", " (List.range numTemps |>.map (s!"t{·}")) ++ ";\n"
+
+/-- Generate temp variable declarations for Rust (let mut t0: i64; ...). -/
+private def rustTempDecls (numTemps : Nat) : String :=
+  String.join (List.range numTemps |>.map fun i => s!"  let mut t{i}: i64;\n")
+
+/-- Generate verified C reduction function via TrustLean.Stmt.
+    Solinas: solinasFoldLLE → exprToC (single expression, verified).
+    Montgomery: lowerMontyReduce → stmtToC (multi-statement REDC, verified).
+    Replaces genSolinasReduceC / genMontyReduceAsAmoC string emission. -/
+def verifiedReduceC (fc : FieldConfig) (strategyName : String)
+    (funcName : String := "amo_reduce") : String :=
+  match strategyName with
+  | "Montgomery REDC" =>
+    let xExpr : _root_.TrustLean.LowLevelExpr := .varRef (.user "x")
+    let (sr, cgs') := lowerMontyReduce xExpr fc.pNat fc.muNat {}
+    let body := _root_.TrustLean.stmtToC 1 sr.stmt
+    let retExpr := _root_.TrustLean.exprToC sr.resultVar
+    let decls := cTempDecls cgs'.nextVar
+    s!"static inline {fc.elemType} {funcName}({fc.wideType} x) \{\n{decls}{body}\n  return ({fc.elemType}){retExpr};\n}"
+  | _ =>
+    let foldExpr := solinasFoldLLE (.varRef (.user "x")) fc.k fc.cNat
+    let foldC := _root_.TrustLean.exprToC foldExpr
+    s!"static inline {fc.elemType} {funcName}({fc.wideType} x) \{
+    return ({fc.elemType})({foldC});
+}"
+
+/-- Generate verified Rust reduction function via TrustLean.Stmt. -/
+def verifiedReduceRust (fc : FieldConfig) (strategyName : String)
+    (funcName : String := "amo_reduce") : String :=
+  let et := if fc.k == 64 then "u64" else "u32"
+  let wt := if fc.k == 64 then "u128" else "u64"
+  match strategyName with
+  | "Montgomery REDC" =>
+    let xExpr : _root_.TrustLean.LowLevelExpr := .varRef (.user "x")
+    let (sr, cgs') := lowerMontyReduce xExpr fc.pNat fc.muNat {}
+    let body := _root_.TrustLean.stmtToRust 1 sr.stmt
+    let retExpr := _root_.TrustLean.exprToRust sr.resultVar
+    let decls := rustTempDecls cgs'.nextVar
+    s!"#[inline(always)]\nfn {funcName}(x: {wt}) -> {et} \{\n{decls}{body}\n  {retExpr} as {et}\n}"
+  | _ =>
+    let foldExpr := solinasFoldLLE (.varRef (.user "x")) fc.k fc.cNat
+    let foldRust := _root_.TrustLean.exprToRust foldExpr
+    s!"#[inline(always)]\nfn {funcName}(x: {wt}) -> {et} \{
+    ({foldRust}) as {et}
+}"
+
+/-- Generate verified C butterfly using TrustLean.Stmt.
+    Replaces inline string butterflies in optimizedNTTC. -/
+def verifiedButterflyC (fc : FieldConfig) : String :=
+  emitDIFButterflyC "a" "b" "w" fc.pNat fc.k fc.cNat
+
+/-- Generate verified Rust butterfly using TrustLean.Stmt. -/
+def verifiedButterflyRust (fc : FieldConfig) : String :=
+  emitDIFButterflyRust "a" "b" "w" fc.pNat fc.k fc.cNat
+
+/-- Generate verified NTT C function using TrustLean.Stmt.
+    Replaces genNTTLoopC string emission. -/
+def verifiedNTTFnC (fc : FieldConfig) (logN : Nat)
+    (funcName : String) : String :=
+  emitNTTCFn logN fc.pNat fc.k fc.cNat funcName
+
+/-- Generate verified NTT Rust function using TrustLean.Stmt. -/
+def verifiedNTTFnRust (fc : FieldConfig) (logN : Nat)
+    (funcName : String) : String :=
+  emitNTTRustFn logN fc.pNat fc.k fc.cNat funcName
 
 /-- Generate the Plonky3-style Montgomery REDC C function for comparison. -/
 def genMontyReduceC (fc : FieldConfig) : String :=
@@ -196,76 +268,9 @@ def genMontyReduceC (fc : FieldConfig) : String :=
     return (x<u)?hi+{fc.pLit}:hi;
 }"
 
-/-- Generate the AMO Solinas reduction C function.
-    For 31-bit fields: canonical mod (LLVM optimizes to reciprocal multiply).
-    For Goldilocks: hand-written 128-bit arithmetic. -/
-def genSolinasReduceC (fc : FieldConfig) : String :=
-  if fc.k == 64 then
-    s!"static inline uint64_t amo_reduce(__uint128_t x) \{
-    uint64_t lo=(uint64_t)x, hi=(uint64_t)(x>>64);
-    uint64_t hh=hi>>32, hl=hi&0xFFFFFFFF;
-    uint64_t t0; int borrow=__builtin_sub_overflow(lo,hh,&t0);
-    if(borrow) t0-=0xFFFFFFFF;
-    uint64_t t1=hl*0xFFFFFFFF;
-    uint64_t r; int carry=__builtin_add_overflow(t0,t1,&r);
-    if(carry||r>={fc.pLit}) r-={fc.pLit};
-    return r;
-}"
-  else
-    s!"/* Canonical modular reduction -- LLVM reciprocal multiply optimization.
-   A single Solinas fold reduces ~4-7 bits per pass for {fc.name} (c={fc.cNat}). */
-static inline {fc.elemType} amo_reduce({fc.wideType} x) \{
-    return ({fc.elemType})(x % ({fc.wideType}){fc.pLit});
-}"
-
-/-- Generate a Harvey conditional subtraction C function.
-    For bounded inputs (value < 2*p), a single conditional sub reduces to [0, p).
-    NOTE: only valid for narrow (elemType) inputs, not wide products. -/
-def genHarveyReduceC (fc : FieldConfig) : String :=
-  s!"static inline {fc.elemType} amo_reduce_narrow({fc.elemType} x) \{
-    return (x >= {fc.pLit}) ? x - {fc.pLit} : x;
-}"
-
-/-- Generate Montgomery REDC named as amo_reduce (for use when e-graph picks Montgomery). -/
-def genMontyReduceAsAmoC (fc : FieldConfig) : String :=
-  if fc.k == 64 then
-    s!"static inline uint64_t amo_reduce(__uint128_t x) \{
-    uint64_t lo=(uint64_t)x, hi=(uint64_t)(x>>64);
-    uint64_t hh=hi>>32, hl=hi&0xFFFFFFFF;
-    uint64_t t0; int borrow=__builtin_sub_overflow(lo,hh,&t0);
-    if(borrow) t0-=0xFFFFFFFF;
-    uint64_t t1=hl*0xFFFFFFFF;
-    uint64_t r; int carry=__builtin_add_overflow(t0,t1,&r);
-    if(carry||r>={fc.pLit}) r-={fc.pLit};
-    return r;
-}"
-  else
-    s!"static inline {fc.elemType} amo_reduce({fc.wideType} x) \{
-    {fc.wideType} t=(x*({fc.wideType}){fc.muLit})&0xFFFFFFFF;
-    {fc.wideType} u=t*({fc.wideType}){fc.pLit};
-    {fc.wideType} d=x-u;
-    {fc.elemType} hi=({fc.elemType})(d>>32);
-    return (x<u)?hi+{fc.pLit}:hi;
-}"
-
 -- ══════════════════════════════════════════════════════════════════
 -- Section 4: Full NTT Benchmark C Generation
 -- ══════════════════════════════════════════════════════════════════
-
-/-- Generate the AMO butterfly C function using optimized reduction. -/
-def genAmoButterflyC (fc : FieldConfig) : String :=
-  if fc.k == 64 then
-    s!"static inline void amo_bf({fc.elemType} *a, {fc.elemType} *b, {fc.elemType} w) \{
-    {fc.elemType} oa=*a, wb=amo_reduce(({fc.wideType})w*({fc.wideType})(*b));
-    {fc.elemType} s=oa+wb; *a=(s>={fc.pLit}||s<oa)?s-{fc.pLit}:s;
-    *b=(oa>=wb)?oa-wb:{fc.pLit}-wb+oa;
-}"
-  else
-    s!"static inline void amo_bf({fc.elemType} *a, {fc.elemType} *b, {fc.elemType} w) \{
-    {fc.elemType} oa=*a, wb=amo_reduce(({fc.wideType})w*({fc.wideType})(*b));
-    {fc.elemType} s=oa+wb; *a=(s>={fc.pLit})?s-{fc.pLit}:s;
-    *b=(oa>=wb)?oa-wb:{fc.pLit}-wb+oa;
-}"
 
 /-- Generate the Plonky3-style butterfly for comparison. -/
 def genP3ButterflyC (fc : FieldConfig) : String :=
@@ -295,69 +300,56 @@ def optimizedNTTC (fc : FieldConfig) (hw : HardwareCost) (logN iters : Nat)
   let n := 2^logN
   -- Step 1: Run the e-graph optimization pipeline
   let optResult := optimizeReduction fc hw cfg
-  -- Step 2: Generate the reduction function based on e-graph result
-  let amoReduce := match optResult.strategyName with
-    | "Montgomery REDC" => genMontyReduceAsAmoC fc
-    | _ => genSolinasReduceC fc  -- default: Solinas fold (also works for Harvey/fallback)
-  -- Step 3: Run bound analysis for per-stage schedule
-  let boundCfg : NTTBoundConfig := {
-    numStages := logN, prime := fc.pNat,
-    hwIsSimd := hw.isSimd, arrayIsLarge := 2^logN > 4096 }
-  let stageAnalysis := nttStageBoundAnalysis boundCfg
-  let lazyCount := lazyReductionSavings stageAnalysis
-  -- Step 4: Build schedule array (0=lazy, 1=reduce)
-  let scheduleArr := stageAnalysis.map fun (_, red, _) =>
-    match red with | .lazy => "0" | _ => "1"
-  let scheduleC := s!"int schedule[{logN}] = \{{String.intercalate "," scheduleArr}};"
-  -- Step 5: Generate butterfly functions (lazy + reduce) + P3 reference
-  let lazyBf := s!"static inline void amo_bf_lazy({fc.elemType} *a, {fc.elemType} *b, {fc.elemType} w) \{
-    {fc.wideType} wb = ({fc.wideType})w * ({fc.wideType})(*b);
-    {fc.elemType} wb32 = ({fc.elemType})wb;
-    {fc.elemType} oa = *a;
-    *a = oa + wb32;
-    *b = oa - wb32 + {fc.pLit};
+  -- Step 2: Generate VERIFIED reduction via TrustLean.Stmt
+  let amoReduce := verifiedReduceC fc optResult.strategyName "amo_reduce"
+  -- Step 3: Verified NTT function (complete, butterfly+reduction inlined)
+  let amoNTTVerified := verifiedNTTFnC fc logN s!"{fc.name.toLower}_ntt_verified"
+  -- Step 4: Butterfly that calls verified amo_reduce
+  let amoBf := s!"static inline void amo_bf({fc.elemType} *a, {fc.elemType} *b, {fc.elemType} w) \{
+    {fc.elemType} oa=*a, wb_r=amo_reduce(({fc.wideType})w*({fc.wideType})(*b));
+    {fc.elemType} s=oa+wb_r; *a=(s>={fc.pLit})?s-{fc.pLit}:s;
+    *b=(oa>=wb_r)?oa-wb_r:{fc.pLit}-wb_r+oa;
 }"
-  let reduceBf := s!"static inline void amo_bf_reduce({fc.elemType} *a, {fc.elemType} *b, {fc.elemType} w) \{
-    {fc.wideType} wb = ({fc.wideType})w * ({fc.wideType})(*b);
-    {fc.elemType} wb_r = amo_reduce(wb);
-    {fc.elemType} oa = *a;
-    {fc.elemType} s = oa + wb_r;
-    *a = amo_reduce(s);
-    *b = amo_reduce(({fc.wideType}){fc.pLit} + oa - wb_r);
-}"
+  -- Step 5: NTT loop (uniform reduction, calls amo_bf)
+  let amoLoop := genNTTLoopC "amo_bf" logN
+  -- Step 6: P3 reference (Montgomery baseline, string emission)
   let montyReduce := genMontyReduceC fc
   let p3Bf := genP3ButterflyC fc
   let p3Loop := genNTTLoopC "p3_bf" logN
-  -- Step 6: Generate NTT loop with per-stage dispatch
-  let amoLoop :=
-    s!"{scheduleC}
-    for(size_t st=0;st<{logN};st++) \{ size_t h=1<<({logN}-st-1);
-      void (*bf)({fc.elemType}*,{fc.elemType}*,{fc.elemType}) = schedule[st] ? amo_bf_reduce : amo_bf_lazy;
-      for(size_t g=0;g<(1u<<st);g++) for(size_t p=0;p+1<=h;p++) \{
-        size_t i=g*2*h+p,j=i+h; bf(&d[i],&d[j],tw[(st*({n}/2)+g*h+p)%tw_sz]); }}"
+  -- Step 6b: Plan-based SIMD (if hardware supports it)
+  let plan := selectBestPlan fc.pNat n hw.mul32 hw.add hw.isSimd
+  let simdCode := if hw.isSimd then
+    let simdCfg := if hw.simdLanes == 8 then avx2Config else neonConfig
+    some (lowerNTTFromPlanSIMD plan simdCfg fc.k fc.cNat fc.muNat logN)
+  else none
   -- Step 7: Assemble the complete benchmark program
   s!"/* AMO-Lean Optimized NTT Benchmark
  * Field: {fc.name} (p = {fc.pNat})
  * E-graph selected: {optResult.strategyName}
  * Improved over seed: {optResult.improved}
- * Per-stage schedule: {lazyCount} lazy + {logN - lazyCount} reduce
+ * Reduction: verified via TrustLean.Stmt (solinasFoldLLE/lowerMontyReduce)
  * Hardware target: mul32={hw.mul32}, add={hw.add}, shift={hw.shift}
- * Generated by OptimizedNTTPipeline.lean
+ * Generated by OptimizedNTTPipeline.lean (Plan D Phase 1)
  */
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <time.h>
 
+/* === Verified reduction (TrustLean.Stmt path) === */
 {amoReduce}
 
-{lazyBf}
+{amoBf}
 
-{reduceBf}
-
+/* === P3 reference (Montgomery, baseline) === */
 {montyReduce}
 
 {p3Bf}
+
+/* === Verified NTT function (TrustLean.Stmt, butterfly+Solinas inlined) === */
+{amoNTTVerified}
+
+{match simdCode with | some code => s!"/* === Verified SIMD NTT (plan-based, per-stage reduction) === */\n{code}" | none => "/* SIMD: not available for this hardware target */"}
 
 int main(void) \{
     size_t n={n}, logn={logN};
@@ -375,7 +367,7 @@ int main(void) \{
     for(size_t i=0;i<n;i++) d[i]=orig[i];
     {amoLoop}
 
-    /* AMO benchmark ({lazyCount} lazy + {logN - lazyCount} reduce stages) */
+    /* AMO benchmark (verified reduce, uniform {optResult.strategyName}) */
     clock_gettime(CLOCK_MONOTONIC,&s);
     for(int it=0;it<iters;it++) \{
       for(size_t i=0;i<n;i++) d[i]=orig[i];
@@ -394,7 +386,7 @@ int main(void) \{
     double p3_us=((e.tv_sec-s.tv_sec)+(e.tv_nsec-s.tv_nsec)/1e9)/iters*1e6;
 
     double melem=({n}.0)/(amo_us/1e6)/1e6;
-    printf(\"%.1f,%.1f,%.1f,%+.1f\\n\",amo_us,p3_us,melem,(1.0-amo_us/p3_us)*100.0);
+    printf(\"{fc.name},{optResult.strategyName},%.1f,%.1f,%.1f,%+.1f\\n\",amo_us,p3_us,melem,(1.0-amo_us/p3_us)*100.0);
     (void)sink; free(d); free(orig); free(tw);
     return 0;
 }"
@@ -430,47 +422,6 @@ private def rustWideType (fc : FieldConfig) : String :=
 
 private def rustPLit (fc : FieldConfig) : String :=
   s!"{fc.pNat}_{rustElemType fc}"
-
-/-- Generate Solinas reduction as `amo_reduce` in Rust.
-    31-bit: canonical mod (LLVM reciprocal multiply).
-    64-bit (Goldilocks): hand-written 128-bit Solinas fold. -/
-def genSolinasReduceRust (fc : FieldConfig) : String :=
-  if fc.k == 64 then
-    s!"#[inline(always)]
-fn amo_reduce(x: u128) -> u64 \{
-    let lo = x as u64;
-    let hi = (x >> 64) as u64;
-    let hh = hi >> 32;
-    let hl = hi & 0xFFFFFFFF_u64;
-    let (t0, borrow) = lo.overflowing_sub(hh);
-    let t0 = if borrow \{ t0.wrapping_sub(0xFFFFFFFF_u64) } else \{ t0 };
-    let t1 = hl.wrapping_mul(0xFFFFFFFF_u64);
-    let (result, carry) = t0.overflowing_add(t1);
-    if carry || result >= {fc.pNat}_u64 \{ result.wrapping_sub({fc.pNat}_u64) } else \{ result }
-}"
-  else
-    let et := rustElemType fc
-    let wt := rustWideType fc
-    s!"#[inline(always)]
-fn amo_reduce(x: {wt}) -> {et} \{
-    (x % {fc.pNat}_{wt}) as {et}
-}"
-
-/-- Generate Montgomery REDC as `amo_reduce` in Rust (for e-graph Montgomery selection). -/
-def genMontyReduceAsAmoRust (fc : FieldConfig) : String :=
-  if fc.k == 64 then
-    -- Goldilocks: same Solinas-like algorithm
-    genSolinasReduceRust fc
-  else
-    let muNat := fc.muLit.replace "0x" "" |>.replace "U" ""
-    s!"#[inline(always)]
-fn amo_reduce(x: u64) -> u32 \{
-    let t = x.wrapping_mul(0x{muNat}_u64) as u32;
-    let u = t as u64 * {fc.pNat}_u64;
-    let d = x.wrapping_sub(u);
-    let hi = (d >> 32) as u32;
-    if x < u \{ hi.wrapping_add({fc.pNat}_u32) } else \{ hi }
-}"
 
 /-- Generate Montgomery REDC as `p3_reduce` in Rust (Plonky3 reference). -/
 def genMontyReduceRust (fc : FieldConfig) : String :=
@@ -540,75 +491,61 @@ def optimizedNTTRust (fc : FieldConfig) (hw : HardwareCost) (logN iters : Nat)
   let pLit := rustPLit fc
   -- Step 1: Run the e-graph optimization pipeline
   let optResult := optimizeReduction fc hw cfg
-  -- Step 2: Generate the reduction function based on e-graph result
-  let amoReduce := match optResult.strategyName with
-    | "Montgomery REDC" => genMontyReduceAsAmoRust fc
-    | _ => genSolinasReduceRust fc
-  -- Step 3: Run bound analysis for per-stage schedule
-  let boundCfg : NTTBoundConfig := {
-    numStages := logN, prime := fc.pNat,
-    hwIsSimd := hw.isSimd, arrayIsLarge := 2^logN > 4096 }
-  let stageAnalysis := nttStageBoundAnalysis boundCfg
-  let lazyCount := lazyReductionSavings stageAnalysis
-  -- Step 4: Build schedule array
-  let scheduleArr := stageAnalysis.map fun (_, red, _) =>
-    match red with | .lazy => "false" | _ => "true"
-  let scheduleRust := s!"let schedule: [bool; {logN}] = [{String.intercalate ", " scheduleArr}];"
-  -- Step 5: Generate butterfly functions (lazy + reduce)
-  let lazyBf :=
+  -- Step 2: Generate VERIFIED reduction via TrustLean.Stmt
+  let amoReduce := verifiedReduceRust fc optResult.strategyName "amo_reduce"
+  -- Step 3: Verified NTT function (complete)
+  let amoNTTVerified := verifiedNTTFnRust fc logN s!"{fc.name.toLower}_ntt_verified"
+  -- Step 4: Butterfly that calls verified amo_reduce
+  let amoBf :=
     if fc.k == 64 then
       s!"#[inline(always)]
-fn amo_bf_lazy(a: &mut {et}, b: &mut {et}, w: {et}) \{
-    let wb = (w as {wt}).wrapping_mul(*b as {wt}) as {et};
+fn amo_bf(a: &mut {et}, b: &mut {et}, w: {et}) \{
     let oa = *a;
-    *a = oa.wrapping_add(wb);
-    *b = oa.wrapping_sub(wb).wrapping_add({pLit});
-}"
-    else
-      s!"#[inline(always)]
-fn amo_bf_lazy(a: &mut {et}, b: &mut {et}, w: {et}) \{
-    let wb = (w as {wt} * *b as {wt}) as {et};
-    let oa = *a;
-    *a = oa.wrapping_add(wb);
-    *b = oa.wrapping_sub(wb).wrapping_add({pLit});
-}"
-  let reduceBf :=
-    if fc.k == 64 then
-      s!"#[inline(always)]
-fn amo_bf_reduce(a: &mut {et}, b: &mut {et}, w: {et}) \{
     let wb_r = amo_reduce((w as {wt}).wrapping_mul(*b as {wt}));
-    let oa = *a;
     let (s, ov) = oa.overflowing_add(wb_r);
     *a = if ov || s >= {pLit} \{ s.wrapping_sub({pLit}) } else \{ s };
     *b = if oa >= wb_r \{ oa - wb_r } else \{ {pLit} - wb_r + oa };
 }"
     else
       s!"#[inline(always)]
-fn amo_bf_reduce(a: &mut {et}, b: &mut {et}, w: {et}) \{
-    let wb_r = amo_reduce(w as {wt} * *b as {wt});
+fn amo_bf(a: &mut {et}, b: &mut {et}, w: {et}) \{
     let oa = *a;
+    let wb_r = amo_reduce(w as {wt} * *b as {wt});
     let s = oa.wrapping_add(wb_r);
     *a = if s >= {pLit} \{ s - {pLit} } else \{ s };
     *b = if oa >= wb_r \{ oa - wb_r } else \{ {pLit} - wb_r + oa };
 }"
+  -- Step 5: P3 reference (Montgomery baseline)
   let montyReduce := genMontyReduceRust fc
   let p3Bf := genP3ButterflyRust fc
+  -- Step 5b: Plan-based SIMD (if hardware supports it)
+  let plan := selectBestPlan fc.pNat n hw.mul32 hw.add hw.isSimd
+  let simdCode := if hw.isSimd then
+    let simdCfg := if hw.simdLanes == 8 then avx2Config else neonConfig
+    some (lowerNTTFromPlanSIMDRust plan simdCfg fc.k fc.cNat fc.muNat logN)
+  else none
   -- Step 6: Assemble the complete Rust benchmark
   s!"// AMO-Lean Optimized NTT Benchmark (Rust)
 // Field: {fc.name} (p = {fc.pNat})
 // E-graph selected: {optResult.strategyName}
-// Per-stage schedule: {lazyCount} lazy + {logN - lazyCount} reduce
+// Reduction: verified via TrustLean.Stmt
 // Hardware target: mul32={hw.mul32}, add={hw.add}, shift={hw.shift}
+// Generated by OptimizedNTTPipeline.lean (Plan D Phase 1)
 
+/* === Verified reduction (TrustLean.Stmt path) === */
 {amoReduce}
 
-{lazyBf}
+{amoBf}
 
-{reduceBf}
-
+/* === P3 reference (Montgomery, baseline) === */
 {montyReduce}
 
 {p3Bf}
+
+/* === Verified NTT function (TrustLean.Stmt, butterfly+Solinas inlined) === */
+{amoNTTVerified}
+
+{match simdCode with | some code => s!"/* === Verified SIMD NTT (plan-based, per-stage reduction) === */\n{code}" | none => "/* SIMD: not available for this hardware target */"}
 
 fn main() \{
     let n: usize = {n};
@@ -620,17 +557,15 @@ fn main() \{
 
     // Warmup
     let mut d = orig.clone();
-    {scheduleRust}
     for st in 0..logn \{ let h = 1usize << (logn-st-1);
       for g in 0..(1usize<<st) \{ for p in 0..h \{
         let i=g*2*h+p; let j=i+h; let w=tw[(st*(n/2)+g*h+p)%tw_sz];
         let (l,r) = d.split_at_mut(j);
-        if schedule[st] \{ amo_bf_reduce(&mut l[i], &mut r[0], w); }
-        else \{ amo_bf_lazy(&mut l[i], &mut r[0], w); }
+        amo_bf(&mut l[i], &mut r[0], w);
       }}}
     std::hint::black_box(&d);
 
-    // AMO benchmark ({lazyCount} lazy + {logN - lazyCount} reduce stages)
+    // AMO benchmark (verified reduce, uniform {optResult.strategyName})
     let start = std::time::Instant::now();
     for _ in 0..iters \{
       let mut d = orig.clone();
@@ -638,8 +573,7 @@ fn main() \{
         for g in 0..(1usize<<st) \{ for p in 0..h \{
           let i=g*2*h+p; let j=i+h; let w=tw[(st*(n/2)+g*h+p)%tw_sz];
           let (l,r) = d.split_at_mut(j);
-          if schedule[st] \{ amo_bf_reduce(&mut l[i], &mut r[0], w); }
-          else \{ amo_bf_lazy(&mut l[i], &mut r[0], w); }
+          amo_bf(&mut l[i], &mut r[0], w);
         }}}
       std::hint::black_box(&d);
     }
@@ -659,7 +593,7 @@ fn main() \{
     let p3_us = start.elapsed().as_secs_f64() / iters as f64 * 1e6;
 
     let melem = {n}_f64 / (amo_us / 1e6) / 1e6;
-    println!(\"\{:.1},\{:.1},\{:.1},\{:+.1}\", amo_us, p3_us, melem, (1.0 - amo_us/p3_us)*100.0);
+    println!(\"{fc.name},{optResult.strategyName},\{:.1},\{:.1},\{:.1},\{:+.1}\", amo_us, p3_us, melem, (1.0 - amo_us/p3_us)*100.0);
 }
 "
 
@@ -692,14 +626,14 @@ def emitVerifiedNTTRustFn (fc : FieldConfig) (logN : Nat) : String :=
 
 /-- Generate NTT C code from the plan selection pipeline.
     1. selectBestPlan: evaluates 8 candidates (radix-2/4, Solinas/Monty/Harvey/lazy)
-    2. emitCFromPlan: lowers the selected plan to C via UnifiedCodeGen
+    2. emitCFromPlanVerified: lowers the selected plan to C via TrustLean.Stmt (verified)
 
     This integrates the bound-propagation analysis that determines
     per-stage reductions (lazy where safe, Solinas/Monty where needed). -/
 def emitPlanBasedNTTC (fc : FieldConfig) (logN : Nat) (hw : HardwareCost) : String :=
   let n := 2^logN
   let plan := selectBestPlan fc.pNat n hw.mul32 hw.add hw.isSimd
-  emitCFromPlan plan s!"{fc.name.toLower}_ntt_plan"
+  emitCFromPlanVerified plan fc.k fc.cNat fc.muNat s!"{fc.name.toLower}_ntt_plan"
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 8: Cost Analysis Report

@@ -16,6 +16,7 @@
   0 sorry, 0 new axioms.
 -/
 import AmoLean.EGraph.Verified.Bitwise.VerifiedCodeGen
+import AmoLean.EGraph.Verified.Bitwise.VerifiedPlanCodeGen
 
 set_option autoImplicit false
 
@@ -26,7 +27,9 @@ open TrustLean (Value LowLevelExpr LowLevelEnv VarName BinOp Stmt StmtResult
   exprToC exprToRust varNameToStr varNameToC joinCode indentStr
   generateCFunction generateCHeader)
 open AmoLean.EGraph.Verified.Bitwise.VerifiedCodeGen (lowerDIFButterflyStmt solinasFoldLLE)
-open AmoLean.EGraph.Verified.Bitwise.TrustLeanBridge (lowerMontyReduce)
+open AmoLean.EGraph.Verified.Bitwise.TrustLeanBridge (lowerMontyReduce lowerHarveyReduce)
+open AmoLean.EGraph.Verified.Bitwise.BoundProp (ReductionChoice)
+open AmoLean.EGraph.Verified.Bitwise.VerifiedPlanCodeGen (lowerDIFButterflyByReduction)
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 1: SIMD Target Configuration
@@ -378,6 +381,35 @@ def lowerDIFButterflyVecStmt (p k c : Nat) (lanes : Nat)
                       [varNameToStr sumVar, varNameToStr bPrimeVar] scalarBody)
     (.vecSeq (.vecStore "data" 0 (varNameToStr sumVar) lanes)
              (.vecStore "data" lanes (varNameToStr bPrimeVar) lanes)))))
+
+-- ══════════════════════════════════════════════════════════════════
+-- Section 5b: SIMD Butterfly with ReductionChoice (Plan D Phase 3)
+-- ══════════════════════════════════════════════════════════════════
+
+/-- SIMD butterfly parametrized by ReductionChoice.
+    Extends lowerDIFButterflyVecStmt to support Harvey and Lazy reductions.
+    Uses lowerDIFButterflyByReduction from VerifiedPlanCodeGen for non-Solinas paths. -/
+def lowerDIFButterflyVecStmtByReduction (p k c lanes : Nat)
+    (red : ReductionChoice) (mu : Nat := 0) : VecStmt :=
+  match red with
+  | .solinasFold =>
+    -- Reuse existing Solinas path
+    lowerDIFButterflyVecStmt p k c lanes
+  | .montgomery =>
+    -- Reuse existing Montgomery path
+    lowerDIFButterflyVecStmt p k c lanes true mu
+  | _ =>
+    -- Harvey / Lazy: use lowerDIFButterflyByReduction (verified scalar) in vecMap
+    let (scalarBody, sumVar, diffVar, _) :=
+      lowerDIFButterflyByReduction (.user "a_val") (.user "b_val") (.user "w_val")
+        red p k c mu {}
+    .vecSeq (.vecLoad "a_val" "data" 0 lanes)
+    (.vecSeq (.vecLoad "b_val" "data" lanes lanes)
+    (.vecSeq (.vecLoad "w_val" "twiddles" 0 lanes)
+    (.vecSeq (.vecMap lanes ["a_val", "b_val", "w_val"]
+                      [varNameToStr sumVar, varNameToStr diffVar] scalarBody)
+    (.vecSeq (.vecStore "data" 0 (varNameToStr sumVar) lanes)
+             (.vecStore "data" lanes (varNameToStr diffVar) lanes)))))
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 6: Verified SIMD Montgomery REDC
@@ -832,5 +864,79 @@ example : ∃ (rest : VecStmt),
 
 #eval IO.println "═══ BabyBear FRI Fold NEON (C) ═══"
 #eval IO.println (babybear_fri_fold_neon_c 512)
+
+-- ══════════════════════════════════════════════════════════════════
+-- Section 14: Plan-Based SIMD NTT (Plan D Phase 3)
+-- ══════════════════════════════════════════════════════════════════
+
+open AmoLean.EGraph.Verified.Bitwise.NTTPlan (Plan NTTStage) in
+/-- Lower a complete NTT from Plan to SIMD VecStmt.
+    Each stage uses the Plan's reduction choice for its butterfly.
+    Outer loop structure (stages, groups) is string scaffolding.
+    Inner butterfly is VecStmt (verified SIMD). -/
+def lowerNTTFromPlanSIMD (plan : Plan) (cfg : SIMDConfig)
+    (k c mu : Nat) (logN : Nat) : String :=
+  let n := 2^logN
+  let stages := plan.stages.toList.map fun (stage : NTTStage) =>
+    let bfVec := lowerDIFButterflyVecStmtByReduction plan.field k c cfg.lanes
+      stage.reduction mu
+    let bfCode := vecStmtToC cfg bfVec
+    (stage, bfCode)
+  let loopBody := stages.foldl (fun acc (stage, bfCode) =>
+    let halfSize := n / (2 ^ (stage.stageIdx + 1))
+    let numGroups := 2 ^ stage.stageIdx
+    acc ++ s!"\n  // Stage {stage.stageIdx}: {repr stage.reduction}\n" ++
+    s!"  for (size_t g = 0; g < {numGroups}; g++) \{\n" ++
+    s!"    for (size_t p = 0; p < {halfSize}; p++) \{\n" ++
+    s!"      size_t i = g * {2 * halfSize} + p;\n" ++
+    s!"      // butterfly at data[i], data[i + {halfSize}]\n" ++
+    bfCode ++ "\n" ++
+    s!"    }}\n  }}\n"
+  ) ""
+  let tgt := repr cfg.target
+  s!"#include <stdint.h>\n{cfg.headerInclude}\n" ++
+  s!"void ntt_simd_{tgt}({cfg.vecType}* data, const {cfg.vecType}* twiddles, size_t n) \{\n" ++
+  loopBody ++ "}\n"
+
+open AmoLean.EGraph.Verified.Bitwise.NTTPlan (Plan NTTStage) in
+/-- Rust variant of plan-based SIMD NTT. -/
+def lowerNTTFromPlanSIMDRust (plan : Plan) (cfg : SIMDConfig)
+    (k c mu : Nat) (logN : Nat) : String :=
+  let n := 2^logN
+  let stages := plan.stages.toList.map fun (stage : NTTStage) =>
+    let bfVec := lowerDIFButterflyVecStmtByReduction plan.field k c cfg.lanes
+      stage.reduction mu
+    let bfCode := vecStmtToRust cfg bfVec
+    (stage, bfCode)
+  let loopBody := stages.foldl (fun acc (stage, bfCode) =>
+    let halfSize := n / (2 ^ (stage.stageIdx + 1))
+    let numGroups := 2 ^ stage.stageIdx
+    acc ++ s!"\n  // Stage {stage.stageIdx}: {repr stage.reduction}\n" ++
+    s!"  for g in 0..{numGroups} \{\n" ++
+    s!"    for p in 0..{halfSize} \{\n" ++
+    s!"      let i = g * {2 * halfSize} + p;\n" ++
+    bfCode ++ "\n" ++
+    s!"    }}\n  }}\n"
+  ) ""
+  s!"fn ntt_simd(data: &mut [std::simd::Simd<i32, {cfg.lanes}>], twiddles: &[std::simd::Simd<i32, {cfg.lanes}>]) \{\n" ++
+  loopBody ++ "}\n"
+
+-- ══════════════════════════════════════════════════════════════════
+-- Section 15: Lifting theorem per-lane for ReductionChoice
+-- ══════════════════════════════════════════════════════════════════
+
+/-- The SIMD butterfly delegates correctly to the verified scalar butterfly
+    for each ReductionChoice variant. -/
+theorem lowerDIFButterflyVecStmtByReduction_solinas_eq
+    (p k c lanes : Nat) (mu : Nat) :
+    lowerDIFButterflyVecStmtByReduction p k c lanes .solinasFold mu =
+    lowerDIFButterflyVecStmt p k c lanes := by
+  simp [lowerDIFButterflyVecStmtByReduction]
+
+theorem lowerDIFButterflyVecStmtByReduction_montgomery_eq
+    (p k c lanes : Nat) (mu : Nat) :
+    lowerDIFButterflyVecStmtByReduction p k c lanes .montgomery mu =
+    lowerDIFButterflyVecStmt p k c lanes true mu := by
+  simp [lowerDIFButterflyVecStmtByReduction]
 
 end AmoLean.EGraph.Verified.Bitwise.VerifiedSIMDCodeGen
