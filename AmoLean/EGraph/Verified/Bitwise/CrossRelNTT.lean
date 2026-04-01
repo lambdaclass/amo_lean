@@ -13,6 +13,7 @@
   - `boundInformedCost`: cost function that uses bound info
 -/
 import AmoLean.EGraph.Verified.Bitwise.BoundPropagation
+import AmoLean.EGraph.Verified.Bitwise.CostModelDef
 -- Note: BoundPropagation transitively imports MultiRelMixed
 
 set_option autoImplicit false
@@ -21,6 +22,7 @@ namespace AmoLean.EGraph.Verified.Bitwise.CrossRelNTT
 
 open AmoLean.EGraph.Verified.Bitwise.BoundProp (ReductionChoice stageBoundFactor
   lazyReductionSafe computeStageBounds boundAfterReduction)
+open AmoLean.EGraph.Verified.Bitwise (HardwareCost MixedNodeOp mixedOpCost)
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 1: Bound-Informed Reduction Selection
@@ -49,6 +51,27 @@ def selectReductionForBound (boundK : Nat) (hwIsSimd : Bool) (arrayIsLarge : Boo
     .montgomery
   else
     .solinasFold
+
+/-- Cost-aware reduction selection: enumerate feasible reductions,
+    compute actual hardware cost for each, pick cheapest.
+    Uses mixedOpCost + branchPenalty for butterfly context. -/
+def costAwareReductionForBound (hw : HardwareCost) (boundK p : Nat) :
+    ReductionChoice :=
+  -- Feasibility: Harvey needs boundK ≤ 2
+  let candidates : List (Nat × ReductionChoice) :=
+    (if boundK ≤ 2 then [(mixedOpCost hw (.harveyReduce 0 p), .harvey)] else []) ++
+    [(mixedOpCost hw (.reduceGate 0 p), .solinasFold),
+     (mixedOpCost hw (.montyReduce 0 p 0), .montgomery)]
+  -- In butterfly context: account for branch penalties per reduction
+  let withBranch := candidates.map fun (baseCost, choice) =>
+    let branchAdj := match choice with
+      | .solinasFold => 2 * hw.branchPenalty  -- output < 2p → 2 cond subs
+      | _ => hw.branchPenalty                  -- output < p → 1 cond sub
+    (baseCost + branchAdj, choice)
+  -- Pick cheapest
+  withBranch.foldl (fun (bestC, bestR) (c, r) =>
+    if c < bestC then (c, r) else (bestC, bestR))
+    (100000, .montgomery) |>.2
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 2: NTT Stage Bound Analysis

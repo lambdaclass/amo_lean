@@ -26,6 +26,7 @@ import AmoLean.EGraph.Verified.Bitwise.CrossRelNTT
 import AmoLean.EGraph.Verified.Bitwise.VerifiedPlanCodeGen
 import AmoLean.EGraph.Verified.Bitwise.VerifiedSIMDCodeGen
 import AmoLean.Bridge.VerifiedPipeline
+import AmoLean.EGraph.Verified.Bitwise.UltraPipeline
 
 set_option autoImplicit false
 
@@ -409,6 +410,97 @@ int main(void) \{
 def genOptimizedBenchC (fc : FieldConfig) (logN iters : Nat)
     (hw : HardwareCost := arm_cortex_a76) : String :=
   optimizedNTTC fc hw logN iters
+
+-- ══════════════════════════════════════════════════════════════════
+-- Section 5a: Ultra Pipeline Entry Points (Gap 5)
+-- ══════════════════════════════════════════════════════════════════
+
+open AmoLean.EGraph.Verified.Bitwise.UltraPipeline (ultraPipeline UltraConfig)
+
+/-- Build UltraConfig from FieldConfig + HardwareCost. -/
+private def fieldConfigToUltraConfig (fc : FieldConfig) (hw : HardwareCost) : UltraConfig :=
+  { hw := hw
+    k := fc.k
+    c := fc.cNat
+    mu := fc.muNat
+    targetColor := if hw.isSimd then 2 else 1 }
+
+/-- Generate NTT C code using the Ultra pipeline (all phases + verified codegen).
+    Uses the full Ultra pipeline: Ruler discovery → bound-aware saturation
+    → dynamic schedule → verified codegen via TrustLean.Stmt.
+
+    CRITICAL: does NOT modify the legacy optimizedNTTC path. -/
+def optimizedNTTC_ultra (fc : FieldConfig) (hw : HardwareCost) (logN iters : Nat) : String :=
+  let n := 2^logN
+  let ucfg := fieldConfigToUltraConfig fc hw
+  let (nttBody, report) := ultraPipeline default [] fc.pNat n ucfg
+    s!"{fc.name.toLower}_ntt_ultra"
+  -- Generate P3 reference for comparison (same as legacy)
+  let montyReduce := genMontyReduceC fc
+  let p3Bf := genP3ButterflyC fc
+  let p3Loop := genNTTLoopC "p3_bf" logN
+  s!"/* AMO-Lean Ultra NTT Benchmark
+ * Field: {fc.name} (p = {fc.pNat})
+ * Pipeline: Ultra (Ruler + bounds + colored + verified codegen)
+ * {report.splitOn "\n" |>.take 5 |>.map ("   " ++ ·) |> String.intercalate "\n"}
+ */
+#include <stdio.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <time.h>
+
+/* === Ultra Verified NTT (TrustLean.Stmt path) === */
+{nttBody}
+
+/* === P3 reference (Montgomery, baseline) === */
+{montyReduce}
+
+{p3Bf}
+
+int main(void) \{
+    size_t n={n}, logn={logN};
+    int iters={iters};
+    {fc.elemType} *d=malloc(n*sizeof({fc.elemType}));
+    {fc.elemType} *orig=malloc(n*sizeof({fc.elemType}));
+    size_t tw_sz=n*logn;
+    {fc.elemType} *tw=malloc(tw_sz*sizeof({fc.elemType}));
+    for(size_t i=0;i<tw_sz;i++) tw[i]=({fc.elemType})((i*7+31)%({fc.wideType}){fc.pLit});
+    for(size_t i=0;i<n;i++) orig[i]=({fc.elemType})((i*1000000007ULL)%({fc.wideType}){fc.pLit});
+    volatile {fc.elemType} sink;
+    struct timespec s,e;
+
+    /* warmup */
+    for(size_t i=0;i<n;i++) d[i]=orig[i];
+    {fc.name.toLower}_ntt_ultra(d, tw);
+
+    /* Ultra benchmark */
+    clock_gettime(CLOCK_MONOTONIC,&s);
+    for(int it=0;it<iters;it++) \{
+      for(size_t i=0;i<n;i++) d[i]=orig[i];
+      {fc.name.toLower}_ntt_ultra(d, tw);
+      sink=d[0]; }
+    clock_gettime(CLOCK_MONOTONIC,&e);
+    double amo_us=((e.tv_sec-s.tv_sec)+(e.tv_nsec-s.tv_nsec)/1e9)/iters*1e6;
+
+    /* P3 benchmark (Montgomery every stage) */
+    clock_gettime(CLOCK_MONOTONIC,&s);
+    for(int it=0;it<iters;it++) \{
+      for(size_t i=0;i<n;i++) d[i]=orig[i];
+      {p3Loop}
+      sink=d[0]; }
+    clock_gettime(CLOCK_MONOTONIC,&e);
+    double p3_us=((e.tv_sec-s.tv_sec)+(e.tv_nsec-s.tv_nsec)/1e9)/iters*1e6;
+
+    double melem=({n}.0)/(amo_us/1e6)/1e6;
+    printf(\"{fc.name},ultra,%.1f,%.1f,%.1f,%+.1f\\n\",amo_us,p3_us,melem,(1.0-amo_us/p3_us)*100.0);
+    (void)sink; free(d); free(orig); free(tw);
+    return 0;
+}"
+
+/-- Ultra benchmark C generator (drop-in alternative to genOptimizedBenchC). -/
+def genOptimizedBenchC_ultra (fc : FieldConfig) (logN iters : Nat)
+    (hw : HardwareCost := arm_cortex_a76) : String :=
+  optimizedNTTC_ultra fc hw logN iters
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 5b: Rust Code Emission Helpers

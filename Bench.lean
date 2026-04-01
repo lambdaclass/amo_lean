@@ -11,6 +11,7 @@
     --iters       auto or a number                               (default: auto)
     --no-explain  hide cost model explanation
     --csv PATH    export results to CSV file
+    --pipeline    legacy,ultra                                  (default: legacy)
     --help        show this help
 -/
 import AmoLean.EGraph.Verified.Bitwise.CostModelDef
@@ -22,7 +23,7 @@ import AmoLean.EGraph.Verified.Bitwise.NTTPlanCodeGen
 open AmoLean.EGraph.Verified.Bitwise
 open AmoLean.EGraph.Verified.Bitwise.VerifiedCodeGen (emitC emitSolinasFoldC lowerMixedExprToLLE)
 open AmoLean.EGraph.Verified.Bitwise.MixedExtract (MixedExpr)
-open AmoLean.EGraph.Verified.Bitwise.OptimizedNTTPipeline (FieldConfig optimizedNTTC genOptimizedBenchC genOptimizedBenchRust costReport babybearConfig koalabearConfig mersenne31Config goldilocksConfig)
+open AmoLean.EGraph.Verified.Bitwise.OptimizedNTTPipeline (FieldConfig optimizedNTTC genOptimizedBenchC genOptimizedBenchC_ultra genOptimizedBenchRust costReport babybearConfig koalabearConfig mersenne31Config goldilocksConfig)
 open AmoLean.EGraph.Verified.Bitwise.CrossRelNTT (nttStageBoundAnalysis NTTBoundConfig)
 
 -- ═══════════════════════════════════════════════════════════════════
@@ -50,6 +51,7 @@ structure BenchConfig where
   itersOverride : Option Nat := none
   explain : Bool := true
   csvPath : Option String := none
+  pipeline : String := "legacy"  -- "legacy" or "ultra"
 
 -- ═══════════════════════════════════════════════════════════════════
 -- Section 2: Field data
@@ -545,6 +547,7 @@ def printHeader (cfg : BenchConfig) : IO Unit := do
   IO.println s!"  Primitives: {primNames}"
   IO.println s!"  Language:   {langNames}"
   IO.println s!"  Hardware:   {cfg.hardware}"
+  IO.println s!"  Pipeline:   {cfg.pipeline}"
   IO.println ""
 
 def printFairness : IO Unit := do
@@ -656,6 +659,7 @@ def parseArgs (args : List String) : BenchConfig :=
     | "--iters" :: v :: rest, cfg => go rest { cfg with itersOverride := v.toNat? }
     | "--no-explain" :: rest, cfg => go rest { cfg with explain := false }
     | "--csv" :: v :: rest, cfg => go rest { cfg with csvPath := some v }
+    | "--pipeline" :: v :: rest, cfg => go rest { cfg with pipeline := v }
     | "--help" :: _, _ => { explain := true }  -- handled in main
     | _ :: rest, cfg => go rest cfg
   go args {}
@@ -728,7 +732,9 @@ def main (args : List String) : IO Unit := do
           if lang == .c then
             let fdConfig := fieldDataToConfig fd
             let code := match prim with
-              | .ntt => genOptimizedBenchC fdConfig logN iters hw
+              | .ntt => if cfg.pipeline == "ultra"
+                then genOptimizedBenchC_ultra fdConfig logN iters hw
+                else genOptimizedBenchC fdConfig logN iters hw
               | _ => genLinearBenchC fd prim logN iters
             IO.FS.writeFile ⟨"/tmp/amobench.c"⟩ code
             let comp ← IO.Process.output { cmd := "cc", args := #["-O2", "-o", "/tmp/amobench", "/tmp/amobench.c"] }

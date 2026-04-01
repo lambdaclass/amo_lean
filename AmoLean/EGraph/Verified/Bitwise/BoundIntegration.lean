@@ -32,8 +32,9 @@ open AmoLean.EGraph.Verified.Bitwise.BoundProp (ReductionChoice babyBearFactory
   mkFieldFactory stageBoundFactor computeStageBounds buildBoundLookup
   lazyReductionSafe decode_encode)
 open AmoLean.EGraph.Verified.Bitwise.CrossRelNTT (NTTBoundConfig nttStageBoundAnalysis
-  selectReductionForBound reductionCost nttTotalReductionCost improvementVsNaive
-  lazyReductionSavings)
+  selectReductionForBound costAwareReductionForBound reductionCost
+  nttTotalReductionCost improvementVsNaive lazyReductionSavings)
+open AmoLean.EGraph.Verified.Bitwise (HardwareCost)
 open MixedPipeline (MixedEGraph)
 
 -- ══════════════════════════════════════════════════════════════════
@@ -176,6 +177,62 @@ example (s : State) : relStep nullFactory s = s := rfl
 example : (babyBearFactory (State.empty.addRelation "bounds")).length = 2 := rfl
 
 end SmokeTests
+
+-- ══════════════════════════════════════════════════════════════════
+-- Section 4b: Dynamic Schedule Extraction from Saturated State
+-- ══════════════════════════════════════════════════════════════════
+
+/-- Extract per-stage reduction schedule from saturated State.
+    Uses sentinel-encoded bounds when available in the relational DAG,
+    combining with static analysis from nttStageBoundAnalysis.
+
+    The saturated state's relEntries[0].dag contains bound edges added by
+    mkFieldFactory during saturation. buildBoundLookup decodes sentinel-encoded
+    bound factors (k values) per e-class.
+
+    For each stage, the effective bound is min(dynamic, static). If the DAG
+    provides a tighter bound, a cheaper reduction strategy may be selected. -/
+def extractScheduleFromState (state : State) (numStages p : Nat)
+    (hwIsSimd arrayIsLarge : Bool)
+    (hw : Option HardwareCost := none) : List (Nat × ReductionChoice × Nat) :=
+  -- Get bound lookup from DAG if available
+  let maybeLookup : Option (EClassId → Option Nat) :=
+    if h : state.relEntries.size > 0 then
+      some (buildBoundLookup (state.relEntries[0]'(by omega)).dag)
+    else none
+  -- Walk through stages, accumulating bounds
+  List.range numStages |>.foldl (fun (acc, boundK) stage =>
+    -- Static bound: butterfly adds 1 to the bound factor
+    let staticK := boundK + 1
+    -- Dynamic bound: query DAG for this stage's class (stage index as proxy)
+    let effectiveK := match maybeLookup with
+      | some lookup => match lookup stage with
+        | some dynamicK => min dynamicK staticK
+        | none => staticK
+      | none => staticK
+    let canLazy := lazyReductionSafe effectiveK p
+    let mustReduce := stage ≥ numStages - 2
+    let reduction :=
+      if !canLazy || mustReduce then
+        match hw with
+        | some hwCost => costAwareReductionForBound hwCost effectiveK p
+        | none => selectReductionForBound effectiveK hwIsSimd arrayIsLarge
+      else match hw with
+        | some hwCost =>
+          -- Lazy saves reduction cost but pays u64 penalty on butterfly ops (mul+add+sub=3 ops)
+          let u64Pen := if hwCost.vectorLength > hwCost.cacheThreshold then hwCost.cachePenalty
+                        else if hwCost.isSimd then hwCost.wideningPenalty else 0
+          let lazyCost := 3 * u64Pen  -- butterfly does ~3 ops that stay in u64
+          let bestRedCost := match costAwareReductionForBound hwCost effectiveK p with
+            | .harvey => mixedOpCost hwCost (.harveyReduce 0 p)
+            | .montgomery => mixedOpCost hwCost (.montyReduce 0 p 0)
+            | _ => mixedOpCost hwCost (.reduceGate 0 p)
+          if lazyCost < bestRedCost then .lazy
+          else costAwareReductionForBound hwCost effectiveK p
+        | none => .lazy  -- no hw info → default to lazy (backward compat)
+    let newBound := stageBoundFactor boundK reduction
+    (acc ++ [(stage, reduction, newBound)], newBound)
+  ) ([], 1) |>.1
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 5: Ruler Feedback Integration (N28.3)

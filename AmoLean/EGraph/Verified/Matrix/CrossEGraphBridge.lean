@@ -113,19 +113,19 @@ where
       go (stage + 1) total nextK ((stage, red, cost, nextK) :: acc)
   termination_by total - stage
 
--- Smoke tests
-#eval do
-  match verifiedJointOptimize 8 2013265921 arm_cortex_a76 with
-  | some result =>
-    let ⟨m, n, _⟩ := result.factorization
-    IO.println s!"BabyBear N=8: {m}x{n}, bf_cost={result.butterflyCost}, total={result.totalCost}"
-  | none => IO.println "Optimization failed"
-
-#eval do
-  match verifiedJointOptimize 1024 2013265921 arm_cortex_a76 with
-  | some result =>
-    let ⟨m, n, _⟩ := result.factorization
-    IO.println s!"BabyBear N=1024: {m}x{n}, bf_cost={result.butterflyCost}, total={result.totalCost}"
-  | none => IO.println "Optimization failed"
+-- Smoke tests (heavy computation, disabled to avoid 45+ min compile time)
+-- Re-enable when needed for debugging:
+-- #eval do
+--   match verifiedJointOptimize 8 2013265921 arm_cortex_a76 with
+--   | some result =>
+--     let ⟨m, n, _⟩ := result.factorization
+--     IO.println s!"BabyBear N=8: {m}x{n}, bf_cost={result.butterflyCost}, total={result.totalCost}"
+--   | none => IO.println "Optimization failed"
+-- #eval do
+--   match verifiedJointOptimize 1024 2013265921 arm_cortex_a76 with
+--   | some result =>
+--     let ⟨m, n, _⟩ := result.factorization
+--     IO.println s!"BabyBear N=1024: {m}x{n}, bf_cost={result.butterflyCost}, total={result.totalCost}"
+--   | none => IO.println "Optimization failed"
 
 end AmoLean.EGraph.Verified.Matrix.CrossEGraphBridge

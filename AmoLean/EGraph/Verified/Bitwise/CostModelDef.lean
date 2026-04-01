@@ -79,7 +79,7 @@ def arm_cortex_a76 : HardwareCost :=
   { mul32 := 3, mul64 := 5, add := 1, sub := 1,
     shift := 1, bitAnd := 1, bitXor := 1, bitOr := 1,
     fusedShiftSub := 1, fusedMulAdd := 3, condSub := 1, modReduce := 1,
-    branchPenalty := 1 }
+    branchPenalty := 1, cachePenalty := 2 }
 
 /-- RISC-V SiFive U74 cost model (from core complex manual 21G1).
     No barrel shifter — shift+sub = 2 separate instructions. -/
