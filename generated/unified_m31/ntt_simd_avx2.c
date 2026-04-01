@@ -16,6 +16,15 @@
 static inline uint32_t reduce_fallback(uint64_t x) {
     return (uint32_t)(((x >> 31) * 134217727U) + (x & 0x7FFFFFFFU));
 }
+
+/* Butterfly: data[i] = a + tw*b, data[j] = a - tw*b (mod p) */
+static inline void butterfly(uint32_t *a, uint32_t *b, uint32_t tw) {
+    uint32_t u = *a;
+    uint32_t v = reduce_fallback((uint64_t)tw * (uint64_t)(*b));
+    *a = reduce_fallback((uint64_t)u + (uint64_t)v);
+    *b = reduce_fallback((uint64_t)u + (2147483647U - (uint64_t)v));
+}
+
 void ntt_simd_avx2(uint32_t *data, size_t n, const uint32_t *twiddles) {
     /* Literal loop bound (12) enables compiler loop unrolling */
     for (size_t stage = 0; stage < 12; stage++) {

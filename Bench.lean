@@ -11,14 +11,20 @@
     --iters       auto or a number                               (default: auto)
     --no-explain  hide cost model explanation
     --csv PATH    export results to CSV file
+    --pipeline    legacy,ultra                                  (default: legacy)
     --help        show this help
 -/
 import AmoLean.EGraph.Verified.Bitwise.CostModelDef
 import AmoLean.EGraph.Verified.Bitwise.VerifiedCodeGen
+import AmoLean.EGraph.Verified.Bitwise.OptimizedNTTPipeline
+import AmoLean.EGraph.Verified.Bitwise.CrossRelNTT
+import AmoLean.EGraph.Verified.Bitwise.NTTPlanCodeGen
 
 open AmoLean.EGraph.Verified.Bitwise
 open AmoLean.EGraph.Verified.Bitwise.VerifiedCodeGen (emitC emitSolinasFoldC lowerMixedExprToLLE)
 open AmoLean.EGraph.Verified.Bitwise.MixedExtract (MixedExpr)
+open AmoLean.EGraph.Verified.Bitwise.OptimizedNTTPipeline (FieldConfig optimizedNTTC genOptimizedBenchC genOptimizedBenchC_ultra genOptimizedBenchRust costReport babybearConfig koalabearConfig mersenne31Config goldilocksConfig)
+open AmoLean.EGraph.Verified.Bitwise.CrossRelNTT (nttStageBoundAnalysis NTTBoundConfig)
 
 -- ═══════════════════════════════════════════════════════════════════
 -- Section 1: Types
@@ -45,6 +51,7 @@ structure BenchConfig where
   itersOverride : Option Nat := none
   explain : Bool := true
   csvPath : Option String := none
+  pipeline : String := "legacy"  -- "legacy" or "ultra"
 
 -- ═══════════════════════════════════════════════════════════════════
 -- Section 2: Field data
@@ -79,6 +86,14 @@ def fieldData : FieldChoice → FieldData
       name := "Goldilocks", p := "0xFFFFFFFF00000001ULL", pNat := 18446744069414584321,
       c := "0xFFFFFFFFULL", cNat := 4294967295, mu := "0ULL", k := 64,
       generator := "7", elemType := "uint64_t", wideType := "__uint128_t" }
+
+/-- Convert Bench FieldData to pipeline FieldConfig. -/
+def fieldDataToConfig (fd : FieldData) : FieldConfig :=
+  if fd.pNat == 2013265921 then babybearConfig
+  else if fd.pNat == 2130706433 then koalabearConfig
+  else if fd.pNat == 2147483647 then mersenne31Config
+  else if fd.pNat == 18446744069414584321 then goldilocksConfig
+  else babybearConfig  -- fallback
 
 def autoIters (logN : Nat) : Nat :=
   if logN ≤ 12 then 1000
@@ -151,13 +166,14 @@ def genSolinasReduce (fd : FieldData) : String :=
     return r;
 }"
   else
-    -- 31-bit fields: expression body from VerifiedCodeGen (VERIFIED path)
-    let verifiedBody := emitSolinasFoldC (.witnessE 0) fd.k fd.cNat
-    -- Wrap in C function with variable rename: w_0 → x
-    let cBody := verifiedBody.replace "w_0" "x"
-    s!"/* Solinas fold — expression body generated via VerifiedCodeGen (verified) */
+    -- 31-bit fields: canonical modular reduction.
+    -- A single Solinas fold does NOT fit in u32 for BabyBear/KoalaBear
+    -- (fold reduces only ~4-7 bits per pass, need ~8 passes from u64 product).
+    -- LLVM optimizes (x % constant) to reciprocal multiply-high (~3 cycles).
+    s!"/* Canonical modular reduction — LLVM reciprocal multiply optimization.
+   A single Solinas fold is NOT a complete reduction for {fd.name} (c={fd.cNat}). */
 static inline {fd.elemType} amo_reduce({fd.wideType} x) \{
-    return ({fd.elemType}){cBody};
+    return ({fd.elemType})(x % ({fd.wideType}){fd.p});
 }"
 
 def genMontyReduce (fd : FieldData) : String :=
@@ -191,15 +207,17 @@ def genNTTBenchC (fd : FieldData) (logN iters : Nat) : String :=
 
 {genSolinasReduce fd}
 
+/* AMO butterfly: canonical reduce in inner loop.
+   All intermediates in u32 after canonical wb reduction.
+   sum = oa + wb < 2p < 2^32, diff = p + oa - wb or oa - wb: both < 2p. */
 static inline void amo_bf({fd.elemType} *a, {fd.elemType} *b, {fd.elemType} w) \{{if fd.k == 64 then s!"
-    /* Goldilocks: amo_reduce for twiddle mul, conditional subtract for sum/diff */
     {fd.elemType} oa=*a, wb=amo_reduce(({fd.wideType})w*({fd.wideType})(*b));
     {fd.elemType} s=oa+wb; *a=(s>={fd.p}||s<oa)?s-{fd.p}:s;
     *b=(oa>=wb)?oa-wb:{fd.p}-wb+oa;"
   else s!"
     {fd.elemType} oa=*a, wb=amo_reduce(({fd.wideType})w*({fd.wideType})(*b));
-    *a=amo_reduce(({fd.wideType})oa+({fd.wideType})wb);
-    *b=amo_reduce(({fd.wideType}){fd.p}+({fd.wideType})oa-({fd.wideType})wb);"}
+    {fd.elemType} s=oa+wb; *a=(s>={fd.p})?s-{fd.p}:s;
+    *b=(oa>=wb)?oa-wb:{fd.p}-wb+oa;"}
 }
 
 {genMontyReduce fd}
@@ -218,6 +236,9 @@ int main(void) \{
     size_t tw_sz=n*logn;
     {fd.elemType} *tw=malloc(tw_sz*sizeof({fd.elemType}));
     for(size_t i=0;i<tw_sz;i++) tw[i]=({fd.elemType})((i*7+31)%({fd.wideType}){fd.p});
+    /* NOTE: Both AMO and P3 initialize in standard form (not Montgomery).
+       P3's REDC with standard-form inputs produces (a*b*R^\{-1})%p instead of (a*b)%p.
+       This is fine for benchmarking throughput (identical instruction mix). */
     for(size_t i=0;i<n;i++) orig[i]=({fd.elemType})((i*1000000007ULL)%({fd.wideType}){fd.p});
     volatile {fd.elemType} sink;
     struct timespec s,e;
@@ -315,9 +336,10 @@ fn amo_reduce(x: u128) -> u64 \{
     if carry || result >= {fd.pNat}_u64 \{ result.wrapping_sub({fd.pNat}_u64) } else \{ result }
 }"
   else
-    s!"#[inline(always)]
-fn amo_reduce(x: u64) -> u64 \{
-    (x >> {fd.k}).wrapping_mul({fd.cNat}_u64).wrapping_add(x & {2^fd.k - 1}_u64)
+    s!"/// Canonical modular reduction — LLVM reciprocal multiply optimization.
+#[inline(always)]
+fn amo_reduce(x: u64) -> u32 \{
+    (x % {fd.pNat}_u64) as u32
 }"
 
 def genMontyReduceRust (fd : FieldData) : String :=
@@ -351,10 +373,15 @@ def genNTTBenchRust (fd : FieldData) (logN iters : Nat) : String :=
   let pLit := if fd.k == 64 then s!"{fd.pNat}_u64" else s!"{fd.pNat}_u32"
   let twMod := if fd.k == 64 then s!"{fd.pNat}_u128" else s!"{fd.pNat}_u64"
   let dataMod := if fd.k == 64 then s!"{fd.pNat}_u128" else s!"{fd.pNat}_u64"
+  -- mu without 0x prefix for Rust hex literal
+  let muHex := fd.mu.replace "0x" "" |>.replace "U" ""
   s!"use std::time::Instant;
 
 {genSolinasReduceRust fd}
 
+{genMontyReduceRust fd}
+
+// AMO butterfly: canonical reduce, all intermediates in native width after wb reduction
 #[inline(always)]
 fn amo_bf(a: &mut {et}, b: &mut {et}, w: {et}) \{{if fd.k == 64 then s!"
     let oa = *a; let wb = amo_reduce(w as u128 * *b as u128);
@@ -362,13 +389,12 @@ fn amo_bf(a: &mut {et}, b: &mut {et}, w: {et}) \{{if fd.k == 64 then s!"
     *a = if ov || s >= {pLit} \{ s.wrapping_sub({pLit}) } else \{ s };
     *b = if oa >= wb \{ oa - wb } else \{ {pLit} - wb + oa };"
   else s!"
-    let oa = *a; let wb = amo_reduce(w as u64 * *b as u64) as u32;
-    *a = amo_reduce(oa as u64 + wb as u64) as u32;
-    *b = amo_reduce({fd.pNat}_u64 + oa as u64 - wb as u64) as u32;"}
+    let oa = *a; let wb = amo_reduce(w as u64 * *b as u64);
+    let s = oa + wb; *a = if s >= {fd.pNat}_{et} \{ s - {fd.pNat}_{et} } else \{ s };
+    *b = if oa >= wb \{ oa - wb } else \{ {fd.pNat}_{et} - wb + oa };"}
 }
 
-{genMontyReduceRust fd}
-
+// Plonky3 butterfly: Montgomery REDC + conditional subtract
 #[inline(always)]
 fn p3_bf(a: &mut {et}, b: &mut {et}, w: {et}) \{{if fd.k == 64 then s!"
     let oa = *a; let wb = p3_reduce(w as u128 * *b as u128);
@@ -383,13 +409,15 @@ fn p3_bf(a: &mut {et}, b: &mut {et}, w: {et}) \{{if fd.k == 64 then s!"
 }
 
 " ++
-  -- Main body built with ++ to avoid `let` keyword conflicts in s!"..."
   "fn main() {\n" ++
   s!"    let n: usize = {n};\n" ++
   s!"    let logn: usize = {logN};\n" ++
   s!"    let iters: usize = {iters};\n" ++
   "    let tw_sz = n * logn;\n" ++
   s!"    let tw: Vec<{et}> = (0..tw_sz).map(|i| ((i as {wt} * 7 + 31) % {twMod}) as {et}).collect();\n" ++
+  "    // NOTE: Both AMO and P3 initialize in standard form (not Montgomery).\n" ++
+  "    // P3's REDC with standard-form inputs produces (a*b*R^{-1})%p instead of (a*b)%p.\n" ++
+  "    // This is fine for benchmarking throughput (identical instruction mix).\n" ++
   s!"    let orig: Vec<{et}> = (0..n).map(|i| ((i as {wt} * 1000000007) % {dataMod}) as {et}).collect();\n" ++
   "    let mut d = orig.clone();\n" ++
   "    for st in 0..logn { let h = 1usize << (logn-st-1);\n" ++
@@ -519,6 +547,7 @@ def printHeader (cfg : BenchConfig) : IO Unit := do
   IO.println s!"  Primitives: {primNames}"
   IO.println s!"  Language:   {langNames}"
   IO.println s!"  Hardware:   {cfg.hardware}"
+  IO.println s!"  Pipeline:   {cfg.pipeline}"
   IO.println ""
 
 def printFairness : IO Unit := do
@@ -542,8 +571,9 @@ def runOneBenchC (hw : HardwareCost) (fd : FieldData) (prim : PrimChoice)
     explainStrategy hw prim fd
     IO.println ""
 
+  let fc := fieldDataToConfig fd
   let code := match prim with
-    | .ntt => genNTTBenchC fd logN iters
+    | .ntt => genOptimizedBenchC fc logN iters hw
     | _ => genLinearBenchC fd prim logN iters
 
   let srcPath := "/tmp/amobench.c"
@@ -629,6 +659,7 @@ def parseArgs (args : List String) : BenchConfig :=
     | "--iters" :: v :: rest, cfg => go rest { cfg with itersOverride := v.toNat? }
     | "--no-explain" :: rest, cfg => go rest { cfg with explain := false }
     | "--csv" :: v :: rest, cfg => go rest { cfg with csvPath := some v }
+    | "--pipeline" :: v :: rest, cfg => go rest { cfg with pipeline := v }
     | "--help" :: _, _ => { explain := true }  -- handled in main
     | _ :: rest, cfg => go rest cfg
   go args {}
@@ -699,8 +730,11 @@ def main (args : List String) : IO Unit := do
         for lang in cfg.langs do
           let langStr := match lang with | .c => "C" | .rust => "Rust"
           if lang == .c then
+            let fdConfig := fieldDataToConfig fd
             let code := match prim with
-              | .ntt => genNTTBenchC fd logN iters
+              | .ntt => if cfg.pipeline == "ultra"
+                then genOptimizedBenchC_ultra fdConfig logN iters hw
+                else genOptimizedBenchC fdConfig logN iters hw
               | _ => genLinearBenchC fd prim logN iters
             IO.FS.writeFile ⟨"/tmp/amobench.c"⟩ code
             let comp ← IO.Process.output { cmd := "cc", args := #["-O2", "-o", "/tmp/amobench", "/tmp/amobench.c"] }
@@ -719,8 +753,9 @@ def main (args : List String) : IO Unit := do
             else
               IO.println s!"  {fd.name}  2^{logN}  {langStr}  PARSE ERROR: {run.stdout.trim}"
           else
+            let fdConfigRust := fieldDataToConfig fd
             let code := match prim with
-              | .ntt => genNTTBenchRust fd logN iters
+              | .ntt => genOptimizedBenchRust fdConfigRust logN iters hw
               | _ => genLinearBenchRust fd prim logN iters
             IO.FS.writeFile ⟨"/tmp/amobench.rs"⟩ code
             let comp ← IO.Process.output { cmd := "rustc", args := #["-O", "/tmp/amobench.rs", "-o", "/tmp/amobench_rs"] }

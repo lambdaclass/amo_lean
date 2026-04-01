@@ -8,8 +8,10 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#define P 2013265921U
+
 static inline uint32_t reduce(uint64_t x) {
-    return (uint32_t)(((x >> 31) * 134217727U) + (x & 2147483647U));
+    return (uint32_t)(x % P);
 }
 
 void fri_fold_babybear(const uint32_t *even, const uint32_t *odd,

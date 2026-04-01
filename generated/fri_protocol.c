@@ -17,6 +17,8 @@
 #include <string.h>
 #include <stdio.h>
 
+#include "field_goldilocks.h"
+
 // Field element type (Goldilocks: p = 2^64 - 2^32 + 1)
 typedef uint64_t field_t;
 
@@ -128,7 +130,7 @@ field_t merkle_hash(field_t left, field_t right) {
 // ============================================================================
 void fri_fold(size_t n, const field_t* input, field_t* output, field_t alpha) {
     for (size_t i = 0; i < n; i++) {
-        output[i] = input[2*i] + alpha * input[2*i + 1];
+        output[i] = goldilocks_add(input[2*i], goldilocks_mul(alpha, input[2*i + 1]));
     }
 }
 

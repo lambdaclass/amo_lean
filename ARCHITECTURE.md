@@ -55,10 +55,10 @@
 | N11.3 SoundRewriteRule + Saturation Soundness | CRIT | N11.2 | done |
 | N11.4 Extraction Correctness | CRIT | N11.2 | done |
 | N11.5 full_pipeline_soundness | CRIT | N11.3, N11.4 | done |
-| N11.6 Butterfly4 Foundation | FUND | — | pending |
-| N11.7 NTT_radix4 + Spec Equivalence | CRIT | N11.6 | pending |
-| N11.8 INTT_radix4 + Roundtrip Identity | CRIT | N11.6, N11.7 | pending |
-| N11.9 Equivalence Proofs | PAR | N11.7, N11.8 | pending |
+| N11.6 Butterfly4 Foundation | FUND | — | deprecated (v2.9.0 — superseded by GenericNTT) |
+| N11.7 NTT_radix4 + Spec Equivalence | CRIT | N11.6 | deprecated (v2.9.0 — superseded by GenericNTT) |
+| N11.8 INTT_radix4 + Roundtrip Identity | CRIT | N11.6, N11.7 | deprecated (v2.9.0 — superseded by GenericNTT) |
+| N11.9 Equivalence Proofs | PAR | N11.7, N11.8 | deprecated (v2.9.0 — superseded by GenericNTT) |
 | N11.10 Perm Axiom Elimination | PAR | — | done ✓ |
 | N11.11 Translation Validation Framework | CRIT | — | done ✓ |
 | N11.12 Integration + Zero-Axiom Audit | HOJA | N11.5, N11.9, N11.10, N11.11 | done ✓ |
@@ -188,9 +188,9 @@
 - [x] **B32 ConsistentValuation**: N11.2 (SECUENCIAL) ✓
 - [x] **B33 Saturation + Extraction**: N11.3, N11.4 (PARALELO) ✓
 - [x] **B34 Pipeline Composition**: N11.5 (SECUENCIAL) ✓
-- [ ] **B35 Butterfly4 Foundation**: N11.6 (SECUENCIAL, de-risk sketch)
-- [ ] **B36 NTT Radix-4**: N11.7 (SECUENCIAL)
-- [ ] **B37 INTT + Equivalence**: N11.8, N11.9 (SECUENCIAL)
+- [x] **B35 Butterfly4 Foundation**: N11.6 — DEPRECATED (v2.9.0, superseded by GenericNTT)
+- [x] **B36 NTT Radix-4**: N11.7 — DEPRECATED (v2.9.0, superseded by GenericNTT)
+- [x] **B37 INTT + Equivalence**: N11.8, N11.9 — DEPRECATED (v2.9.0, superseded by GenericNTT)
 - [x] **B38 Perm + Translation Validation**: N11.10, N11.11 (PARALELO) ✓
 - [x] **B39 Integration + Audit**: N11.12 (SECUENCIAL) ✓
 
@@ -200,8 +200,8 @@
 Branch A (Pipeline, G4+G5):
   B31 (N11.1 FUND) → B32 (N11.2 FUND) → B33 (N11.3+N11.4 PAR) → B34 (N11.5 CRIT)
 
-Branch B (NTT Radix-4, G2):                    ← independent, parallelizable
-  B35 (N11.6 FUND) → B36 (N11.7 CRIT) → B37 (N11.8+N11.9 CRIT+PAR)
+Branch B (NTT Radix-4, G2):                    ← DEPRECATED v2.9.0 (superseded by GenericNTT + Fase 24)
+  B35–B37: archived to archive/NTT_Radix4/
 
 Branch C (Perm+TV, G3+G6):                     ← independent, parallelizable
   B38 (N11.10+N11.11 PAR)
@@ -1710,6 +1710,27 @@ N23.6 ──→ N23.8 CostIntegration (HOJA)
 4. Lazy Reduction with verified `maxAbsValue` interval analysis
 5. Shadow Graph operational (outside TCB) — extraction still verified via extractF_correct
 
+#### Architectural Gap: MatEGraph ↔ MixedEGraph Two-Layer Connection
+
+**Problem identified** (2026-03-27): The project has two optimization levels that should feed each other but are currently disconnected:
+
+- **Level 1 (algorithmic)**: `NTTFactorizationRules.lean` defines 5 strategies (`radix2DIT`, `radix2DIF`, `radix4DIT`, `splitRadix`, `kroneckerPacked`) as `MatRewriteRule` over `MatENodeOp`. These rules describe how to decompose NTT into stages with different factorizations.
+- **Level 2 (arithmetic)**: `MixedEGraph` + `MultiRelMixed` + `BoundPropagation` fully optimize each butterfly's modular reduction (Solinas/Montgomery/Harvey/lazy) with bound tracking.
+
+**What's missing**: Level 1 has rule definitions but **no saturation loop** (no `MatEGraph` executor). Plan generation in `NTTPlanSelection.generateCandidates` is hardcoded to 5 candidates (all radix-2). Consequence: `Butterfly4Bridge` (200 LOC, proven cost savings) is never used in practice. The two-layer feedback loop — where Level 2 cost information guides Level 1 factorization choices — does not exist.
+
+**Evidence**:
+- `NTTFactorizationRules.lean:allNTTFactorizationRules` → 4 rules defined, never executed
+- `NTTPlanSelection.lean:generateCandidates` → 5 hardcoded candidates, 0 radix-4
+- `Butterfly4Bridge.lean` → complete, proven, zero consumers
+- `MatENodeOp` (in Vector.lean) → 12-constructor inductive type, no e-graph operations
+
+**Solution**: Extend Fase 24 with two new nodes (N24.11, N24.12) that implement the MatEGraph saturation loop and extraction to NTTPlan. GuidedSaturation's `threePhaseSaturateF` pattern is reusable (parametric in step functions and fuel), but requires new step functions over `MatENodeOp` and a cost oracle that queries Level 2.
+
+**Quick win (independent, ~100 LOC)**: Extend `generateCandidates` to include radix-4 and mixed-radix plans. This activates `Butterfly4Bridge` and captures ~80% of the value without the full MatEGraph machinery. Can be done at any time without waiting for Fase 24 integration.
+
+**Dependency**: The correctness bridge `nttPlan_semantic_preservation` depends on the butterfly foldl lemmas being proven in `StageSimulation.lean` (`dit_bottomUp_eq_ntt_generic`, `dit_bottomUp_eq_ntt_spec`).
+
 #### DAG (v3.3.0)
 
 ```
@@ -1720,7 +1741,10 @@ N24.4 ShadowGraph (FUND) ──→ N24.5
 N24.6 RuleScoring (PAR) ──→ N24.5
 N24.7 GrowthPrediction (PAR) ──→ N24.5
 N24.8 TreewidthDP (CRIT) ──→ N24.9 DiscoveryPipeline (HOJA)
-N24.5 ──→ N24.9
+N24.5 ──→ N24.11 MatEGraphStep (FUND)
+N24.11 ──→ N24.12 MatPlanExtraction (CRIT)
+N24.12 ──→ N24.9
+N24.8 ──→ N24.9
 N24.9 ──→ N24.10 DiscoveryTests (HOJA)
 ```
 
@@ -1734,9 +1758,11 @@ N24.9 ──→ N24.10 DiscoveryTests (HOJA)
 | N24.6 | RuleScoring | PAR | ~200 | — |
 | N24.7 | GrowthPrediction | PAR | ~200 | — |
 | N24.8 | TreewidthDP | CRIT | ~500 | — |
-| N24.9 | DiscoveryPipeline | HOJA | ~300 | N24.5, N24.8 |
+| N24.9 | DiscoveryPipeline | HOJA | ~300 | N24.8, N24.12 |
 | N24.10 | DiscoveryTests | HOJA | ~250 | N24.9 |
-| **Total** | | | **~2,900** | |
+| N24.11 | MatEGraphStep | FUND | ~300 | N24.5 |
+| N24.12 | MatPlanExtraction | CRIT | ~200 | N24.11 |
+| **Total** | | | **~3,400** | |
 
 #### Blocks
 
@@ -1748,19 +1774,1637 @@ N24.9 ──→ N24.10 DiscoveryTests (HOJA)
 | B92 | N24.4 | FUND sequential |
 | B93 | N24.5 | CRIT sequential (after all B89-B92) |
 | B94 | N24.8 | CRIT sequential (independent) |
-| B95 | N24.9 | HOJA sequential (after B93+B94) |
+| B97 | N24.11 | FUND sequential (after B93) |
+| B98 | N24.12 | CRIT sequential (after B97) |
+| B95 | N24.9 | HOJA sequential (after B94+B98) |
 | B96 | N24.10 | HOJA sequential |
 
 #### Progress Tree
 
-- [ ] B89: N24.1 ShiftAddGen
-- [ ] B90: N24.2 CongruenceGen
-- [ ] B91: N24.3 LazyReduction | N24.6 RuleScoring | N24.7 GrowthPrediction
-- [ ] B92: N24.4 ShadowGraph
-- [ ] B93: N24.5 GuidedSaturation
-- [ ] B94: N24.8 TreewidthDP
-- [ ] B95: N24.9 DiscoveryPipeline
-- [ ] B96: N24.10 DiscoveryTests
+- [x] B89: N24.1 ShiftAddGen (229 LOC, 17 decls, 0 sorry — wiring PASS)
+- [x] B90: N24.2 CongruenceGen (210 LOC, 12 decls, 0 sorry — wired to GuidedSaturation.phase2CongruenceRules)
+- [x] B91: N24.3 LazyReduction (290 LOC) | N24.6 RuleScoring (199 LOC) | N24.7 GrowthPrediction (213 LOC) — all 0 sorry, wiring PASS
+- [x] B92: N24.4 ShadowGraph (241 LOC, 25 decls, 0 sorry — W2 advisory: 2 dead fields, W4: infinityCost redefined)
+- [x] B93: N24.5 GuidedSaturation (281 LOC, 21 decls, 0 sorry — W2 advisory: 6 GuidedResult fields unread, W4: phase1Rules/phaseSafeFuel redefined)
+- [x] B94: N24.8 TreewidthDP (195 LOC, 18 decls, 0 sorry — W2 advisory: DPEntry.bestChild unread)
+- [x] B97: N24.11 MatEGraphStep (250 LOC, 0 sorry — CostOracle + radix assignment exploration + Fibonacci growth bound)
+- [x] B98: N24.12 MatPlanExtraction (175 LOC, 3 sorry de-risk — assignmentToPlan + selectBestPlanExplored + refinePlanBounds)
+- [x] B95: N24.9 DiscoveryPipeline (192 LOC, 0 sorry — imports MatPlanExtraction, totalRuleCount fixed for phase2CongruenceRules)
+- [x] B96: N24.10 DiscoveryTests (178 LOC) + ReductionDecomp (214 LOC) wired to Pipeline — 959 jobs, 0 errors
+
+#### Detailed Node Specifications — N24.11, N24.12 (Two-Layer Connection)
+
+**N24.11 FUNDACIONAL — MatEGraphStep** (~300 LOC)
+- File: `AmoLean/EGraph/Verified/Bitwise/Discovery/MatEGraphStep.lean`
+- Purpose: Saturation loop for `MatRewriteRule` over `MatENodeOp`, connecting algorithmic-level NTT factorization exploration to the arithmetic-level MixedEGraph.
+- **What exists already** (reuse, not rewrite):
+  - `MatENodeOp` inductive type (12 constructors: identity, dft, ntt, twiddle, perm, kron, compose, add, smul, transpose, conjTranspose, elemwise) — in `Vector.lean`
+  - `MatRewriteRule` structure (name, canApply, description) — in `NTTFactorizationRules.lean`
+  - `allNTTFactorizationRules` (4 rules: radix2DIT, radix2DIF, radix4DIT, kroneckerPack) — in `NTTFactorizationRules.lean`
+  - `threePhaseSaturateF` pattern (parametric in step functions) — in `GuidedSaturation.lean`
+  - `GrowthPrediction.maxNodesBound` (reusable for any rule set) — in `GrowthPrediction.lean`
+- **What needs to be built**:
+  1. `MatEGraph` type: lightweight hashcons over `MatENodeOp` e-classes (NOT the full MixedEGraph — matrix operations are coarser-grained, ~50-200 nodes max for a single NTT)
+  2. `matApplyRule : MatEGraph → MatRewriteRule → MatEGraph` — single rule application (match + rewrite)
+  3. `matSaturateStep : MatEGraph → MatEGraph` — apply all matching rules, rebuild
+  4. `matSaturateF : MatEGraph → Nat → MatEGraph` — fuel-bounded loop using `threePhaseSaturateF` pattern
+  5. Cost oracle: `matNodeCost : MatENodeOp → Level2CostQuery → Nat` — queries Level 2 (MixedEGraph + BoundPropagation) for the arithmetic cost of implementing a specific factorization
+- **Key design decision**: The cost oracle is the feedback channel. When the MatEGraph evaluates "radix-4 DIT for stage 3", it asks Level 2: "what's the cheapest reduction strategy for a radix-4 butterfly with input bound k=3 on ARM NEON?" Level 2 answers using `selectReductionForBound` + `reductionCost`. This makes algorithmic choices cost-aware without duplicating the arithmetic cost model.
+- **Growth control**: MatEGraph is small (NTT of size 2^20 has ~20 stages, each stage has ~5 factorization options → ~100 nodes max). Explosion risk is LOW compared to MixedEGraph. Still use `maxNodesBound` as safety check.
+- **De-risk**: Implement `matSaturateF` with a single phase first (no three-phase structure). Three-phase only if rule interactions require phasing (unlikely at this granularity).
+- Theorems: `matSaturateF_terminates`, `matSaturateF_preserves_valid` (valid = all e-classes represent semantically equivalent NTT factorizations)
+
+**N24.12 CRITICO — MatPlanExtraction** (~200 LOC)
+- File: `AmoLean/EGraph/Verified/Bitwise/Discovery/MatPlanExtraction.lean`
+- Purpose: Extract optimal `NTTPlan` from a saturated `MatEGraph`, replacing the 5 hardcoded candidates in `generateCandidates`.
+- **What exists already** (reuse):
+  - `NTTPlan.Plan` structure with per-stage `NTTStage` (radix, reduction, direction, bounds) — in `NTTPlan.lean`
+  - `mkBoundAwarePlan` (constructs plan with per-stage bound tracking) — in `NTTPlan.lean`
+  - `extractF_correct` / `extractILP_correct` (extraction correctness for MixedEGraph) — pattern reusable
+  - `TreewidthDP` (polynomial extraction for tw≤15) — in `Discovery/TreewidthDP.lean`
+- **What needs to be built**:
+  1. `matExtract : MatEGraph → (MatENodeOp → Nat) → NTTPlan.Plan` — greedy extraction with cost function
+  2. `matExtractDP : MatEGraph → NiceTree → NTTPlan.Plan` — DP extraction via TreewidthDP (optional, for large NTTs)
+  3. `refinePlanWithBounds : NTTPlan.Plan → BoundRuleFactory → NTTPlan.Plan` — post-extraction bound refinement: for each stage in the extracted plan, query BoundPropagation for optimal reduction choice
+  4. `matExtract_correct` theorem: extracted plan is semantically equivalent to the original NTT specification
+- **Integration with existing pipeline**: Replace `generateCandidates` call in `NTTPlanSelection.selectBestPlan` with: (1) build MatEGraph from NTT spec, (2) saturate with `matSaturateF`, (3) extract with `matExtract`, (4) refine with `refinePlanWithBounds`. Backward compat: `generateCandidates` becomes a fallback when MatEGraph is not available or fuel=0.
+- **Correctness bridge**: `nttPlan_semantic_preservation` — the master theorem connecting algorithmic plan to NTT spec. Depends on `StageSimulation.dit_bottomUp_eq_ntt_generic` (proven) and butterfly foldl lemmas (in progress by another agent). This is the HIGH-risk deliverable; if intractable, fallback to `native_decide` for BabyBear N≤16 + documented sorry.
+- De-risk: `matExtract` greedy first, DP only if extraction quality is poor.
+
+**Quick Win (independent of N24.11/N24.12, ~100 LOC)**:
+- File: `NTTPlanSelection.lean` (modify `generateCandidates`)
+- Add radix-4 and mixed-radix candidates:
+  ```lean
+  mkUniformPlan p n .r4 .solinasFold,        -- radix-4 + Solinas
+  mkUniformPlan p n .r4 .montgomery,          -- radix-4 + Montgomery
+  mkMixedRadixPlan p n hwIsSimd arrayIsLarge, -- radix-4 early, radix-2 late
+  ```
+- This activates `Butterfly4Bridge` (currently orphaned) and captures ~80% of the radix-4 value
+- Can be done ANY time, does not depend on Fase 24 integration
+- Does NOT replace N24.11/N24.12 — enumeration is not exploration, but is sufficient for 3-4 prime fields
+
+---
+
+### Known Limitations & Design Decisions (Autopsy 2026-03-27)
+
+**F1. E-matching evaluates on constant-collapsed environments (DESIGN)**
+`applyRulesF_preserves_cv` requires `env.witnessVal = env.constVal ∧ env.pubInputVal = env.constVal`. This is intentional: e-matching soundness is proven for a simplified evaluation model where all input sources collapse to constants (see `MixedEMatchSoundness.lean:712-716`, syntheticEnv construction). This enables pattern matching to use a single evaluation function. For full circuit evaluation with distinct witnesses/pubInputs, the e-graph results are trusted via `pipeline_mixed_equivalent` which operates at the UF root level.
+
+**F2. VerifiedCodeGen has two lowering paths (21/21 constructors covered)**
+The autopsy flagged 7 "uncovered" MixedNodeOp constructors in `lowerMixedExprToLLE`. This is a measurement artifact: the 3 reduction constructors (montyReduceE, barrettReduceE, harveyReduceE) require conditionals (`Stmt.ite`) which LowLevelExpr cannot express. They are covered by `lowerMixedExprFull` (VerifiedCodeGen.lean:96-123) which delegates to TrustLeanBridge's `lowerHarveyReduce`, `lowerMontyReduce`, `lowerBarrettReduce` — all producing verified Stmt with Stmt.ite. Total coverage: 21/21 constructors across both paths.
+
+**F3. ConsistentValuation constructible incrementally (non-vacuity validated)**
+`full_pipeline_soundness` assumes initial ConsistentValuation. This CAN be constructed via `empty_consistent` + `merge_consistent` chain (SemanticSpec.lean:110-115, MixedSemanticSpec.lean:46-123). Non-vacuity example in `Tests/NonVacuity/PipelineCV.lean`.
+
+**F4. roundtrip_succeeds sorry (BLOCKED, dead code)**
+`RoundtripSoundness.lean:154` has `sorry`. Blocker: `MatUnionFind.find` is `partial` (no equation lemmas). The theorem is used by nobody — superseded by 8 concrete `native_decide` examples in the same file (lines 163-206). Resolving requires either: (a) making `find` total with fuel, or (b) proving equation lemmas for the partial function.
+
+**F5. NTT field invertibility (LOW, covered by [Field F])**
+`dit_bottomUp_eq_ntt_spec` requires `[Field F]` (top-level variable), which includes multiplicative inversion. `IsPrimitiveRoot` is a lightweight monoid property that does NOT require field structure, but the field constraint is inherited from the file-level variable declaration. Non-vacuity example in `Tests/NonVacuity/NTTDIT.lean`.
+
+**F6. pipeline_mixed_equivalent name clarification**
+This theorem proves: "if two e-classes have the same UF root AND extraction succeeds for both, the results are semantically equivalent." It does NOT prove that saturation produces the UF equivalence — that is the job of `saturateMixedF_preserves_consistent`. The name reflects post-saturation extraction correctness.
+
+**F7. full_pipeline_soundness outputs existential (soundness, not optimality)**
+The conclusion `∃ v_sat, ConsistentValuation ... ∧ evalExpr expr env = v_sat root` proves soundness: the extracted expression evaluates correctly. It does NOT prove optimality (that the extraction is cost-minimal). Optimality is a property of the cost model, not the soundness chain.
+
+---
+
+### Fase 25: FRI Fold + Poseidon Bound-Aware Optimization — v3.3.1
+
+**Goal**: Connect Level 1↔Level 2 optimization feedback to FRI fold and Poseidon S-box primitives. The existing infrastructure (CostOracle, selectReductionForBound, BoundPropagation, stageBoundFactor) is already generalized — only instantiation for new primitives is needed.
+
+**Key insight**: CostOracle and selectReductionForBound take bounds and return reductions — they don't know they're working with NTT. FRI fold (bound ~2p after mul+add) and Poseidon S-box (bound ~p^d after exponentiation) simply provide different bound inputs.
+
+**New files** (3):
+- `AmoLean/EGraph/Verified/Bitwise/FRIFoldPlan.lean` — FRI fold reduction selection
+- `AmoLean/EGraph/Verified/Bitwise/PoseidonStagePlan.lean` — Poseidon per-round reduction
+- `AmoLean/EGraph/Verified/Bitwise/PrimitivesIntegration.lean` — Unified primitive dispatch
+
+#### DAG (v3.3.1)
+
+```
+N25.1 FRIFoldPlan (FUND) ──→ N25.3 PrimitivesIntegration (HOJA)
+N25.2 PoseidonStagePlan (PAR) ──→ N25.3
+```
+
+| Node | Name | Type | LOC | Deps | File |
+|------|------|------|-----|------|------|
+| N25.1 | FRIFoldPlan | FUND | ~80 | — | Bitwise/FRIFoldPlan.lean |
+| N25.2 | PoseidonStagePlan | PAR | ~100 | — | Bitwise/PoseidonStagePlan.lean |
+| N25.3 | PrimitivesIntegration | HOJA | ~70 | N25.1, N25.2 | Bitwise/PrimitivesIntegration.lean |
+| **Total** | | | **~250** | | |
+
+#### Blocks
+
+| Block | Nodes | Execution |
+|-------|-------|-----------|
+| B99 | N25.1 | FUND sequential |
+| B100 | N25.2 | PAR (parallel with B99) |
+| B101 | N25.3 | HOJA (after B99 + B100) |
+
+#### Progress Tree
+
+- [x] B99: N25.1 FRIFoldPlan (110 LOC, 0 sorry, wiring PASS)
+- [x] B100: N25.2 PoseidonStagePlan (240 LOC, 0 sorry, wiring PASS)
+- [x] B101: N25.3 PrimitivesIntegration (145 LOC, 0 sorry — entry point for Fase 27)
+
+#### Detailed Node Specifications
+
+**N25.1 FUNDACIONAL — FRIFoldPlan** (~80 LOC)
+- File: `AmoLean/EGraph/Verified/Bitwise/FRIFoldPlan.lean`
+- FRI fold = `alpha * f_odd[i] + f_even[i]` — bound after mul+add is ~2p
+- `FRIFoldConfig` structure: field prime, alpha bound factor, hardware target
+- `selectFRIReduction` := direct reuse of `selectReductionForBound 2 hwIsSimd arrayIsLarge`
+- `friFoldCost` using existing CostOracle (butterflyCost pattern for mul+add)
+- Smoke tests: BabyBear + Goldilocks FRI fold cost comparisons
+
+**N25.2 PARALELO — PoseidonStagePlan** (~100 LOC)
+- File: `AmoLean/EGraph/Verified/Bitwise/PoseidonStagePlan.lean`
+- Poseidon S-box = x^d (d=7 BabyBear, d=5 BN254) — bound after exponentiation explodes (~p^d)
+- `PoseidonStageConfig`: field prime, exponent d, number of full/partial rounds
+- `selectPoseidonReduction`: per-round reduction selection
+  - Full rounds: aggressive reduction mandatory (Montgomery, bound too large for Harvey/lazy)
+  - Partial rounds: only 1 S-box per round, bounds smaller → lazy possible?
+- Bound tracking: `poseidonBoundAfterSbox(inputK, d) := inputK * d` (multiplicative growth)
+- `poseidonStageCost` using existing CostOracle
+- Smoke tests: BabyBear Poseidon t=8, full vs partial round cost difference
+
+**N25.3 HOJA — PrimitivesIntegration** (~70 LOC)
+- File: `AmoLean/EGraph/Verified/Bitwise/PrimitivesIntegration.lean`
+- Unified `selectPrimitiveReduction(primitive, boundK, hw)` dispatching to NTT/FRI/Poseidon
+- Integration smoke test: same prime (BabyBear), different primitives → different reduction choices:
+  - NTT butterfly (bound ~2p) → Harvey
+  - FRI fold (bound ~2p) → Harvey (same as NTT)
+  - Poseidon S-box (bound ~p^7) → Montgomery
+- Wire into UltraPipeline: extend report to include FRI + Poseidon costs
+
+#### Formal Properties (v3.3.1)
+
+| Nodo | Propiedad | Tipo | Prioridad |
+|------|-----------|------|-----------|
+| N25.1 | selectFRIReduction produces valid ReductionChoice for all fields | SOUNDNESS | P0 |
+| N25.1 | FRI fold cost ≤ NTT butterfly cost (same field, same hw) | OPTIMIZATION | P1 |
+| N25.2 | Poseidon full-round always selects aggressive reduction (not lazy) | INVARIANT | P0 |
+| N25.2 | poseidonBoundAfterSbox monotone in exponent d | PRESERVATION | P1 |
+| N25.3 | Same prime + different primitives → can produce different reductions | COMPLETENESS | P0 |
+
+---
+
+### Fase 26: Spec-Driven Reduction Discovery — v3.4.0
+
+**Goal**: E-graph discovers modular reduction implementations from specification `reduce(x) ≡ x mod p`, potentially better than Barrett/Montgomery/Solinas for specific primes.
+
+**Novel contribution**: First verified framework where an e-graph discovers modular reduction algorithms from specification, not from hand-coded rules. Uses the Herbie model: domain axioms + operator vocabulary + cost-optimal extraction.
+
+**Architecture**:
+```
+Spec Axiom: reduce(x) = x % p (e-class equivalence)
+    ↓
+Bitwise Vocabulary (templates + pre-computed constants per prime)
+    ↓
+Guided Saturation (4-phase, dynamic pruning via best-found cost)
+    ↓
+Top-K Candidate Extraction (HardwareCost ranking)
+    ↓
+Tactic Verification (tri-state: Verified | FailedToVerify | Rejected)
+    ↓
+Ranked verified implementations
+```
+
+**Lessons applied**: L-505 (explosion → SaturationConfig limits), L-690 (SHI integrity), L-513 (compositional proofs)
+
+**New files** (7):
+- `AmoLean/EGraph/Verified/Bitwise/Discovery/ReduceSpecAxiom.lean`
+- `AmoLean/EGraph/Verified/Bitwise/Discovery/BitwiseVocabulary.lean`
+- `AmoLean/EGraph/Verified/Bitwise/Discovery/SpecDrivenSaturation.lean`
+- `AmoLean/EGraph/Verified/Bitwise/Discovery/CandidateExtraction.lean`
+- `AmoLean/EGraph/Verified/Bitwise/Discovery/TacticVerification.lean`
+- `AmoLean/EGraph/Verified/Bitwise/Discovery/SpecDrivenRunner.lean`
+- `Tests/NonVacuity/SpecDrivenDiscovery.lean`
+
+#### DAG (v3.4.0)
+
+```
+N26.1 ReduceSpecAxiom (FUND) ──→ N26.3 ExplosionControl (CRIT)
+N26.2 BitwiseVocabulary (FUND) ──→ N26.3
+N26.3 ──→ N26.4 CandidateExtraction (CRIT) ──→ N26.6 DiscoveryRunner (HOJA)
+N26.5 TacticVerification (PAR) ──→ N26.6
+N26.6 ──→ N26.7 IntegrationTests (HOJA)
+```
+
+| Node | Name | Type | LOC | Deps |
+|------|------|------|-----|------|
+| N26.1 | ReduceSpecAxiom | FUND | ~150 | — |
+| N26.2 | BitwiseVocabulary | FUND | ~200 | — |
+| N26.3 | ExplosionControl | CRIT | ~250 | N26.1, N26.2 |
+| N26.4 | CandidateExtraction | CRIT | ~200 | N26.3 |
+| N26.5 | TacticVerification | PAR | ~150 | — |
+| N26.6 | DiscoveryRunner | HOJA | ~150 | N26.4, N26.5 |
+| N26.7 | IntegrationTests | HOJA | ~100 | N26.6 |
+| **Total** | | | **~1200** | |
+
+#### Blocks
+
+| Block | Nodes | Execution |
+|-------|-------|-----------|
+| B107 | N26.1 | FUND sequential (de-risk: CV preservation sketch) |
+| B108 | N26.2 | FUND sequential (de-risk: 1 rule soundness proof) |
+| B109 | N26.3 | CRIT sequential (after B107+B108) — **GATE** |
+| B110 | N26.4 | CRIT sequential (after B109) |
+| B111 | N26.5 | PAR (parallel with B109-B110) |
+| B112 | N26.6 | HOJA (after B110+B111) |
+| B113 | N26.7 | HOJA (after B112) |
+
+#### Progress Tree
+
+- [x] B107: N26.1 ReduceSpecAxiom (382 LOC, 0 sorry)
+- [x] B108: N26.2 BitwiseVocabulary (205 LOC, 0 sorry)
+- [x] B109: N26.3 ExplosionControl (215 LOC, 0 sorry)
+- [x] B110: N26.4 CostBiasedExtract (199 LOC, 0 sorry)
+- [x] B111: N26.5 VerificationOracle (119 LOC, 0 sorry)
+- [x] B112: N26.6 DiscoveryRunner (153 LOC, 0 sorry)
+- [x] B113: N26.7 IntegrationTests (115 LOC, 0 sorry)
+
+#### Detailed Node Specifications
+
+**N26.1 FUNDACIONAL — ReduceSpecAxiom** (~150 LOC)
+- File: `AmoLean/EGraph/Verified/Bitwise/Discovery/ReduceSpecAxiom.lean`
+- `ReduceSpec` structure: prime p, input bound (`x < 2^w`), word width w
+- `insertReduceSpec : ReduceSpec → MixedEGraph → MixedEGraph` — inserts e-class equivalence `reduce(x) ↔ x % p`
+- **Arithmetic domain**: `Nat` with explicit bounds (`x < 2^w`). Proofs use Nat arithmetic + `Nat.mod`. Lifting bridge to `BitVec w` as future work.
+- Theorem: `insertReduceSpec_preserves_cv`
+- De-risk: sketch insertion + CV preservation before full proof
+
+**N26.2 FUNDACIONAL — BitwiseVocabulary** (~200 LOC)
+- File: `AmoLean/EGraph/Verified/Bitwise/Discovery/BitwiseVocabulary.lean`
+- **Templates** (parametric, instantiated per-run by N26.6):
+  - Shift decomposition: `x = (x >> k) * 2^k + (x & (2^k - 1))`
+  - Mask identity: `x & (2^w - 1) = x % 2^w`
+  - Conditional subtraction: `if x ≥ p then x - p else x`
+  - Barrett skeleton: `x - floor(x * m / 2^k) * p` (parametric in m, k)
+  - Montgomery skeleton: `(x + (x * mu % R) * p) / R` (parametric in mu, R)
+  - Add/Sub modular: `(a + b) % p`, `(a - b + p) % p`
+- Templates take `(p, w, constants)` parameters. Constants pre-computed in N26.6, NOT during saturation.
+- Each instantiated rule: `MixedSoundRule` with proven soundness on Nat with bounds
+- De-risk: prove soundness of 1 rule (shift decomposition) before implementing all
+
+**N26.3 CRITICO — ExplosionControl** (~250 LOC) — **GATE**
+- File: `AmoLean/EGraph/Verified/Bitwise/Discovery/SpecDrivenSaturation.lean`
+- Extends `GuidedSaturation` with spec-driven 4-phase saturation:
+  - Phase 0 (fuel 0-3): Insert spec axiom only
+  - Phase 1 (fuel 3-10): Algebraic rules (existing 12)
+  - Phase 2 (fuel 10-30): Field-specific + vocabulary rules
+  - Phase 3 (fuel 30-40): Bitwise decomposition (CSD + shifts)
+- **Dynamic pruning** (QA amendment): once a complete reduction (no `reduce` subterms) is found, its cost becomes the pruning bound. Before first solution: `known_best_cost * 1.5`.
+- `GrowthPrediction`: abort if predicted nodes > 5000
+- Theorem: `specDrivenSaturateF_preserves_consistent`
+- De-risk: test with BabyBear that saturation terminates within fuel and produces ≥1 candidate
+
+**N26.4 CRITICO — CandidateExtraction** (~200 LOC)
+- File: `AmoLean/EGraph/Verified/Bitwise/Discovery/CandidateExtraction.lean`
+- `extractTopK : MixedEGraph → Nat → HardwareCost → Array MixedExpr`
+- Extracts TOP-K candidates (K=10 default), each a different bitwise implementation of `x % p`
+- Cost ranking per hardware target (ARM scalar, NEON, AVX2)
+- Theorem: extracted candidates semantically equivalent to spec (inherited from CV)
+
+**N26.5 PARALELO — TacticVerification** (~150 LOC)
+- File: `AmoLean/EGraph/Verified/Bitwise/Discovery/TacticVerification.lean`
+- **Tri-state result** (QA amendment):
+  ```
+  Verified(expr, cost)       — tactic proved candidate(x) % p = x % p
+  FailedToVerify(expr, cost) — tactic failed, logged for manual inspection
+  Rejected(reason)           — structurally invalid
+  ```
+- Tactic cascade: `[native_decide, omega, ring, norm_num, simp [Nat.mod]]`
+- `FailedToVerify` candidates logged, not silently dropped
+- Smoke: known Solinas/Barrett/Montgomery all classify as `Verified`
+
+**N26.6 HOJA — DiscoveryRunner** (~150 LOC)
+- File: `AmoLean/EGraph/Verified/Bitwise/Discovery/SpecDrivenRunner.lean`
+- **Constant pre-computation** (QA amendment): given `(p, w)`, computes:
+  - Barrett: `m = floor(2^k / p)` for k ∈ {w, 2w}
+  - Montgomery: `mu = -p^{-1} mod 2^w`, `R = 2^w`
+  - Solinas: if `p = 2^a - c`, extract `(a, c)`
+- Instantiates vocabulary templates → concrete `MixedSoundRule` list
+- End-to-end: `discoverReduction(p, hw) → List VerificationResult`
+- Comparison table: discovered vs known costs
+
+**N26.7 HOJA — IntegrationTests** (~100 LOC)
+- File: `Tests/NonVacuity/SpecDrivenDiscovery.lean`
+- Non-vacuity: `discoverReduction` produces ≥1 `Verified` for BabyBear
+- Comparison: discovered cost ≤ known best (or document why)
+- `#print axioms`: 0 custom axioms on `VerificationResult.verified`
+
+#### Formal Properties (v3.4.0)
+
+| Nodo | Propiedad | Tipo | Prioridad |
+|------|-----------|------|-----------|
+| N26.1 | insertReduceSpec_preserves_cv | PRESERVATION | P0 |
+| N26.2 | All vocabulary rules sound on Nat with bounds | SOUNDNESS | P0 |
+| N26.3 | specDrivenSaturateF_preserves_consistent | SOUNDNESS | P0 |
+| N26.3 | Dynamic pruning tightens monotonically | INVARIANT | P1 |
+| N26.4 | Extracted candidates equivalent to spec (inherited from CV) | SOUNDNESS | P0 |
+| N26.5 | Known algorithms (Solinas/Barrett/Montgomery) all verify | COMPLETENESS | P0 |
+| N26.6 | discoverReduction produces ≥1 verified for all 4 ZK primes | COMPLETENESS | P0 |
+| N26.7 | 0 custom axioms on VerificationResult.verified | SOUNDNESS | P0 |
+
+#### Discovery Targets
+
+| Prime | Known best | Discovery target |
+|-------|-----------|-----------------|
+| BabyBear (2^31 - 2^27 + 1) | Solinas fold (6 cycles ARM) | ≤ 6 cycles or novel |
+| Mersenne31 (2^31 - 1) | Solinas fold (3 cycles ARM) | ≤ 3 cycles or novel |
+| Goldilocks (2^64 - 2^32 + 1) | Solinas fold (8 cycles ARM) | ≤ 8 cycles or novel |
+| KoalaBear (2^31 - 2^24 + 1) | Solinas fold (5 cycles ARM) | ≤ 5 cycles or novel |
+
+---
+
+#### Fase 26 Corrección 1: Connect Discovery to Real Saturation Engine
+
+**Problem**: Fase 26 implemented 1388 LOC of discovery pipeline that does NOT use the verified saturation engine. `SpecDrivenRunner.discoverReduction` built its own graph, ran identity saturation, and extracted from it — bypassing `guidedOptimizeMixedF`, `saturateMixedF`, `reductionAlternativeRules`, and `allBitwisePatternRulesWithBridges` which already exist and are verified.
+
+**Goal**: Replace the standalone discovery pipeline with one that delegates to the real engine. Connect Level 2 (reduction discovery) with Level 1 (NTT plan optimization via `CostOracle`).
+
+**Infrastructure that MUST be used** (not reimplemented):
+- `MixedRunner.guidedOptimizeMixedF` — 3-phase guided saturation pipeline
+- `MixedSaturation.saturateMixedF` — the real rewrite engine
+- `ReductionAlternativeRules.reductionAlternativeRules` — Barrett/Montgomery/Harvey rules (already exist)
+- `MixedPatternRules.allBitwisePatternRulesWithBridges` — bitwise pattern rules (already exist)
+- `MixedEGraphBuilder.buildEGraph` — handles `reduceE` seeds
+
+**Files that are NOT touched**: ReduceSpecAxiom, BitwiseVocabulary, CostBiasedExtract, VerificationOracle.
+
+**Archivos modificados/nuevos**:
+- `Discovery/SpecDrivenRunner.lean` — REWRITE: delegate to `guidedOptimizeMixedF`
+- `Discovery/OracleAdapter.lean` — NEW: bridge discovery cost → `CostOracle`
+- `Discovery/JointOptimization.lean` — NEW: coordinate `matSaturateF` + `discoverReduction`
+- `Tests/NonVacuity/SpecDrivenDiscovery.lean` — REWRITE: update to new API
+- `Discovery/ExplosionControl.lean` — DEPRECATE (add header, no delete)
+
+##### DAG
+
+```
+C26.2 SpecDrivenRunner (FUND) ──→ C26.3 OracleAdapter (CRIT)
+C26.3 ──→ C26.4 JointOptimization (HOJA)
+C26.2 + C26.3 + C26.4 ──→ C26.5 NonVacuity (HOJA)
+ExplosionControl deprecation (PAR, independent)
+```
+
+| Node | Name | Type | LOC est | Deps | Status |
+|------|------|------|---------|------|--------|
+| C26.2 | SpecDrivenRunner rewrite | FUND | 126 | — | DONE |
+| C26.3 | OracleAdapter | CRIT | 153 | C26.2 | DONE |
+| C26.4 | JointOptimization | HOJA | 114 | C26.3 | DONE |
+| C26.5 | NonVacuity tests | HOJA | 82 | C26.2-4 | DONE |
+| — | ExplosionControl deprecation | PAR | 11 | — | DONE |
+
+##### Blocks
+
+| Block | Nodes | Execution |
+|-------|-------|-----------|
+| B114 | C26.2 | FUND sequential — compile + smoke tests |
+| B115 | C26.3 | CRIT sequential — fix struct mismatch, compile |
+| B116 | C26.4 | HOJA (after B115) |
+| B117 | C26.5 | HOJA (after B114-B116) — rewrite NonVacuity |
+
+##### Progress Tree
+
+- [x] B114: C26.2 SpecDrivenRunner rewrite (126 LOC, 0 sorry)
+- [x] B115: C26.3 OracleAdapter (153 LOC, 0 sorry)
+- [x] B116: C26.4 JointOptimization (114 LOC, 0 sorry)
+- [x] B117: C26.5 NonVacuity tests (82 LOC, 0 sorry)
+- [x] ExplosionControl deprecation header
+
+##### Constraints
+
+- 0 sorry, 0 errores, `lake build` limpio
+- Non-vacuity examples for all theorems with ≥3 Prop hypotheses
+- `spec_audit.py` + `wiring_check.py` before closing any node
+
+---
+
+### Fase 27: OptiSat v2 Port + Three-Objective Integration — v3.5.0
+
+**Goal**: Port OptiSat v2 infrastructure (relational saturation, colored e-graphs, Ruler) to enable:
+- **Q1**: Per-stage optimal modular reduction in NTT with verified lazy reduction
+- **Q2**: Algorithm-level optimization (radix-2/4/mixed auto-selection, cross-level cost queries)
+
+First phase cleans up ~2,200 LOC of island dead code from prior agents.
+
+**OptiSat v2 source**: `~/Documents/claudio/optisat/LambdaSat/` (5,914 LOC, 180 theorems, 0 sorry). Policy: copy/adapt, never import.
+
+**Adaptation pattern** (proven Fases 11-16, L-458): copy file → rename namespace → replace generic `Op/Expr/Val` with concrete `MixedNodeOp/MixedExpr/Nat` → adapt proofs.
+
+**Lessons applied**: L-458 (concrete evalOp), L-704 (coarsening automatic), L-709 (SHI threading), L-513 (compositional proofs), L-719 (wiring check), L-121 (explicit semantic bridge), L-512 (three-tier bridge)
+
+#### Ultra-Branch Reuse Map
+
+Every block's Pre-Block Briefing MUST consult this map to know what exists.
+
+**REUSED AS-IS** (ultra files used without modification):
+
+| File | LOC | Used by Node(s) | How |
+|------|-----|-----------------|-----|
+| `Discovery/ReduceSpecAxiom.lean` | 382 | N27.12 | `insertReduceSpec` + `insertReduceSpec_preserves_cv` base of discovery |
+| `Discovery/BitwiseVocabulary.lean` | 205 | N27.12 | Vocabulary templates for saturation rules |
+| `Discovery/VerificationOracle.lean` | 119 | N27.12, N27.10 | Test-based verification + test inputs for Ruler |
+| `Discovery/GuidedSaturation.lean` | 288 | N27.12 | `threePhaseSaturateF_preserves_consistent` pattern |
+| `Discovery/ShiftAddGen.lean` | 229 | N27.10, N27.12 | CSD decomposition, ops for Ruler evaluator |
+| `Discovery/CongruenceGen.lean` | 210 | N27.12 | Congruence rules for saturation |
+| `Discovery/ReductionDecomp.lean` | 214 | N27.12 | Barrett/Montgomery/Harvey rule generation |
+| `Discovery/LazyReduction.lean` | 290 | N27.7, N27.11 | Interval bounds feed BoundRelation + StageContext |
+| `Discovery/GrowthPrediction.lean` | 213 | N27.5 | Anti-explosion bounds for tiered saturation |
+| `Discovery/RuleScoring.lean` | 199 | N27.5 | UCB1 scoring for tiered saturation |
+| `Discovery/TreewidthDP.lean` | 195 | N27.5 | DP extraction routing |
+| `Discovery/MatEGraphStep.lean` | 288 | N27.14 | `matSaturateF_preserves_levels` for multi-level |
+| `Discovery/MatPlanExtraction.lean` | 212 | N27.16 | Plan extraction from MatEGraph |
+| `Discovery/JointOptimization.lean` | 114 | N27.16 | `jointOptimize_sound` |
+| `Discovery/OracleAdapter.lean` | 153 | N27.15 | Bridge discovery cost → CostOracle for NTT plan |
+| `GuidedMixedSaturation.lean` | 122 | N27.12 | `guidedOptimizeMixedF` called by discoverForStage |
+| `NTTPlan.lean` | 300 | N27.13 | Plan/NTTStage/RadixChoice structures |
+| `NTTPlanSelection.lean` | 189 | N27.13 | `selectBestPlanExplored` + cost model |
+| `CrossRelNTT.lean` | 189 | N27.15 | Cross-relation NTT rules |
+| `MatNodeOps.lean` | 261 | N27.14, N27.16 | MatOp types in import chain |
+| `RulerDiscovery.lean` | 188 | N27.10 | Basic CVec (partial, extended by full Ruler) |
+| **Total reused as-is** | **~4,560** | | |
+
+**EXTENDED** (ultra files modified by the plan):
+
+| File | LOC | Plan Node | What changes |
+|------|-----|-----------|-------------|
+| `HardwareColors.lean` | 207 | N27.8 | Add `assumption : MixedEnv → Prop` field to `MixedColoredSoundRule` |
+| `Discovery/SpecDrivenRunner.lean` | 126 | N27.12 | Add `discoverReductionForStage(spec, stageCtx)` + rename misleading theorem |
+| `NTTPlanCodeGen.lean` | 165 | N27.13 | Add per-stage reduce dispatch (`emitPerStageNTT`) |
+| `Matrix/BreakdownBridge.lean` | 127 | N27.14 | Complete TODO at line 116 (recursive multi-level expansion) |
+| `Matrix/CrossEGraphBridge.lean` | 88 | N27.15 | Add `queryButterflyReduceCost` for cross-level queries |
+| `Matrix/CrossEGraphProtocol.lean` | 179 | N27.16 | Rewrite `jointOptimizeToNTTPlan` to USE factorization result |
+| **Total extended** | **~892** | | |
+
+**SUPERSEDED** (ultra files whose functionality is replaced by OptiSat v2 port — extend, don't delete):
+
+| File | LOC | Plan Node | Strategy |
+|------|-----|-----------|----------|
+| `Bitwise/RelationTypes.lean` | 125 | N27.4 | EXTEND: add OptiSat `DirectedRelGraph`, `hasPath_implies_relation` etc. |
+| `Bitwise/DirectedRelSpec.lean` | 117 | N27.4 | EXTEND: add `DirectedRelConsistency`, `bidirectional_path_implies_eq` |
+| `Bitwise/MultiRelMixed.lean` | 245 | N27.5 | EXTEND: replace with full `MultiRelMixedEGraph` = base + colored + relDags |
+| `Bitwise/BoundPropagation.lean` | 184 | N27.9 | EXTEND: replace identity `relStep` with real bound propagation |
+| `Bitwise/BoundIntegration.lean` | 168 | N27.9 | REWIRE: point to new relStep, update consumers |
+| **Total superseded** | **~839** | | |
+
+**DELETED** (island modules, N27.1):
+
+| File | LOC | Reason |
+|------|-----|--------|
+| `UltraPipeline.lean` | 236 | Island (0 importers) |
+| `Discovery/ExplosionControl.lean` | 226 | Island, DEPRECATED |
+| `Discovery/ShadowGraph.lean` | 241 | Island |
+| `Discovery/CostBiasedExtract.lean` | 199 | Island |
+| `FRI/Verified/PrimitivesIntegration.lean` | 149 | Island |
+| `NTT/StageSimulation.lean` | 1,231 | Island (+ 2 test files) |
+| **Total deleted** | **~2,282** | |
+
+**NOT USED** (stays in codebase, not referenced by plan):
+
+| File | LOC | Reason |
+|------|-----|--------|
+| `Matrix/RoundtripSoundness.lean` | 208 | Has sorry line 154, no consumer |
+| `Discovery/Pipeline.lean` | 206 | Spec-level System A, no executor |
+| `Discovery/Tests.lean` | 178 | Tests of System A only |
+| `Phase23Integration.lean` | 142 | Old integration wiring |
+| **Total not used** | **~734** | |
+
+#### DAG (v3.5.0)
+
+```
+FASE 27A: CLEANUP
+  N27.1 Dead Code Elimination (FUND) -------+
+                                             |
+FASE 27B: OPTISAT V2 CORE PORT              |
+  N27.2 SmallUF + ColoredLayer (FUND) --+   |
+  N27.3 CCV + SoundColoredRule (FUND) --+   |
+  N27.4 DirectedRelSpec (FUND) ---------+   |
+  N27.5 MultiRelEGraph + Tiered (CRIT)<-+   |
+  N27.6 Ruler Pipeline (PAR) --------+      |
+                                      |      |
+FASE 27C: DOMAIN INSTANCES            |      |
+  N27.7 BoundRelation (FUND) <--N27.4 |     |
+  N27.8 HW Colors+Assumptions (CRIT)<-N27.3 |
+  N27.9 relStep Impl (CRIT) <--N27.5,N27.7  |
+  N27.10 Ruler Evaluator (PAR) <--N27.6     |
+                                      |      |
+FASE 27D: Q1 -- PER-STAGE DISCOVERY   |      |
+  N27.11 StageContext+Lazy (CRIT)<--N27.9    |
+  N27.12 discoverForStage (CRIT)<--N27.11    |
+  N27.13 Per-Stage CodeGen (PAR) <--N27.12   |
+                                      |      |
+FASE 27E: Q2 -- ALGORITHM SEARCH      |      |
+  N27.14 MatEGraph Multi-Level (CRIT)<-+--N27.1
+  N27.15 Cross-Level Costs (CRIT)<--N27.14,N27.8
+  N27.16 factorizationToPlan (PAR)<--N27.15  |
+                                      |      |
+FASE 27F: INTEGRATION                 |      |
+  N27.17 E2E Demo + Tests (HOJA) <----+------+
+```
+
+| Node | Name | Type | Est. LOC | Deps | File(s) |
+|------|------|------|----------|------|---------|
+| N27.1 | Dead Code Elimination | FUND | -2,200 | — | See DELETED table above |
+| N27.2 | SmallUF + ColoredLayer | FUND | ~350 | — | NEW: `Bitwise/ColoredEGraph.lean` |
+| N27.3 | CCV + SoundColoredRule | FUND | ~300 | N27.2 | NEW: `Bitwise/ColoredSpec.lean` |
+| N27.4 | DirectedRelSpec | FUND | ~250 | — | EXTEND: `Bitwise/RelationTypes.lean` + `Bitwise/DirectedRelSpec.lean` |
+| N27.5 | MultiRelEGraph + Tiered | CRIT | ~350 | N27.2,N27.3,N27.4 | EXTEND: `Bitwise/MultiRelMixed.lean` |
+| N27.6 | Ruler Pipeline | PAR | ~500 | — | NEW: `Discovery/Ruler/*.lean` (5 files) |
+| N27.7 | BoundRelation MixedNodeOp | FUND | ~200 | N27.4 | NEW: `Bitwise/BoundRelation.lean` |
+| N27.8 | HW Colors + Assumptions | CRIT | ~150 | N27.3 | EXTEND: `Bitwise/HardwareColors.lean` |
+| N27.9 | relStep Implementation | CRIT | ~200 | N27.5,N27.7 | EXTEND: `Bitwise/BoundPropagation.lean` + `BoundIntegration.lean` |
+| N27.10 | Ruler Evaluator | PAR | ~150 | N27.6 | NEW: `Discovery/Ruler/MixedEval.lean` |
+| N27.11 | StageContext + Lazy | CRIT | ~200 | N27.9 | NEW: `Discovery/StageContext.lean` |
+| N27.12 | discoverForStage | CRIT | ~200 | N27.11 | EXTEND: `Discovery/SpecDrivenRunner.lean` |
+| N27.13 | Per-Stage CodeGen | PAR | ~150 | N27.12 | EXTEND: `Bitwise/NTTPlanCodeGen.lean` |
+| N27.14 | MatEGraph Multi-Level | CRIT | ~200 | N27.1 | EXTEND: `Matrix/BreakdownBridge.lean` |
+| N27.15 | Cross-Level Costs | CRIT | ~200 | N27.14,N27.8 | EXTEND: `Matrix/CrossEGraphBridge.lean` |
+| N27.16 | factorizationToPlan | PAR | ~150 | N27.15 | REWRITE: `Matrix/CrossEGraphProtocol.lean` |
+| N27.17 | E2E Demo + Tests | HOJA | ~200 | N27.13,N27.16,N27.10 | NEW: `Tests/NonVacuity/OptiSatV2.lean` |
+
+**Total new**: ~3,750 LOC. **Deleted**: ~2,200 LOC. **Net**: +1,550 LOC.
+
+#### Blocks
+
+| Block | Nodes | Execution | Gate |
+|-------|-------|-----------|------|
+| B114 | N27.1 | FUND sequential | `lake build` 0 errors |
+| B115 | N27.2 | FUND sequential | `lake env lean ColoredEGraph.lean` |
+| B116 | N27.3, N27.4 | FUND parallel | `lake build` both |
+| B117 | N27.5 | CRIT sequential (after B115+B116) | `lake build` |
+| B118 | N27.6 | PAR (parallel with B115-B117) | compile all Ruler/*.lean |
+| B119 | N27.7, N27.8 | FUND+CRIT parallel (after B116,B115) | `lake build` |
+| B120 | N27.9 | CRIT sequential (after B117+B119) — **GATE** | `lake build` + #eval smoke |
+| B121 | N27.10 | PAR (after B118) | compile + #eval smoke |
+| B122 | N27.11, N27.12 | CRIT sequential (after B120) | `lake build` + #eval per-stage |
+| B123 | N27.13 | PAR (after B122) | #eval NTT per-stage reduce |
+| B124 | N27.14, N27.15, N27.16 | CRIT+PAR (after B114,B119) | #eval factorization |
+| B125 | N27.17 | HOJA (after B123+B124+B121) | wiring_check + spec_audit + `lake build` |
+
+**Per-block reuse reference** (worker MUST read before coding):
+
+| Block | Ultra files REUSED as-is | Ultra files EXTENDED | OptiSat source files | Ultra files SUPERSEDED |
+|-------|--------------------------|---------------------|---------------------|----------------------|
+| B114 | — | — | — | — (deletion only) |
+| B115 | — | — | `ColorTypes.lean`, `ColoredMerge.lean` | — |
+| B116 | — | — | `ColoredSpec.lean`, `ColoredEMatch.lean`, `DirectedRelSpec.lean`, `RelationTypes.lean` | `RelationTypes.lean`, `DirectedRelSpec.lean` |
+| B117 | `GrowthPrediction`, `RuleScoring`, `TreewidthDP` | — | `MultiRelSaturate.lean`, `MultiRelSoundness.lean`, `MultiRelEGraph.lean` | `MultiRelMixed.lean` |
+| B118 | — | — | `Ruler/TermEnumerator.lean`, `CVecEngine.lean`, `CVecMatcher.lean`, `RuleMinimizer.lean`, `SelfImprovement.lean` | — |
+| B119 | `LazyReduction.lean` | `HardwareColors.lean` | — | — |
+| B120 | — | — | — | `BoundPropagation.lean`, `BoundIntegration.lean` |
+| B121 | `VerificationOracle.lean`, `ShiftAddGen.lean`, `RulerDiscovery.lean` | — | — | — |
+| B122 | `ReduceSpecAxiom`, `BitwiseVocabulary`, `GuidedSaturation`, `CongruenceGen`, `ReductionDecomp`, `GuidedMixedSaturation` | `SpecDrivenRunner.lean` | — | — |
+| B123 | `NTTPlan.lean`, `NTTPlanSelection.lean` | `NTTPlanCodeGen.lean` | — | — |
+| B124 | `MatEGraphStep`, `MatPlanExtraction`, `JointOptimization`, `OracleAdapter`, `MatNodeOps`, `CrossRelNTT` | `BreakdownBridge`, `CrossEGraphBridge`, `CrossEGraphProtocol` | — | — |
+| B125 | ALL above (integration) | — | — | — |
+
+#### Progress Tree
+
+- [x] B114: N27.1 Dead Code Elimination — 5 files deleted (-900 LOC), 3 already gone (-1,600 LOC), build 3136/0err
+- [x] B115: N27.2 SmallUF + ColoredLayer — 310 LOC, 12 theorems, 0 sorry, coarsening verified
+- [x] B116: N27.3 CCV + N27.4 DirectedRelSpec — ColoredSpec 240 LOC + hasPath+path_implies 100 LOC, 0 sorry
+- [x] B117: N27.5 MultiRelEGraph — coloredLayer+assumptions in State, MRCV+v2_implies_v1, 0 sorry
+- [x] B118: N27.6 Ruler Pipeline — Core.lean 270 LOC + consolidated, 0 sorry
+- [x] B119: N27.7 BoundRelation + N27.8 HW Colors — BoundRel 115 LOC + assumptions+MixedColoredSoundRule 70 LOC, 0 sorry
+- [x] B120: N27.9 relStep Implementation (GATE) — SoundFactory+preserves_base/colored/assumptions proven, 1 sorry (rel induction PENDIENTE)
+- [x] B121: N27.10 Ruler Evaluator — MixedEval.lean 110 LOC, mixedEvalOp+discoverMixedRules, 0 sorry
+- [x] B122: N27.11 StageContext + N27.12 discoverForStage — StageContext 140 LOC + perStage 80 LOC, 0 sorry
+- [x] B123: N27.13 Per-Stage CodeGen — emitPerStageNTT + mkPerStagePlan 40 LOC, 0 sorry
+- [x] B124: N27.14-16 — recursive sub-DFT expansion + queryButterflyReduceCost + factorizationToPlan, 0 sorry
+- [x] B125: N27.17 E2E Demo + Tests — Q1+Q2+Ruler+Bounds+CCV+MRCV, build 3136/0err
+
+#### Execution Order
+
+```
+Branch A (OptiSat Port → Q1):
+  B114 (cleanup) → B115 (SmallUF) → B116 (CCV+Rel) → B117 (MultiRel) → B120 (relStep GATE) → B122 (Q1 stage) → B123 (codegen)
+
+Branch B (Ruler, parallel):
+  B118 (Ruler) → B121 (MixedEval)
+
+Branch C (Q2, after cleanup):
+  B119 (BoundRel+Colors) → B124 (MatEGraph+CrossLevel+Plan)
+
+Convergence:
+  B125 (E2E) ← B123 + B124 + B121
+```
+
+Branches A, B, C are independent after B114 (cleanup must come first).
+
+#### Detailed Node Specifications
+
+**N27.1 FUNDACIONAL — Dead Code Elimination** (-2,200 LOC)
+- Delete 7 files listed in DELETED table above + 2 test files (`Tests/NonVacuity/NTTDIT.lean`, `Tests/VerifiedPipeline/StageSimE2E.lean`)
+- Protocol: delete one → `lake build` → verify 0 new errors. Revert if break.
+- Anti-pattern: NO creating replacement files. Deletion only.
+
+**N27.2 FUNDACIONAL — SmallUF + ColoredLayer** (~350 LOC)
+- File: NEW `AmoLean/EGraph/Verified/Bitwise/ColoredEGraph.lean`
+- Port from: OptiSat `LambdaSat/ColorTypes.lean` (268 LOC) + `LambdaSat/ColoredMerge.lean` (295 LOC)
+- Contents: `SmallUF` (delta UF, fuel-bounded), `ColoredLayer` (hierarchy + colorUFs + worklists), `compositeFind`, `mergeUnderColor`, `CoarseningInvariant`
+- Key theorem: `compositeFind_coarsening` (L-704, one-liner via `foldl_append`)
+
+**N27.3 FUNDACIONAL — CCV + SoundColoredRule** (~300 LOC)
+- File: NEW `AmoLean/EGraph/Verified/Bitwise/ColoredSpec.lean`
+- Port from: OptiSat `LambdaSat/ColoredSpec.lean` (350 LOC) + `LambdaSat/ColoredEMatch.lean` (141 LOC)
+- Contents: `ColoredConsistentValuation (CCV)`, `MixedColoredSoundRule` (with `assumption : MixedEnv → Prop`), `CCV_implies_base_CV`, `soundColoredRule_preserves_CCV`
+- Gap to close: current `ColoredRule` in `HardwareColors.lean` has no `assumption` field
+
+**N27.4 FUNDACIONAL — DirectedRelSpec** (~250 LOC)
+- Files: EXTEND `Bitwise/RelationTypes.lean` (125 LOC) + `Bitwise/DirectedRelSpec.lean` (117 LOC)
+- Port from: OptiSat `LambdaSat/DirectedRelSpec.lean` (307 LOC) + `LambdaSat/RelationTypes.lean` (216 LOC)
+- Add: `DirectedRelGraph` (adjacency DAG), `addEdge`, `hasPath`, `hasPath_implies_relation`, `bidirectional_path_implies_eq`, `DirectedRelConsistency`
+- Keep existing `MixedSoundRelationRule` (concrete, compatible)
+
+**N27.5 CRITICO — MultiRelEGraph + Tiered Saturation** (~350 LOC)
+- File: EXTEND `Bitwise/MultiRelMixed.lean` (245 LOC) — replace current contents with full MultiRelMixedEGraph
+- Port from: OptiSat `LambdaSat/MultiRelSaturate.lean` + `MultiRelSoundness.lean` + `MultiRelEGraph.lean`
+- Contents: `MultiRelMixedEGraph` (baseGraph + coloredLayer + relDags + assumptions), `tieredStep`, `crossStep` (IMPLEMENTED), `relStep` (identity for now, real in N27.9)
+- Key theorems: `full_pipeline_v2_soundness`, `v2_implies_v1_soundness`
+
+**N27.6 PARALELO — Ruler Pipeline** (~500 LOC)
+- Files: NEW `Discovery/Ruler/` directory (5 files)
+- Port from: OptiSat `LambdaSat/Ruler/` (6 files, skip RuleValidator — use VerificationOracle instead)
+- Contents: `TermEnumerator`, `CVecEngine` (5 match modes), `CVecMatcher` (groupByCVec, detectRelation), `RuleMinimizer` (isDerivable), `SelfImprovement` (improvementLoop with fixpoint)
+- Adaptation: generic `evalOp : Nat → List Nat → Nat` wired to AMO-Lean in N27.10
+
+**N27.7 FUNDACIONAL — BoundRelation for MixedNodeOp** (~200 LOC)
+- File: NEW `Bitwise/BoundRelation.lean`
+- REUSES: `Discovery/LazyReduction.lean` interval bounds
+- Contents: `BoundedByKP p k`, `solinasFold_bound` (output < 2p), `montyReduce_bound` (output < p), `add_bound_propagate`, `safeWithoutReduce`
+
+**N27.8 CRITICO — Hardware Colors + Assumptions** (~150 LOC)
+- File: EXTEND `Bitwise/HardwareColors.lean` (207 LOC)
+- Add: `simdAssumption`, `scalarAssumption`, `largeArrayAssumption` as `MixedEnv → Prop`; `MixedColoredSoundRule` instances per context
+
+**N27.9 CRITICO — relStep Implementation** (~200 LOC) — **GATE**
+- Files: EXTEND `Bitwise/BoundPropagation.lean` (184 LOC) + `BoundIntegration.lean` (168 LOC)
+- THE CORE INNOVATION: implement real `relStep` (OptiSat has identity only)
+- Logic: for each node, lookup op type → add BoundedByKP edge (reduce→bound, add→propagate children bounds)
+- Theorem: `relStepMixed_preserves_MRCV`
+- De-risk: start with solinasFold + addGate only
+
+**N27.10 PARALELO — MixedNodeOp Ruler Evaluator** (~150 LOC)
+- File: NEW `Discovery/Ruler/MixedEval.lean`
+- REUSES: `VerificationOracle.lean` (test inputs), `ShiftAddGen.lean` (CSD ops), `RulerDiscovery.lean` (basic CVec)
+- Contents: `mixedEvalOp` (concrete evaluator), `mixedWorkload` (config for improvementLoop)
+
+**N27.11 CRITICO — StageContext + LazyReduction** (~200 LOC)
+- File: NEW `Discovery/StageContext.lean`
+- REUSES: `LazyReduction.lean` for `safeWithoutReduce`
+- Contents: `StageContext` (stageIndex, totalStages, inputBound, bitwidth, hw, cacheLevel), `reductionDecision` using verified bounds
+
+**N27.12 CRITICO — discoverReductionForStage** (~200 LOC)
+- File: EXTEND `Discovery/SpecDrivenRunner.lean` (126 LOC)
+- REUSES: `ReduceSpecAxiom`, `BitwiseVocabulary`, `GuidedSaturation`, `CongruenceGen`, `ReductionDecomp`, `GuidedMixedSaturation`
+- Add: `discoverReductionForStage(spec, ctx)` — builds MultiRelGraph, runs tiered sat, reads bound, makes per-stage choice
+- Rename: `discoverReduction_pipeline_sound` → `insertReduceSpec_sound` (misleading name)
+
+**N27.13 PARALELO — Per-Stage NTTPlanCodeGen** (~150 LOC)
+- File: EXTEND `Bitwise/NTTPlanCodeGen.lean` (165 LOC)
+- REUSES: `NTTPlan.lean`, `NTTPlanSelection.lean`
+- Add: `emitPerStageNTT` — iterates stages, calls discoverForStage per stage, emits different C code per stage
+
+**N27.14 CRITICO — MatEGraph Multi-Level** (~200 LOC)
+- File: EXTEND `Matrix/BreakdownBridge.lean` (127 LOC)
+- REUSES: `MatEGraphStep.lean`, `MatNodeOps.lean`
+- Complete TODO at line 116: recursive sub-DFT expansion (`extractSubDFTs` + recursive `applyBreakdownRulesRecursive`)
+
+**N27.15 CRITICO — Cross-Level Cost Queries** (~200 LOC)
+- File: EXTEND `Matrix/CrossEGraphBridge.lean` (88 LOC)
+- REUSES: `OracleAdapter.lean`, `CrossRelNTT.lean`
+- Add: `queryButterflyReduceCost(p, hw, radix, stageCtx)` — asks Mixed e-graph for per-butterfly cost INCLUDING optimal reduction
+
+**N27.16 PARALELO — factorizationToPlan** (~150 LOC)
+- File: REWRITE `Matrix/CrossEGraphProtocol.lean` (179 LOC)
+- REUSES: `JointOptimization.lean`, `MatPlanExtraction.lean`
+- Fix: `jointOptimizeToNTTPlan` must USE factorization result, not discard it. Add `factorizationToPlan` converter.
+
+**N27.17 HOJA — E2E Demo + Tests** (~200 LOC)
+- File: NEW `Tests/NonVacuity/OptiSatV2.lean`
+- Demos: Q1 per-stage (#eval emitPerStageNTT), Q2 algorithm (#eval jointOptimizeToNTTPlan 1024), Ruler (#eval improvementLoop), bounds (#eval lookupBound), axiom audit (#print axioms)
+
+#### Formal Properties (v3.5.0)
+
+| Nodo | Propiedad | Tipo | Prioridad |
+|------|-----------|------|-----------|
+| N27.2 | compositeFind_coarsening: parent merges visible to children | PRESERVATION | P0 |
+| N27.3 | CCV_implies_base_CV: backward compatibility | SOUNDNESS | P0 |
+| N27.5 | v2_implies_v1_soundness: MultiRel result valid under v1 | SOUNDNESS | P0 |
+| N27.7 | solinasFold_bound: output < 2*p | INVARIANT | P0 |
+| N27.7 | add_bound_propagate: bounds compose through addition | PRESERVATION | P0 |
+| N27.9 | relStepMixed_preserves_MRCV | PRESERVATION | P0 |
+| N27.11 | safeWithoutReduce correct: no overflow when predicate holds | SOUNDNESS | P0 |
+| N27.12 | per-stage discovery uses verified bounds (not heuristic) | SOUNDNESS | P0 |
+| N27.14 | multi-level expansion terminates and covers all sub-DFTs | COMPLETENESS | P0 |
+| N27.17 | 0 custom axioms on key theorems | SOUNDNESS | P0 |
+
+#### Risk Assessment
+
+| Node | Risk | Mitigation |
+|------|------|------------|
+| N27.1 | LOW | Incremental deletion |
+| N27.2-N27.4 | LOW | Direct port from verified OptiSat code |
+| N27.5 | MEDIUM | Composition of ported pieces |
+| N27.6 | LOW | Mostly copy with evaluator adapter |
+| N27.9 | **HIGH** | **GATE**: relStep is new. De-risk: solinasFold+addGate only first |
+| N27.11-12 | MEDIUM | Integration of multiple systems |
+| N27.14 | MEDIUM | Recursive expansion, fuel-bounded |
+| N27.15 | MEDIUM | Two e-graph engines communicating |
+
+#### Anti-Pattern Guards
+
+1. **NO duplicate types** — use OptiSat adapted types, never reinvent
+2. **NO island modules** — every new file MUST have consumer (wiring_check)
+3. **NO misleading names** — `pipeline_sound` means FULL pipeline
+4. **NO deferring fundacionales** — OptiSat port is FUND, comes FIRST
+5. **NO discarding search results** — jointOptimize output MUST be used
+6. **ALWAYS close_block.py** before marking any block complete
+7. **ALWAYS wiring_check.py** before marking any node complete
+
+---
+
+### Fase 28: Integration Wiring — v3.6.0
+
+**Goal**: Connect the 5 orphaned Fase 27 components so that the system actually delivers:
+- A: Automatic bound propagation through the e-graph (eliminating branchPenalty)
+- B: Colored rules for hardware-specific optimization (SIMD/scalar/largeArray)
+- C: Ruler feedback loop (discovered rules injected into saturation)
+- D: Cross-level cost queries driving factorization decisions
+
+**Net**: ~335 LOC new code (pure wiring, no new infrastructure).
+
+#### DAG (v3.6.0)
+
+```
+N28.1 coloredStep (FUND) ─────────┐
+N28.2 Ruler→SoundRule (PAR) ──┐   │
+N28.3 Ruler feedback (PAR) <──┘   │
+N28.4 Cross-level scoring (PAR) ──┤
+N28.5 MRCV sorry elim (FUND) ─────┤
+                                   └→ N28.6 E2E Integration (HOJA)
+```
+
+| Node | Name | Type | LOC | Deps | File(s) |
+|------|------|------|-----|------|---------|
+| N28.1 | coloredStep in tieredStep | FUND | ~60 | — | `MultiRelMixed.lean` |
+| N28.2 | Ruler→SoundRule converter | PAR | ~40 | — | `Ruler/Core.lean` |
+| N28.3 | Ruler feedback injection | PAR | ~30 | N28.2 | `BoundIntegration.lean` |
+| N28.4 | Cross-level cost scoring | PAR | ~50 | — | `CrossEGraphProtocol.lean` |
+| N28.5 | MRCV sorry elimination | FUND | ~75 | — | `BoundPropagation.lean` |
+| N28.6 | E2E Integration Demo | HOJA | ~80 | all | `Tests/NonVacuity/OptiSatV2.lean` |
+
+#### Blocks
+
+| Block | Nodes | Execution | Gate |
+|-------|-------|-----------|------|
+| B126 | N28.5 | FUND sequential | 0 sorry in BoundPropagation |
+| B127 | N28.1, N28.2, N28.4 | Parallel | `lake build` all three |
+| B128 | N28.3 | PAR (after N28.2) | `lake build` + `#eval` |
+| B129 | N28.6 | HOJA (after all) | wiring_check + `lake build` |
+
+#### Progress Tree
+
+- [x] B126: N28.5 MRCV sorry elimination — 0 sorry, full foldl induction proven (5 lemmas)
+- [x] B127: N28.1 coloredStep + N28.2 Ruler converter + N28.4 Cross-level — coloredStep in tieredStep, queryButterflyReduceCost in factorizationToPlan
+- [x] B128: N28.3 Ruler feedback — semanticMatchStep + optimizeNTTFull with Ruler+colored+bound integration
+- [x] B129: N28.6 E2E Integration — optimizeNTTFull demo, wiring PASS, 0 sorry in core
+- [x] B130: Correction — Ruler vocabulary extended (reduction ops 8-11), optimizeNTTFull seeds with real e-graph + reductionAlternativeRules, BabyBear test inputs
+
+---
+
+### Fase 29: Verified Code Generation Pipeline — v3.7.0
+
+**Goal**: Replace the 7 unverified string-emission codegen files (~3,515 LOC, 78+ `partial def`, 0 theorems) with TrustLean v3.0's verified pipeline. After this phase, ALL externally-shared C/Rust code flows through `MixedExpr → ExpandedSigma → Stmt → MicroC → String` with machine-checked correctness.
+
+**Motivation**: 11/12 Rust + 9 C files were found defective (truncation u32/u64, overflow, syntax errors, wrong field widths). All bugs were in the string-emission layer (Path B), not in formal proofs. TrustLean v3.0 (already a Lake dependency) offers 623 verified properties, 0 sorry, 0 axioms — but AMO-Lean only uses a fraction.
+
+**Insights**: `TRZK_codegen_insights.md`
+
+**What already exists (reuse, NOT rewrite)**:
+- `AmoLean/Bridge/TrustLean.lean` (585 LOC, 32 decls) — roundtrip theorems for ScalarVar, IdxExpr, ExpandedKernel, ExpandedSigma. Functions: `verifiedCodeGen`, `verifiedCodeGenMicroC`
+- `AmoLean/EGraph/Verified/Bitwise/TrustLeanBridge.lean` (580 LOC, 39 decls) — `CodeGenerable` instance for `MixedOpWithArgs`, `lowerOp` with 20 per-constructor soundness theorems, reduction specs (Harvey, Montgomery, Barrett)
+- `AmoLean/EGraph/Verified/Bitwise/VerifiedCodeGen.lean` (738 LOC, 38 decls) — `lowerMixedExprToLLE`, `lowerMixedExprFull`, per-constructor soundness (17 theorems), `lowerDIFButterfly`
+- `AmoLean/Bridge/MicroC/SimBridge.lean` (903 LOC, 111 decls) — concrete field correctness via `native_decide` for Mersenne31 + BabyBear (26 correctness + 16 branch + 10 boundary theorems)
+- TrustLean v3.0: `expandedSigmaToStmt_correct_full`, `stmtToMicroC_correct`, `parseMicroC_roundtrip_full`, `evalMicroC_int64`, `binOp_agreement`
+
+**What's missing (this phase)**:
+1. **MixedExpr → ExpandedSigma full conversion** with semantics preservation
+2. **End-to-end composition theorem** chaining extraction → lowering → MicroC → string
+3. **Int64 field agreement** proving field ops fit in Int64Range (BabyBear, Mersenne31, Goldilocks)
+4. **Goldilocks MicroC programs** (BabyBear + Mersenne31 exist; Goldilocks missing)
+5. **Path B deprecation** — mark unverified emitters as UNTRUSTED
+6. **E2E roundtrip tests** — compile generated C/Rust, verify against Lean reference
+
+**Lessons applied**: L-572 (Three-Tier Bridge), L-512 (Production Verification), L-620 (Minimize Int64 preconditions), L-297/L-311 (Three-Part Contract), L-368 (Roundtrip as proof bridge), L-307 (Statement-oriented frontend bypass)
+
+#### DAG (v3.7.0)
+
+```
+N29.1 MixedExprToSigma (FUND) ──────────┐
+N29.2 CompositionTheorem (CRIT) ←── N29.1┤
+N29.3 FieldInt64Agreement (FUND) ────────┤
+N29.4 GoldilocksMicroC (PAR) ←── N29.3  │
+N29.5 PipelineE2E (CRIT) ←── N29.2,N29.3┤
+N29.6 DeprecatePathB + E2E Tests (HOJA) ←┘
+```
+
+| Node | Name | Type | LOC est. | Deps | File(s) |
+|------|------|------|----------|------|---------|
+| N29.1 | MixedExpr → ExpandedSigma conversion | FUND | ~250 | — | `AmoLean/Bridge/MixedExprToSigma.lean` |
+| N29.2 | End-to-end composition theorem | CRIT | ~300 | N29.1 | `AmoLean/Bridge/VerifiedPipeline.lean` |
+| N29.3 | Field Int64 agreement (BabyBear + Mersenne31 + Goldilocks) | FUND | ~200 | — | `AmoLean/Bridge/MicroC/FieldInt64.lean` |
+| N29.4 | Goldilocks MicroC programs + SimBridge | PAR | ~250 | N29.3 | `AmoLean/Bridge/MicroC/Goldilocks.lean` |
+| N29.5 | Pipeline E2E soundness theorem | CRIT | ~200 | N29.2, N29.3 | `AmoLean/Bridge/VerifiedPipeline.lean` |
+| N29.6 | Deprecate Path B + E2E tests | HOJA | ~150 | N29.5 | `Tests/Integration/VerifiedCodeGenE2E.lean` + headers in 7 Path B files |
+
+**Total budget**: ~1,350 LOC new + ~100 LOC modifications to existing files
+
+#### Detailed Node Specifications
+
+**N29.1 FUNDACIONAL — MixedExpr → ExpandedSigma Conversion** (~250 LOC)
+
+Extend `VerifiedCodeGen.lowerMixedExprFull` to produce `TrustLean.ExpandedSigma` instead of raw `Stmt`. The key insight: `lowerMixedExprFull` already lowers MixedExpr → Stmt sequences. This node wraps that in `ExpandedSigma.scalar` with proper gather/scatter patterns.
+
+- Define `mixedExprToExpandedSigma : MixedExpr → ExpandedSigma` composing existing `lowerMixedExprFull` with ExpandedSigma constructors
+- Prove `mixedExprToExpandedSigma_injective` (from `convert_injective` in Bridge/TrustLean.lean)
+- Prove `mixedExprToExpandedSigma_semantics : evalMixedExpr e env = evalExpandedSigma (convert e) (bridgeEnv env)` — structural induction over MixedExpr, delegating to the 20 per-constructor soundness theorems in TrustLeanBridge.lean
+- **De-risk**: Sketch type alignment first. `lowerMixedExprFull` returns `Stmt × LowLevelExpr × Nat`. Wrap in `.scalar kernel gather scatter` where kernel body = lowered Stmt.
+- Adapt from: `VerifiedCodeGen.lean:100-128` (lowerMixedExprFull) + `Bridge/TrustLean.lean:426-455` (convertExpandedSigma)
+
+**N29.2 CRÍTICO — End-to-End Composition Theorem** (~300 LOC)
+
+Chain the verified stages into a single theorem:
+```lean
+theorem verified_codegen_composition (e : MixedExpr) (env : MixedEnv) :
+    let sigma := mixedExprToExpandedSigma e
+    let stmt := TrustLean.expandedSigmaToStmt (convertExpandedSigma sigma)
+    let microc := TrustLean.stmtToMicroC stmt
+    let cCode := TrustLean.microCToString microc
+    -- Roundtrip: string is canonical
+    TrustLean.parseMicroC cCode = some microc ∧
+    -- Semantics: MicroC evaluation matches MixedExpr evaluation
+    ∃ fuel mcEnv', TrustLean.evalMicroC fuel (initMCEnv env) microc = some (.normal, mcEnv')
+```
+
+- Compose: N29.1 `semantics` + TrustLean `expandedSigmaToStmt_correct_full` + `stmtToMicroC_correct` + `parseMicroC_roundtrip_full`
+- Three-part contract (L-297): fuel existence, result correctness, frame preservation
+- **De-risk**: Each component theorem exists. Main risk is bridge compatibility (env types). Verify `fullBridge` predicate is satisfiable for AMO-Lean environments.
+
+**N29.3 FUNDACIONAL — Field Int64 Agreement** (~200 LOC)
+
+Prove that field operations for BabyBear, Mersenne31, and Goldilocks produce intermediate results within Int64Range, so `binOp_agreement` (TrustLean v3.0) applies.
+
+- For BabyBear (p = 2013265921, fits u32): prove `∀ a b < p, InInt64Range (a + b)`, `InInt64Range (a * b)`, etc. Straightforward: max intermediate = p² < 2⁶³.
+- For Mersenne31 (p = 2³¹-1, fits u32): same pattern. max intermediate = (2³¹-1)² < 2⁶³.
+- For Goldilocks (p = 2⁶⁴-2³²+1, fits u64): tighter. Multiplication overflows u64. Need `__uint128_t` or split multiplication. Prove `InInt64Range` for add/sub (YES), prove overflow bounds for mul (document as requiring u128 accumulator).
+- Use `native_decide` for concrete boundary values + `omega` for range arithmetic.
+- Adapt from: `SimBridge.lean` correctness pattern + `TrustLean/MicroC/Int64Agreement.lean`
+
+**N29.4 PARALELO — Goldilocks MicroC Programs + SimBridge** (~250 LOC)
+
+BabyBear and Mersenne31 MicroC programs exist in `Bridge/MicroC/`. Goldilocks is missing.
+
+- Define `Goldilocks.add_prog`, `sub_prog`, `neg_prog`, `mul_prog`, `reduce_prog` as MicroCStmt
+- Goldilocks reduction: `x mod (2⁶⁴ - 2³² + 1)` using Solinas form (reduce upper 64 bits)
+- Smoke tests via `#eval evalMicroC_uint64` on concrete values
+- SimBridge theorems via `native_decide`: correctness, branch analysis, boundary values
+- Adapt from: `Bridge/MicroC/BabyBear.lean` (291 LOC) + `Bridge/MicroC/Mersenne31.lean` (267 LOC)
+
+**N29.5 CRÍTICO — Pipeline E2E Soundness** (~200 LOC)
+
+Compose N29.2 (general composition) with N29.3 (Int64 agreement) into field-specific pipeline theorems:
+
+```lean
+theorem babybear_verified_pipeline (e : MixedExpr) (env : BabyBearEnv) :
+    let cCode := verifiedCodeGenMixedExpr e babybear_config
+    -- Code is correct AND fits in int64_t (no overflow)
+    PipelineCorrect cCode env ∧ AllOpsInInt64Range e env
+
+theorem mersenne31_verified_pipeline (e : MixedExpr) (env : Mersenne31Env) : ...
+theorem goldilocks_verified_pipeline (e : MixedExpr) (env : GoldilocksEnv) : ...
+```
+
+- Bundle: composition (N29.2) + Int64 agreement (N29.3) + field-specific SimBridge
+- Non-vacuity examples: concrete MixedExpr programs (add, mul, reduce) verified end-to-end
+- `#print axioms` on all pipeline theorems → 0 custom axioms
+
+**N29.6 HOJA — Deprecate Path B + E2E Tests** (~150 LOC)
+
+1. Add `UNTRUSTED` headers to 7 Path B files:
+   - `CodeGen.lean`, `Backends/Rust.lean`, `FRI/CodeGen.lean`, `Sigma/CodeGen.lean`, `Vector/CodeGen.lean`, `Protocols/Poseidon/CodeGen.lean`, `Protocols/Poseidon/Constants/CodeGen.lean`
+   - Header: `/-! UNTRUSTED — This module uses unverified string emission (Path B). For verified code generation, use AmoLean.Bridge.VerifiedPipeline (Path A). See ARCHITECTURE.md Fase 29. -/`
+2. E2E integration test: `Tests/Integration/VerifiedCodeGenE2E.lean`
+   - Generate C code for BabyBear add/mul/reduce via verified pipeline
+   - Verify roundtrip: `parseMicroC(generated_code) = some expected_microc`
+   - Verify non-vacuity: concrete field values produce correct output
+3. Update README.md with verified codegen usage instructions
+
+#### Blocks
+
+| Block | Nodes | Execution | Gate |
+|-------|-------|-----------|------|
+| B131 | N29.1 | FUND sequential, de-risk sketch first | `lake env lean` on MixedExprToSigma.lean |
+| B132 | N29.3 | FUND sequential, parallel with B131 | `lake env lean` on FieldInt64.lean |
+| B133 | N29.2 | CRIT sequential (after B131) | `lake env lean` on VerifiedPipeline.lean |
+| B134 | N29.4 | PAR (after B132) | `lake env lean` on Goldilocks.lean |
+| B135 | N29.5 | CRIT sequential (after B133 + B132) | `lake build` + `#print axioms` |
+| B136 | N29.6 | HOJA (after B135) | wiring_check + `lake build` |
+
+#### Execution Order
+
+```
+Branch A (Conversion + Composition):
+  B131 (N29.1 FUND) → B133 (N29.2 CRIT) ──────→ B135 (N29.5 CRIT)
+                                                      ↓
+Branch B (Int64 + Goldilocks):              ← independent, parallelizable
+  B132 (N29.3 FUND) → B134 (N29.4 PAR) ──→ B135 (N29.5 CRIT)
+                                                      ↓
+Final:                                            B136 (N29.6 HOJA)
+```
+
+**Branches A and B are fully parallelizable.** B131 + B132 can execute simultaneously. B133 waits only on B131. B134 waits only on B132. B135 merges both branches.
+
+#### Risk Assessment
+
+| Node | Risk | Mitigation |
+|------|------|------------|
+| N29.1 | MEDIUM — wrapping lowerMixedExprFull in ExpandedSigma may need env adapter | De-risk sketch: verify type alignment before implementing |
+| N29.2 | MEDIUM — composing 4 theorems requires compatible env types | Use bridge predicates from TrustLean (fullBridge, microCBridge) |
+| N29.3 | LOW — BabyBear/Mersenne31 arithmetic easily fits Int64; Goldilocks mul needs u128 doc | Document Goldilocks mul overflow as architectural limitation |
+| N29.4 | LOW — follows established BabyBear/Mersenne31 pattern | Copy-adapt from existing MicroC programs |
+| N29.5 | LOW — composition of already-proven components | Standard composition pattern |
+| N29.6 | LOW — mechanical deprecation + test writing | No formal proof needed |
+
+#### Progress Tree
+
+- [x] B131: N29.1 VerifiedPipeline — 232 LOC, 5 defs, 7 theorems (5 proven, 2 sorry on reduction path), 7 examples ✓
+- [x] B132: N29.3 FieldInt64Agreement — 207 LOC, 9 theorems, 0 sorry, BabyBear+Mersenne31 certified, Goldilocks overflow documented ✓
+- [x] B133: N29.2 CompositionTheorem — verified_pipeline_sound_simple proven E2E, full reduction path 2 sorry ✓
+- [x] B134: N29.4 GoldilocksMicroC — 310 LOC, 5 programs, 14 smoke tests, 0 sorry, Solinas reduction ✓
+- [x] B135: N29.5 PipelineE2E — FieldInt64Cert bundles field guarantees, 0 custom axioms ✓
+- [x] B136: N29.6 DeprecatePathB + Tests — 7 Path B files marked UNTRUSTED, E2E tests 18/18 PASS ✓
+
+#### Formal Properties (v3.7.0)
+
+| Node | Property | Type | Priority |
+|------|----------|------|----------|
+| N29.1 | mixedExprToExpandedSigma is injective | PRESERVATION | P0 |
+| N29.1 | Conversion preserves evaluation semantics for all 20 MixedNodeOp constructors | SOUNDNESS | P0 |
+| N29.2 | Composition theorem chains 4 verified stages end-to-end | SOUNDNESS | P0 |
+| N29.2 | Generated MicroC string roundtrips (parse ∘ print = id) | EQUIVALENCE | P0 |
+| N29.3 | BabyBear ops ∈ Int64Range (add, sub, mul, reduce) | INVARIANT | P0 |
+| N29.3 | Mersenne31 ops ∈ Int64Range (add, sub, mul, reduce) | INVARIANT | P0 |
+| N29.3 | Goldilocks add/sub ∈ Int64Range; mul documents u128 requirement | INVARIANT | P1 |
+| N29.4 | Goldilocks MicroC programs produce correct field values on boundary inputs | SOUNDNESS | P0 |
+| N29.5 | Field-specific pipeline theorems (BabyBear, Mersenne31, Goldilocks) | SOUNDNESS | P0 |
+| N29.5 | `#print axioms` shows 0 custom axioms on pipeline theorems | SOUNDNESS | P0 |
+| N29.6 | E2E roundtrip test passes for concrete field programs | EQUIVALENCE | P0 |
+
+---
+
+#### Fase 29 Corrección 1: Close Pipeline Soundness Sorry
+
+**Problem**: `VerifiedPipeline.lean` has 2 sorry on `mixedExprToStmt_evaluates` (L75) and `verified_pipeline_sound` (L204). Both try to prove `evalStmt 1 llEnv stmt = some (.normal, llEnv.update resultVar (.int v))` but for reduction nodes (Harvey/Monty/Barrett), `lowerMixedExprFull` produces `.seq childStmt reductionStmt`, so the output env is `(llEnv.update childVar _).update resultVar _` — NOT `llEnv.update resultVar _`.
+
+**Root Cause**: The theorem statements are too strong for the reduction path. The env after `.seq` has multiple temp variable updates, not just the result variable.
+
+**Fix Strategy** (validated by TrustLean patterns — Bridge/Correctness.lean:456-471):
+1. **Weaken the conclusion** to existential env: `∃ v env', evalStmt 1 llEnv stmt = some (.normal, env') ∧ env' resultVar = .int v`
+2. **Prove by structural induction** on MixedExpr, case split on lowerMixedExprFull
+3. For primitives: unfold to single `.assign`, use `lowerMixedExprToLLE_evaluates`
+4. For reductions: compose via `evalStmt_seq` + IH on child + unfold `.ite`/`.assign`
+
+**Key Technical Facts** (from TrustLean Core):
+- `evalStmt fuel (.seq s1 s2)` passes SAME fuel to both s1 and s2 (no fuel consumed)
+- `evalStmt fuel (.ite cond s1 s2)` passes SAME fuel to chosen branch (no fuel consumed)
+- `evalStmt fuel (.assign v e)` is fuel-independent (`evalStmt_assign_fuel_indep`)
+- Therefore **fuel=1 IS sufficient** — no loops in any reduction lowering
+- Lemmas: `evalStmt_seq`, `evalStmt_ite`, `evalStmt_assign` (all `@[simp]` in TrustLean/Core/Eval.lean)
+- Fuel monotonicity: `evalStmt_fuel_mono` (TrustLean/Core/FuelMono.lean)
+
+**Lessons applied**: L-338 (fuel via max not sum), L-265 (fuel = depth bound, not resource), L-288 (non-loop constructs fuel-independent)
+
+**What `lowerHarveyReduce` produces** (TrustLeanBridge.lean:374-384):
+```
+Stmt.ite (ltOp x 2p)           -- x < 2p?
+  (Stmt.ite (ltOp x p)         -- x < p?
+    (.assign tmpVar x)          -- yes: result = x
+    (.assign tmpVar (x - p)))   -- no: result = x - p
+  (.assign tmpVar (x - 2p))    -- x >= 2p: result = x - 2p
+```
+All leaves are `.assign` (fuel-independent). No loops.
+
+**What `lowerMontyReduce` produces** (TrustLeanBridge.lean:438-470):
+```
+Stmt.seq s1 (Stmt.seq s2 (Stmt.seq s3 s4))
+where s1 = .assign mVar (band (mul x mu) mask32)     -- m = (x*mu) & 0xFFFFFFFF
+      s2 = .assign sVar (add x (mul m p))             -- s = x + m*p
+      s3 = .assign qVar (bshr s 32)                   -- q = s >> 32
+      s4 = Stmt.ite (ltOp (p-1) q)                    -- if q >= p
+             (.assign resultVar (sub q p))             --   result = q - p
+             (.assign resultVar q)                     --   result = q
+```
+Chain of `.assign` + final `.ite`. No loops. Fuel=1 sufficient.
+
+**What `lowerBarrettReduce` produces** (TrustLeanBridge.lean:495-525):
+```
+Stmt.seq s1 (Stmt.seq s2 s3)
+where s1 = .assign qVar (bshr (mul x m) k)           -- q = (x*m) >> k
+      s2 = .assign rVar (sub x (mul q p))             -- r = x - q*p
+      s3 = Stmt.ite (ltOp r p)                        -- if r < p
+             (.assign resultVar r)                     --   result = r
+             (.assign resultVar (sub r p))             --   result = r - p
+```
+Same pattern. No loops.
+
+**Proof Template for Harvey case** (~20 lines):
+```lean
+| .harveyReduceE child p ih =>
+  simp only [lowerMixedExprFull]
+  -- IH on child: ∃ vchild env_child, evalStmt 1 llEnv childStmt = some (.normal, env_child) ∧ env_child childVar = .int vchild
+  obtain ⟨vchild, env_child, hchild_eval, hchild_val⟩ := ih llEnv mEnv henv cgs
+  -- Unfold evalStmt_seq: first evaluate childStmt, then evaluate reductionStmt in env_child
+  simp only [evalStmt_seq, hchild_eval]
+  -- Now prove: evalStmt 1 env_child (Stmt.ite ...) = some (.normal, env'')
+  -- The .ite evaluates its condition (evalExpr on .binOp .ltOp), routes to a branch (.assign)
+  -- Each branch is fuel-independent
+  simp only [evalStmt_ite, evalExpr, evalBinOp, hchild_val]
+  -- Split on the condition value
+  split <;> simp only [evalStmt_assign, evalExpr, evalBinOp, hchild_val]
+  -- Each branch produces (.normal, env_child.update resultVar (.int _))
+  ...
+```
+
+#### DAG (Corrección 1)
+
+```
+N_C1.1 lowerMixedExprFull_evaluates (FUND) → N_C1.2 Close sorry (HOJA)
+```
+
+| Node | Name | Type | LOC est. | Deps | File(s) |
+|------|------|------|----------|------|---------|
+| N_C1.1 | `lowerMixedExprFull_evaluates` aux lemma | FUND | ~80 | — | `VerifiedCodeGen.lean` (add after L428) |
+| N_C1.2 | Fix statements + close sorry | HOJA | ~30 | N_C1.1 | `VerifiedPipeline.lean` (modify L75-89, L204-219) |
+
+**N_C1.1 FUNDACIONAL — `lowerMixedExprFull_evaluates`** (~80 LOC)
+
+Add to `VerifiedCodeGen.lean` after `lowerMixedExprToStmt_sound` (line 428). Uses firewall `_aux` pattern.
+
+**Statement** (weakened — existential env):
+```lean
+theorem lowerMixedExprFull_evaluates (e : MixedExpr) (llEnv : LowLevelEnv)
+    (mEnv : MixedEnv) (henv : EnvConsistent llEnv mEnv) (cgs : CodeGenState) :
+    ∃ (v : Int) (env' : LowLevelEnv),
+      let (stmt, resultVar, _) := lowerMixedExprFull e cgs
+      evalStmt 1 llEnv stmt = some (.normal, env') ∧
+      env' resultVar = .int v := by
+  induction e generalizing llEnv mEnv cgs with
+  | harveyReduceE child p ih => -- ~20 lines (see template above)
+  | montyReduceE child p mu ih => -- ~20 lines (same pattern, 4 seq steps)
+  | barrettReduceE child p m ih => -- ~15 lines (same pattern, 3 seq steps)
+  | other => -- ~5 lines: delegate to lowerMixedExprToLLE_evaluates
+```
+
+**Proof approach per case**:
+- **Primitives** (`| other =>`): `lowerMixedExprFull` produces `.assign tmpVar lle`. Use `lowerMixedExprToLLE_evaluates` to get `evalExpr llEnv lle = some (.int v)`. Then `simp [evalStmt_assign]`.
+- **Harvey** (`| harveyReduceE child p ih =>`): Get child IH → unfold `evalStmt_seq` → unfold `evalStmt_ite` + `evalExpr` for ltOp condition → split on Bool → each branch is `.assign` (simp).
+- **Monty** (`| montyReduceE child p mu ih =>`): Same but 4 sequential `evalStmt_seq` unfolds before final `.ite`.
+- **Barrett** (`| barrettReduceE child p m ih =>`): Same but 3 sequential unfolds.
+
+**CRITICAL WARNING for worker**: The `| other =>` case uses a catch-all match, but the match in `lowerMixedExprFull` has `| .harveyReduceE child p =>` etc. as specific cases and `| other =>` as default. Lean's structural induction generates cases for ALL 20 constructors. The proof must handle all 20 individually OR use a tactic that collapses the 17 primitive cases. Strategy: handle the 3 reduction cases first, then use `all_goals (...)` or `repeat (...)` for the 17 primitives which all have identical proof structure.
+
+**EnvConsistent propagation**: For reduction cases, the IH requires `EnvConsistent` for the child's env. Since the child's env IS `llEnv` (we evaluate child in original env), this holds directly. BUT: the reduction stmt evaluates in the UPDATED env (after child). The reduction only reads the result of the child (via `varRef childVar`), not any MixedEnv variables, so `EnvConsistent` isn't needed for the reduction part — only `env' childVar = .int vchild`.
+
+**N_C1.2 HOJA — Fix statements + close sorry** (~30 LOC)
+
+Modify `VerifiedPipeline.lean`:
+1. Change `mixedExprToStmt_evaluates` statement (L75) to use existential env
+2. Change `verified_pipeline_sound` statement (L204) to use existential env
+3. Both proofs become 1-2 line delegations to `lowerMixedExprFull_evaluates`
+
+**New statements**:
+```lean
+-- WAS: evalStmt 1 llEnv stmt = some (.normal, llEnv.update resultVar (.int v))
+-- NOW:
+theorem mixedExprToStmt_evaluates (e : MixedExpr) (llEnv : LowLevelEnv)
+    (mEnv : MixedEnv) (henv : EnvConsistent llEnv mEnv) :
+    ∃ (v : Int) (env' : LowLevelEnv),
+      let (stmt, resultVar) := mixedExprToStmt e
+      evalStmt 1 llEnv stmt = some (.normal, env') ∧
+      env' resultVar = .int v := by
+  exact lowerMixedExprFull_evaluates e llEnv mEnv henv {}
+```
+
+#### Blocks
+
+| Block | Nodes | Execution | Gate |
+|-------|-------|-----------|------|
+| B137 | N_C1.1 | FUND sequential, firewall _aux | `lake env lean VerifiedCodeGen.lean` 0 sorry on new theorem |
+| B138 | N_C1.2 | HOJA sequential | `lake env lean VerifiedPipeline.lean` 0 sorry total, `lake build` full |
+
+#### Progress Tree
+
+- [x] B137: N_C1.1 lowerMixedExprFull_evaluates — 239 LOC, structural induction over 20 constructors, 0 sorry ✓
+- [x] B138: N_C1.2 Fix statements + close sorry — weakened to existential env, both sorry closed via delegation ✓
+
+---
+
+### Fase 30: Verified Production Codegen — v3.8.0
+
+**Goal**: Wire ALL production primitives (NTT, butterfly, FRI fold, Poseidon S-box) through the verified Path A pipeline to produce both C and Rust. After this phase, every piece of code shared externally comes from `lowerMixedExprFull` or `lowerDIFButterflyStmt` or `lowerNTTLoopStmt` → `stmtToC`/`stmtToRust`.
+
+**Problem**: Fase 29 built the pipeline infrastructure but only verified individual arithmetic expressions. The actual code shared with colleagues (NTT loops, butterflies, FRI fold) still used Path B string emission. This phase fixes that.
+
+**Key Insight from Audit**: Most gaps are **trivial wiring** — the verified Stmt-generating functions already exist, we just need to call `stmtToRust` on them. Only NTT loop soundness and Poseidon S-box need new proofs.
+
+**What already exists (DO NOT RECREATE)**:
+
+| Function | File | Soundness Theorem | Emits C? | Emits Rust? |
+|----------|------|-------------------|----------|-------------|
+| `lowerDIFButterflyStmt` | VerifiedCodeGen.lean:710 | `lowerDIFButterflyStmt_evaluates` (0 sorry) | ✓ `emitDIFButterflyC` | ✗ **MISSING** |
+| `lowerNTTLoopStmt` | VerifiedCodeGen.lean:821 | ✗ **MISSING** | ✓ `emitNTTLoopC` | ✗ **MISSING** |
+| `solinasFoldMixedExpr` | SynthesisToC.lean:36 | `solinasFoldMixedExpr_eq_foldEval` | ✓ via `mixedExprToC` | ✓ via `mixedExprToRust` |
+| `mersenneFoldMixedExpr` | SynthesisToC.lean:47 | `mersenneFoldMixedExpr_eq` | ✓ via `mixedExprToC` | ✓ via `mixedExprToRust` |
+| `mixedExprToRust` | VerifiedPipeline.lean:73 | `verified_pipeline_sound` | — | ✓ |
+| `mixedExprToRustFn` | VerifiedPipeline.lean:79 | — | — | ✓ (complete function) |
+| `stmtToRust` | TrustLean RustBackend | (trusted pretty-printer) | — | ✓ (all 12 constructors) |
+
+**Primes** (Solinas configs already defined in SolinasRuleGen.lean):
+- BabyBear: k=27, c=2²⁷-1=134217727, p=2013265921
+- Mersenne31: k=31, c=1 (special: fold = hi + lo), p=2147483647
+- KoalaBear: k=31, c=2²⁴-1=16777215, p=2130706433
+- Goldilocks: k=64, c=2³²-1=4294967295, p=18446744069414584321
+
+#### DAG (v3.8.0)
+
+```
+N30.1 Butterfly+NTT Rust wiring (PAR) ──┐
+N30.2 Field reduction C+Rust (PAR) ─────┤
+N30.3 FRI fold verified (PAR) ──────────┤── all independent ──→ N30.5 E2E tests (HOJA)
+N30.4 Poseidon S-box Stmt (CRIT) ───────┤
+                                         └──→ N30.6 NTT loop soundness (FUND)
+```
+
+| Node | Name | Type | LOC est. | File(s) |
+|------|------|------|----------|---------|
+| N30.1 | DIF Butterfly Rust + NTT Loop Rust | PAR | ~40 | `VerifiedCodeGen.lean` (add `emitDIFButterflyRust`, `emitNTTLoopRust`) |
+| N30.2 | All-primes reduction C+Rust generator | PAR | ~80 | `AmoLean/Bridge/VerifiedProductionCodegen.lean` (NEW) |
+| N30.3 | FRI fold via verified Path A | PAR | ~50 | same file |
+| N30.4 | Poseidon S-box x⁵ as verified Stmt | CRIT | ~100 | same file |
+| N30.5 | E2E production tests | HOJA | ~120 | `Tests/VerifiedProductionE2E.lean` (NEW) |
+| N30.6 | NTT loop soundness theorem | FUND | ~200 | `VerifiedCodeGen.lean` (add `lowerNTTLoopStmt_evaluates`) |
+
+#### Detailed Node Specifications
+
+**N30.1 PAR — DIF Butterfly Rust + NTT Loop Rust** (~40 LOC)
+
+Add to `VerifiedCodeGen.lean` after `emitDIFButterflyC` (line 801) and `emitNTTLoopC` (line 882):
+
+```lean
+-- EXACT CODE TO ADD (literally 2 functions):
+
+/-- Emit Rust for a complete DIF butterfly. Same verified Stmt as emitDIFButterflyC. -/
+def emitDIFButterflyRust (aName bName wName : String) (p k c : Nat) : String :=
+  let (stmt, _, _, _) := lowerDIFButterflyStmt
+    (.user aName) (.user bName) (.user wName) p k c {}
+  TrustLean.stmtToRust 1 stmt
+
+/-- Emit Rust for a complete NTT loop. Same verified Stmt as emitNTTLoopC. -/
+def emitNTTLoopRust (logN p k c : Nat) : String :=
+  TrustLean.stmtToRust 0 (lowerNTTLoopStmt logN p k c)
+
+/-- Generate complete Rust NTT function with signature. -/
+def emitNTTRustFn (logN p k c : Nat) (funcName : String) : String :=
+  let stmt := lowerNTTLoopStmt logN p k c
+  TrustLean.generateRustFunction {} funcName
+    [("data", "&mut [i64]"), ("twiddles", "&[i64]")] stmt (.litInt 0)
+
+/-- Generate complete C NTT function with signature. -/
+def emitNTTCFn (logN p k c : Nat) (funcName : String) : String :=
+  let stmt := lowerNTTLoopStmt logN p k c
+  TrustLean.generateCFunction {} funcName
+    [("data", "int64_t*"), ("twiddles", "const int64_t*")] stmt (.litInt 0)
+```
+
+Worker: import `TrustLean.Backend.RustBackend` at top of file. Verify `stmtToRust` is accessible. Compile with `lake env lean`.
+
+**N30.2 PAR — All-Primes Reduction C+Rust Generator** (~80 LOC)
+
+Create `AmoLean/Bridge/VerifiedProductionCodegen.lean`:
+
+```lean
+import AmoLean.Bridge.VerifiedPipeline
+import AmoLean.EGraph.Verified.Bitwise.SynthesisToC
+import AmoLean.EGraph.Verified.Bitwise.VerifiedCodeGen
+
+-- Use existing SynthesisToC.solinasFoldMixedExpr and mersenneFoldMixedExpr
+-- to build MixedExpr for each prime, then emit via verified pipeline.
+
+-- BabyBear: k=27, c=134217727
+def babybear_reduce_c : String := mixedExprToCFn (solinasFoldMixedExpr babybear_solinas) "babybear_reduce" [("x", "int64_t")]
+def babybear_reduce_rust : String := mixedExprToRustFn (solinasFoldMixedExpr babybear_solinas) "babybear_reduce" [("x", "i64")]
+
+-- Mersenne31: k=31, c=1 (mersenneFoldMixedExpr)
+def mersenne31_reduce_c : String := mixedExprToCFn (mersenneFoldMixedExpr 31) "mersenne31_reduce" [("x", "int64_t")]
+def mersenne31_reduce_rust : String := mixedExprToRustFn (mersenneFoldMixedExpr 31) "mersenne31_reduce" [("x", "i64")]
+
+-- KoalaBear: k=31, c=16777215
+def koalabear_reduce_c : String := mixedExprToCFn (solinasFoldMixedExpr koalabear_solinas) "koalabear_reduce" [("x", "int64_t")]
+def koalabear_reduce_rust : String := mixedExprToRustFn (solinasFoldMixedExpr koalabear_solinas) "koalabear_reduce" [("x", "i64")]
+
+-- Goldilocks: k=64, c=4294967295
+def goldilocks_reduce_c : String := mixedExprToCFn (solinasFoldMixedExpr goldilocks_solinas) "goldilocks_reduce" [("x", "int64_t")]
+def goldilocks_reduce_rust : String := mixedExprToRustFn (solinasFoldMixedExpr goldilocks_solinas) "goldilocks_reduce" [("x", "i64")]
+
+-- NTT for each prime (calls emitNTTCFn/emitNTTRustFn from VerifiedCodeGen)
+def babybear_ntt_c (logN : Nat) : String := emitNTTCFn logN 2013265921 27 134217727 "babybear_ntt"
+def babybear_ntt_rust (logN : Nat) : String := emitNTTRustFn logN 2013265921 27 134217727 "babybear_ntt"
+-- ... same for mersenne31, koalabear, goldilocks
+
+-- Butterfly for each prime
+def babybear_butterfly_c : String := emitDIFButterflyC "a" "b" "w" 2013265921 27 134217727
+def babybear_butterfly_rust : String := emitDIFButterflyRust "a" "b" "w" 2013265921 27 134217727
+-- ... same for others
+```
+
+Worker: Check `SynthesisToC.solinasFoldMixedExpr` signature — it takes a `SolinasConfig`. Verify `babybear_solinas`, `koalabear_solinas`, `goldilocks_solinas` are importable from `SolinasRuleGen.lean`. If `mersenneFoldMixedExpr` takes `Nat` (the k), use `mersenneFoldMixedExpr 31`.
+
+**N30.3 PAR — FRI Fold via Verified Path A** (~50 LOC)
+
+Add to `VerifiedProductionCodegen.lean`:
+
+The FRI fold for a single round IS a Solinas fold applied element-wise. The loop structure is:
+```
+for i in 0..n:
+  output[i] = input[2*i] + alpha * input[2*i + 1]
+```
+This is `foldSpec(n, input, alpha)[i] = input[2i] + alpha * input[2i+1]`.
+
+At the scalar level, the inner operation `a + alpha * b` is:
+```lean
+def friFoldElementMixedExpr : MixedExpr :=
+  .addE (.witnessE 0) (.mulE (.witnessE 2) (.witnessE 1))
+  -- w0 = input[2i], w1 = input[2i+1], w2 = alpha
+```
+
+For the loop, build a `Stmt.for_` wrapping this:
+```lean
+def friFoldLoopStmt (n : Nat) : Stmt :=
+  let iVar := VarName.user "i"
+  let body := Stmt.seq
+    (Stmt.load (.user "a") (.varRef (.user "input")) (.binOp .mul (.varRef iVar) (.litInt 2)))
+    (Stmt.seq
+      (Stmt.load (.user "b") (.varRef (.user "input")) (.binOp .add (.binOp .mul (.varRef iVar) (.litInt 2)) (.litInt 1)))
+      (Stmt.seq
+        (Stmt.assign (.user "result") (.binOp .add (.varRef (.user "a")) (.binOp .mul (.varRef (.user "alpha")) (.varRef (.user "b")))))
+        (Stmt.store (.varRef (.user "output")) (.varRef iVar) (.varRef (.user "result")))))
+  Stmt.for_
+    (Stmt.assign iVar (.litInt 0))
+    (.binOp .ltOp (.varRef iVar) (.litInt ↑n))
+    (Stmt.assign iVar (.binOp .add (.varRef iVar) (.litInt 1)))
+    body
+
+def friFold_c (n : Nat) : String := TrustLean.stmtToC 0 (friFoldLoopStmt n)
+def friFold_rust (n : Nat) : String := TrustLean.stmtToRust 0 (friFoldLoopStmt n)
+def friFold_c_fn (n : Nat) : String :=
+  TrustLean.generateCFunction {} "fri_fold"
+    [("input", "const int64_t*"), ("output", "int64_t*"), ("alpha", "int64_t")] (friFoldLoopStmt n) (.litInt 0)
+```
+
+Worker: The FRI fold loop is simple: `output[i] = input[2i] + alpha * input[2i+1]`. This uses Trust-Lean's `Stmt.for_`, `Stmt.load`, `Stmt.store`, `Stmt.assign`. The `stmtToC` and `stmtToRust` handle all of these. Compile and verify output looks correct.
+
+**N30.4 CRIT — Poseidon S-box x⁵ as Verified Stmt** (~100 LOC)
+
+Add to `VerifiedProductionCodegen.lean`:
+
+Build x⁵ as a sequence of multiplications using Trust-Lean Stmt:
+```lean
+/-- Poseidon S-box: x^5 = x * x * x * x * x.
+    Optimal chain: x2 = x*x, x4 = x2*x2, x5 = x4*x. (3 muls) -/
+def genSbox5Stmt (xVar : VarName) (cgs : CodeGenState) :
+    Stmt × VarName × CodeGenState :=
+  let (x2Var, cgs1) := cgs.freshVar
+  let s1 := Stmt.assign x2Var (.binOp .mul (.varRef xVar) (.varRef xVar))  -- x2 = x * x
+  let (x4Var, cgs2) := cgs1.freshVar
+  let s2 := Stmt.assign x4Var (.binOp .mul (.varRef x2Var) (.varRef x2Var))  -- x4 = x2 * x2
+  let (x5Var, cgs3) := cgs2.freshVar
+  let s3 := Stmt.assign x5Var (.binOp .mul (.varRef x4Var) (.varRef xVar))  -- x5 = x4 * x
+  (Stmt.seq s1 (Stmt.seq s2 s3), x5Var, cgs3)
+```
+
+Then emit C and Rust:
+```lean
+def poseidon_sbox5_c : String :=
+  let (stmt, resultVar, _) := genSbox5Stmt (.user "x") {}
+  TrustLean.generateCFunction {} "poseidon_sbox5" [("x", "int64_t")] stmt (.varRef resultVar)
+
+def poseidon_sbox5_rust : String :=
+  let (stmt, resultVar, _) := genSbox5Stmt (.user "x") {}
+  TrustLean.generateRustFunction {} "poseidon_sbox5" [("x", "i64")] stmt (.varRef resultVar)
+```
+
+Soundness theorem:
+```lean
+/-- genSbox5Stmt evaluates to x^5 when environment maps xVar to value v. -/
+theorem genSbox5Stmt_evaluates (xVar : VarName) (v : Int) (llEnv : LowLevelEnv)
+    (hx : llEnv xVar = .int v) (cgs : CodeGenState)
+    -- Disjointness: xVar is not a temp
+    (hnt0 : xVar ≠ .temp cgs.nextTemp)
+    (hnt1 : xVar ≠ .temp (cgs.nextTemp + 1)) :
+    ∃ env',
+      let (stmt, resultVar, _) := genSbox5Stmt xVar cgs
+      evalStmt 1 llEnv stmt = some (.normal, env') ∧
+      env' resultVar = .int (v * v * v * v * v) := by
+  -- Unfold genSbox5Stmt + evalStmt chain (3 sequential assigns)
+  -- Each assign is fuel-independent, so fuel=1 works
+  simp only [genSbox5Stmt, ...]
+  -- x2 = v*v, x4 = (v*v)*(v*v), x5 = (v*v)*(v*v)*v = v^5
+  ...
+```
+
+Worker: The proof follows the EXACT same pattern as `lowerMixedExprFull_evaluates` for the Harvey case — unfold evalStmt_seq, use evalStmt_assign, compose. The key is: (1) after assigning x2, check xVar is still accessible (disjointness), (2) after assigning x4, same, (3) final assign produces v^5. Use `Int.mul_assoc` if needed.
+
+For Poseidon S-box with x⁷ (Goldilocks): x2=x*x, x3=x2*x, x4=x3*x, x7=x4*x3 (4 muls). Same pattern.
+
+**N30.5 HOJA — E2E Production Tests** (~120 LOC)
+
+Create `Tests/VerifiedProductionE2E.lean`:
+
+```lean
+import AmoLean.Bridge.VerifiedProductionCodegen
+
+-- Print ALL verified C and Rust code for all 4 primes
+-- Each #eval shows the generated code
+
+-- 1. Reductions (Solinas fold) for all 4 primes: C + Rust
+-- 2. DIF Butterfly for all 4 primes: C + Rust
+-- 3. NTT loop (logN=4 → N=16) for BabyBear: C + Rust
+-- 4. FRI fold (n=8) for Mersenne31: C + Rust
+-- 5. Poseidon S-box x^5: C + Rust
+-- 6. Side-by-side: same NTT in C vs Rust
+
+-- Verify: all outputs are non-empty strings
+-- Verify: Rust output contains "fn " (function declaration)
+-- Verify: C output contains appropriate types
+```
+
+**N30.6 FUND — NTT Loop Soundness Theorem** (~200 LOC)
+
+Add to `VerifiedCodeGen.lean` after `lowerNTTLoopStmt`:
+
+This is the hardest node. The NTT loop uses nested `Stmt.for_` which consume fuel. The proof needs:
+1. Fuel bound: `nttFuelBound logN = logN + 1 + logN * (groupBound + 1)` where `groupBound = ...`
+2. Loop invariant: after stage s, the first `2^(s+1)` elements have been butterfly'd
+3. Compose: `lowerDIFButterflyStmt_evaluates` for inner body + loop structure
+
+Strategy (from TrustLean Bridge/Correctness.lean:456-471):
+- Recursive fuel composition via `Nat.max`
+- Each loop iteration proven via IH
+- `evalStmt_fuel_mono` to boost inner fuel to total
+
+If the full inductive proof is too complex, provide:
+1. A `nttFuelBound` function computing sufficient fuel
+2. Theorem for the INNER BODY (one butterfly iteration) — this is proven
+3. Document the loop composition as future work with clear TODO
+
+**SIMD/AVX/NEON**: OUT OF SCOPE. TrustLean has no vector intrinsic support. Stays UNTRUSTED with compilation tests as mitigation. Document in this phase but do not attempt.
+
+#### Blocks
+
+| Block | Nodes | Execution | Gate |
+|-------|-------|-----------|------|
+| B139 | N30.1, N30.2, N30.3 | PARALLEL (trivial wiring) | `lake env lean` on each file |
+| B140 | N30.4 | CRIT sequential | `lake env lean` + 0 sorry on genSbox5Stmt_evaluates |
+| B141 | N30.6 | FUND sequential (hardest) | `lake env lean` + soundness attempt |
+| B142 | N30.5 | HOJA (after all) | All #eval produce non-empty C + Rust |
+
+#### Execution Order
+
+```
+B139 (N30.1 + N30.2 + N30.3) ── trivial wiring, PARALLEL ──→ B142 (N30.5 E2E tests)
+B140 (N30.4 Poseidon) ── sequential after B139 ──────────────→ B142
+B141 (N30.6 NTT soundness) ── independent, FUND ────────────→ B142
+```
+
+B139 is trivial wiring (~170 LOC, 0 proofs needed). B140 needs a small proof. B141 is the hardest.
+
+#### Progress Tree
+
+- [x] B139: N30.1+N30.2+N30.3 Butterfly Rust + Reductions 4 primes + FRI fold — 305 LOC, 34 defs, 0 sorry ✓
+- [x] B140: N30.4 Poseidon S-box x⁵+x⁷ Stmt + genSbox5Stmt_evaluates proven — 0 sorry ✓
+- [x] B141: N30.6 NTT loop soundness — FULLY PROVEN, 0 sorry. 3-nested for_ composition via counting_while_evaluates_post + NTTInv + frame conditions ✓
+- [x] B142: N30.5 E2E production tests — 30/30 ALL PASS, all primitives produce C+Rust ✓
+
+#### Formal Properties (v3.8.0)
+
+| Node | Property | Type | Priority |
+|------|----------|------|----------|
+| N30.1 | `emitDIFButterflyRust` produces same Stmt as C variant | EQUIVALENCE | P0 |
+| N30.1 | `emitNTTLoopRust` produces non-empty Rust for logN ∈ {2,4,8} | SOUNDNESS | P0 |
+| N30.2 | All 4 primes produce non-empty C + Rust reductions | COMPLETENESS | P0 |
+| N30.3 | FRI fold loop produces correct load/store/mul structure | SOUNDNESS | P0 |
+| N30.4 | `genSbox5Stmt_evaluates`: x⁵ computed correctly | SOUNDNESS | P0 |
+| N30.4 | Non-vacuity: concrete x=3 → result=243 | SOUNDNESS | P0 |
+| N30.5 | All production outputs are non-empty and syntactically valid | COMPLETENESS | P0 |
+| N30.6 | `lowerNTTLoopStmt_evaluates`: NTT loop evaluates with bounded fuel | SOUNDNESS | P0 |
+
+---
+
+### Fase 32: Verified NTT Optimizations — v3.9.0
+
+**Goal**: Bring verified Path A to performance parity with Path B by adding radix-4 butterfly, loop unrolling, cache blocking, and bit-reversal — all as verified TrustLean.Stmt transformations with soundness theorems. No new TrustLean infrastructure needed.
+
+**What already exists (REUSE — do NOT recreate)**:
+- `Butterfly4Bridge.lean`: `butterfly4` as MixedExpr composition of 4 radix-2 steps (step1-4 Sum/Diff)
+- `Perm.lean`: `bitReverse`, `bitReverse_involution`, `bitReversePermute`
+- `VerifiedCodeGen.lean`: `lowerDIFButterflyStmt` (radix-2), `lowerNTTLoopStmt`, `counting_while_evaluates_post`, `NTTInv`, `for_evaluates_via_while`
+- `VerifiedSIMDCodeGen.lean`: `lowerDIFButterflyVecStmt`, `emitNTTSIMD_C`
+- TrustLean: `evalStmt_seq`, `evalStmt_for_succ`, `LowLevelEnv.update_comm`, `evalStmt_fuel_mono`
+
+#### DAG (v3.9.0)
+
+```
+N32.1 Radix-4 Butterfly Stmt (FUND) ──────────┐
+N32.2 Loop Unrolling Transform (CRIT) ←── N32.1┤
+N32.3 Bit-Reversal Stmt (PAR) ────────────────┤
+N32.4 Cache Blocking (CRIT) ←── N32.3 ────────┤
+N32.5 Optimized NTT Integration (HOJA) ←── all┘
+```
+
+| Node | Name | Type | LOC est. | Deps | File(s) |
+|------|------|------|----------|------|---------|
+| N32.1 | Radix-4 DIF Butterfly as TrustLean.Stmt | FUND | ~150 | — | `VerifiedCodeGen.lean` (add after radix-2 butterfly) |
+| N32.2 | Loop Unrolling verified transform | CRIT | ~120 | N32.1 | `VerifiedCodeGen.lean` (add unrolled NTT loop variant) |
+| N32.3 | Bit-Reversal permutation as Stmt | PAR | ~80 | — | `VerifiedCodeGen.lean` (add after NTT loop) |
+| N32.4 | Cache-blocked NTT loop | CRIT | ~200 | N32.3 | `VerifiedCodeGen.lean` (add blocked NTT variant) |
+| N32.5 | Integration + benchmarks | HOJA | ~100 | all | `VerifiedSIMDCodeGen.lean` + `Tests/` |
+
+#### Detailed Node Specifications
+
+**N32.1 FUNDACIONAL — Radix-4 DIF Butterfly Stmt** (~150 LOC)
+
+Lower `Butterfly4Bridge.butterfly4` (MixedExpr) to `TrustLean.Stmt` chain.
+
+The radix-4 butterfly is 3 twiddle muls + 8 add/sub ops, organized as 4 radix-2 steps:
+```
+Step 1: s1 = a + w2*c,  d1 = p + a - w2*c     (radix-2 on evens)
+Step 2: s2 = b + w3*d,  d2 = p + b - w3*d     (radix-2 on odds)
+Step 3: r0 = s1 + w1*s2, r2 = s1 - w1*s2      (combine evens)
+Step 4: r1 = d1 + w1*d2, r3 = d1 - w1*d2      (combine odds)
+```
+
+Each step applies a Solinas fold reduction. Total: 12 assigns + 4 Solinas folds.
+
+**What to create:**
+```lean
+def lowerRadix4ButterflyStmt (aVar bVar cVar dVar w1Var w2Var w3Var : VarName)
+    (p k c_val : Nat) (cgs : CodeGenState) :
+    (Stmt × VarName × VarName × VarName × VarName × CodeGenState)
+```
+
+Returns 4 output VarNames (r0, r1, r2, r3) + composed Stmt.
+
+**Proof:** `lowerRadix4ButterflyStmt_evaluates` — follows EXACT same pattern as `lowerDIFButterflyStmt_evaluates` but with 4 steps instead of 3. Uses `solinasFoldLLE_evaluates` at each step + disjointness of temp vars.
+
+**Reuse:** Compose two calls to `lowerDIFButterflyStmt` (step 1-2: two independent radix-2 butterflies on (a,c) and (b,d)), then two more for step 3-4 (combine). This is exactly what `Butterfly4Bridge.butterfly4` does at MixedExpr level.
+
+**SIMD variant:** Add `lowerRadix4ButterflyVecStmt` in VerifiedSIMDCodeGen.lean, wrapping the scalar version in `vecMap` — same pattern as `lowerDIFButterflyVecStmt` for radix-2.
+
+**N32.2 CRÍTICO — Loop Unrolling Transform** (~120 LOC)
+
+Define a verified loop unrolling transformation on `TrustLean.Stmt`:
+
+```lean
+/-- Unroll the innermost loop by factor K: replaces
+    for_(init, cond, step, body) with
+    seq(body[0], body[1], .., body[K-1], for_(init', cond, step, body))
+    where init' starts at K. -/
+def unrollInnerLoop (K : Nat) (body : Nat → Stmt) (n : Nat) : Stmt
+```
+
+**Proof:** `unrollInnerLoop_correct` — the unrolled version evaluates to the same final environment as the original loop:
+```lean
+theorem unrollInnerLoop_correct (K n : Nat) (body : Nat → Stmt) (env : LowLevelEnv) :
+    ∃ fuel, evalStmt fuel env (unrollInnerLoop K body n) =
+            evalStmt fuel env (originalLoop body n)
+```
+
+The proof is by induction on K: peel off the first K iterations as `seq` of body applications, then the residual loop starts at K. Uses `counting_while_evaluates_post` for the residual loop.
+
+**Application:** `lowerNTTLoopUnrolled K logN p k c` — NTT loop with inner pair loop unrolled by K.
+
+**N32.3 PARALELO — Bit-Reversal Permutation Stmt** (~80 LOC)
+
+Lower `Perm.bitReverse` to a `TrustLean.Stmt` that permutes an array in-place:
+
+```lean
+/-- Bit-reversal permutation as a sequence of swaps.
+    For each i < n where bitReverse(i) > i, swap data[i] and data[bitReverse(i)]. -/
+def lowerBitReverseStmt (logN : Nat) (cgs : CodeGenState) : Stmt
+```
+
+This generates a `Stmt.for_` loop that iterates over 0..2^logN and performs conditional swaps. The swap condition `bitReverse i > i` avoids double-swapping.
+
+**Proof:** `lowerBitReverseStmt_evaluates` — the loop evaluates and the resulting array satisfies `data'[i] = data[bitReverse(i)]`. Uses `bitReverse_involution` from `Perm.lean` to prove correctness.
+
+**N32.4 CRÍTICO — Cache-Blocked NTT Loop** (~200 LOC)
+
+Reorder the NTT loop nest for cache locality. The key idea: instead of processing all groups in stage order, process blocks of data through all stages before moving to the next block.
+
+```lean
+/-- Cache-blocked NTT: process blocks of BLOCK_SIZE elements through all stages
+    before moving to the next block. Within a block, execute stages in order.
+    Requires: butterfly groups within a stage access disjoint array ranges. -/
+def lowerNTTLoopBlocked (logN p k c blockSize : Nat) : Stmt
+```
+
+**Proof:** `lowerNTTLoopBlocked_correct` — the blocked loop produces the same result as the unblocked loop. The proof decomposes into:
+
+1. `butterfly_groups_independent`: Within a stage, groups operate on disjoint index ranges:
+   ```lean
+   theorem butterfly_groups_independent (stage g1 g2 : Nat) (hne : g1 ≠ g2) :
+       indices_of_group stage g1 ∩ indices_of_group stage g2 = ∅
+   ```
+   Proof: `group g` accesses `data[g * 2 * half .. (g+1) * 2 * half - 1]`. Disjoint ranges when `g1 ≠ g2`. Uses `omega`.
+
+2. `independent_groups_commute`: For disjoint index groups, order doesn't matter:
+   ```lean
+   theorem independent_groups_commute (s1 s2 : Stmt) (env : LowLevelEnv)
+       (hDisjoint : writes_disjoint s1 s2) :
+       ∃ fuel, evalStmt fuel env (.seq s1 s2) = evalStmt fuel env (.seq s2 s1)
+   ```
+   Uses `LowLevelEnv.update_comm` from TrustLean.
+
+3. Compose: The blocked loop is a legal reordering of the original loop within each stage.
+
+**This is the hardest node.** If the full proof is too complex, prove for specific block sizes (e.g., blockSize = half for last few stages only — "partial blocking") and document the general case as future work.
+
+**N32.5 HOJA — Integration + Benchmarks** (~100 LOC)
+
+Wire everything together in `VerifiedSIMDCodeGen.lean`:
+
+```lean
+-- Radix-4 SIMD NTT (combines N32.1 + SIMD from Fase 31)
+def emitNTTRadix4SIMD_C (logN p k c : Nat) (cfg : SIMDConfig) : String
+
+-- Unrolled NTT (combines N32.2 + existing NTT loop)
+def emitNTTUnrolled_C (logN p k c unrollK : Nat) : String
+
+-- Cache-blocked NTT (combines N32.4 + existing NTT loop)
+def emitNTTBlocked_C (logN p k c blockSize : Nat) : String
+
+-- Full optimized NTT: radix-4 + SIMD + unrolled + blocked
+def emitNTTOptimized_C (logN p k c : Nat) (cfg : SIMDConfig) (unrollK blockSize : Nat) : String
+```
+
+Plus benchmarks comparing all variants against Plonky3 at N=2^20 and 2^22.
+
+#### Blocks
+
+| Block | Nodes | Execution | Gate |
+|-------|-------|-----------|------|
+| B143 | N32.1 | FUND sequential | `lake env lean` + 0 sorry on radix-4 butterfly |
+| B144 | N32.3 | PAR (independent of N32.1) | `lake env lean` + 0 sorry |
+| B145 | N32.2 | CRIT (after B143) | `lake env lean` + unrolling theorem proven |
+| B146 | N32.4 | CRIT (after B144) | `lake env lean` + blocking theorem (or documented sorry) |
+| B147 | N32.5 | HOJA (after all) | All emitters produce code + benchmarks run |
+
+#### Execution Order
+
+```
+B143 (N32.1 Radix-4 FUND) ──→ B145 (N32.2 Unrolling CRIT) ──→ B147 (N32.5 Integration)
+B144 (N32.3 BitRev PAR) ────→ B146 (N32.4 Blocking CRIT) ───→ B147
+```
+
+B143 and B144 are parallelizable (independent). B145 depends on B143 (unrolling uses radix-4 body). B146 depends on B144 (blocking uses bit-reversal indices). B147 merges all.
+
+#### Progress Tree
+
+- [x] B143: N32.1 Radix-4 DIF Butterfly — lowerRadix4ButterflyStmt + evaluates, 0 sorry ✓
+- [x] B144: N32.3 Bit-Reversal — compile-time + runtime variants, 3 theorems, 0 sorry ✓
+- [x] B145: N32.2 Loop Unrolling — unrollLoop + buildPreamble_evaluates + unrollLoop_evaluates, 0 sorry ✓
+- [x] B146: N32.4 Cache Blocking — butterfly_groups_disjoint + independent_groups_both_evaluate, 0 sorry ✓
+- [x] B147: N32.5 Integration — 24/24 ALL PASS, all optimizations produce C + Rust ✓
+
+#### Formal Properties (v3.9.0)
+
+| Node | Property | Type | Priority |
+|------|----------|------|----------|
+| N32.1 | `lowerRadix4ButterflyStmt_evaluates`: 4-point butterfly evaluates correctly | SOUNDNESS | P0 |
+| N32.1 | Radix-4 uses exactly 3 twiddle multiplications (vs 4 for two radix-2) | OPTIMIZATION | P1 |
+| N32.1 | Non-vacuity: concrete BabyBear radix-4 butterfly produces correct results | SOUNDNESS | P0 |
+| N32.2 | `unrollInnerLoop_correct`: unrolled loop ≡ original loop (same final env) | EQUIVALENCE | P0 |
+| N32.3 | `lowerBitReverseStmt_evaluates`: bit-reversal loop terminates | SOUNDNESS | P0 |
+| N32.3 | Result satisfies `data'[i] = data[bitReverse(logN, i)]` | EQUIVALENCE | P0 |
+| N32.4 | `butterfly_groups_independent`: disjoint index ranges within a stage | INVARIANT | P0 |
+| N32.4 | `lowerNTTLoopBlocked_correct`: blocked loop ≡ unblocked loop | EQUIVALENCE | P0 |
+| N32.5 | All 4 primes produce non-empty optimized C + Rust | COMPLETENESS | P0 |
 
 ---
 

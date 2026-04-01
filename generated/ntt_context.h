@@ -188,8 +188,8 @@ static const goldilocks_t GOLDILOCKS_TWO_ADIC_ROOTS[] = {
     /* omega for N = 2^16 = 65536 */ 0x54DF9630BF79450EULL,
     /* omega for N = 2^17 = 131072 */ 0xABD0A6E8AA3D8A0EULL,
     /* omega for N = 2^18 = 262144 */ 0x81281A7B05F9BEACULL,
-    /* omega for N = 2^19 = 524288 */ 0xCA25B9AB3C316FB6ULL,  /* TODO: verify */
-    /* omega for N = 2^20 = 1048576 */ 0x1D094B0FFF3B314AULL, /* TODO: verify */
+    /* omega for N = 2^19 = 524288 */ 0xFBD41C6B8CAA3302ULL,
+    /* omega for N = 2^20 = 1048576 */ 0x30BA2ECD5E93E76DULL,
 };
 
 #define GOLDILOCKS_MAX_LOG_N 20  /* Support up to N = 2^20 = 1M elements */

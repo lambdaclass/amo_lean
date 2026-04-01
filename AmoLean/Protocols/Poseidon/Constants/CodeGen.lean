@@ -9,6 +9,8 @@
      - This is clearer and matches the reference implementation
   2. Single source of truth: constants come from BN254.lean
   3. Layout: RC[round][elem][limb] for cache-friendly access
+
+  **UNTRUSTED (Path B)**: For verified codegen, use AmoLean.Bridge.VerifiedPipeline.
 -/
 
 import AmoLean.Protocols.Poseidon.Constants.BN254

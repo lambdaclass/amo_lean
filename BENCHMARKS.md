@@ -40,6 +40,333 @@ This section is written ONCE and not modified during execution.
 - Doc comments on all public defs/theorems
 - Consistent naming with OptiSat/SuperTensor conventions
 
+## Verification Criteria (Fase 29 — Verified Code Generation Pipeline)
+
+### Mechanical Health (Fase 29 — Global)
+<!-- CHECK:f29_zero_sorry --> Zero sorry/admit in ALL Fase 29 files
+<!-- CHECK:f29_zero_axiom --> Zero custom axioms (#print axioms shows only Lean/Mathlib/TrustLean)
+<!-- CHECK:f29_build --> `lake build` 0 errors, 0 warnings
+<!-- CHECK:f29_no_simp_star --> No `simp [*]` in new code (only `simp only [...]`)
+<!-- CHECK:f29_no_partial --> No new `partial def` in Fase 29 code (eliminating, not adding)
+<!-- CHECK:f29_elaboration --> Elaboration time <10s per theorem in FUND/CRIT nodes
+
+### N29.1 MixedExprToSigma (FUNDACIONAL)
+<!-- CHECK:n29_1_injective --> `mixedExprToExpandedSigma_injective` proven (no sorry)
+<!-- CHECK:n29_1_semantics --> Semantics preservation proven for ALL 20 MixedNodeOp constructors
+<!-- CHECK:n29_1_type_align --> Return type compatible with `TrustLean.convertExpandedSigma`
+<!-- CHECK:n29_1_non_vacuity --> Non-vacuity example: concrete MixedExpr roundtrips through conversion
+
+### N29.2 CompositionTheorem (CRITICO)
+<!-- CHECK:n29_2_chain --> Theorem chains 4 stages: conversion → expandedSigmaToStmt → stmtToMicroC → microCToString
+<!-- CHECK:n29_2_roundtrip --> Roundtrip clause: parseMicroC(generated) = some microc
+<!-- CHECK:n29_2_semantics --> Semantics clause: evalMicroC matches evalMixedExpr
+<!-- CHECK:n29_2_three_part --> Three-part contract (L-297): fuel + result + frame
+
+### N29.3 FieldInt64Agreement (FUNDACIONAL)
+<!-- CHECK:n29_3_babybear --> BabyBear: all ops proven ∈ Int64Range
+<!-- CHECK:n29_3_mersenne --> Mersenne31: all ops proven ∈ Int64Range
+<!-- CHECK:n29_3_goldilocks --> Goldilocks: add/sub proven ∈ Int64Range; mul overflow documented
+<!-- CHECK:n29_3_native --> Uses `native_decide` for boundary values + `omega` for range arithmetic
+
+### N29.4 GoldilocksMicroC (PARALELO)
+<!-- CHECK:n29_4_programs --> All 5 MicroC programs defined (add, sub, neg, mul, reduce)
+<!-- CHECK:n29_4_simbridge --> Correctness theorems via native_decide for boundary values
+<!-- CHECK:n29_4_branch --> Branch analysis theorems (both branches of each conditional)
+
+### N29.5 PipelineE2E (CRITICO)
+<!-- CHECK:n29_5_babybear --> babybear_verified_pipeline theorem proven
+<!-- CHECK:n29_5_mersenne --> mersenne31_verified_pipeline theorem proven
+<!-- CHECK:n29_5_goldilocks --> goldilocks_verified_pipeline theorem proven (with mul caveat)
+<!-- CHECK:n29_5_axiom_audit --> `#print axioms` on all pipeline theorems → 0 custom axioms
+<!-- CHECK:n29_5_non_vacuity --> Non-vacuity: concrete programs verified end-to-end
+
+### N29.6 DeprecatePathB (HOJA)
+<!-- CHECK:n29_6_headers --> All 7 Path B files have UNTRUSTED header
+<!-- CHECK:n29_6_e2e_test --> E2E test file compiles and passes
+<!-- CHECK:n29_6_roundtrip --> At least 3 concrete programs roundtrip-tested
+
+### Cross-Node Invariants (Fase 29)
+<!-- CHECK:f29_no_path_b --> No new code uses Path B (string emission) for external output
+<!-- CHECK:f29_wiring --> All new modules imported by at least one consumer (no islands)
+<!-- CHECK:f29_trustlean_compat --> All theorems compose with TrustLean v3.0 without conversion sorry
+
+### Fase 29 Corrección 1: Close Pipeline Soundness Sorry
+
+<!-- CHECK:c1_zero_sorry --> Zero sorry in VerifiedPipeline.lean after fix
+<!-- CHECK:c1_zero_sorry_vcg --> Zero new sorry in VerifiedCodeGen.lean
+<!-- CHECK:c1_build --> `lake build` 0 errors after changes
+<!-- CHECK:c1_no_sorry_regression --> `grep -rn sorry AmoLean/Bridge/VerifiedPipeline.lean` returns 0 matches (excluding comments)
+<!-- CHECK:c1_induction --> `lowerMixedExprFull_evaluates` uses structural induction on MixedExpr (not sorry/native_decide)
+<!-- CHECK:c1_all_constructors --> Proof covers all 20 MixedExpr constructors (3 reduction + 17 primitive)
+<!-- CHECK:c1_fuel_1 --> Fuel=1 used throughout (no fuel inflation)
+<!-- CHECK:c1_statement_weakened --> Both theorems use existential env (not `llEnv.update resultVar`)
+<!-- CHECK:c1_existing_preserved --> `verified_pipeline_sound_simple` and all examples still compile
+
+---
+
+## Verification Criteria by Node (Fase 18 — Generic VerifiedCodeGen Architecture)
+
+### Mechanical Health (Fase 18 — Global)
+<!-- CHECK:f18_zero_sorry --> Zero sorry/admit in ALL Fase 18 files
+<!-- CHECK:f18_zero_axiom --> Zero custom axioms (#print axioms shows ONLY standard Lean/Mathlib)
+<!-- CHECK:f18_build --> `lake build` 0 errors, 0 warnings on all Fase 18 modules
+<!-- CHECK:f18_no_simp_star --> No `simp [*]` in Fase 18 code
+<!-- CHECK:f18_scoped_simp --> All `simp` calls are `simp only [...]` in FUND/CRIT nodes
+<!-- CHECK:f18_no_native_in_proofs --> No `native_decide` in theorem proofs (OK in tests/examples/non-vacuity)
+<!-- CHECK:f18_flat_patterns --> No nested pattern matching in inductive match arms (L-478)
+<!-- CHECK:f18_no_identity_passes --> No `:= id`, `fun x => x`, or `fun _ w => w` in pipeline fields unless documented PENDIENTE
+<!-- CHECK:f18_backward_compat --> Existing `lake build` passes unchanged — zero regressions on all prior Fase modules
+<!-- CHECK:f18_loc_budget --> Total new LOC <= 3,500
+
+---
+
+### N18.1 Reduction Decomposition Rules (FUNDACIONAL)
+
+**Goal**: E-graph rewrite rules that decompose abstract `.reduceE x p` (and `.montyReduceE`, `.barrettReduceE`, `.harveyReduceE`) into primitive MixedExpr compositions (shift, mask, mul, add, sub, ite) that `lowerMixedExprToLLE` already handles. The e-graph discovers optimal decompositions; extraction yields only primitives.
+
+#### Soundness (BLOCKING)
+<!-- CHECK:f18_n1_monty_decomp_sound --> Montgomery decomposition rule is a `MixedSoundRule`: for all `env`, `evalMixedOp(decomposed_tree, env) = evalMixedOp(.montyReduce child p mu, env)`. The equality must be modular (`% p`), not bit-exact.
+<!-- CHECK:f18_n1_barrett_decomp_sound --> Barrett decomposition rule is a `MixedSoundRule`: `evalMixedOp(decomposed_tree, env) = evalMixedOp(.barrettReduce child p m, env) % p`.
+<!-- CHECK:f18_n1_harvey_decomp_sound --> Harvey conditional-subtraction decomposition rule is a `MixedSoundRule`: decomposed tree preserves `% p` equivalence. Must handle the conditional (if x >= p then x - p else x) structure.
+<!-- CHECK:f18_n1_reduce_decomp_sound --> Generic `.reduceE x p` decomposition rule produces a tree using only existing primitives (bitAnd + constMask for Mersenne, shift+add+sub for Solinas, etc.) with soundness proof.
+<!-- CHECK:f18_n1_decomp_only_primitives --> Every decomposition rule's RHS tree uses ONLY constructors from {addE, subE, mulE, shiftLeftE, shiftRightE, bitAndE, bitXorE, bitOrE, constMaskE, constE, smulE, witnessE} — no `.reduceE`, `.montyReduceE`, `.barrettReduceE`, or `.harveyReduceE` in any RHS.
+<!-- CHECK:f18_n1_bridge_existing --> Soundness proofs reference existing verified specs: `montyReduceSpec` from TrustLeanBridge.lean, `barrettReduceSpec_mod`, `harveyReduceSpec_mod`, `fold_reduction_mod` from BitwiseBridge.lean. No new unverified specs.
+
+#### Structural (BLOCKING)
+<!-- CHECK:f18_n1_rules_in_allRules --> All new decomposition rules are included in a collected list (e.g., `allDecompositionRules`) with a length theorem and a master `allDecompositionRules_sound` theorem analogous to `allBitwiseRules_sound`.
+<!-- CHECK:f18_n1_eliminates_identity --> After N18.1, the three identity passes in `lowerMixedExprToLLE` (lines 75-77 of VerifiedCodeGen.lean) are replaced with actual lowering or become unreachable because extraction never produces `.montyReduceE`/`.barrettReduceE`/`.harveyReduceE` at the MixedExpr level (they are decomposed in the e-graph before extraction).
+<!-- CHECK:f18_n1_new_file_wired --> The new file containing decomposition rules is imported by at least one other file (e.g., PhasedSaturation.lean or GuidedSaturation.lean) and the rules are passed to the saturation engine.
+
+#### Non-vacuity (BLOCKING)
+<!-- CHECK:f18_n1_nonvac_monty --> Non-vacuity `example`: instantiate Montgomery decomposition with concrete `p = 2013265921` (BabyBear), `mu` computed, concrete input `x := 12345678`. Show `evalMixedOp(decomposed) % p = evalMixedOp(.montyReduce x p mu) % p`. Must compile without sorry.
+<!-- CHECK:f18_n1_nonvac_barrett --> Non-vacuity `example` for Barrett with concrete `p = 2013265921`, `m` computed, concrete input.
+<!-- CHECK:f18_n1_nonvac_harvey --> Non-vacuity `example` for Harvey with concrete `p = 2013265921`, input in `[0, 4p)`, showing conditional subtraction path is exercised (input >= p).
+
+#### Edge Cases (ADVISORY)
+<!-- CHECK:f18_n1_edge_p_eq_2 --> Decomposition handles degenerate prime `p = 2` (simplest case).
+<!-- CHECK:f18_n1_edge_input_zero --> Decomposition correct when input `x = 0`.
+<!-- CHECK:f18_n1_edge_input_eq_p --> Decomposition correct when input `x = p` (boundary).
+<!-- CHECK:f18_n1_edge_mersenne_vs_solinas --> For Mersenne primes (p = 2^k - 1), decomposition produces pure bitAnd+constMask (no mul). For non-Mersenne Solinas, decomposition includes shift+mul.
+
+---
+
+### N18.2 lowerMixedExprFull (CRITICO)
+
+**Goal**: A new Stmt-level lowering function that handles the FULL MixedExpr tree including conditional nodes (Harvey). Delegates to `lowerMixedExprToLLE` for primitive nodes, emits `Stmt.ite` / `Stmt.ifThenElse` for conditional structures. Soundness theorem: `evalStmt` of generated Stmt equals `evalMixedExpr` of input tree.
+
+#### Soundness (BLOCKING)
+<!-- CHECK:f18_n2_full_sound --> Master soundness theorem: `lowerMixedExprFull_sound : forall (e : MixedExpr) (env : ...), evalStmt(lowerMixedExprFull e cgs, llEnv) = evalMixedExpr(e, mixedEnv)`. This must cover ALL 20 MixedExpr constructors, not just a subset.
+<!-- CHECK:f18_n2_delegates_primitives --> For all primitive constructors (addE, mulE, subE, shiftLeftE, shiftRightE, bitAndE, bitXorE, bitOrE, constMaskE, constE, witnessE, pubInputE, negE, smulE, kronPackE, kronUnpackLoE, kronUnpackHiE, reduceE), `lowerMixedExprFull` delegates to `lowerMixedExprToLLE` and wraps the result in a `Stmt.assign`. Soundness follows from existing `lowerMixedExprToLLE_evaluates`.
+<!-- CHECK:f18_n2_harvey_ite --> For `.harveyReduceE a p`, `lowerMixedExprFull` emits a conditional statement structure: `if val >= p then val - p else val` (or the 2-level Harvey variant for `[0, 4p)` inputs). The generated Stmt contains at least one `Stmt.ite` or equivalent branching construct.
+<!-- CHECK:f18_n2_monty_full --> For `.montyReduceE a p mu`, `lowerMixedExprFull` emits the full REDC algorithm as a sequence of Stmts (mul_lo, mul, sub, shift), NOT an identity pass. Matches `lowerMontyReduce` from TrustLeanBridge.lean.
+<!-- CHECK:f18_n2_barrett_full --> For `.barrettReduceE a p m`, `lowerMixedExprFull` emits the Barrett reduction as Stmts. Matches `lowerBarrettReduce` from TrustLeanBridge.lean.
+<!-- CHECK:f18_n2_recursive_sound --> Soundness proof is by structural induction on MixedExpr, not by cases on a finite set. Every recursive call to `lowerMixedExprFull` on subexpressions is covered by the induction hypothesis.
+
+#### Structural (BLOCKING)
+<!-- CHECK:f18_n2_no_identity --> `lowerMixedExprFull` contains zero identity passes. No constructor maps to `fun x => x` or to just returning the input unchanged.
+<!-- CHECK:f18_n2_cgs_threaded --> CodeGenState is threaded through all recursive calls (fresh variable generation). No variable name collisions: each intermediate result gets a unique `VarName`.
+<!-- CHECK:f18_n2_consumes_n1 --> If N18.1 decomposes reductions before extraction, then `lowerMixedExprFull` may legitimately never see `.montyReduceE` etc. at runtime. In that case, the lowering for those constructors must still exist and be sound (defense in depth), OR the MixedExpr type must be refactored to remove those constructors (making unreachability a type-level guarantee). Document which approach is taken.
+
+#### Non-vacuity (BLOCKING)
+<!-- CHECK:f18_n2_nonvac_full_tree --> Non-vacuity `example`: construct a MixedExpr tree with >= 5 levels of nesting including at least one `.addE`, one `.mulE`, one `.shiftRightE`, one `.bitAndE`. Lower via `lowerMixedExprFull`, evaluate the Stmt, show result matches `evalMixedExpr`. Compile without sorry.
+<!-- CHECK:f18_n2_nonvac_harvey_path --> Non-vacuity `example`: construct `.harveyReduceE (addE (witnessE 0) (witnessE 1)) p`. Lower, evaluate with concrete env where `witness 0 + witness 1 >= p`. Show the `ite` path is taken (result = val - p, not val). Compile without sorry.
+<!-- CHECK:f18_n2_nonvac_nested_reduce --> Non-vacuity `example`: MixedExpr with a reduction inside an arithmetic expression, e.g., `addE (montyReduceE (...) p mu) (witnessE 2)`. Verify end-to-end.
+
+#### Edge Cases (ADVISORY)
+<!-- CHECK:f18_n2_edge_empty_stmt --> Lowering a leaf (constE, witnessE) produces minimal Stmt (single assign, no seq chain).
+<!-- CHECK:f18_n2_edge_deep_nesting --> Lowering a tree with depth >= 10 terminates and produces correct Stmt (no stack overflow in recursive lowering).
+<!-- CHECK:f18_n2_edge_cgs_counter --> After lowering a tree with 20 nodes, CodeGenState counter >= 20 (each node consumed a fresh temp).
+
+---
+
+### N18.3 Array.set Reasoning Lemmas (HOJA)
+
+**Goal**: Adapt ProofKit's `getD_push_lt`/`getD_push_eq` pattern for `Array.set`: prove lemmas for in-place array mutation reasoning needed by N18.4 and N18.6.
+
+#### Correctness (BLOCKING)
+<!-- CHECK:f18_n3_getD_set_eq --> `getD_set_eq : forall (a : List T) (i : Nat) (v d : T), i < a.length -> (a.set i v).getD i d = v`. Proven without sorry. Uses `List.getD`, `List.set`.
+<!-- CHECK:f18_n3_getD_set_ne --> `getD_set_ne : forall (a : List T) (i j : Nat) (v d : T), i != j -> (a.set i v).getD j d = a.getD j d`. Proven without sorry.
+<!-- CHECK:f18_n3_set_length --> `set_length : forall (a : List T) (i : Nat) (v : T), (a.set i v).length = a.length`. Proven without sorry. (May already exist in Mathlib — if so, reference it; do not redefine.)
+<!-- CHECK:f18_n3_foldl_set_getD --> `range_foldl_set_getD` or equivalent: for a fold that applies `Array.set` at each index via a function `f`, prove that `getD` at index `k` of the result equals `f k (original getD at k)` when `f` only writes to the same index it reads. This is the core lemma needed for butterfly stage simulation.
+<!-- CHECK:f18_n3_set_set_comm --> `set_set_comm : forall (a : List T) (i j : Nat) (v w : T), i != j -> (a.set i v).set j w = (a.set j w).set i v`. Commutativity of non-overlapping writes. Proven without sorry.
+<!-- CHECK:f18_n3_set_set_overwrite --> `set_set_overwrite : forall (a : List T) (i : Nat) (v w : T), (a.set i v).set i w = a.set i w`. Last-write-wins for overlapping writes. Proven without sorry.
+
+#### Structural (BLOCKING)
+<!-- CHECK:f18_n3_adapts_proofkit --> Lemmas adapt ProofKit's `getD_push_lt`/`getD_push_eq` pattern (not copy-paste). The set-based lemmas should use analogous proof structure (split on index comparison, simp with List.set).
+<!-- CHECK:f18_n3_no_mathlib_dupes --> Before defining any lemma, check if Mathlib already provides it (e.g., `List.getElem_set_eq`, `List.getElem_set_ne`, `List.length_set`). If so, use the Mathlib version or prove a `getD` wrapper that delegates. Do not redefine what Mathlib already has.
+<!-- CHECK:f18_n3_consumed_by_n4 --> At least one of the proven lemmas is imported and used in N18.4's butterfly stage proof. Not an island module.
+
+#### Non-vacuity (BLOCKING)
+<!-- CHECK:f18_n3_nonvac_concrete --> Non-vacuity `example`: for a concrete list `[10, 20, 30, 40]`, show `(list.set 2 99).getD 2 0 = 99` and `(list.set 2 99).getD 0 0 = 10`. Compile without sorry.
+<!-- CHECK:f18_n3_nonvac_foldl --> Non-vacuity `example` for `range_foldl_set_getD`: fold over `[0, 1, 2, 3]` applying `set i (i * 10)`, verify `getD 2 0 = 20`. Compile without sorry.
+
+#### Edge Cases (ADVISORY)
+<!-- CHECK:f18_n3_edge_oob --> `getD_set_eq` when `i >= a.length` returns default (set is no-op). Verify this is either proven or documented as precondition.
+<!-- CHECK:f18_n3_edge_empty --> Lemmas handle empty list: `[].set 0 v = []` (no-op, set on empty is identity).
+
+---
+
+### N18.4 NTT Stage Simulation (CRITICO)
+
+**Goal**: Prove that one NTT butterfly stage (all butterflies at a given level) applied via in-place Array.set on a list/array produces results matching `ntt_generic`'s recursive decomposition at that level.
+
+#### Soundness (BLOCKING)
+<!-- CHECK:f18_n4_stage_spec --> Define `applyStage (data : List F) (omega : F) (stage logN : Nat) : List F` that applies all butterflies at a given DIF stage using in-place `List.set`. Each butterfly reads `data[i]` and `data[j]` where `j = i + half`, computes `(data[i] + omega^k * data[j], data[i] - omega^k * data[j])`, and writes back.
+<!-- CHECK:f18_n4_stage_matches_ntt --> `applyStage_eq_ntt_level : forall (data : List F) (omega : F) (stage logN : Nat), [preconditions] -> applyStage data omega stage logN = ntt_generic_at_level omega data stage logN`. The "level" of `ntt_generic` is the corresponding recursive decomposition step. The equality must be elementwise (getD-based) or as full lists.
+<!-- CHECK:f18_n4_butterfly_pair_correct --> Individual butterfly pair lemma: `butterfly_set_correct : forall (data : List F) (i j : Nat) (w : F), i < j -> j < data.length -> let d' = (data.set i (data.getD i 0 + w * data.getD j 0)).set j (data.getD i 0 - w * data.getD j 0) in d'.getD i 0 = data.getD i 0 + w * data.getD j 0 /\ d'.getD j 0 = data.getD i 0 - w * data.getD j 0`. Uses N18.3's `getD_set_eq`/`getD_set_ne`.
+<!-- CHECK:f18_n4_no_interference --> Non-interference lemma: butterfly pair at `(i, j)` does not modify indices outside `{i, j}`. Formally: `forall k, k != i -> k != j -> d'.getD k 0 = data.getD k 0`. Uses N18.3's `getD_set_ne`.
+<!-- CHECK:f18_n4_stage_length --> `applyStage` preserves list length: `(applyStage data omega stage logN).length = data.length`.
+<!-- CHECK:f18_n4_uses_foldl_inv --> Proof uses ProofKit's `foldl_inv_extends` pattern (or an adapted version): define a loop invariant that holds after each butterfly pair, show it extends across the fold, conclude the full stage result.
+
+#### Structural (BLOCKING)
+<!-- CHECK:f18_n4_imports_n3 --> File imports the Array.set lemma module from N18.3. Uses at least `getD_set_eq`, `getD_set_ne`, and one foldl-set lemma.
+<!-- CHECK:f18_n4_connects_ntt_generic --> The proof references `ntt_generic` or `ntt_generic_unfold` from `AmoLean/NTT/GenericNTT.lean`. It is not a standalone specification — it bridges the iterative (in-place) computation with the recursive specification.
+
+#### Non-vacuity (BLOCKING)
+<!-- CHECK:f18_n4_nonvac_stage0 --> Non-vacuity `example`: apply stage 0 (largest butterflies, stride = N/2) to a concrete list of length 8 with a concrete omega. Show the result matches `ntt_generic`'s first-level decomposition. Compile without sorry.
+<!-- CHECK:f18_n4_nonvac_small --> Non-vacuity `example`: full 2-element NTT via `applyStage` on `[a, b]` with 1 stage. Result = `[a + omega*b, a - omega*b]`. Verify against `ntt_generic omega [a, b]`.
+
+#### Edge Cases (ADVISORY)
+<!-- CHECK:f18_n4_edge_stage_last --> Last stage (stage = logN - 1) with stride = 1: adjacent butterfly pairs. No overlap issues.
+<!-- CHECK:f18_n4_edge_n_eq_2 --> Degenerate case: logN = 1 (2-element NTT), single stage, single butterfly. Should work.
+<!-- CHECK:f18_n4_edge_data_shorter --> If `data.length < 2^logN`, behavior is well-defined (either precondition or graceful getD default).
+
+---
+
+### N18.5 Representation Annotations (CRITICO)
+
+**Goal**: Add a `Repr` type (standard/montgomery/custom) as an e-class annotation. Propagation rules determine which representation each e-class value is in. `toMonty`/`fromMonty` are explicit conversion nodes. The lowering uses `repr` to decide if format conversions are needed.
+
+#### Correctness (BLOCKING)
+<!-- CHECK:f18_n5_repr_type --> Define `Repr` inductive with at least: `.standard`, `.montgomery`, `.lazyReduced` (value in `[0, 2p)`), `.custom (tag : String)`. Must have `DecidableEq` and `BEq`.
+<!-- CHECK:f18_n5_repr_annotation --> `Repr` is stored as an e-class annotation (either a new field in `EClass` in the mixed e-graph, or in a side-table `HashMap EClassId Repr`). Annotation survives `merge` and `find` operations.
+<!-- CHECK:f18_n5_propagation_rules --> Propagation rules proven sound:
+  - `mul(monty, monty)` -> result is `monty` (product in Montgomery form needs REDC)
+  - `add(standard, standard)` -> result is `standard`
+  - `add(monty, monty)` -> result is `monty` (addition in Montgomery form stays Montgomery)
+  - `toMonty(standard)` -> `monty`
+  - `fromMonty(monty)` -> `standard`
+  - `reduceE(standard, p)` -> `standard`
+  Each rule must have a soundness argument (the annotation is consistent with the mathematical interpretation).
+<!-- CHECK:f18_n5_conversion_nodes --> `toMonty` and `fromMonty` are MixedNodeOp constructors (or MixedExpr constructors). They have `evalMixedOp` definitions:
+  - `evalMixedOp(.toMonty child p R) env = (env child * R) % p` where `R = 2^32 % p`
+  - `evalMixedOp(.fromMonty child p mu) env = montyReduceSpec(env child, p, mu)`
+<!-- CHECK:f18_n5_no_implicit_conversion --> The lowering NEVER inserts implicit representation conversions. All conversions are explicit nodes in the MixedExpr tree placed by the e-graph optimizer. This ensures the e-graph can cost-optimize conversion placement.
+
+#### Structural (BLOCKING)
+<!-- CHECK:f18_n5_merge_consistent --> When two e-classes with different `Repr` annotations are merged, the resulting annotation is well-defined (e.g., `standard` if any operand is standard, requiring explicit conversion; or a conflict error). The merge policy is documented.
+<!-- CHECK:f18_n5_consumed_by_lowering --> `lowerMixedExprFull` (N18.2) or `lowerMixedExprToLLE` queries the `Repr` annotation when lowering multiplication: if both operands are `.montgomery`, emit REDC after mul; if one is `.standard`, emit `toMonty` conversion first. At least one call site in the lowering reads `Repr`.
+<!-- CHECK:f18_n5_backward_compat_repr --> E-graphs created without repr annotations default to `.standard` on all e-classes. Existing code continues to work unchanged.
+
+#### Non-vacuity (BLOCKING)
+<!-- CHECK:f18_n5_nonvac_mul_monty --> Non-vacuity `example`: create two e-classes with `.montgomery` repr, add a `mul` node, verify the propagated repr is `.montgomery` and the lowering emits REDC. Concrete values.
+<!-- CHECK:f18_n5_nonvac_conversion --> Non-vacuity `example`: create a `.standard` e-class, insert `toMonty` conversion, verify the resulting e-class has `.montgomery` repr. Then `fromMonty` back to `.standard`. Round-trip: `fromMonty(toMonty(x)) % p = x % p`.
+
+#### Edge Cases (ADVISORY)
+<!-- CHECK:f18_n5_edge_mixed_add --> `add(standard, montgomery)` triggers a type error or forces explicit conversion insertion. Does not silently produce garbage.
+<!-- CHECK:f18_n5_edge_no_repr --> Operations on e-classes with no repr annotation (legacy/default) behave as `.standard`.
+<!-- CHECK:f18_n5_edge_lazy --> `.lazyReduced` repr propagation: `add(lazy, lazy)` may exceed `[0, 2p)` bound, requiring explicit reduction. Document the policy.
+
+---
+
+### N18.6 NTT Loop Simulation Theorem (CRITICO)
+
+**Goal**: Compose N18.4's per-stage results into a full NTT loop theorem: applying all stages sequentially via Array.set produces results matching `ntt_generic omega data`.
+
+#### Soundness (BLOCKING)
+<!-- CHECK:f18_n6_loop_spec --> Define `applyAllStages (data : List F) (omega : F) (logN : Nat) : List F` that folds `applyStage` over stages `0..logN-1`. Equivalent to the full iterative DIF NTT.
+<!-- CHECK:f18_n6_loop_eq_ntt --> `ntt_loop_eq_ntt_generic : forall (data : List F) (omega : F) (logN : Nat), data.length = 2^logN -> IsPrimitiveRoot omega (2^logN) -> applyAllStages data omega logN = ntt_generic omega data` (possibly up to bit-reversal permutation). Proven without sorry.
+<!-- CHECK:f18_n6_induction --> Proof is by induction on `logN` (or equivalently, on stages). The induction step composes: "after applying stages 0..s, the array matches ntt_generic partially evaluated to depth s+1" with N18.4's per-stage result to extend to stage s+1.
+<!-- CHECK:f18_n6_stmt_simulation --> Bridge theorem: `evalStmt(lowerNTTLoopStmt logN p k c, initialEnv) = applyAllStages initialData omega logN` where `initialEnv` maps variable names to the initial array data and twiddle factors. This connects the Trust-Lean Stmt (from VerifiedCodeGen.lean) to the mathematical specification.
+<!-- CHECK:f18_n6_twiddle_correct --> The twiddle factors used at each stage are correct: at stage `s`, butterfly `k` uses `omega^(k * 2^(logN - 1 - s))`. The proof verifies the twiddle index computation `tw_idx = stage * (n/2) + group * half + pair` produces the right power of omega.
+
+#### Structural (BLOCKING)
+<!-- CHECK:f18_n6_imports_n4 --> Proof imports and uses N18.4's `applyStage_eq_ntt_level` as the key induction step. Not a standalone proof — it composes per-stage results.
+<!-- CHECK:f18_n6_imports_ntt_generic --> References `ntt_generic` and `ntt_generic_eq_spec` from `AmoLean/NTT/GenericNTT.lean` and `GenericCorrectness.lean`.
+<!-- CHECK:f18_n6_no_sorry_in_chain --> The full chain: `lowerNTTLoopStmt` -> `evalStmt` -> `applyAllStages` -> `ntt_generic` -> `ntt_spec` has zero sorry at every link.
+
+#### Non-vacuity (BLOCKING)
+<!-- CHECK:f18_n6_nonvac_4pt --> Non-vacuity `example`: 4-point NTT (logN=2, 2 stages). Concrete data `[1, 2, 3, 4]` over a field with concrete omega. Show `applyAllStages [1,2,3,4] omega 2 = ntt_generic omega [1,2,3,4]`. Compile without sorry.
+<!-- CHECK:f18_n6_nonvac_8pt --> Non-vacuity `example`: 8-point NTT (logN=3, 3 stages). Concrete BabyBear values. Verify against `ntt_generic`.
+<!-- CHECK:f18_n6_nonvac_stmt --> Non-vacuity `example`: evaluate `lowerNTTLoopStmt 2 p k c` on a concrete environment, show the output data array matches the mathematical NTT.
+
+#### Edge Cases (ADVISORY)
+<!-- CHECK:f18_n6_edge_logn_0 --> logN = 0: 1-element NTT is identity. `applyAllStages [x] omega 0 = [x]`.
+<!-- CHECK:f18_n6_edge_logn_1 --> logN = 1: 2-element NTT, single stage, single butterfly. `applyAllStages [a,b] omega 1 = [a+omega*b, a-omega*b]`.
+<!-- CHECK:f18_n6_edge_bit_reversal --> Document whether the output is in natural order or bit-reversed order. If bit-reversed, provide or reference a `bitReversePermute` bridge to natural order (already exists in `BitReverseNTT.lean`).
+
+---
+
+### N18.7 Integration + E2E (HOJA)
+
+**Goal**: End-to-end test demonstrating the full pipeline: MixedExpr tree -> e-graph optimization (discovers reduction) -> extract -> lower via lowerMixedExprFull -> emit C -> compile -> run -> verify output matches Lean #eval.
+
+#### End-to-End (BLOCKING)
+<!-- CHECK:f18_n7_e2e_mersenne --> E2E for Mersenne31 (`p = 2^31 - 1`): (1) Create MixedExpr with arithmetic + reduceE, (2) Build e-graph with decomposition rules from N18.1, (3) Saturate, (4) Extract optimal tree, (5) Lower via `lowerMixedExprFull`, (6) Emit C via `stmtToC`, (7) Verify emitted C string is syntactically plausible (contains expected variable names, no `.reduceE` text).
+<!-- CHECK:f18_n7_e2e_babybear --> E2E for BabyBear (`p = 2013265921`): same pipeline. Must produce different reduction code than Mersenne31 (BabyBear is Solinas, not pure Mersenne).
+<!-- CHECK:f18_n7_e2e_goldilocks --> E2E for Goldilocks (`p = 2^64 - 2^32 + 1`): same pipeline.
+<!-- CHECK:f18_n7_eval_matches --> For each E2E test: `#eval` the MixedExpr evaluation and the Stmt evaluation with matching environments. Assert they produce the same Nat value. At least 3 different input values per prime.
+<!-- CHECK:f18_n7_extraction_no_reduce --> After e-graph optimization + extraction, the extracted MixedExpr tree contains ZERO `.reduceE`, `.montyReduceE`, `.barrettReduceE`, or `.harveyReduceE` nodes. All reductions have been decomposed into primitives by N18.1's rules.
+
+#### Integration (BLOCKING)
+<!-- CHECK:f18_n7_ntt_butterfly_e2e --> E2E for a single NTT butterfly with Solinas fold reduction: MixedExpr representing `butterfly(a, b, w)` with reduction -> lower via full pipeline -> emit C. Verify C output contains the butterfly operations + reduction operations.
+<!-- CHECK:f18_n7_uses_all_nodes --> The E2E test exercises artifacts from ALL prior nodes: decomposition rules (N18.1), lowerMixedExprFull (N18.2), Array.set lemmas indirectly via NTT verification (N18.3+N18.4), repr annotations (N18.5), NTT loop theorem (N18.6). If any node's output is not consumed by the E2E test, document why.
+
+#### Quality (ADVISORY)
+<!-- CHECK:f18_n7_emitted_c_readable --> Emitted C code uses meaningful variable names (not just `t0, t1, ...`), contains comments or is otherwise auditable.
+<!-- CHECK:f18_n7_property_tests --> At least 5 `#eval`-based property tests: (1) reduction idempotent (`reduce(reduce(x)) = reduce(x)`), (2) reduction preserves mod (`reduce(x) % p = x % p`), (3) butterfly invertibility, (4) NTT of known input matches expected output, (5) different primes produce different C code.
+<!-- CHECK:f18_n7_smoke_tests --> At least 10 `#eval` smoke tests covering: all 4 primes (Mersenne31, BabyBear, KoalaBear, Goldilocks) x at least 2 reduction strategies.
+
+---
+
+### Cross-Node Invariants (BLOCKING)
+
+These invariants span multiple nodes and must hold at Fase 18 close.
+
+<!-- CHECK:f18_cross_no_identity_in_pipeline --> The full pipeline from MixedExpr -> Stmt -> C contains ZERO identity passes. Every MixedExpr constructor either (a) lowers to a non-trivial Stmt/LLE, or (b) is guaranteed unreachable after e-graph decomposition (with a proof or documented argument). The three identity passes at VerifiedCodeGen.lean:75-77 are eliminated.
+<!-- CHECK:f18_cross_soundness_chain --> There exists a complete soundness chain: `MixedExpr --(evalMixedExpr)--> Nat <--(evalStmt)-- Stmt`. Every link is proven. No link uses sorry. The chain covers ALL 20 MixedExpr constructors.
+<!-- CHECK:f18_cross_ntt_chain --> The NTT verification chain is complete: `lowerNTTLoopStmt --(evalStmt)--> applyAllStages --(N18.6)--> ntt_generic --(GenericCorrectness)--> ntt_spec`. Zero sorry in the chain.
+<!-- CHECK:f18_cross_wiring_check --> `wiring_check.py --project . --files {all N18 files}` passes with 0 W1 (island) findings. Every new module has at least one external consumer.
+<!-- CHECK:f18_cross_spec_audit --> `spec_audit.py --project . --pipeline-only` passes with 0 T1 (vacuity) findings on all Fase 18 theorems.
+<!-- CHECK:f18_cross_decomp_extraction_roundtrip --> Decomposition (N18.1) + extraction + lowering (N18.2) produces semantically equivalent code to direct lowering of the original reduction. Formally: for any `MixedExpr` with a `reduceE` node, the C code from (decompose -> extract -> lower) computes the same function as the C code from (direct lower with reduction).
+
+---
+
+### Rubric Summary
+
+| Check Category | Count | Classification |
+|---------------|-------|---------------|
+| Mechanical Health (global) | 10 | BLOCKING |
+| N18.1 Soundness | 6 | BLOCKING |
+| N18.1 Structural | 3 | BLOCKING |
+| N18.1 Non-vacuity | 3 | BLOCKING |
+| N18.1 Edge Cases | 4 | ADVISORY |
+| N18.2 Soundness | 6 | BLOCKING |
+| N18.2 Structural | 3 | BLOCKING |
+| N18.2 Non-vacuity | 3 | BLOCKING |
+| N18.2 Edge Cases | 3 | ADVISORY |
+| N18.3 Correctness | 6 | BLOCKING |
+| N18.3 Structural | 3 | BLOCKING |
+| N18.3 Non-vacuity | 2 | BLOCKING |
+| N18.3 Edge Cases | 2 | ADVISORY |
+| N18.4 Soundness | 6 | BLOCKING |
+| N18.4 Structural | 2 | BLOCKING |
+| N18.4 Non-vacuity | 2 | BLOCKING |
+| N18.4 Edge Cases | 3 | ADVISORY |
+| N18.5 Correctness | 4 | BLOCKING |
+| N18.5 Structural | 3 | BLOCKING |
+| N18.5 Non-vacuity | 2 | BLOCKING |
+| N18.5 Edge Cases | 3 | ADVISORY |
+| N18.6 Soundness | 5 | BLOCKING |
+| N18.6 Structural | 3 | BLOCKING |
+| N18.6 Non-vacuity | 3 | BLOCKING |
+| N18.6 Edge Cases | 3 | ADVISORY |
+| N18.7 E2E | 5 | BLOCKING |
+| N18.7 Integration | 2 | BLOCKING |
+| N18.7 Quality | 3 | ADVISORY |
+| Cross-Node | 6 | BLOCKING |
+| **Total** | **109** | **87 BLOCKING / 22 ADVISORY** |
+
 ## Verification Criteria by Node (v2.5.0 — Fase 15)
 
 ### Mechanical Health (Fase 15 — VerifiedExtraction Integration)
@@ -1585,4 +1912,313 @@ Nodes covered: N10.7 Stress Test + Docs.
 <!-- CHECK:f17_axiom_audit --> `#print axioms` = exactly 3 existing crypto axioms
 <!-- CHECK:f17_e2e_nonvac --> End-to-end non-vacuity example (Mersenne31)
 - `lake build` clean, no island modules, all nodes referenced
+
+## Verification Criteria by Node (Fase 19 — MatEGraph Reconnection, Option D)
+
+### Mechanical Health (Fase 19 — Global)
+<!-- CHECK:f19_zero_sorry --> Zero sorry/admit in ALL Fase 19 files
+<!-- CHECK:f19_zero_axiom --> Zero custom axioms (#print axioms shows ONLY standard Lean/Mathlib)
+<!-- CHECK:f19_build --> `lake build` 0 errors, 0 warnings on all Fase 19 modules
+<!-- CHECK:f19_no_simp_star --> No `simp [*]` in Fase 19 code
+<!-- CHECK:f19_scoped_simp --> All `simp` calls are `simp only [...]` in FUND/CRIT nodes
+<!-- CHECK:f19_no_native_in_proofs --> No `native_decide` in theorem proofs (OK in tests/examples/non-vacuity)
+<!-- CHECK:f19_no_identity_passes --> No `:= id`, `fun x => x`, or `fun _ w => w` in pipeline fields unless documented PENDIENTE
+<!-- CHECK:f19_no_panic --> No `panic!` in any new or modified function (existing panics in addMatExpr must be replaced with proper handling)
+<!-- CHECK:f19_backward_compat --> Existing `lake build` passes unchanged — zero regressions on all prior Fase modules
+<!-- CHECK:f19_loc_budget --> Total new + modified LOC <= 4,000 (excluding deleted code)
+<!-- CHECK:f19_no_matop_refs --> After N19.8, zero references to `MatOp`, `TransformId`, `FactorizationTree`, `exploreFact`, or `expandSubDFTs` in any non-deleted file
+
+---
+
+### N19.1 Fix addMatExpr (HOJA)
+
+**Goal**: Fix lossy cases in `addMatExpr` (EGraph/Vector.lean). Currently `Perm.compose`/`inverse`/`tensor` collapse to identity in `permToPermOp`. Fix to produce correct `PermOp`. Also fix `diag`/`scalar` approximations and replace `partialElemwise`/`mdsApply`/`addRoundConst` panics with proper handling.
+
+#### Correctness (BLOCKING)
+<!-- CHECK:f19_n1_perm_compose --> `permToPermOp` handles `Perm.compose p q` by recursively converting both sub-permutations and producing a `PermOp.compose`. NEVER collapses to `.identity n`.
+<!-- CHECK:f19_n1_perm_inverse --> `permToPermOp` handles `Perm.inverse p` by converting the sub-permutation and producing a `PermOp.inverse`. NEVER collapses to `.identity n`.
+<!-- CHECK:f19_n1_perm_tensor --> `permToPermOp` handles `Perm.tensor p q` by converting both sub-permutations and producing a `PermOp.tensor`. NEVER collapses to `.identity n`.
+<!-- CHECK:f19_n1_diag_correct --> `addMatExpr` for `.diag coeffs` produces a diagonal matrix node that retains the coefficient information, NOT a plain `.identity n`.
+<!-- CHECK:f19_n1_scalar_correct --> `addMatExpr` for `.scalar c` produces a scalar multiplication node that retains the scalar value, NOT a plain `.identity 1`.
+<!-- CHECK:f19_n1_no_panic --> `addMatExpr` for `.partialElemwise`, `.mdsApply`, and `.addRoundConst` does NOT panic. Each case either: (a) produces a correct MatENodeOp representation, or (b) uses an opaque barrier node with dimensions preserved and is documented as PENDIENTE in ARCHITECTURE.md.
+<!-- CHECK:f19_n1_total_function --> `addMatExpr` is total for all 17 MatExpr constructors. No `panic!`, no `sorry`, no `unreachable!`.
+
+#### Structural (BLOCKING)
+<!-- CHECK:f19_n1_permop_extended --> If `PermOp` needs new constructors (`.compose`, `.inverse`, `.tensor`), they are added with `BEq`, `Hashable`, `Repr` derived. The `children`, `mapChildren`, `localCost` functions in `MatENodeOp` are updated to handle the new `PermOp` variants.
+<!-- CHECK:f19_n1_backward_compat --> Existing callers of `addMatExpr` continue to compile. No signature change.
+<!-- CHECK:f19_n1_consumed_by_n5 --> The fixed `addMatExpr` is used by N19.5's soundness proof. Not an isolated fix.
+
+#### Non-vacuity (BLOCKING)
+<!-- CHECK:f19_n1_nonvac_compose --> Non-vacuity `example`: `addMatExpr` on a `MatExpr` containing `Perm.compose stride bitRev` produces a `MatENodeOp` where the permutation is NOT `.identity`. Compile without sorry.
+<!-- CHECK:f19_n1_nonvac_diag --> Non-vacuity `example`: `addMatExpr` on `.diag [1,2,3]` produces a node distinguishable from `.identity 3`. Compile without sorry.
+
+#### Edge Cases (ADVISORY)
+<!-- CHECK:f19_n1_edge_identity_perm --> `permToPermOp` on `Perm.identity` still produces `PermOp.identity n`. No regression.
+<!-- CHECK:f19_n1_edge_nested_compose --> `permToPermOp` on `Perm.compose (Perm.compose a b) c` handles nested composition without stack overflow (structurally recursive on Perm).
+<!-- CHECK:f19_n1_edge_zero_dim --> `addMatExpr` on `.zero 0 0`, `.identity 0` produces valid nodes (dimensions stored correctly).
+
+---
+
+### N19.2 NodeOps MatENodeOp (HOJA)
+
+**Goal**: Implement the `NodeOps` typeclass instance for `MatENodeOp`. Functions (`children`, `mapChildren`, `localCost`) exist in Vector.lean; need `replaceChildren` + 4 proof obligations from `NodeOps` in VerifiedExtraction/Core.lean.
+
+#### Correctness (BLOCKING)
+<!-- CHECK:f19_n2_instance --> `instance : NodeOps MatENodeOp` compiles without sorry.
+<!-- CHECK:f19_n2_replaceChildren --> `replaceChildren : MatENodeOp -> List EClassId -> MatENodeOp` is implemented for all 14 MatENodeOp constructors. Leaf nodes (identity, zero, dft, ntt, twiddle, perm) ignore the list. Non-leaf nodes replace children positionally.
+<!-- CHECK:f19_n2_law_mapChildren_children --> `mapChildren_children` proven: `forall f op, children (mapChildren f op) = (children op).map f`. Covers all 14 constructors.
+<!-- CHECK:f19_n2_law_mapChildren_id --> `mapChildren_id` proven: `forall op, mapChildren id op = op`. Covers all 14 constructors.
+<!-- CHECK:f19_n2_law_replaceChildren_children --> `replaceChildren_children` proven: `forall op ids, ids.length = (children op).length -> children (replaceChildren op ids) = ids`. Covers all 14 constructors.
+<!-- CHECK:f19_n2_law_replaceChildren_sameShape --> `replaceChildren_sameShape` proven: `forall op ids, ids.length = (children op).length -> mapChildren (fun _ => 0) (replaceChildren op ids) = mapChildren (fun _ => 0) op`. Covers all 14 constructors.
+
+#### Structural (BLOCKING)
+<!-- CHECK:f19_n2_uses_existing_fns --> The instance reuses the existing `children`, `mapChildren`, and `localCost` definitions from Vector.lean (lines 230-293). Does NOT redefine them.
+<!-- CHECK:f19_n2_consumed_by_n4 --> The `NodeOps MatENodeOp` instance is imported and used by N19.4 (extractMatExpr). Not an island typeclass instance.
+<!-- CHECK:f19_n2_matches_core_class --> The instance matches the exact `NodeOps` class signature from `VerifiedExtraction/Core.lean` (4 fields + 4 proof obligations). No additional axioms or sorry.
+
+#### Non-vacuity (BLOCKING)
+<!-- CHECK:f19_n2_nonvac_kron --> Non-vacuity `example`: `NodeOps.children (.kron a b m1 n1 m2 n2) = [a, b]` and `NodeOps.replaceChildren (.kron a b m1 n1 m2 n2) [c, d] |> NodeOps.children = [c, d]` for concrete `a, b, c, d`. Compile without sorry.
+<!-- CHECK:f19_n2_nonvac_compose --> Non-vacuity `example`: same pattern for `.compose a b m k n`. Compile without sorry.
+<!-- CHECK:f19_n2_nonvac_leaf --> Non-vacuity `example`: `NodeOps.children (.dft 8) = []` and `NodeOps.replaceChildren (.dft 8) [] = .dft 8`. Compile without sorry.
+
+#### Edge Cases (ADVISORY)
+<!-- CHECK:f19_n2_edge_wrong_length --> `replaceChildren op ids` when `ids.length != (children op).length` is well-defined (does not panic). Behavior documented (e.g., returns op unchanged, or takes min-length prefix).
+<!-- CHECK:f19_n2_edge_all_constructors --> A single test exercises `children` on all 14 MatENodeOp constructors, verifying the expected child count: 0 for leaves, 1 for unary, 2 for binary, 2 for kron/compose/add.
+
+---
+
+### N19.3 BreakdownRules as Rewrite Rules (CRITICO)
+
+**Goal**: Convert `cooleyTukeyRule`, `baseCase2Rule`, `radix4Rule` from FactorizationTree builders (MatNodeOps.lean) to MatEGraph rewrite rules. Each rule inserts a decomposition into the MatEGraph via `addMatExpr`. Must be sound: the rewrite preserves `evalMatExprAlg`.
+
+#### Soundness (BLOCKING)
+<!-- CHECK:f19_n3_ct_rule_sound --> Cooley-Tukey rewrite rule has a soundness proof: for all `omega`, `input`, `n` where `n = 2*m`, `evalMatExprAlg omega (fftCooleyTukey 2 m) input = evalMatExprAlg omega (dft (2*m)) input` (under `IsPrimitiveRoot omega (2*m)` and `input.length = 2*m`). The proof references or implies N19.9.
+<!-- CHECK:f19_n3_base2_rule_sound --> Base case rule has a soundness proof: for `n = 2`, `evalMatExprAlg omega (dft 2) input = evalDFT2 input` (for `input.length = 2`). This follows from `evalMatExprAlg_dft_eq_kernelAlg` and `dft2_algebraic_correct`.
+<!-- CHECK:f19_n3_radix4_rule_sound --> Radix-4 rule has a soundness proof: `evalMatExprAlg omega (fftCooleyTukey 4 m) input = evalMatExprAlg omega (dft (4*m)) input` (under appropriate preconditions). This composes two radix-2 steps.
+<!-- CHECK:f19_n3_rules_type --> Each rule has type compatible with a `MatSoundRule` structure (analogous to `MixedSoundRule` in BitwiseRules.lean). The structure includes: `name : String`, `lhsMatch : MatENodeOp -> Bool`, `apply : MatEGraph -> MatEClassId -> MatEGraph`, `sound : [soundness statement]`.
+<!-- CHECK:f19_n3_rules_use_addMatExpr --> Each rule's `apply` function uses `addMatExpr` (from N19.1) to insert the decomposition MatExpr into the MatEGraph. The decomposed MatExpr is constructed as a concrete `MatExpr` term, NOT as ad-hoc node insertions.
+
+#### Structural (BLOCKING)
+<!-- CHECK:f19_n3_all_rules_collected --> All breakdown rules are collected in an `allBreakdownRules` list with a `length` theorem and a master `allBreakdownRules_sound` theorem (analogous to `allBitwiseRules` pattern in BitwiseRules.lean).
+<!-- CHECK:f19_n3_lhs_matches_dft --> Each rule's `lhsMatch` triggers on `.dft n` (or `.ntt n p`) nodes in the MatEGraph. The Cooley-Tukey rule triggers when `n` is even and `n > 2`. The base case triggers when `n = 2`. Radix-4 triggers when `4 | n` and `n > 4`.
+<!-- CHECK:f19_n3_consumed_by_n7 --> The rules are imported and passed to the saturation engine in N19.7 (CrossEGraphProtocol rewire). Not island definitions.
+<!-- CHECK:f19_n3_no_factorizationTree --> The rules do NOT produce `FactorizationTree` values. They produce `MatEGraph` modifications (e-class merges). The entire `FactorizationTree` abstraction is being replaced.
+
+#### Non-vacuity (BLOCKING)
+<!-- CHECK:f19_n3_nonvac_ct_apply --> Non-vacuity `example`: start with `MatEGraph` containing a single `dft 8` node. Apply the Cooley-Tukey rule. The resulting `MatEGraph` has > 1 e-class (the decomposition was inserted). Compile without sorry.
+<!-- CHECK:f19_n3_nonvac_base2_apply --> Non-vacuity `example`: start with `MatEGraph` containing `dft 2`. Apply the base case rule. The resulting e-graph has the DFT2 kernel merged with the `dft 2` class. Compile without sorry.
+
+#### Edge Cases (ADVISORY)
+<!-- CHECK:f19_n3_edge_dft1 --> Rules do NOT trigger on `dft 1` (identity, should be left alone).
+<!-- CHECK:f19_n3_edge_dft_odd --> Cooley-Tukey rule does NOT trigger on `dft 7` (odd, not decomposable).
+<!-- CHECK:f19_n3_edge_double_apply --> Applying the same rule twice to the same e-class is idempotent (second application either detects the decomposition already exists or produces a no-op merge).
+
+---
+
+### N19.4 extractMatExpr (CRITICO)
+
+**Goal**: Implement extraction from `MatEGraph` back to `MatExpr`. Must reconstruct dependent types (m x n dimensions) from the Nat fields in `MatENodeOp`. Uses the `NodeOps` interface for tree extraction.
+
+#### Correctness (BLOCKING)
+<!-- CHECK:f19_n4_extracts_matexpr --> `extractMatExpr : MatEGraph -> MatEClassId -> Option (MatExpr alpha m n)` returns a `MatExpr` for valid e-class IDs. The `m` and `n` are determined from the `MatENodeOp`'s dimension fields.
+<!-- CHECK:f19_n4_dimension_reconstruction --> For every `MatENodeOp` constructor, the extraction correctly reconstructs the `m x n` type indices: `.dft n` -> `MatExpr alpha n n`, `.kron a b m1 n1 m2 n2` -> `MatExpr alpha (m1*m2) (n1*n2)`, `.compose a b m k n` -> `MatExpr alpha m n`, etc.
+<!-- CHECK:f19_n4_recursive --> Extraction is recursive: for non-leaf nodes, it extracts children first, then reconstructs the parent MatExpr from the children's MatExpr values. Uses `NodeOps.children` (from N19.2) to traverse.
+<!-- CHECK:f19_n4_handles_all_ops --> Extraction handles all 14 `MatENodeOp` constructors. No `sorry`, no `panic!`, no missing match arms.
+<!-- CHECK:f19_n4_perm_reconstruction --> For `.perm pop`, the extraction reconstructs a `Perm` from `PermOp`, including the new `PermOp.compose`/`inverse`/`tensor` variants (from N19.1). The reconstructed `Perm` has correct type-level dimension `n`.
+
+#### Structural (BLOCKING)
+<!-- CHECK:f19_n4_uses_nodeops --> Extraction uses `NodeOps MatENodeOp` (from N19.2) for `children` traversal, NOT direct pattern matching on the MatEGraph internals. This ensures compatibility with the generic extraction framework.
+<!-- CHECK:f19_n4_uses_best_node --> Extraction selects the best (lowest cost) node from each e-class, following the standard greedy extraction pattern from `VerifiedExtraction/Core.lean`.
+<!-- CHECK:f19_n4_consumed_by_n6 --> The extraction function is used by N19.6 (extractMatExpr soundness). Not an island function.
+<!-- CHECK:f19_n4_consumed_by_n7 --> The extraction function is used by N19.7 (CrossEGraphProtocol rewire) to produce the final `MatExpr` from the optimized MatEGraph.
+
+#### Non-vacuity (BLOCKING)
+<!-- CHECK:f19_n4_nonvac_roundtrip_dft --> Non-vacuity `example`: `addMatExpr` a `dft 8` MatExpr into a fresh MatEGraph, then `extractMatExpr` from the root e-class. The extracted MatExpr evaluates identically to the original via `evalMatExprAlg`. Compile without sorry.
+<!-- CHECK:f19_n4_nonvac_kron --> Non-vacuity `example`: `addMatExpr` a `kron (identity 2) (dft 4)` into MatEGraph, extract, verify the extracted MatExpr has the correct structure (kron with identity and dft children). Compile without sorry.
+<!-- CHECK:f19_n4_nonvac_composed --> Non-vacuity `example`: `addMatExpr` a `compose (perm stride) (kron (identity 2) (dft 4))`, extract, verify structure. Compile without sorry.
+
+#### Edge Cases (ADVISORY)
+<!-- CHECK:f19_n4_edge_invalid_id --> `extractMatExpr` on an invalid (non-existent) e-class ID returns `none`, not panic.
+<!-- CHECK:f19_n4_edge_empty_graph --> `extractMatExpr` on an empty `MatEGraph` returns `none`.
+<!-- CHECK:f19_n4_edge_merged_classes --> After merging two e-classes, extraction from either original ID returns a valid MatExpr (follows canonical representatives).
+
+---
+
+### N19.5 addMatExpr Soundness (FUNDACIONAL)
+
+**Goal**: Prove that `addMatExpr` preserves semantic equivalence: for any `MatExpr e`, the e-class containing its `MatENodeOp` representation, when extracted back to `MatExpr`, evaluates (via `evalMatExprAlg`) to the same result as `evalMatExprAlg(e)`.
+
+#### Soundness (BLOCKING)
+<!-- CHECK:f19_n5_insertion_sound --> Master theorem: `addMatExpr_sound : forall (g : MatEGraph) (m n : Nat) (e : MatExpr alpha m n) (omega : alpha) (input : List alpha), let (rootId, g') := addMatExpr g m n e in forall e', extractMatExpr g' rootId = some e' -> evalMatExprAlg omega m n e' input = evalMatExprAlg omega m n e input`. This is the key insertion theorem.
+<!-- CHECK:f19_n5_preserves_existing --> `addMatExpr` does NOT corrupt existing e-classes: `forall id, id < g.numClasses -> extractMatExpr g' id = extractMatExpr g id` (modulo canonical representative changes). Existing classes are preserved.
+<!-- CHECK:f19_n5_structural_induction --> The proof is by structural induction on `MatExpr`, covering all 17 constructors. Each case shows the inserted MatENodeOp, when extracted, reconstructs a semantically equivalent MatExpr.
+<!-- CHECK:f19_n5_perm_faithful --> The proof covers the fixed `permToPermOp`: for `MatExpr.perm p`, the theorem shows `evalMatExprAlg(extracted) = applyPerm p input`. This requires that `permToPermOp` is faithful (not lossy, verified by N19.1).
+
+#### Structural (BLOCKING)
+<!-- CHECK:f19_n5_depends_on_n1 --> The proof imports and relies on the fixed `addMatExpr` (N19.1). If `permToPermOp` is lossy, this theorem CANNOT hold for `.perm (Perm.compose ...)`.
+<!-- CHECK:f19_n5_depends_on_n4 --> The proof uses `extractMatExpr` (N19.4) in its statement. The two functions are inverses for the insertion case.
+<!-- CHECK:f19_n5_no_sorry --> Zero sorry in the proof. This is the FUNDACIONAL node — no deferral allowed.
+<!-- CHECK:f19_n5_bridge_to_lowering --> The theorem's conclusion uses `evalMatExprAlg`, which is the same evaluation function used in `lowering_algebraic_correct` (AlgebraicSemantics.lean). This ensures the e-graph soundness composes with the existing lowering soundness.
+
+#### Non-vacuity (BLOCKING)
+<!-- CHECK:f19_n5_nonvac_concrete --> Non-vacuity `example`: instantiate `addMatExpr_sound` with `e := fftCooleyTukey 2 4` (CT decomposition of DFT-8), concrete `omega` (8th root of unity in a concrete field), concrete `input := [1,2,3,4,5,6,7,8]`. Show all hypotheses are satisfiable and the conclusion holds. Compile without sorry.
+<!-- CHECK:f19_n5_nonvac_perm --> Non-vacuity `example`: instantiate with `e := perm (Perm.compose stride bitRev)`. Show the composed permutation survives the addMatExpr -> extract roundtrip. Compile without sorry.
+
+#### Edge Cases (ADVISORY)
+<!-- CHECK:f19_n5_edge_identity --> Soundness for `.identity n`: trivially preserves (identity is identity).
+<!-- CHECK:f19_n5_edge_zero --> Soundness for `.zero m n`: produces all-zeros list.
+<!-- CHECK:f19_n5_edge_empty_graph --> Starting from `MatEGraph.empty`, the first insertion is sound.
+
+---
+
+### N19.6 extractMatExpr Soundness (CRITICO)
+
+**Goal**: Prove that extraction produces a `MatExpr` that evaluates to the same result as the original. Combined with N19.5, gives the roundtrip: insert -> optimize -> extract preserves semantics.
+
+#### Soundness (BLOCKING)
+<!-- CHECK:f19_n6_extraction_sound --> Master theorem: `extractMatExpr_sound : forall (g : MatEGraph) (id : MatEClassId) (omega : alpha) (input : List alpha), MatEGraphConsistent g -> forall e, extractMatExpr g id = some e -> evalMatExprAlg omega m n e input = semanticValue g id omega input`. Here `semanticValue` is the e-graph's semantic interpretation of the e-class, and `MatEGraphConsistent` is the invariant that all merged classes have equal semantic values.
+<!-- CHECK:f19_n6_consistency_invariant --> Define `MatEGraphConsistent : MatEGraph -> Prop` that asserts: for all e-classes `c`, all nodes `n1, n2` in `c`, `evalMatExprAlg(extract n1) = evalMatExprAlg(extract n2)` (all nodes in the same class evaluate identically). This is the matrix analog of `ConsistentValuation` from SemanticSpec.lean.
+<!-- CHECK:f19_n6_merge_preserves_consistency --> Prove that `merge` preserves `MatEGraphConsistent` when the two merged classes have equal semantic values. This is required for breakdown rules to maintain the invariant.
+<!-- CHECK:f19_n6_add_preserves_consistency --> Prove that `add` (inserting a new node) preserves `MatEGraphConsistent`. A fresh e-class with a single node is trivially consistent.
+
+#### Structural (BLOCKING)
+<!-- CHECK:f19_n6_composes_with_n5 --> The roundtrip theorem follows from N19.5 + N19.6: `forall e, let (id, g') := addMatExpr empty m n e in MatEGraphConsistent g' -> forall e', extractMatExpr g' id = some e' -> evalMatExprAlg omega m n e' input = evalMatExprAlg omega m n e input`.
+<!-- CHECK:f19_n6_uses_nodeops --> The proof uses `NodeOps MatENodeOp` (N19.2) properties, particularly `replaceChildren_children` and `mapChildren_children`, to reason about tree reconstruction.
+<!-- CHECK:f19_n6_consumed_by_n7 --> The extraction soundness is invoked in N19.7 to justify the final pipeline output.
+
+#### Non-vacuity (BLOCKING)
+<!-- CHECK:f19_n6_nonvac_after_rewrite --> Non-vacuity `example`: start with `dft 8` in MatEGraph, apply one Cooley-Tukey breakdown (N19.3), then extract. Show `MatEGraphConsistent` holds and the extracted MatExpr evaluates to the same as `dft 8`. This exercises the full insert -> rewrite -> extract path. Compile without sorry.
+
+#### Edge Cases (ADVISORY)
+<!-- CHECK:f19_n6_edge_single_node --> Extraction from a single-node e-class is trivially sound (no merges, no rewrites).
+<!-- CHECK:f19_n6_edge_multi_rewrite --> After applying multiple breakdown rules (CT at levels 8 -> 4 -> 2), extraction still produces a correct MatExpr.
+
+---
+
+### N19.7 Rewire CrossEGraphProtocol (CRITICO)
+
+**Goal**: Modify `jointOptimize` to use `MatEGraph` with `BreakdownRules` as rewrite rules. The result is an extracted `MatExpr` (not a `FactorizationTree`). This `MatExpr` flows to `lowering_algebraic_correct` for verified code generation.
+
+#### Correctness (BLOCKING)
+<!-- CHECK:f19_n7_new_signature --> `jointOptimize` returns `(MatExpr alpha m n) x Nat x ArithmeticCostResponse` instead of `FactorizationTree x Nat x ArithmeticCostResponse`. The `MatExpr` is the optimized decomposition extracted from the MatEGraph.
+<!-- CHECK:f19_n7_uses_mategraph --> `jointOptimize` internally: (1) creates a `MatEGraph` via `addMatExpr` for the input DFT/NTT, (2) applies `allBreakdownRules` (from N19.3) via saturation, (3) extracts the optimized `MatExpr` via `extractMatExpr` (N19.4), (4) queries arithmetic costs from the bitwise e-graph.
+<!-- CHECK:f19_n7_pipeline_sound --> The end-to-end pipeline theorem: `jointOptimize_sound : forall n p omega input, IsPrimitiveRoot omega n -> input.length = n -> let (optimizedExpr, _, _) := jointOptimize n p in evalMatExprAlg omega m n optimizedExpr input = evalMatExprAlg omega n n (dft n) input`. The optimized MatExpr computes the same DFT as the original.
+<!-- CHECK:f19_n7_flows_to_lowering --> The `MatExpr` output of `jointOptimize` satisfies `IsWellFormedNTT` (from AlgebraicSemantics.lean), so it can be passed to `lowering_algebraic_correct`. Either: (a) the `IsWellFormedNTT` predicate is proven for all outputs of breakdown rules, or (b) `jointOptimize` checks the predicate and returns only well-formed results.
+<!-- CHECK:f19_n7_cost_from_arithmetic --> The cost component still queries `queryArithmeticCost` from the bitwise e-graph. The cross-e-graph protocol is preserved: algebraic level (MatEGraph) handles decomposition, arithmetic level (MixedEGraph) handles cost estimation.
+
+#### Structural (BLOCKING)
+<!-- CHECK:f19_n7_imports_n3 --> File imports the breakdown rules from N19.3.
+<!-- CHECK:f19_n7_imports_n4 --> File imports `extractMatExpr` from N19.4.
+<!-- CHECK:f19_n7_no_factorizationTree --> `jointOptimize` does NOT reference `FactorizationTree`, `exploreFact`, or `expandSubDFTs`. These are deleted in N19.8.
+<!-- CHECK:f19_n7_backward_compat_callers --> All callers of `jointOptimize` (e.g., `jointOptimizeToNTTPlan`, GuidedSaturation integration) compile with the new signature. Either they adapt to receive `MatExpr`, or a bridge adapter is provided.
+<!-- CHECK:f19_n7_smoke_tests --> At least 3 `#eval` or `example` smoke tests: (a) `jointOptimize 8 p` produces a decomposition with > 1 node, (b) `jointOptimize 1024 2013265921` completes without timeout, (c) cost is positive.
+
+#### Non-vacuity (BLOCKING)
+<!-- CHECK:f19_n7_nonvac_pipeline --> Non-vacuity `example`: `jointOptimize 8 2013265921` returns a `MatExpr` whose `nodeCount > 1` (it actually decomposed, not just returned the original dft). Compile without sorry.
+
+#### Edge Cases (ADVISORY)
+<!-- CHECK:f19_n7_edge_prime_2 --> `jointOptimize 2 p` returns the base case (dft2 kernel) without infinite recursion.
+<!-- CHECK:f19_n7_edge_n_eq_1 --> `jointOptimize 1 p` returns identity (DFT of size 1 is identity).
+<!-- CHECK:f19_n7_edge_non_power_of_2 --> `jointOptimize 6 p` either handles composite non-power-of-2 or returns the original DFT unchanged with documented limitation.
+
+---
+
+### N19.8 Delete MatOp (HOJA)
+
+**Goal**: Remove `MatOp`, `TransformId`, `FactorizationTree`, `exploreFact`, `expandSubDFTs` from MatNodeOps.lean. Verify no remaining references.
+
+#### Correctness (BLOCKING)
+<!-- CHECK:f19_n8_matop_deleted --> The `MatOp` inductive type is deleted from the codebase. `grep -r "MatOp" --include="*.lean"` in non-deleted source files returns zero hits (excluding comments explaining the deletion).
+<!-- CHECK:f19_n8_transformid_deleted --> The `TransformId` structure is deleted. No references remain.
+<!-- CHECK:f19_n8_factorizationtree_deleted --> The `FactorizationTree` structure is deleted. No references remain.
+<!-- CHECK:f19_n8_explorefact_deleted --> The `exploreFact` function is deleted. No references remain.
+<!-- CHECK:f19_n8_breakdown_rule_old_deleted --> The old `BreakdownRule` structure (which returns `FactorizationTree`) is replaced by the new rule format from N19.3 (which operates on `MatEGraph`).
+
+#### Structural (BLOCKING)
+<!-- CHECK:f19_n8_build_clean --> `lake build` succeeds with 0 errors after deletion. No dangling imports, no unresolved references.
+<!-- CHECK:f19_n8_no_orphan_theorems --> Theorems that referenced deleted types (e.g., `dft_transformId`, `base2_applicable`, `ct_produces_tree_8`, `base2_produces_leaf`) are either: (a) deleted, or (b) migrated to reference the new MatEGraph-based types. Zero orphan theorem references.
+<!-- CHECK:f19_n8_file_cleanup --> If `MatNodeOps.lean` becomes empty or near-empty after deletion, it is either removed entirely or repurposed for N19.3's breakdown rules. No empty files in the build.
+
+#### Non-vacuity (BLOCKING)
+<!-- CHECK:f19_n8_nonvac_build --> Non-vacuity: the full `lake build` completes successfully. This is the mechanical proof that all references are cleaned up.
+
+#### Edge Cases (ADVISORY)
+<!-- CHECK:f19_n8_edge_comments --> Comments referencing MatOp/FactorizationTree are updated or removed. No stale documentation.
+<!-- CHECK:f19_n8_edge_tests --> Any test files referencing deleted types are updated or removed.
+
+---
+
+### N19.9 CT Identity at MatExpr Level (CRITICO)
+
+**Goal**: Prove `evalMatExprAlg(fftCooleyTukey 2 n) = evalMatExprAlg(dft (2*n))`. This is the Cooley-Tukey correctness theorem at the algebraic level, using `ntt_coeff_generic_split` from GenericCorrectness.lean.
+
+#### Soundness (BLOCKING)
+<!-- CHECK:f19_n9_ct_identity --> Master theorem: `cooleyTukey_algebraic_correct : forall (F : Type) [Field F] (omega : F) (n : Nat) (hn : n > 0) (input : List F), IsPrimitiveRoot omega (2*n) -> input.length = 2*n -> evalMatExprAlg omega (2*n) (2*n) (fftCooleyTukey 2 n) input = evalMatExprAlg omega (2*n) (2*n) (dft (2*n)) input`. Proven without sorry.
+<!-- CHECK:f19_n9_uses_splitting --> The proof uses `ntt_coeff_generic_split` and/or `ntt_coeff_generic_split_upper` from `AmoLean/NTT/GenericCorrectness.lean`. These are the verified DFT splitting formulas: X_k = E_k + omega^k * O_k and X_{k+n/2} = E_k - omega^k * O_k.
+<!-- CHECK:f19_n9_unfolds_ct --> The proof unfolds `fftCooleyTukey 2 n` to its definition: `compose (kron (identity 2) (dft n)) (compose (twiddle (2*n) ...) (compose (perm stride) ...))` and shows each component matches the splitting formula.
+<!-- CHECK:f19_n9_connects_evalDFT --> The proof shows `evalMatExprAlg omega (dft N) input` equals the NTT specification `ntt_spec_generic omega input` (or a closely related form), bridging the matrix algebra with the polynomial evaluation.
+<!-- CHECK:f19_n9_elementwise --> The equality is shown pointwise (element-by-element) for all output indices `k in [0, 2*n)`. Each output element of the CT decomposition equals the corresponding element of the direct DFT.
+
+#### Structural (BLOCKING)
+<!-- CHECK:f19_n9_imports_generic --> The proof imports `AmoLean/NTT/GenericCorrectness.lean` for the splitting lemmas.
+<!-- CHECK:f19_n9_imports_algebraic --> The proof imports `AmoLean/Verification/AlgebraicSemantics.lean` for `evalMatExprAlg` and `fftCooleyTukey`.
+<!-- CHECK:f19_n9_consumed_by_n3 --> The theorem is used by N19.3 (BreakdownRules soundness) for the Cooley-Tukey rule's soundness proof. This is the mathematical core that the rewrite rule's soundness depends on.
+<!-- CHECK:f19_n9_no_new_axioms --> The proof introduces zero new axioms. `#print axioms cooleyTukey_algebraic_correct` shows only standard Lean/Mathlib axioms.
+
+#### Non-vacuity (BLOCKING)
+<!-- CHECK:f19_n9_nonvac_n4 --> Non-vacuity `example`: for `n = 4` (DFT-8), concrete omega (primitive 8th root of unity in ZMod 17 or similar small field), concrete input `[1,0,0,0,0,0,0,0]`. Verify both sides evaluate to the same list. Compile without sorry.
+<!-- CHECK:f19_n9_nonvac_n1 --> Non-vacuity `example`: for `n = 1` (DFT-2), degenerate case. `fftCooleyTukey 2 1` on `[a, b]` produces `[a+b, a-b]`. Compile without sorry.
+
+#### Edge Cases (ADVISORY)
+<!-- CHECK:f19_n9_edge_primitive_root --> The `IsPrimitiveRoot` hypothesis is essential. Without it, the twiddle factors are wrong and the identity does NOT hold. Verify the proof actually uses this hypothesis (not vacuously true).
+<!-- CHECK:f19_n9_edge_length_mismatch --> If `input.length != 2*n`, behavior is well-defined via `getD default` but the identity need not hold. The hypothesis `input.length = 2*n` is documented as necessary.
+
+---
+
+### N19.10 Integration E2E (HOJA)
+
+**Goal**: End-to-end: create `MatExpr(dft 8)` -> add to `MatEGraph` -> apply `BreakdownRules` -> extract optimized `MatExpr` -> lower via `lowering_algebraic_correct` -> verify output matches `ntt_spec_generic`.
+
+#### Correctness (BLOCKING)
+<!-- CHECK:f19_n10_e2e_theorem --> End-to-end theorem: `fase19_e2e : forall (F : Type) [Field F] (omega : F) (input : List F), IsPrimitiveRoot omega 8 -> input.length = 8 -> let optimized := jointOptimize_pipeline (dft 8) in let lowered := runSigmaAlg (lower optimized) input in lowered = ntt_spec_generic omega input`. Or a formulation that chains: (1) MatEGraph insertion soundness (N19.5), (2) rewrite soundness (N19.3 + N19.9), (3) extraction soundness (N19.6), (4) lowering correctness (lowering_algebraic_correct).
+<!-- CHECK:f19_n10_chain_explicit --> The proof explicitly chains the four soundness lemmas: `addMatExpr_sound -> breakdown_sound -> extractMatExpr_sound -> lowering_algebraic_correct`. Each link in the chain is a cited theorem, not an ad-hoc proof.
+<!-- CHECK:f19_n10_all_links_verified --> Every step in the chain is fully proven (no sorry). The composition is the master theorem for Fase 19.
+<!-- CHECK:f19_n10_ntt_spec_output --> The final output is shown equal to `ntt_spec_generic omega input` (the polynomial evaluation DFT spec from GenericNTT.lean), OR to `evalMatExprAlg omega (dft 8) input` (which is shown equal to `ntt_spec_generic` elsewhere). The connection to the user-facing spec is explicit.
+
+#### Structural (BLOCKING)
+<!-- CHECK:f19_n10_imports_all --> The E2E file imports modules from N19.1 through N19.9. It is the integration point that verifies all nodes compose correctly.
+<!-- CHECK:f19_n10_no_island --> Every theorem proven in Fase 19 (N19.1-N19.9) is transitively referenced by the E2E proof or by a function the E2E proof calls. No island nodes.
+<!-- CHECK:f19_n10_axiom_audit --> `#print axioms fase19_e2e` shows ONLY standard Lean/Mathlib axioms (propext, Quot.sound, Classical.choice, funext). Zero crypto axioms, zero custom axioms.
+
+#### Non-vacuity (BLOCKING)
+<!-- CHECK:f19_n10_nonvac_concrete --> Non-vacuity `example`: instantiate the E2E theorem with a concrete field (e.g., ZMod 17 with omega = 2, which is a primitive 8th root of unity since 2^8 = 256 = 15*17+1 = 1 mod 17), concrete input `[1, 2, 3, 4, 5, 6, 7, 8]`. Evaluate both sides concretely and verify equality. Compile without sorry.
+<!-- CHECK:f19_n10_nonvac_trivial_input --> Non-vacuity `example`: input = `[1, 0, 0, 0, 0, 0, 0, 0]` (impulse), verify output is the constant sequence (DFT of delta is all-1s). Compile without sorry.
+
+#### Edge Cases (ADVISORY)
+<!-- CHECK:f19_n10_edge_n_eq_2 --> E2E also works for DFT-2 (smallest non-trivial case). Verify with concrete values.
+<!-- CHECK:f19_n10_edge_n_eq_4 --> E2E also works for DFT-4 (exercises one level of CT decomposition). Verify with concrete values.
+<!-- CHECK:f19_n10_edge_performance --> The E2E proof elaborates in < 60 seconds. The extracted MatExpr for DFT-8 has reasonable `nodeCount` (< 50 nodes).
+
+---
+
+### Cross-Node Invariants (Fase 19 Global)
+
+These invariants must hold across all nodes simultaneously at phase close.
+
+#### Roundtrip Property (BLOCKING)
+<!-- CHECK:f19_global_roundtrip --> The composition of N19.5 + N19.6 gives the roundtrip: for any `MatExpr e`, `addMatExpr -> extractMatExpr` preserves `evalMatExprAlg`. Formally: `addMatExpr_sound` (N19.5) composed with `extractMatExpr_sound` (N19.6) implies `evalMatExprAlg(extracted) = evalMatExprAlg(original)`.
+
+#### Rewrite Soundness (BLOCKING)
+<!-- CHECK:f19_global_rewrite_sound --> The composition of N19.3 + N19.9 gives rewrite soundness: applying any breakdown rule to a `MatEGraphConsistent` e-graph produces a `MatEGraphConsistent` e-graph. The merged e-classes have equal semantic values because the CT identity (N19.9) justifies the merge.
+
+#### Pipeline Compositionality (BLOCKING)
+<!-- CHECK:f19_global_pipeline --> The full chain: `dft n -> MatEGraph -> breakdown rewrites -> extract MatExpr -> lower SigmaExpr -> evaluate` produces the same result as `ntt_spec_generic omega input`. Each arrow is backed by a proven theorem. No gaps.
+
+#### Clean Deletion (BLOCKING)
+<!-- CHECK:f19_global_no_dead_code --> After N19.8, `wiring_check.py --project . --files {all Fase 19 files}` reports 0 W1 (islands). Every new module has at least one external consumer.
+<!-- CHECK:f19_global_spec_audit --> `spec_audit.py --project . --pipeline-only` reports 0 T1 (vacuity) issues in Fase 19 files. No `True`, no `:= id`, no identity passes.
+
+#### Backward Compatibility (BLOCKING)
+<!-- CHECK:f19_global_build --> `lake build` completes with 0 errors. All prior phases (11-18) continue to compile.
+<!-- CHECK:f19_global_no_regression --> Existing theorems (full_pipeline_soundness, lowering_algebraic_correct, ntt_generic_eq_spec) are unmodified and still hold. Their axiom audits are unchanged.
 

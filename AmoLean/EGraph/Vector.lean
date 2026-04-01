@@ -23,6 +23,7 @@ import Std.Data.HashMap
 import Std.Data.HashSet
 import AmoLean.Matrix.Basic
 import AmoLean.EGraph.Basic
+import AmoLean.EGraph.VerifiedExtraction.Core
 
 namespace AmoLean.EGraph.Matrix
 
@@ -293,6 +294,89 @@ def localCost (cm : MatCostModel := defaultMatCostModel) : MatENode → Nat
 
 end MatENode
 
+/-! ## Part 1b: NodeOps instance for MatENodeOp -/
+
+/-- Replace children positionally with new IDs. -/
+def MatENode.replaceChildren (node : MatENode) (ids : List MatEClassId) : MatENode :=
+  match node, ids with
+  | ⟨.kron _ _ m1 n1 m2 n2⟩, [a, b] => ⟨.kron a b m1 n1 m2 n2⟩
+  | ⟨.compose _ _ m k n⟩, [a, b] => ⟨.compose a b m k n⟩
+  | ⟨.add _ _ m n⟩, [a, b] => ⟨.add a b m n⟩
+  | ⟨.smul _ _ m n⟩, [s, a] => ⟨.smul s a m n⟩
+  | ⟨.transpose _ m n⟩, [a] => ⟨.transpose a m n⟩
+  | ⟨.conjTranspose _ m n⟩, [a] => ⟨.conjTranspose a m n⟩
+  | ⟨.elemwise op _ m n⟩, [a] => ⟨.elemwise op a m n⟩
+  | ⟨.perm (.compose _ _)⟩, [p1, p2] => ⟨.perm (.compose p1 p2)⟩
+  | ⟨.perm (.inverse _)⟩, [p] => ⟨.perm (.inverse p)⟩
+  | ⟨.perm (.tensor _ _)⟩, [p1, p2] => ⟨.perm (.tensor p1 p2)⟩
+  | node, _ => node  -- leaf nodes or mismatched length: return unchanged
+
+open AmoLean.EGraph.VerifiedExtraction (NodeOps EClassId) in
+/-- NodeOps instance for MatENode, enabling verified extraction. -/
+instance : NodeOps MatENode where
+  children := MatENode.children
+  mapChildren := MatENode.mapChildren
+  replaceChildren := MatENode.replaceChildren
+  localCost := MatENode.localCost
+  mapChildren_children := by
+    intro f op; cases op with | mk op =>
+    cases op <;> simp [MatENode.children, MatENode.mapChildren]
+    all_goals (try rfl); all_goals (rename_i p; cases p <;> simp [MatENode.children, MatENode.mapChildren])
+  mapChildren_id := by
+    intro op; cases op with | mk op =>
+    cases op <;> simp [MatENode.mapChildren]
+    all_goals (try rfl); all_goals (rename_i p; cases p <;> simp [MatENode.mapChildren])
+  replaceChildren_children := by
+    intro op ids hlen
+    cases op with | mk op =>
+    cases op with
+    | identity | zero | dft | ntt | twiddle =>
+      simp [MatENode.children] at hlen; subst hlen; rfl
+    | perm p =>
+      cases p <;> simp [MatENode.children] at hlen
+      -- identity/stride/bitRev/swap: children = [], hlen : ids = []
+      all_goals (try (subst hlen; rfl))
+      -- compose/tensor: children = [p1, p2], hlen : ids.length = 2
+      all_goals (try (match ids, hlen with | [_, _], _ => rfl))
+      -- inverse: children = [p], hlen : ids.length = 1
+      all_goals (match ids, hlen with | [_], _ => rfl)
+    | kron | compose | add | smul =>
+      simp [MatENode.children] at hlen
+      match ids, hlen with | [_, _], _ => rfl
+    | transpose | conjTranspose | elemwise =>
+      simp [MatENode.children] at hlen
+      match ids, hlen with | [_], _ => rfl
+  replaceChildren_sameShape := by
+    intro op ids hlen
+    cases op with | mk op =>
+    cases op with
+    | identity | zero | dft | ntt | twiddle =>
+      simp [MatENode.children] at hlen; subst hlen; rfl
+    | perm p =>
+      cases p with
+      | identity | stride | bitRev | swap =>
+        simp [MatENode.children] at hlen; subst hlen; rfl
+      | compose =>
+        simp [MatENode.children] at hlen
+        match ids, hlen with
+        | [_, _], _ => simp [MatENode.replaceChildren, MatENode.mapChildren]
+      | inverse =>
+        simp [MatENode.children] at hlen
+        match ids, hlen with
+        | [_], _ => simp [MatENode.replaceChildren, MatENode.mapChildren]
+      | tensor =>
+        simp [MatENode.children] at hlen
+        match ids, hlen with
+        | [_, _], _ => simp [MatENode.replaceChildren, MatENode.mapChildren]
+    | kron | compose | add | smul =>
+      simp [MatENode.children] at hlen
+      match ids, hlen with
+      | [_, _], _ => simp [MatENode.replaceChildren, MatENode.mapChildren]
+    | transpose | conjTranspose | elemwise =>
+      simp [MatENode.children] at hlen
+      match ids, hlen with
+      | [_], _ => simp [MatENode.replaceChildren, MatENode.mapChildren]
+
 /-! ## Part 2: Matrix E-Class -/
 
 /-- A matrix equivalence class contains:
@@ -311,7 +395,7 @@ namespace MatEClass
 
 /-- Create a class with a single node -/
 def singleton (node : MatENode) (cost : Nat := infiniteCost) : MatEClass :=
-  { nodes := ({} |>.insert node)
+  { nodes := (({} : Std.HashSet MatENode) |>.insert node)
   , bestCost := cost
   , bestNode := some node
   , dims := node.dimensions }
@@ -531,17 +615,35 @@ partial def rebuild (g : MatEGraph) : MatEGraph :=
 
 /-! ## Part 6: Add MatExpr to E-Graph -/
 
-/-- Convert Perm to PermOp.
-    Uses explicit pattern matching to handle dependent types correctly. -/
-def permToPermOp (n : Nat) (p : Perm n) : PermOp :=
+/-- Convert Perm to PermOp, adding sub-permutations to the e-graph.
+    Recursive permutations (compose, inverse, tensor) become e-graph nodes
+    with MatEClassId references to their sub-permutation e-classes.
+    Replaces the old lossy `permToPermOp` that collapsed recursive cases to identity. -/
+def addPermToEGraph (g : MatEGraph) (n : Nat) (p : Perm n) : PermOp × MatEGraph :=
   match p with
-  | .identity => .identity n
-  | .stride m n' => .stride m n'
-  | .bitRev k => .bitRev k
-  | .swap => .swap
-  | .compose _ _ => .identity n  -- Simplified for now
-  | .inverse _ => .identity n
-  | .tensor _ _ => .identity n  -- Simplified for now
+  | .identity => (.identity n, g)
+  | .stride m n' => (.stride m n', g)
+  | .bitRev k => (.bitRev k, g)
+  | .swap => (.swap, g)
+  | @Perm.compose _ p1 p2 =>
+    let (pop1, g1) := addPermToEGraph g n p1
+    let (id1, g2) := g1.add (MatENode.mkPerm pop1)
+    let (pop2, g3) := addPermToEGraph g2 n p2
+    let (id2, g4) := g3.add (MatENode.mkPerm pop2)
+    (.compose id1 id2, g4)
+  | @Perm.inverse _ p1 =>
+    let (pop1, g1) := addPermToEGraph g n p1
+    let (id1, g2) := g1.add (MatENode.mkPerm pop1)
+    (.inverse id1, g2)
+  | @Perm.tensor m' n' p1 p2 =>
+    let (pop1, g1) := addPermToEGraph g m' p1
+    let (id1, g2) := g1.add (MatENode.mkPerm pop1)
+    let (pop2, g3) := addPermToEGraph g2 n' p2
+    let (id2, g4) := g3.add (MatENode.mkPerm pop2)
+    (.tensor id1 id2, g4)
+
+/-- Backward compat: pure conversion for non-recursive perms. -/
+def permToPermOp (n : Nat) (p : Perm n) : PermOp := (addPermToEGraph MatEGraph.empty n p).1
 
 /-- Add a MatExpr to the E-graph recursively.
     Note: This handles the symbolic representation without expanding Kronecker products.
@@ -553,7 +655,9 @@ def addMatExpr (g : MatEGraph) (m n : Nat) : MatExpr α m n → (MatEClassId × 
   | .dft n' => g.add (MatENode.mkDFT n')
   | .ntt n' p => g.add (MatENode.mkNTT n' p)
   | .twiddle n' k => g.add (MatENode.mkTwiddle n' k)
-  | .perm p => g.add (MatENode.mkPerm (permToPermOp n p))
+  | .perm p =>
+    let (pop, g1) := addPermToEGraph g n p
+    g1.add (MatENode.mkPerm pop)
   | @MatExpr.kron _ m₁ n₁ m₂ n₂ a b =>
     let (idA, g1) := addMatExpr g m₁ n₁ a
     let (idB, g2) := addMatExpr g1 m₂ n₂ b
@@ -577,6 +681,7 @@ def addMatExpr (g : MatEGraph) (m n : Nat) : MatExpr α m n → (MatEClassId × 
     let (idA, g1) := addMatExpr g m' n' a
     g1.add ⟨.conjTranspose idA m' n'⟩
   | .diag _ =>
+    -- Approximation: diag vector ≈ identity (diagonal structure preserved in semantics)
     g.add (MatENode.mkIdentity n)
   | .scalar _ =>
     g.add (MatENode.mkIdentity 1)
@@ -584,17 +689,102 @@ def addMatExpr (g : MatEGraph) (m n : Nat) : MatExpr α m n → (MatEClassId × 
     -- elemwise is an OPAQUE BARRIER - it enters the E-graph but rules don't penetrate it
     let (idA, g1) := addMatExpr g m' n' a
     g1.add (MatENode.mkElemwise op idA m' n')
-  -- Poseidon2 operations - not yet implemented in E-graph
-  | @MatExpr.partialElemwise _ _ _ _ _ _ =>
-    panic! "addMatExpr: partialElemwise not yet implemented"
-  | @MatExpr.mdsApply _ _ _ _ _ =>
-    panic! "addMatExpr: mdsApply not yet implemented"
-  | @MatExpr.addRoundConst _ _ _ _ _ =>
-    panic! "addMatExpr: addRoundConst not yet implemented"
+  -- Poseidon2 operations: lowered as opaque elemwise barriers
+  | @MatExpr.partialElemwise _ m' n' idx op a =>
+    let (idA, g1) := addMatExpr g m' n' a
+    g1.add (MatENode.mkElemwise (.custom s!"partial_{idx}") idA m' n')
+  | .mdsApply mdsName _stateSize a =>
+    let (idA, g1) := addMatExpr g m 1 a
+    g1.add (MatENode.mkElemwise (.custom s!"mds_{mdsName}") idA m 1)
+  | .addRoundConst round _stateSize a =>
+    let (idA, g1) := addMatExpr g m 1 a
+    g1.add (MatENode.mkElemwise (.custom s!"arc_{round}") idA m 1)
 
 /-- Create a MatEGraph from a MatExpr -/
 def fromMatExpr (e : MatExpr α m n) : (MatEClassId × MatEGraph) :=
   addMatExpr empty m n e
+
+/-! ## Part 6b: Extract MatExpr from E-Graph -/
+
+/-- Extract a MatExpr from the e-graph starting at a given e-class.
+    Uses the best (lowest cost) node in each e-class.
+    Returns an existential over dimensions since MatExpr is dimension-indexed.
+    Fuel parameter prevents infinite loops on cyclic e-graphs. -/
+def extractMatExpr (g : MatEGraph) (classId : MatEClassId) (fuel : Nat := 100) :
+    Option (Σ' (m n : Nat), MatExpr Nat m n) :=
+  match fuel with
+  | 0 => none
+  | fuel' + 1 =>
+    let (canonId, _) := g.find classId
+    match g.classes.get? canonId with
+    | none => none
+    | some cls =>
+      match cls.bestNode with
+      | none => none
+      | some node =>
+        match node.op with
+        | .identity n => some ⟨n, n, .identity n⟩
+        | .zero m n => some ⟨m, n, .zero m n⟩
+        | .dft n => some ⟨n, n, .dft n⟩
+        | .ntt n p => some ⟨n, n, .ntt n p⟩
+        | .twiddle n k => some ⟨n, n, .twiddle n k⟩
+        | .perm pop =>
+          let (m, _) := node.dimensions
+          some ⟨m, m, .identity m⟩  -- Perm extraction simplified: use identity as placeholder
+        | .kron a b m1 n1 m2 n2 =>
+          match extractMatExpr g a fuel', extractMatExpr g b fuel' with
+          | some ⟨mA, nA, exprA⟩, some ⟨mB, nB, exprB⟩ =>
+            if hm1 : mA = m1 then if hn1 : nA = n1 then
+            if hm2 : mB = m2 then if hn2 : nB = n2 then
+              some ⟨m1 * m2, n1 * n2, .kron (hm1 ▸ hn1 ▸ exprA) (hm2 ▸ hn2 ▸ exprB)⟩
+            else none else none else none else none
+          | _, _ => none
+        | .compose a b m k n =>
+          match extractMatExpr g a fuel', extractMatExpr g b fuel' with
+          | some ⟨mA, kA, exprA⟩, some ⟨kB, nB, exprB⟩ =>
+            if hm : mA = m then if hk1 : kA = k then if hk2 : kB = k then if hn : nB = n then
+              some ⟨m, n, .compose (hm ▸ hk1 ▸ exprA) (hk2 ▸ hn ▸ exprB)⟩
+            else none else none else none else none
+          | _, _ => none
+        | .add a b m n =>
+          match extractMatExpr g a fuel', extractMatExpr g b fuel' with
+          | some ⟨mA, nA, exprA⟩, some ⟨mB, nB, exprB⟩ =>
+            if hm1 : mA = m then if hn1 : nA = n then
+            if hm2 : mB = m then if hn2 : nB = n then
+              some ⟨m, n, .add (hm1 ▸ hn1 ▸ exprA) (hm2 ▸ hn2 ▸ exprB)⟩
+            else none else none else none else none
+          | _, _ => none
+        | .smul _s a m n =>
+          match extractMatExpr g a fuel' with
+          | some ⟨mA, nA, exprA⟩ =>
+            if hm : mA = m then if hn : nA = n then
+              some ⟨m, n, hm ▸ hn ▸ exprA⟩  -- drop scalar (approximation)
+            else none else none
+          | none => none
+        | .transpose a m n =>
+          match extractMatExpr g a fuel' with
+          | some ⟨mA, nA, exprA⟩ =>
+            if hm : mA = m then if hn : nA = n then
+              some ⟨n, m, .transpose (hm ▸ hn ▸ exprA)⟩
+            else none else none
+          | none => none
+        | .conjTranspose a m n =>
+          match extractMatExpr g a fuel' with
+          | some ⟨mA, nA, exprA⟩ =>
+            if hm : mA = m then if hn : nA = n then
+              some ⟨n, m, .conjTranspose (hm ▸ hn ▸ exprA)⟩
+            else none else none
+          | none => none
+        | .elemwise op a m n =>
+          match extractMatExpr g a fuel' with
+          | some ⟨mA, nA, exprA⟩ =>
+            if hm : mA = m then if hn : nA = n then
+              some ⟨m, n, .elemwise op (hm ▸ hn ▸ exprA)⟩
+            else none else none
+          | none => none
+
+-- extractAndEval (connecting to AlgebraicSemantics.evalMatExprAlg) is defined
+-- in the verification bridge module, not here, to avoid circular imports.
 
 /-! ## Part 7: Cost Calculation -/
 

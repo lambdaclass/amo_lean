@@ -1,4 +1,5 @@
 import AmoLean.EGraph.Verified.Bitwise.Discovery.ShiftAddGen
+import AmoLean.EGraph.Verified.Bitwise.Discovery.CongruenceGen
 import AmoLean.EGraph.Verified.Bitwise.Discovery.GrowthPrediction
 import AmoLean.EGraph.Verified.Bitwise.PhasedSaturation
 import AmoLean.EGraph.Verified.Bitwise.SolinasRuleGen
@@ -105,12 +106,19 @@ def phase1Rules : List MixedSoundRule := allBitwiseRules
     These are derived from SolinasRuleGen for each prime. -/
 def phase2SolinasRules : List FieldFoldRule := allSolinasRules
 
+/-- Phase 2 congruence rules: rewrite `(x * 2^k) % p` to `(x * residue) % p`.
+    Generated from CongruenceGen for BabyBear, Mersenne31, and Goldilocks. -/
+def phase2CongruenceRules : List MixedSoundRule :=
+  babybearCongruenceRules ++ mersenne31CongruenceRules ++ goldilocksCongruenceRules
+
 /-- Phase 3 rules: shift-add decomposition rules.
     Generated from CSD for common correction constants. -/
 def phase3ShiftAddRules : List MixedSoundRule :=
   generateShiftAddRules [
     -- BabyBear correction: 2^27 - 1
     134217727,
+    -- KoalaBear correction: 2^24 - 1
+    16777215,
     -- Goldilocks correction: 2^32 - 1
     4294967295,
     -- Common small constants for shift-add optimization
@@ -119,7 +127,8 @@ def phase3ShiftAddRules : List MixedSoundRule :=
 
 /-- Total rule count across all phases. -/
 def totalRuleCount : Nat :=
-  phase1Rules.length + phase2SolinasRules.length + phase3ShiftAddRules.length
+  phase1Rules.length + phase2SolinasRules.length + phase2CongruenceRules.length +
+  phase3ShiftAddRules.length
 
 /-- Phase 1 and Phase 2 rules are disjoint (different names). -/
 theorem phases_have_separate_rules :

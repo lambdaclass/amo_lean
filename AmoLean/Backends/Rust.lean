@@ -21,6 +21,8 @@
   - SPIRAL: "Automatic Implementation of Signal Processing Algorithms"
   - Fiat-Crypto: "Simple High-Level Code For Cryptographic Arithmetic"
   - Plonky3: baby-bear/goldilocks field implementations
+
+  **UNTRUSTED (Path B)**: For verified codegen, use AmoLean.Bridge.VerifiedPipeline.
 -/
 
 import AmoLean.Sigma.Expand

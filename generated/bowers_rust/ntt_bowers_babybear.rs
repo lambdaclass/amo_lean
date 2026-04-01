@@ -11,25 +11,23 @@
 
 use std::time::Instant;
 
-/// Solinas fold — e-graph selected for scalar u32 fields.
-/// Returns u64 (not u32) to avoid premature truncation in chained operations.
-/// Verified: solinasFold_mod_correct — fold(x) % p = x % p.
+/// Canonical reduction mod P.
+/// For 32-bit fields a single Solinas fold does NOT bring a u64 product into
+/// u32 range, so we use direct modular reduction.
 #[inline(always)]
-fn solinas_fold(x: u64) -> u64 {
-    ((x >> 31).wrapping_mul(134217727 as u64))
-        .wrapping_add(x & 2147483647 as u64)
+fn reduce(x: u64) -> u32 {
+    (x % 2013265921u64) as u32
 }
 
-/// DIF butterfly: a' = fold(a + b), b' = fold((p + a - b) * w).
+/// DIF butterfly: a' = reduce(a + b), b' = reduce((p + a - b) * w).
 /// Bowers G network applies ONE twiddle per block.
-/// solinas_fold returns u64 to avoid truncation; cast to u32 at storage.
 #[inline(always)]
 fn dif_butterfly(a: &mut u32, b: &mut u32, w: u32) {
     let va = *a as u64;
     let vb = *b as u64;
-    *a = solinas_fold(va + vb) as u32;
-    let diff = solinas_fold(2013265921 as u64 + va - vb);
-    *b = solinas_fold(diff.wrapping_mul(w as u64)) as u32;
+    *a = reduce(va + vb);
+    let diff = (2013265921u64 + va - vb) % 2013265921u64;
+    *b = reduce(diff.wrapping_mul(w as u64));
 }
 
 fn bit_reverse(data: &mut [u32]) {

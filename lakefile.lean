@@ -8,7 +8,7 @@ require mathlib from git
   "https://github.com/leanprover-community/mathlib4.git" @ "v4.26.0"
 
 require TrustLean from git
-  "https://github.com/manuelpuebla/trust-lean"
+  "https://github.com/manuelpuebla/trust-lean" @ "main"
 
 @[default_target]
 lean_lib «AmoLean» where
@@ -33,6 +33,10 @@ lean_exe «oracle-test» where
 -- Native executable for large-scale benchmarks
 lean_exe «fri-benchmark» where
   root := `Benchmarks.NativeBenchmark
+
+-- NTT benchmark executable (ultra/legacy pipeline)
+lean_exe «bench» where
+  root := `Bench
 
 -- Phase 0 test script: run all tests
 script «phase0-test» do

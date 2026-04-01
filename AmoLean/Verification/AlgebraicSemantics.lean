@@ -29,6 +29,35 @@ open AmoLean.Sigma (SigmaExpr Kernel Gather Scatter IdxExpr LoopVar lower lowerF
 open AmoLean.Matrix (MatExpr Perm)
 open AmoLean.NTT (IsPrimitiveRoot)
 
+-- Lean 4.26.0 compat: List.enum was removed. Provide a namespace extension.
+/-- Compatibility shim: enumerate a list with (index, value) pairs.
+    In Lean 4.26.0, `List.enum` was replaced by `List.zipIdx` which uses (value, index).
+    This preserves the old (index, value) convention used throughout this file. -/
+def _root_.List.enum {α : Type _} (l : List α) : List (Nat × α) :=
+  l.zipIdx |>.map fun (v, i) => (i, v)
+
+def _root_.List.enumFrom {α : Type _} (n : Nat) (l : List α) : List (Nat × α) :=
+  l.zipIdx n |>.map fun (v, i) => (i, v)
+
+@[simp] theorem _root_.List.enumFrom_nil {α : Type _} (n : Nat) :
+    ([] : List α).enumFrom n = [] := by simp [List.enumFrom]
+
+theorem _root_.List.enum_eq_enumFrom {α : Type _} (l : List α) :
+    l.enum = l.enumFrom 0 := by simp [List.enum, List.enumFrom]
+
+@[simp] theorem _root_.List.enumFrom_cons {α : Type _} (n : Nat) (x : α) (xs : List α) :
+    (x :: xs).enumFrom n = (n, x) :: xs.enumFrom (n + 1) := by
+  simp [List.enumFrom, List.zipIdx_cons]
+
+theorem _root_.List.fst_lt_of_mem_enum {α : Type _} {l : List α} {p : Nat × α}
+    (h : p ∈ l.enum) : p.1 < l.length := by
+  simp [List.enum] at h
+  obtain ⟨a, b, hmem, heq⟩ := h
+  have hsnd := List.snd_lt_of_mem_zipIdx hmem
+  simp at hsnd
+  have : p.1 = b := by rw [← heq]
+  omega
+
 /-! ## Part 1: Generic Memory Model -/
 
 variable {α : Type} [Field α] [DecidableEq α] [Inhabited α]
@@ -93,12 +122,12 @@ theorem read_ofList_eq_getD (l : List α) (i : Nat) :
 /-- Size of ofList equals list length -/
 @[simp]
 theorem size_ofList (l : List α) : (ofList l).size = l.length := by
-  simp only [ofList, size, Array.size_toArray]
+  simp [ofList, size]
 
 /-- toList of ofList is identity -/
 @[simp]
 theorem toList_ofList (l : List α) : (ofList l).toList = l := by
-  simp only [ofList, toList, Array.toList_toArray]
+  simp [ofList, toList]
 
 /-! ### Bridge lemmas: Memory.write ↔ List.set -/
 
@@ -110,7 +139,7 @@ theorem zeros_size [Zero α] (n : Nat) : (zeros n : Memory α).size = n := by
 /-- toList of zeros is replicate of 0 -/
 @[simp]
 theorem zeros_toList [Zero α] (n : Nat) : (zeros n : Memory α).toList = List.replicate n 0 := by
-  simp only [zeros, toList, Array.toList_mkArray]
+  simp [zeros, toList]
 
 /-- Writing to in-bounds position preserves size -/
 theorem size_write_eq [Inhabited α] (mem : Memory α) (i : Nat) (v : α) (hi : i < mem.size) :
@@ -1309,7 +1338,7 @@ theorem nested_loop_alpha (ω : α) (v1 v2 w1 w2 : LoopVar) (n m : Nat)
     | nil => rfl
     | cons x xs ih =>
       simp only [List.foldl]
-      have : f init x = g init x := hfg init x (List.mem_cons_self x xs)
+      have : f init x = g init x := hfg init x (List.mem_cons_self)
       rw [this]
       apply ih
       intro s i hi
@@ -2437,7 +2466,7 @@ private theorem scatter_enumFrom_general (vals : List α) (wm : Memory α) (k : 
     = wm.toList.take k ++ vals ++ wm.toList.drop (k + vals.length) := by
   induction vals generalizing wm k with
   | nil =>
-    simp only [List.enumFrom, List.foldl_nil, List.length_nil, Nat.add_zero,
+    simp only [List.enumFrom_nil, List.foldl_nil, List.length_nil, Nat.add_zero,
                List.append_nil, List.take_append_drop]
   | cons hd tl ih =>
     simp only [List.length_cons] at hk
@@ -2498,9 +2527,9 @@ private theorem foldl_write_enumFrom_size (vals : List α) (wm : Memory α) (k :
     (hk : k + vals.length ≤ wm.size) :
     ((vals.enumFrom k).foldl (fun acc x => acc.write x.1 x.2) wm).size = wm.size := by
   induction vals generalizing wm k with
-  | nil => simp [List.enumFrom]
+  | nil => simp [List.enumFrom_nil]
   | cons hd tl ih =>
-    simp only [List.enumFrom, List.foldl, List.length_cons] at *
+    simp only [List.enumFrom_cons, List.foldl_cons, List.length_cons] at *
     have hk_lt : k < wm.size := by omega
     have hsize : (wm.write k hd).size = wm.size := Memory.size_write_eq wm k hd hk_lt
     have hcond : (k + 1) + tl.length ≤ (wm.write k hd).size := by rw [hsize]; omega
@@ -2920,7 +2949,7 @@ theorem foldl_invariant_mem {γ β : Type*} (l : List γ) (f : β → γ → β)
   | cons x xs ih =>
     simp only [List.foldl]
     exact ih (f init x)
-      (h_step init x (List.mem_cons_self x xs) h_init)
+      (h_step init x (List.mem_cons_self) h_init)
       (fun b a ha hb => h_step b a (List.mem_cons_of_mem x ha) hb)
 
 /-- Loop size preservation: if the body of a loop preserves writeMem.size
@@ -4151,7 +4180,7 @@ private theorem evalScatter_block_eq_enumFrom [Inhabited α]
     (v : LoopVar) (m₂ i : Nat) (wm : Memory α) (vals : List α) :
     evalScatter (LoopEnv.empty.bind v i) (Scatter.block m₂ v) wm vals =
     (vals.enumFrom (i * m₂)).foldl (fun acc x => acc.write x.1 x.2) wm := by
-  simp only [evalScatter, Scatter.block, evalIdxExpr_affine_bind, List.enum,
+  simp only [evalScatter, Scatter.block, evalIdxExpr_affine_bind, List.enum_eq_enumFrom,
              Nat.zero_add, Nat.one_mul]
   have h := foldl_write_shifted vals wm (m₂ * i) 0
   simp only [Nat.add_zero] at h
@@ -4226,7 +4255,7 @@ private theorem block_scatter_loop_inv [Inhabited α]
         rw [show i * m₂ + m₂ = ((List.range i).flatMap vals).length + m₂ from by omega]
         rw [show ((List.range i).flatMap vals).length + m₂
               = ((List.range i).flatMap vals).length + m₂ from rfl]
-        rw [← List.drop_drop m₂ ((List.range i).flatMap vals).length]
+        rw [← @List.drop_drop _ m₂ ((List.range i).flatMap vals).length]
         rw [List.drop_left, List.drop_drop]
         congr 1; ring
       rw [htake, hdrop]
@@ -4361,7 +4390,7 @@ private theorem evalScatter_stride_var_eq [Inhabited α]
     evalScatter (LoopEnv.empty.bind v j)
       { count := m₁, baseAddr := .var v, stride := m₂ } wm vals =
     (vals.enumFrom 0).foldl (fun acc ⟨i, val⟩ => acc.write (j + m₂ * i) val) wm := by
-  simp only [evalScatter, evalIdxExpr_var_bind, List.enum]
+  simp only [evalScatter, evalIdxExpr_var_bind, List.enum_eq_enumFrom]
 
 /-- Size preservation for strided writes via enumFrom. -/
 private theorem stride_writes_size [Inhabited α]
@@ -4856,7 +4885,7 @@ theorem flatMap_const_length {α β : Type*} (xs : List α) (f : α → List β)
   | nil => simp
   | cons x xs ih =>
     simp only [List.map, Function.comp_apply, List.sum_cons, List.length_cons]
-    have hx := h x (List.mem_cons_self x xs)
+    have hx := h x (List.mem_cons_self)
     have hxs : ∀ y ∈ xs, (f y).length = k := fun y hy => h y (List.mem_cons_of_mem x hy)
     rw [hx, ih hxs]
     ring
@@ -5290,7 +5319,7 @@ theorem lowering_kron_axiom
       | nil => simp
       | cons x xs ih =>
         simp only [List.flatMap_cons]
-        rw [hvals_eq x (hl x (List.mem_cons_self _ _)),
+        rw [hvals_eq x (hl x (List.mem_cons_self)),
             ih (fun j hj => hl j (List.mem_cons_of_mem _ hj))]
     · -- Zero B: lower b = .nop, both sides = replicate (m₁*m₂) 0
       -- lower b is .nop
@@ -5356,7 +5385,7 @@ theorem lowering_kron_axiom
                 rw [List.length_take, List.length_drop, hv]
                 rw [Nat.min_def]; split_ifs with hle
                 · rfl
-                · have hmul := Nat.mul_le_mul_right m₂ (Nat.succ_le_of_lt (hl x (List.mem_cons_self _ _)))
+                · have hmul := Nat.mul_le_mul_right m₂ (Nat.succ_le_of_lt (hl x (List.mem_cons_self)))
                   rw [Nat.succ_mul] at hmul; omega),
               ih (fun j hj => hl j (List.mem_cons_of_mem _ hj))]
       rw [lhs_eq, rhs_eq]
@@ -5433,7 +5462,7 @@ theorem lowering_kron_axiom
             congr 1; funext idx
             have hmod : idx % m₂ < m₂ := Nat.mod_lt idx hm₂_pos
             simp only [List.getElem?_map, List.getElem?_range, hmod, ↓reduceIte,
-                        Option.map_some']
+                        Option.map_some]
             exact congrArg (fun l => l.getD (idx / m₂) default) (hvals_eq _ hmod).symm
           · next h => exact absurd h_id_b h
       rw [hrhs]
@@ -5454,9 +5483,8 @@ theorem lowering_kron_axiom
         -- h_at : some (toList[i]) = some ((vals (i % m₂))[i / m₂])
         simp only [Option.some.injEq] at h_at
         -- h_at : toList[i] = (vals (i % m₂))[i / m₂]
-        rw [h_at]; show _ = (((vals (i % m₂)).get? (i / m₂)).getD default)
-        rw [List.get?_eq_getElem? (vals (i % m₂)) (i / m₂),
-            List.getElem?_eq_getElem hv_bd, Option.getD_some]
+        rw [h_at]
+        simp [List.getD, List.getElem?_eq_getElem hv_bd]
     · -- Zero A: both sides = replicate (m₁*m₂) 0
       -- lower a = .nop
       have h_nop_a : (lower m₁ m₁ {} a).1 = .nop :=
@@ -5506,11 +5534,11 @@ theorem lowering_kron_axiom
               have hmod : i % m₂ < m₂ := Nat.mod_lt i hm₂_pos
               have hdiv : i / m₂ < m₁ := (Nat.div_lt_iff_lt_mul hm₂_pos).mpr hi
               simp only [List.getElem?_map, List.getElem?_range, hmod, ↓reduceIte,
-                          Option.map_some']
+                          Option.map_some]
               rw [ha_zero _ (by simp)]
               -- Goal: (List.replicate m₁ 0).getD (i / m₂) default = 0
-              show ((List.replicate m₁ (0 : α)).get? (i / m₂)).getD default = 0
-              rw [List.get?_eq_getElem? _ _, List.getElem?_eq_getElem (by simp; exact hdiv)]
+              rw [List.getD_eq_getElem?_getD,
+                  List.getElem?_eq_getElem (by simp; exact hdiv)]
               simp [List.getElem_replicate]
           · next h => exact absurd h_id_b h
       rw [lhs_eq, rhs_eq]
@@ -5631,7 +5659,7 @@ theorem lowering_algebraic_correct
     -- Zero case: PROVEN - lower(.zero) = .nop, writeMem starts as Memory.zeros
     simp only [evalMatExprAlg, lowerFresh, lower,
                runSigmaAlg, evalSigmaAlg, EvalState.init, Memory.zeros_toList]
-    exact List.take_of_length_le (le_of_eq (List.length_replicate k (0 : α)))
+    exact List.take_of_length_le (le_of_eq List.length_replicate)
   | .perm p =>
     -- Perm case: PROVEN - lower(.perm) = identity kernel, applyPerm is identity stub
     simp only [evalMatExprAlg, applyPerm]
