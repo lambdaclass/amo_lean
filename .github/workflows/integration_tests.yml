@@ -33,8 +33,8 @@ jobs:
     - name: Fetch Mathlib cache
       run: lake exe cache get
 
-    - name: Build library
-      run: lake build AmoLean
+    - name: Build full pipeline module
+      run: lake build AmoLean.FullPipeline
 
     - name: Run full pipeline (Lean tests + code generation)
       run: lake env lean AmoLean/FullPipeline.lean
