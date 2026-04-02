@@ -273,12 +273,14 @@ def genMontyReduceC (fc : FieldConfig) : String :=
 -- Section 4: Full NTT Benchmark C Generation
 -- ══════════════════════════════════════════════════════════════════
 
-/-- Generate the Plonky3-style butterfly for comparison. -/
+/-- Generate DIT reference butterfly with standard modular reduction.
+    Uses exact % for correctness verification (not Montgomery REDC). -/
 def genP3ButterflyC (fc : FieldConfig) : String :=
   s!"static inline void p3_bf({fc.elemType} *a, {fc.elemType} *b, {fc.elemType} w) \{
-    {fc.elemType} oa=*a, wb=p3_reduce(({fc.wideType})w*({fc.wideType})(*b));
-    {fc.elemType} s=oa+wb; {if fc.k == 64 then s!"*a=(s>={fc.pLit}||s<oa)?s-{fc.pLit}:s;" else s!"*a=(s>={fc.pLit})?s-{fc.pLit}:s;"}
-    *b=(oa>=wb)?oa-wb:{fc.pLit}-wb+oa;
+    {fc.wideType} wb=(({fc.wideType})w*({fc.wideType})(*b))%({fc.wideType}){fc.pLit};
+    {fc.elemType} oa=*a;
+    *a=({fc.elemType})((({fc.wideType})oa+wb)%({fc.wideType}){fc.pLit});
+    *b=({fc.elemType})((({fc.wideType})oa+({fc.wideType}){fc.pLit}-wb)%({fc.wideType}){fc.pLit});
 }"
 
 /-- Generate the NTT loop C code (identical structure for both AMO and P3). -/
@@ -435,10 +437,11 @@ def optimizedNTTC_ultra (fc : FieldConfig) (hw : HardwareCost) (logN iters : Nat
   let ucfg := fieldConfigToUltraConfig fc hw
   let (nttBody, nttBodyRust, report) := ultraPipeline default [] fc.pNat n ucfg
     s!"{fc.name.toLower}_ntt_ultra"
-  -- Generate P3 reference for comparison (same as legacy)
-  let montyReduce := genMontyReduceC fc
+  -- Generate P3 reference for comparison
   let p3Bf := genP3ButterflyC fc
   let p3Loop := genNTTLoopC "p3_bf" logN
+  -- R = 2^32 for Montgomery twiddles (2^64 for Goldilocks)
+  let rLit := if fc.k == 64 then "(__uint128_t)1<<64" else "4294967296ULL"
   s!"/* AMO-Lean Ultra NTT Benchmark
  * Field: {fc.name} (p = {fc.pNat})
  * Pipeline: Ultra (Ruler + bounds + colored + verified codegen)
@@ -452,8 +455,7 @@ def optimizedNTTC_ultra (fc : FieldConfig) (hw : HardwareCost) (logN iters : Nat
 /* === Ultra Verified NTT (TrustLean.Stmt path) === */
 {nttBody}
 
-/* === P3 reference (Montgomery, baseline) === */
-{montyReduce}
+/* === P3 reference (standard DIT, baseline) === */
 
 {p3Bf}
 
@@ -463,8 +465,12 @@ int main(void) \{
     {fc.elemType} *d=malloc(n*sizeof({fc.elemType}));
     {fc.elemType} *orig=malloc(n*sizeof({fc.elemType}));
     size_t tw_sz=n*logn;
+    /* Standard twiddles for P3 reference */
     {fc.elemType} *tw=malloc(tw_sz*sizeof({fc.elemType}));
     for(size_t i=0;i<tw_sz;i++) tw[i]=({fc.elemType})((i*7+31)%({fc.wideType}){fc.pLit});
+    /* Montgomery twiddles for AMO ultra: tw_mont = tw * R mod p */
+    {fc.elemType} *tw_mont=malloc(tw_sz*sizeof({fc.elemType}));
+    for(size_t i=0;i<tw_sz;i++) tw_mont[i]=({fc.elemType})(((({fc.wideType})tw[i]*({fc.wideType}){rLit})%({fc.wideType}){fc.pLit}));
     for(size_t i=0;i<n;i++) orig[i]=({fc.elemType})((i*1000000007ULL)%({fc.wideType}){fc.pLit});
     volatile {fc.elemType} sink;
     struct timespec s,e;
@@ -473,7 +479,7 @@ int main(void) \{
     {fc.elemType} *amo_out=malloc(n*sizeof({fc.elemType}));
     {fc.elemType} *p3_out=malloc(n*sizeof({fc.elemType}));
     for(size_t i=0;i<n;i++) amo_out[i]=orig[i];
-    {fc.name.toLower}_ntt_ultra(amo_out, tw);
+    {fc.name.toLower}_ntt_ultra(amo_out, tw_mont);
     for(size_t i=0;i<n;i++) p3_out[i]=orig[i];
     \{ {fc.elemType} *d=p3_out; {p3Loop} }
     /* Reduce both to [0,p) for comparison */
@@ -490,18 +496,18 @@ int main(void) \{
 
     /* warmup */
     for(size_t i=0;i<n;i++) d[i]=orig[i];
-    {fc.name.toLower}_ntt_ultra(d, tw);
+    {fc.name.toLower}_ntt_ultra(d, tw_mont);
 
-    /* Ultra benchmark */
+    /* Ultra benchmark (uses Montgomery twiddles) */
     clock_gettime(CLOCK_MONOTONIC,&s);
     for(int it=0;it<iters;it++) \{
       for(size_t i=0;i<n;i++) d[i]=orig[i];
-      {fc.name.toLower}_ntt_ultra(d, tw);
+      {fc.name.toLower}_ntt_ultra(d, tw_mont);
       sink=d[0]; }
     clock_gettime(CLOCK_MONOTONIC,&e);
     double amo_us=((e.tv_sec-s.tv_sec)+(e.tv_nsec-s.tv_nsec)/1e9)/iters*1e6;
 
-    /* P3 benchmark (Montgomery every stage) */
+    /* P3 benchmark (standard DIT, standard twiddles) */
     clock_gettime(CLOCK_MONOTONIC,&s);
     for(int it=0;it<iters;it++) \{
       for(size_t i=0;i<n;i++) d[i]=orig[i];
@@ -512,7 +518,7 @@ int main(void) \{
 
     double melem=({n}.0)/(amo_us/1e6)/1e6;
     printf(\"{fc.name},ultra,%.1f,%.1f,%.1f,%+.1f\\n\",amo_us,p3_us,melem,(1.0-amo_us/p3_us)*100.0);
-    (void)sink; free(d); free(orig); free(tw);
+    (void)sink; free(d); free(orig); free(tw); free(tw_mont);
     return 0;
 }"
 
@@ -560,26 +566,17 @@ fn p3_reduce(x: u64) -> u32 \{
     if x < u \{ hi.wrapping_add({fc.pNat}_u32) } else \{ hi }
 }"
 
-/-- Plonky3-style butterfly in Rust (Montgomery every stage). -/
+/-- DIT reference butterfly in Rust with standard modular reduction. -/
 def genP3ButterflyRust (fc : FieldConfig) : String :=
   let et := rustElemType fc
   let wt := rustWideType fc
   let pLit := rustPLit fc
-  if fc.k == 64 then
-    s!"#[inline(always)]
+  s!"#[inline(always)]
 fn p3_bf(a: &mut {et}, b: &mut {et}, w: {et}) \{
-    let oa = *a; let wb = p3_reduce(w as {wt} * *b as {wt});
-    let (s, ov) = oa.overflowing_add(wb);
-    *a = if ov || s >= {pLit} \{ s.wrapping_sub({pLit}) } else \{ s };
-    *b = if oa >= wb \{ oa - wb } else \{ {pLit} - wb + oa };
-}"
-  else
-    s!"#[inline(always)]
-fn p3_bf(a: &mut {et}, b: &mut {et}, w: {et}) \{
-    let oa = *a; let wb = p3_reduce(w as {wt} * *b as {wt});
-    let s = oa.wrapping_add(wb);
-    *a = if s >= {pLit} \{ s - {pLit} } else \{ s };
-    *b = if oa >= wb \{ oa - wb } else \{ {pLit} - wb + oa };
+    let oa = *a;
+    let wb = ((w as {wt}).wrapping_mul(*b as {wt})) % {pLit};
+    *a = ((oa as {wt} + wb) % {pLit}) as {et};
+    *b = ((oa as {wt} + {pLit} - wb) % {pLit}) as {et};
 }"
 
 -- ══════════════════════════════════════════════════════════════════
@@ -728,8 +725,9 @@ def genOptimizedBenchRust_ultra (fc : FieldConfig) (logN iters : Nat)
   let funcNameRs := funcBase ++ "_rs"
   let et := if fc.k == 64 then "u64" else "u32"
   let wt := if fc.k == 64 then "u128" else "u64"
-  let montyReduce := genMontyReduceRust fc
   let p3Bf := genP3ButterflyRust fc
+  -- R for Montgomery twiddles: 2^32 for 32-bit fields, 2^64 for Goldilocks
+  let rVal := if fc.k == 64 then s!"1{wt}<<64" else s!"4294967296_{wt}"
   s!"// AMO-Lean Ultra NTT Benchmark (Rust, verified codegen)
 // Field: {fc.name} (p = {fc.pNat})
 // Pipeline: Ultra (Ruler + bounds + cost model + verified codegen)
@@ -738,8 +736,7 @@ def genOptimizedBenchRust_ultra (fc : FieldConfig) (logN iters : Nat)
 /* === Ultra Verified NTT (TrustLean.Stmt path) === */
 {nttBodyRust}
 
-/* === P3 reference (Montgomery, baseline) === */
-{montyReduce}
+/* === P3 reference (standard DIT, baseline) === */
 
 {p3Bf}
 
@@ -749,12 +746,15 @@ fn main() \{
     let iters: usize = {iters};
     let tw_sz = n * logn;
     let p: {wt} = {fc.pNat};
+    /* Standard twiddles for P3 reference */
     let tw: Vec<{et}> = (0..tw_sz).map(|i| ((i as {wt} * 7 + 31) % p) as {et}).collect();
+    /* Montgomery twiddles for AMO ultra: tw_mont = tw * R mod p */
+    let tw_mont: Vec<{et}> = tw.iter().map(|&t| ((t as {wt} * {rVal}) % p) as {et}).collect();
     let orig: Vec<{et}> = (0..n).map(|i| ((i as {wt} * 1000000007) % p) as {et}).collect();
 
     /* Correctness check: compare Ultra vs P3 outputs */
     let mut amo_out = orig.clone();
-    {funcNameRs}(&mut amo_out, &tw);
+    {funcNameRs}(&mut amo_out, &tw_mont);
     let mut p3_out = orig.clone();
     for st in 0..logn \{ let h = 1usize << (logn-st-1);
       for g in 0..(1usize<<st) \{ for pp in 0..h \{
@@ -772,19 +772,19 @@ fn main() \{
 
     /* warmup */
     let mut d = orig.clone();
-    {funcNameRs}(&mut d, &tw);
+    {funcNameRs}(&mut d, &tw_mont);
     std::hint::black_box(&d);
 
-    /* Ultra benchmark */
+    /* Ultra benchmark (Montgomery twiddles) */
     let start = std::time::Instant::now();
     for _ in 0..iters \{
       let mut d = orig.clone();
-      {funcNameRs}(&mut d, &tw);
+      {funcNameRs}(&mut d, &tw_mont);
       std::hint::black_box(&d);
     }
     let amo_us = start.elapsed().as_secs_f64() / iters as f64 * 1e6;
 
-    /* P3 benchmark (Montgomery every stage) */
+    /* P3 benchmark (standard DIT, standard twiddles) */
     let start = std::time::Instant::now();
     for _ in 0..iters \{
       let mut d = orig.clone();

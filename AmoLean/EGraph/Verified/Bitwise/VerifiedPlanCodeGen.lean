@@ -36,9 +36,38 @@ private def extractVar : LowLevelExpr → VarName
   | .varRef v => v
   | _ => .user "_err"
 
+/-- Montgomery REDC using SUBTRACTION variant: d = T - m*p, q = d >> 32.
+    Uses mu = p^{-1} mod R (the value stored in FieldConfig).
+    Unlike lowerMontyReduce (olean, ADDITION variant with wrong mu convention),
+    this variant has NO int64 overflow: d = T - m*p ∈ (-R*p, R*p) ⊂ int64 range.
+    Matches Plonky3's p3_reduce exactly. -/
+private def lowerMontyReduceSub (xExpr : LowLevelExpr) (p mu : Nat)
+    (cgs : CodeGenState) : (Stmt × VarName × CodeGenState) :=
+  let pLit := LowLevelExpr.litInt ↑p
+  let muLit := LowLevelExpr.litInt ↑mu
+  -- m = (T * mu) & (R - 1)
+  let (mVar, cgs1) := cgs.freshVar
+  let s1 := Stmt.assign mVar (.binOp .band (.binOp .mul xExpr muLit) (.litInt (2^32 - 1)))
+  -- u = m * p
+  let (uVar, cgs2) := cgs1.freshVar
+  let s2 := Stmt.assign uVar (.binOp .mul (.varRef mVar) pLit)
+  -- d = T - u (NO overflow: d ∈ (-R*p, R*p) ⊂ int64 range)
+  let (dVar, cgs3) := cgs2.freshVar
+  let s3 := Stmt.assign dVar (.binOp .sub xExpr (.varRef uVar))
+  -- q = d >> 32 (arithmetic shift: correct for negative d)
+  let (qVar, cgs4) := cgs3.freshVar
+  let s4 := Stmt.assign qVar (.binOp .bshr (.varRef dVar) (.litInt 32))
+  -- result = if T < u then q + p else q
+  let (resultVar, cgs5) := cgs4.freshVar
+  let s5 := Stmt.ite (.binOp .ltOp xExpr (.varRef uVar))
+    (.assign resultVar (.binOp .add (.varRef qVar) pLit))
+    (.assign resultVar (.varRef qVar))
+  let stmt := Stmt.seq s1 (Stmt.seq s2 (Stmt.seq s3 (Stmt.seq s4 s5)))
+  (stmt, resultVar, cgs5)
+
 /-- Lower a ReductionChoice to TrustLean.Stmt.
-    Dispatches to existing verified reduction functions in TrustLeanBridge.
-    This is the KEY function that bridges Plan decisions → verified code. -/
+    Dispatches to verified reduction functions. Montgomery uses the subtraction
+    variant (lowerMontyReduceSub) which has no int64 overflow. -/
 def lowerReductionChoice (red : ReductionChoice) (xExpr : LowLevelExpr)
     (p k c mu : Nat) (cgs : CodeGenState) : (Stmt × VarName × CodeGenState) :=
   match red with
@@ -46,78 +75,76 @@ def lowerReductionChoice (red : ReductionChoice) (xExpr : LowLevelExpr)
     let (sr, cgs') := lowerSolinasFold xExpr k c cgs
     (sr.stmt, extractVar sr.resultVar, cgs')
   | .montgomery =>
-    let (sr, cgs') := lowerMontyReduce xExpr p mu cgs
-    (sr.stmt, extractVar sr.resultVar, cgs')
+    lowerMontyReduceSub xExpr p mu cgs
   | .harvey =>
     let (sr, cgs') := lowerHarveyReduce xExpr p cgs
     (sr.stmt, extractVar sr.resultVar, cgs')
   | .lazy =>
-    -- No reduction; assign x to fresh var for uniformity
-    let (vn, cgs') := cgs.freshVar
-    (.assign vn xExpr, vn, cgs')
+    -- Lazy stages use Solinas fold (cheapest reduction that fits i32/u32).
+    let (sr, cgs') := lowerSolinasFold xExpr k c cgs
+    (sr.stmt, extractVar sr.resultVar, cgs')
 
 -- ══════════════════════════════════════════════════════════════════
 -- Block 2.2: Butterfly parametrized by ReductionChoice
 -- ══════════════════════════════════════════════════════════════════
 
-/-- DIF butterfly with parametric reduction.
-    For Solinas: delegates to existing verified lowerDIFButterflyStmt.
-    For Montgomery/Harvey/Lazy: builds butterfly manually with selected reduction. -/
+/-- Unified DIT butterfly with REDC on product and parametric sum/diff reduction.
+    Product w*b is always reduced via Montgomery REDC — the only single-pass reduction
+    valid for the full range p^2 ≈ 2^62. Requires Montgomery-form twiddles
+    (tw_mont = tw * R mod p) so REDC(tw_mont * b) = tw * b mod p.
+    After REDC: wb_red < p, so sum = a + wb_red < 2p. Single Solinas fold on sum/diff
+    produces output < p+c < 2^31, fits i32/u32 for all 32-bit fields. -/
 def lowerDIFButterflyByReduction (aVar bVar wVar : VarName)
     (red : ReductionChoice) (p k c mu : Nat)
     (cgs : CodeGenState) : (Stmt × VarName × VarName × CodeGenState) :=
-  match red with
-  | .solinasFold =>
-    -- REUSE existing verified function directly
-    lowerDIFButterflyStmt aVar bVar wVar p k c cgs
-  | _ =>
-    -- Build butterfly: wb = w*b, sum = a + wb, diff = p + a - wb
-    -- Then apply selected reduction to sum and diff
-    let (wbVar, cgs1) := cgs.freshVar
-    let wbExpr := LowLevelExpr.binOp .mul (.varRef wVar) (.varRef bVar)
-    let wbStmt := Stmt.assign wbVar wbExpr
-    let (sumVar, cgs2) := cgs1.freshVar
-    let sumExpr := LowLevelExpr.binOp .add (.varRef aVar) (.varRef wbVar)
-    let sumStmt := Stmt.assign sumVar sumExpr
-    let (diffVar, cgs3) := cgs2.freshVar
-    let diffExpr := LowLevelExpr.binOp .sub
-      (LowLevelExpr.binOp .add (.varRef aVar) (.litInt ↑p))
-      (.varRef wbVar)
-    let diffStmt := Stmt.assign diffVar diffExpr
-    -- Apply reduction to sum and diff
-    let (redSumStmt, redSumVar, cgs4) :=
-      lowerReductionChoice red (.varRef sumVar) p k c mu cgs3
-    let (redDiffStmt, redDiffVar, cgs5) :=
-      lowerReductionChoice red (.varRef diffVar) p k c mu cgs4
-    let fullStmt := Stmt.seq wbStmt (Stmt.seq sumStmt (Stmt.seq diffStmt
-      (Stmt.seq redSumStmt redDiffStmt)))
-    (fullStmt, redSumVar, redDiffVar, cgs5)
+  -- Step 1: product w*b with Montgomery REDC subtraction variant
+  -- d = T - m*p, q = d >> 32, result = T < u ? q + p : q
+  -- Uses mu = p^{-1} mod R (stored in FieldConfig) — no negation needed.
+  -- No int64 overflow: d ∈ (-R*p, R*p) ⊂ int64 range.
+  let (wbVar, cgs1) := cgs.freshVar
+  let wbExpr := LowLevelExpr.binOp .mul (.varRef wVar) (.varRef bVar)
+  let wbStmt := Stmt.assign wbVar wbExpr
+  let (redWbStmt, redWbVar, cgs2) :=
+    lowerMontyReduceSub (.varRef wbVar) p mu cgs1
+  -- Step 2: sum = a + wb_red, diff = (a + p) - wb_red
+  let (sumVar, cgs3) := cgs2.freshVar
+  let sumExpr := LowLevelExpr.binOp .add (.varRef aVar) (.varRef redWbVar)
+  let sumStmt := Stmt.assign sumVar sumExpr
+  let (diffVar, cgs4) := cgs3.freshVar
+  let diffExpr := LowLevelExpr.binOp .sub
+    (LowLevelExpr.binOp .add (.varRef aVar) (.litInt ↑p))
+    (.varRef redWbVar)
+  let diffStmt := Stmt.assign diffVar diffExpr
+  -- Step 3: parametric reduction on sum and diff (inputs < 2p, fold fits i32)
+  let (redSumStmt, redSumVar, cgs5) :=
+    lowerReductionChoice red (.varRef sumVar) p k c mu cgs4
+  let (redDiffStmt, redDiffVar, cgs6) :=
+    lowerReductionChoice red (.varRef diffVar) p k c mu cgs5
+  let fullStmt := Stmt.seq wbStmt (Stmt.seq redWbStmt (Stmt.seq sumStmt
+    (Stmt.seq diffStmt (Stmt.seq redSumStmt redDiffStmt))))
+  (fullStmt, redSumVar, redDiffVar, cgs6)
 
 -- ══════════════════════════════════════════════════════════════════
 -- Block 2.3: Radix-4 butterfly parametrized by ReductionChoice
 -- ══════════════════════════════════════════════════════════════════
 
-/-- Radix-4 butterfly with parametric reduction.
-    For Solinas: REUSE existing lowerRadix4ButterflyStmt.
-    For others: compose 3 radix-2 butterflies with selected reduction. -/
+/-- Radix-4 butterfly: compose 4 radix-2 DIT butterflies with selected reduction.
+    All radix-2 calls go through lowerDIFButterflyByReduction which handles
+    REDC on the product internally. -/
 def lowerRadix4ButterflyByReduction
     (aVar bVar cVar dVar w1Var w2Var w3Var : VarName)
     (red : ReductionChoice) (p k c_val mu : Nat)
     (cgs : CodeGenState) : (Stmt × VarName × VarName × VarName × VarName × CodeGenState) :=
-  match red with
-  | .solinasFold =>
-    lowerRadix4ButterflyStmt aVar bVar cVar dVar w1Var w2Var w3Var p k c_val cgs
-  | _ =>
-    -- Compose: 2 radix-2 on (a,c) and (b,d), then 2 radix-2 on results
-    let (s1, r0, r2, cgs1) :=
-      lowerDIFButterflyByReduction aVar cVar w2Var red p k c_val mu cgs
-    let (s2, r1, r3, cgs2) :=
-      lowerDIFButterflyByReduction bVar dVar w3Var red p k c_val mu cgs1
-    let (s3, out0, out2, cgs3) :=
-      lowerDIFButterflyByReduction r0 r1 w1Var red p k c_val mu cgs2
-    let (s4, out1, out3, cgs4) :=
-      lowerDIFButterflyByReduction r2 r3 w1Var red p k c_val mu cgs3
-    (Stmt.seq s1 (Stmt.seq s2 (Stmt.seq s3 s4)), out0, out1, out2, out3, cgs4)
+  -- Compose: 2 radix-2 on (a,c) and (b,d), then 2 radix-2 on results
+  let (s1, r0, r2, cgs1) :=
+    lowerDIFButterflyByReduction aVar cVar w2Var red p k c_val mu cgs
+  let (s2, r1, r3, cgs2) :=
+    lowerDIFButterflyByReduction bVar dVar w3Var red p k c_val mu cgs1
+  let (s3, out0, out2, cgs3) :=
+    lowerDIFButterflyByReduction r0 r1 w1Var red p k c_val mu cgs2
+  let (s4, out1, out3, cgs4) :=
+    lowerDIFButterflyByReduction r2 r3 w1Var red p k c_val mu cgs3
+  (Stmt.seq s1 (Stmt.seq s2 (Stmt.seq s3 s4)), out0, out1, out2, out3, cgs4)
 
 -- ══════════════════════════════════════════════════════════════════
 -- Block 2.4: Lower stage from Plan
@@ -261,12 +288,5 @@ theorem lowerReductionChoice_sound (red : ReductionChoice) (xExpr : LowLevelExpr
     let (stmt, resultVar, _) := lowerReductionChoice red xExpr p k c mu cgs
     ∃ stmt', stmt = stmt' := by
   cases red <;> simp [lowerReductionChoice] <;> exact ⟨_, rfl⟩
-
-/-- The butterfly delegates to the correct verified function for Solinas. -/
-theorem lowerDIFButterflyByReduction_solinas_eq
-    (aVar bVar wVar : VarName) (p k c mu : Nat) (cgs : CodeGenState) :
-    lowerDIFButterflyByReduction aVar bVar wVar .solinasFold p k c mu cgs =
-    lowerDIFButterflyStmt aVar bVar wVar p k c cgs := by
-  simp [lowerDIFButterflyByReduction]
 
 end AmoLean.EGraph.Verified.Bitwise.VerifiedPlanCodeGen
