@@ -213,22 +213,33 @@ def emitCFromPlanVerified (plan : Plan) (k c mu : Nat)
   let bodyC := _root_.TrustLean.stmtToC 1 stmt
   s!"void {funcName}({elemType}* data, const {elemType}* twiddles) \{\n{tempDecls}{bodyC}\n}"
 
-/-- Emit verified Rust function from Plan. -/
+/-- Emit verified Rust function from Plan.
+    Uses SIGNED types (i32/i64) internally, matching C's int32_t/int64_t exactly.
+    This ensures identical semantics for truncation (i64→i32 preserves low 32 bits),
+    sign-extension (i32→i64 preserves sign), and arithmetic shift (i64 >> k sign-fills).
+    Using unsigned types (u32/u64) breaks all three: zero-extension corrupts negative
+    intermediates, logical shift breaks Solinas fold on truncated values.
+    The function signature keeps u32 arrays for API compatibility; an unsafe transmute
+    reinterprets u32↔i32 internally (same bit representation, zero-cost). -/
 def emitRustFromPlanVerified (plan : Plan) (k c mu : Nat)
     (funcName : String) : String :=
   let stmt := lowerNTTFromPlanVerified plan k c mu
-  let elemType := if k == 64 then "u64" else "u32"
-  let wideType := "u64"  -- intermediates always unsigned 64-bit
+  let uElemType := if k == 64 then "u64" else "u32"
+  let elemType := if k == 64 then "i64" else "i32"
+  let wideType := "i64"
   let numTemps := maxTempsInPlan plan k c mu
   let tempDecls := String.join (List.range numTemps |>.map fun i =>
     s!"  let mut t{i}: {wideType};\n")
   let loopDecls := s!"  let mut group: {wideType};\n  let mut pair: {wideType};\n" ++
     s!"  let mut a_val: {wideType};\n  let mut b_val: {wideType};\n  let mut w_val: {wideType};\n"
-  -- TrustLean emits i64 literals/ops; replace with unsigned equivalents
+  -- Transmute u32↔i32 at function entry (zero-cost reinterpret, same bit layout)
+  let transmute :=
+    s!"  let data: &mut [{elemType}] = unsafe \{ &mut *(data as *mut [{uElemType}] as *mut [{elemType}]) };\n" ++
+    s!"  let twiddles: &[{elemType}] = unsafe \{ &*(twiddles as *const [{uElemType}] as *const [{elemType}]) };\n"
   let bodyRust := _root_.TrustLean.stmtToRust 1 stmt
-  -- Patch loads: "var = data[idx as usize];" → "var = data[idx as usize] as u64;"
+  -- Patch loads: i32 → i64 sign-extension (matching C's int32→int64 promotion)
   let bodyRust := bodyRust.replace " as usize];" s!" as usize] as {wideType};"
-  -- Patch stores: "data[idx as usize] = tN;" → "data[idx as usize] = tN as u32;"
+  -- Patch stores: i64 → i32 truncation (matching C's (int32_t) cast)
   let lines := bodyRust.splitOn "\n"
   let fixedLines := lines.map fun line =>
     let isStore := (line.splitOn "data[").length > 1 &&
@@ -237,7 +248,7 @@ def emitRustFromPlanVerified (plan : Plan) (k c mu : Nat)
     if isStore then line.replace ";" s!" as {elemType};"
     else line
   let bodyRust := "\n".intercalate fixedLines
-  s!"fn {funcName}(data: &mut [{elemType}], twiddles: &[{elemType}]) \{\n{tempDecls}{loopDecls}{bodyRust}\n}"
+  s!"fn {funcName}(data: &mut [{uElemType}], twiddles: &[{uElemType}]) \{\n{tempDecls}{loopDecls}{transmute}{bodyRust}\n}"
 
 -- ══════════════════════════════════════════════════════════════════
 -- Block 2.8: Theorems
