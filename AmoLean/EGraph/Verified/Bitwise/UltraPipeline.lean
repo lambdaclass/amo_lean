@@ -152,6 +152,11 @@ def ultraPipeline (g : MixedEGraph)
       cfg.cacheConfig with
     | some best => best
     | none => schedulePlan
+  -- Validate total NTT coverage (safety net — normalizePlan in lowerNTTFromPlanVerified
+  -- handles codegen, but catch bad plans before generating code)
+  let planLevels := plan.stages.foldl (fun acc s =>
+    acc + match s.radix with | .r2 => 1 | .r4 => 2) 0
+  let plan := if planLevels == logN then plan else schedulePlan
 
   -- ── Gap 4: Verified codegen via TrustLean.Stmt ──
   let code := emitCFromPlanVerified plan cfg.k cfg.c cfg.mu funcName

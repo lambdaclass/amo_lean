@@ -130,21 +130,27 @@ def lowerDIFButterflyByReduction (aVar bVar wVar : VarName)
 
 /-- Radix-4 butterfly: compose 4 radix-2 DIT butterflies with selected reduction.
     All radix-2 calls go through lowerDIFButterflyByReduction which handles
-    REDC on the product internally. -/
+    REDC on the product internally.
+    Uses 4 twiddles: w1/w1p for outer cross-butterflies (groups 2g/2g+1 at level L+1),
+    w2/w3 for inner butterflies (even/odd pairs at level L).
+    Returns outputs in DIT data-position order: (pos0, pos1, pos2, pos3)
+    where pos0=out0 (sum@i0), pos1=out2 (diff@i1), pos2=out1 (sum@i2), pos3=out3 (diff@i3). -/
 def lowerRadix4ButterflyByReduction
-    (aVar bVar cVar dVar w1Var w2Var w3Var : VarName)
+    (aVar bVar cVar dVar w1Var w1pVar w2Var w3Var : VarName)
     (red : ReductionChoice) (p k c_val mu : Nat)
     (cgs : CodeGenState) : (Stmt × VarName × VarName × VarName × VarName × CodeGenState) :=
-  -- Compose: 2 radix-2 on (a,c) and (b,d), then 2 radix-2 on results
+  -- Inner level L: bf2 on even-indexed (a,c) and odd-indexed (b,d)
   let (s1, r0, r2, cgs1) :=
     lowerDIFButterflyByReduction aVar cVar w2Var red p k c_val mu cgs
   let (s2, r1, r3, cgs2) :=
     lowerDIFButterflyByReduction bVar dVar w3Var red p k c_val mu cgs1
+  -- Outer level L+1: cross-butterflies use DIFFERENT twiddles (groups 2g and 2g+1)
   let (s3, out0, out2, cgs3) :=
     lowerDIFButterflyByReduction r0 r1 w1Var red p k c_val mu cgs2
   let (s4, out1, out3, cgs4) :=
-    lowerDIFButterflyByReduction r2 r3 w1Var red p k c_val mu cgs3
-  (Stmt.seq s1 (Stmt.seq s2 (Stmt.seq s3 s4)), out0, out1, out2, out3, cgs4)
+    lowerDIFButterflyByReduction r2 r3 w1pVar red p k c_val mu cgs3
+  -- DIT data-position order: sum@i0, diff@i1, sum@i2, diff@i3
+  (Stmt.seq s1 (Stmt.seq s2 (Stmt.seq s3 s4)), out0, out2, out1, out3, cgs4)
 
 -- ══════════════════════════════════════════════════════════════════
 -- Block 2.4: Lower stage from Plan
@@ -165,9 +171,78 @@ private def nttTwiddleIndex (stageIdx : Nat) (groupVar pairVar : VarName)
       (.binOp .mul (.varRef groupVar) (.litInt ↑halfSize))
       (.varRef pairVar))
 
+/-- Lower a radix-4 NTT stage to TrustLean.Stmt.
+    Covers 2 NTT levels (L and L+1) in one stage. Uses 4 data loads, 4 twiddle loads,
+    the fixed R4 butterfly, and 4 stores. Twiddle indices reuse nttTwiddleIndex + offset.
+    Requires stageIdx = NTT level (post normalizePlan). -/
+private def lowerStageR4 (stage : NTTStage) (n p k c mu : Nat) : Stmt :=
+  let L := stage.stageIdx
+  let quarterSize := n / (2 ^ (L + 2))
+  let halfSizeL := 2 * quarterSize
+  let numGroups := 2 ^ L
+  let groupVar := VarName.user "group"
+  let pairVar := VarName.user "pair"
+  let cgs : CodeGenState := {}
+  let bfBody :=
+    let aVar := VarName.user "a_val"
+    let bVar := VarName.user "b_val"
+    let cVar := VarName.user "c_val"
+    let dVar := VarName.user "d_val"
+    let w1Var := VarName.user "w1_val"
+    let w1pVar := VarName.user "w1p_val"
+    let w2Var := VarName.user "w2_val"
+    let w3Var := VarName.user "w3_val"
+    let dataVar := VarName.user "data"
+    let twVar := VarName.user "twiddles"
+    -- Data indices: base = g·4q + pair, then +q, +2q, +3q
+    let baseExpr := nttDataIndex groupVar pairVar halfSizeL
+    let i0 := baseExpr
+    let i1 := .binOp .add baseExpr (.litInt ↑quarterSize)
+    let i2 := .binOp .add baseExpr (.litInt ↑(2 * quarterSize))
+    let i3 := .binOp .add baseExpr (.litInt ↑(3 * quarterSize))
+    -- Twiddle indices: reuse nttTwiddleIndex + offset
+    -- w2: level L, group g, pair p (inner even)
+    let tw2 := nttTwiddleIndex L groupVar pairVar halfSizeL n
+    -- w3: level L, group g, pair p+q (inner odd)
+    let tw3 := .binOp .add (nttTwiddleIndex L groupVar pairVar halfSizeL n) (.litInt ↑quarterSize)
+    -- w1: level L+1, group 2g, pair p (outer first) — 2g·q = g·2q = g·halfSizeL
+    let tw1 := nttTwiddleIndex (L + 1) groupVar pairVar halfSizeL n
+    -- w1': level L+1, group 2g+1, pair p (outer second)
+    let tw1p := .binOp .add (nttTwiddleIndex (L + 1) groupVar pairVar halfSizeL n)
+      (.litInt ↑quarterSize)
+    -- R4 butterfly returns (pos0, pos1, pos2, pos3) in data-position order
+    let (bf, pos0, pos1, pos2, pos3, _) :=
+      lowerRadix4ButterflyByReduction aVar bVar cVar dVar
+        w1Var w1pVar w2Var w3Var stage.reduction p k c mu cgs
+    -- Load 4 data + 4 twiddles → butterfly → store 4 results
+    Stmt.seq (Stmt.load aVar (.varRef dataVar) i0)
+      (Stmt.seq (Stmt.load bVar (.varRef dataVar) i1)
+        (Stmt.seq (Stmt.load cVar (.varRef dataVar) i2)
+          (Stmt.seq (Stmt.load dVar (.varRef dataVar) i3)
+            (Stmt.seq (Stmt.load w2Var (.varRef twVar) tw2)
+              (Stmt.seq (Stmt.load w3Var (.varRef twVar) tw3)
+                (Stmt.seq (Stmt.load w1Var (.varRef twVar) tw1)
+                  (Stmt.seq (Stmt.load w1pVar (.varRef twVar) tw1p)
+                    (Stmt.seq bf
+                      (Stmt.seq (Stmt.store (.varRef dataVar) i0 (.varRef pos0))
+                        (Stmt.seq (Stmt.store (.varRef dataVar) i1 (.varRef pos1))
+                          (Stmt.seq (Stmt.store (.varRef dataVar) i2 (.varRef pos2))
+                            (Stmt.store (.varRef dataVar) i3 (.varRef pos3)))))))))))))
+  Stmt.for_
+    (.assign groupVar (.litInt 0)) (.binOp .ltOp (.varRef groupVar) (.litInt ↑numGroups))
+    (.assign groupVar (.binOp .add (.varRef groupVar) (.litInt 1)))
+    (Stmt.for_
+      (.assign pairVar (.litInt 0)) (.binOp .ltOp (.varRef pairVar) (.litInt ↑quarterSize))
+      (.assign pairVar (.binOp .add (.varRef pairVar) (.litInt 1)))
+      bfBody)
+
 /-- Lower a single NTTStage to TrustLean.Stmt with nested for-loops.
-    The butterfly and reduction are determined by the stage's Plan entry. -/
+    Dispatches by radix: R4 stages use lowerStageR4 (4-point butterfly, 2 NTT levels).
+    R2 stages use the original path (unchanged). -/
 def lowerStageVerified (stage : NTTStage) (n p k c mu : Nat) : Stmt :=
+  match stage.radix with
+  | .r4 => lowerStageR4 stage n p k c mu
+  | _ =>
   let halfSize := n / (2 ^ (stage.stageIdx + 1))
   let numGroups := 2 ^ stage.stageIdx
   let groupVar := VarName.user "group"
@@ -203,10 +278,25 @@ def lowerStageVerified (stage : NTTStage) (n p k c mu : Nat) : Stmt :=
 -- Block 2.5: Lower NTT from Plan
 -- ══════════════════════════════════════════════════════════════════
 
+/-- Remap stageIdx from sequential counter to NTT level.
+    R2 stages consume 1 level, R4 stages consume 2 levels.
+    After normalization, lowerStageVerified computes correct geometry.
+    Idempotent for R2-only plans (stageIdx = level = sequential counter). -/
+def normalizePlan (plan : Plan) : Plan :=
+  let (newStages, _) := plan.stages.foldl
+    (fun (acc : Array NTTStage × Nat) stage =>
+      let (stages, level) := acc
+      let newStage := { stage with stageIdx := level }
+      let levelsConsumed := match stage.radix with | .r2 => 1 | .r4 => 2
+      (stages.push newStage, level + levelsConsumed)) (#[], 0)
+  { plan with stages := newStages }
+
 /-- Lower a complete NTT from Plan to TrustLean.Stmt.
     Each stage may use a different reduction strategy.
-    This replaces NTTPlanCodeGen.lowerNTTFromPlan (which used UnifiedCodeGen.Stmt). -/
+    Normalizes the plan first so stageIdx = NTT level (covers all callers:
+    ultraPipeline, emitPlanBasedNTTC, and any future consumer). -/
 def lowerNTTFromPlanVerified (plan : Plan) (k c mu : Nat) : Stmt :=
+  let plan := normalizePlan plan
   let stmts := plan.stages.toList.map fun stage =>
     lowerStageVerified stage plan.size plan.field k c mu
   stmts.foldl Stmt.seq Stmt.skip
@@ -215,16 +305,30 @@ def lowerNTTFromPlanVerified (plan : Plan) (k c mu : Nat) : Stmt :=
 -- Block 2.6: Emit C and Rust from verified Plan
 -- ══════════════════════════════════════════════════════════════════
 
-/-- Count maximum temp variables used across all stages. -/
+/-- Count maximum temp variables used across all stages.
+    Dispatches by radix: R4 dry-runs lowerRadix4ButterflyByReduction (~20 temps),
+    R2 dry-runs lowerDIFButterflyByReduction (~5 temps). -/
 private def maxTempsInPlan (plan : Plan) (k c mu : Nat) : Nat :=
   let counts := plan.stages.toList.map fun stage =>
     let cgs : CodeGenState := {}
     let aVar := VarName.user "a_val"
     let bVar := VarName.user "b_val"
     let wVar := VarName.user "w_val"
-    let (_, _, _, cgs') :=
-      lowerDIFButterflyByReduction aVar bVar wVar stage.reduction plan.field k c mu cgs
-    cgs'.nextVar
+    match stage.radix with
+    | .r4 =>
+      let cVar := VarName.user "c_val"
+      let dVar := VarName.user "d_val"
+      let w1pVar := VarName.user "w1p_val"
+      let w2Var := VarName.user "w2_val"
+      let w3Var := VarName.user "w3_val"
+      let (_, _, _, _, _, cgs') :=
+        lowerRadix4ButterflyByReduction aVar bVar cVar dVar wVar w1pVar w2Var w3Var
+          stage.reduction plan.field k c mu cgs
+      cgs'.nextVar
+    | _ =>
+      let (_, _, _, cgs') :=
+        lowerDIFButterflyByReduction aVar bVar wVar stage.reduction plan.field k c mu cgs
+      cgs'.nextVar
   counts.foldl Nat.max 0
 
 /-- Emit verified C function from Plan.
