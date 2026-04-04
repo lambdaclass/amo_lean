@@ -18,6 +18,7 @@
 import AmoLean.EGraph.Verified.Bitwise.RulerBridge
 import AmoLean.EGraph.Verified.Bitwise.ColoredExtraction
 import AmoLean.EGraph.Verified.Bitwise.VerifiedPlanCodeGen
+import AmoLean.EGraph.Verified.Bitwise.SIMDEmitter
 import AmoLean.EGraph.Verified.Matrix.CrossEGraphBridge
 
 set_option autoImplicit false
@@ -50,6 +51,8 @@ open AmoLean.EGraph.Verified.Bitwise.PlanSelection (CacheConfig
 -- Phase 23 verified codegen (Gap 4: TrustLean.Stmt path)
 open AmoLean.EGraph.Verified.Bitwise.VerifiedPlanCodeGen (emitCFromPlanVerified
   emitRustFromPlanVerified lowerNTTFromPlanVerified)
+-- SIMD emission (Fase SIMD v3.1.0)
+open AmoLean.EGraph.Verified.Bitwise.SIMDEmitter (emitSIMDNTTC SIMDTarget)
 
 -- Phase 24 imports
 open AmoLean.EGraph.Verified.Matrix (TransformId FactorizationTree BreakdownRule
@@ -159,7 +162,11 @@ def ultraPipeline (g : MixedEGraph)
   let plan := if planLevels == logN then plan else schedulePlan
 
   -- ── Gap 4: Verified codegen via TrustLean.Stmt ──
-  let code := emitCFromPlanVerified plan cfg.k cfg.c cfg.mu funcName
+  let simdTarget := if cfg.hw.simdLanes == 8 then SIMDTarget.avx2 else SIMDTarget.neon
+  let code := if cfg.hw.isSimd then
+    emitSIMDNTTC plan simdTarget cfg.k cfg.c cfg.mu funcName
+  else
+    emitCFromPlanVerified plan cfg.k cfg.c cfg.mu funcName
   let rustCode := emitRustFromPlanVerified plan cfg.k cfg.c cfg.mu
     (funcName ++ "_rs")
 
