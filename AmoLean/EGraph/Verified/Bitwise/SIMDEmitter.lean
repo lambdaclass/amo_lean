@@ -245,9 +245,10 @@ private def emitStageC (stage : NTTStage) (n p k c mu : Nat) (lanes : Nat)
 -- ══════════════════════════════════════════════════════════════════
 
 /-- Temp variable declarations for scalar fallback stages.
-    Generous count covers R4 (up to ~25 temps) and R2 (~10 temps). -/
+    R4 with Solinas fold needs ~64 temps (4 R2 × 16 temps each).
+    R4 with Harvey needs ~40 temps. Use 70 to be safe. -/
 private def scalarTempDecls (hasR4 : Bool) : String :=
-  let numTemps := if hasR4 then 50 else 30
+  let numTemps := if hasR4 then 80 else 30
   let temps := String.intercalate ", " (List.range numTemps |>.map (s!"t{·}"))
   let r4Extra := if hasR4 then
     "\n  int64_t c_val, d_val, w1_val, w1p_val, w2_val, w3_val;"

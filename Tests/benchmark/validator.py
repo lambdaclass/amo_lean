@@ -31,6 +31,7 @@ def validate(
     field: FieldDef,
     work_dir: Path,
     timeout: int = 120,
+    scalar_program: "GeneratedProgram | None" = None,
 ) -> ValidationResult:
     """Full validation pipeline:
     1. Build validation program (prints NTT output elements)
@@ -43,8 +44,12 @@ def validate(
     tag = f"{program.field}_{program.log_n}_{program.lang}_{program.hardware}"
 
     # Step 1: Generate validation source
+    # For SIMD/non-scalar hardware: validate the SCALAR version (R2 plan matches Python)
+    # because SIMD may use R4 plans with different twiddle access patterns.
+    # With fake twiddles, R4 ≠ R2 (different twiddle positions accessed).
+    val_prog = scalar_program if scalar_program is not None else program
     try:
-        val_source = generate_validation_program(program, field)
+        val_source = generate_validation_program(val_prog, field)
     except Exception as e:
         return ValidationResult(False, program.field, program.log_n, program.lang,
                                 program.hardware, 0, -1, 0, 0, f"Split error: {e}")

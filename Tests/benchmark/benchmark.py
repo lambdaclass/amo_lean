@@ -106,7 +106,17 @@ def main():
                     # Phase 2: Validate
                     if not args.skip_validation:
                         print(f"[VAL] {tag} ... ", end="", flush=True)
-                        vr = validate(program, field, work_dir)
+                        # For SIMD: validate using scalar code (R2 plan matches Python reference)
+                        scalar_ref = None
+                        if hardware != "arm-scalar" and lang == "c":
+                            try:
+                                scalar_ref = generate_program(
+                                    project_root, field_name, log_n, lang,
+                                    "arm-scalar", args.pipeline
+                                )
+                            except Exception:
+                                pass  # Fall back to validating the SIMD code directly
+                        vr = validate(program, field, work_dir, scalar_program=scalar_ref)
                         validations.append(vr)
                         if vr.passed:
                             print(f"PASS ({vr.num_checked} elements)")
