@@ -338,9 +338,13 @@ def emitCFromPlanVerified (plan : Plan) (k c mu : Nat)
   let stmt := lowerNTTFromPlanVerified plan k c mu
   let elemType := if k == 64 then "int64_t" else "int32_t"
   let numTemps := maxTempsInPlan plan k c mu
+  let hasR4 := plan.stages.toList.any fun s => s.radix == .r4
+  let r4Decls := if hasR4 then
+    "\n  int64_t c_val, d_val, w1_val, w1p_val, w2_val, w3_val;"
+  else ""
   let tempDecls := if numTemps == 0 then "" else
     "  int64_t " ++ String.intercalate ", " (List.range numTemps |>.map (s!"t{·}")) ++ ";\n" ++
-    "  int64_t group, pair, a_val, b_val, w_val;\n"
+    "  int64_t group, pair, a_val, b_val, w_val;" ++ r4Decls ++ "\n"
   let bodyC := _root_.TrustLean.stmtToC 1 stmt
   s!"void {funcName}({elemType}* data, const {elemType}* twiddles) \{\n{tempDecls}{bodyC}\n}"
 
@@ -361,8 +365,15 @@ def emitRustFromPlanVerified (plan : Plan) (k c mu : Nat)
   let numTemps := maxTempsInPlan plan k c mu
   let tempDecls := String.join (List.range numTemps |>.map fun i =>
     s!"  let mut t{i}: {wideType};\n")
+  let hasR4 := plan.stages.toList.any fun s => s.radix == .r4
+  let r4Decls := if hasR4 then
+    s!"  let mut c_val: {wideType};\n  let mut d_val: {wideType};\n" ++
+    s!"  let mut w1_val: {wideType};\n  let mut w1p_val: {wideType};\n" ++
+    s!"  let mut w2_val: {wideType};\n  let mut w3_val: {wideType};\n"
+  else ""
   let loopDecls := s!"  let mut group: {wideType};\n  let mut pair: {wideType};\n" ++
-    s!"  let mut a_val: {wideType};\n  let mut b_val: {wideType};\n  let mut w_val: {wideType};\n"
+    s!"  let mut a_val: {wideType};\n  let mut b_val: {wideType};\n  let mut w_val: {wideType};\n" ++
+    r4Decls
   -- Transmute u32↔i32 at function entry (zero-cost reinterpret, same bit layout)
   let transmute :=
     s!"  let data: &mut [{elemType}] = unsafe \{ &mut *(data as *mut [{uElemType}] as *mut [{elemType}]) };\n" ++
