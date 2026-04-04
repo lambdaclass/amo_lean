@@ -44,10 +44,9 @@ def validate(
     tag = f"{program.field}_{program.log_n}_{program.lang}_{program.hardware}"
 
     # Step 1: Generate validation source
-    # For SIMD/non-scalar hardware: validate the SCALAR version (R2 plan matches Python)
-    # because SIMD may use R4 plans with different twiddle access patterns.
-    # With fake twiddles, R4 ≠ R2 (different twiddle positions accessed).
-    val_prog = scalar_program if scalar_program is not None else program
+    # With real roots of unity, R4 and R2 produce the same NTT result.
+    # No need for scalar fallback — validate the actual generated code directly.
+    val_prog = program
     try:
         val_source = generate_validation_program(val_prog, field)
     except Exception as e:

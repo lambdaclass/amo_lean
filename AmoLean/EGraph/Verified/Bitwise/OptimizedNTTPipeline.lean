@@ -459,15 +459,33 @@ def optimizedNTTC_ultra (fc : FieldConfig) (hw : HardwareCost) (logN iters : Nat
 
 {p3Bf}
 
+/* Modular exponentiation: base^exp mod m */
+static {fc.wideType} mod_pow({fc.wideType} base, {fc.wideType} exp, {fc.wideType} m) \{
+    {fc.wideType} result = 1;
+    base %= m;
+    while (exp > 0) \{
+        if (exp & 1) result = ({fc.wideType})(((unsigned __int128)result * base) % m);
+        base = ({fc.wideType})(((unsigned __int128)base * base) % m);
+        exp >>= 1;
+    }
+    return result;
+}
+
 int main(void) \{
     size_t n={n}, logn={logN};
     int iters={iters};
     {fc.elemType} *d=malloc(n*sizeof({fc.elemType}));
     {fc.elemType} *orig=malloc(n*sizeof({fc.elemType}));
     size_t tw_sz=n*logn;
-    /* Standard twiddles for P3 reference */
+    /* Real roots of unity: omega_n = g^((p-1)/n) mod p */
+    {fc.wideType} p_val = ({fc.wideType}){fc.pLit};
+    {fc.wideType} omega_n = mod_pow({fc.genLit}, (p_val - 1) / n, p_val);
     {fc.elemType} *tw=malloc(tw_sz*sizeof({fc.elemType}));
-    for(size_t i=0;i<tw_sz;i++) tw[i]=({fc.elemType})((i*7+31)%({fc.wideType}){fc.pLit});
+    for(size_t st=0;st<logn;st++) \{
+        size_t h=1u<<(logn-1-st);
+        for(size_t g=0;g<(1u<<st);g++) for(size_t pp=0;pp<h;pp++)
+            tw[st*(n/2)+g*h+pp]=({fc.elemType})mod_pow(omega_n, pp*(1ULL<<st), p_val);
+    }
     /* Montgomery twiddles for AMO ultra: tw_mont = tw * R mod p */
     {fc.elemType} *tw_mont=malloc(tw_sz*sizeof({fc.elemType}));
     for(size_t i=0;i<tw_sz;i++) tw_mont[i]=({fc.elemType})(((({fc.wideType})tw[i]*({fc.wideType}){rLit})%({fc.wideType}){fc.pLit}));
@@ -740,14 +758,34 @@ def genOptimizedBenchRust_ultra (fc : FieldConfig) (logN iters : Nat)
 
 {p3Bf}
 
+fn mod_pow(mut base: {wt}, mut exp: {wt}, m: {wt}) -> {wt} \{
+    let mut result: {wt} = 1;
+    base %= m;
+    while exp > 0 \{
+        if exp & 1 == 1 \{ result = ((result as u128 * base as u128) % m as u128) as {wt}; }
+        base = ((base as u128 * base as u128) % m as u128) as {wt};
+        exp >>= 1;
+    }
+    result
+}
+
 fn main() \{
     let n: usize = {n};
     let logn: usize = {logN};
     let iters: usize = {iters};
     let tw_sz = n * logn;
     let p: {wt} = {fc.pNat};
-    /* Standard twiddles for P3 reference */
-    let tw: Vec<{et}> = (0..tw_sz).map(|i| ((i as {wt} * 7 + 31) % p) as {et}).collect();
+    /* Real roots of unity: omega_n = g^((p-1)/n) mod p */
+    let omega_n = mod_pow({fc.genLit}, (p - 1) / n as {wt}, p);
+    let mut tw: Vec<{et}> = vec![0; tw_sz];
+    for st in 0..logn \{
+        let h = 1usize << (logn - 1 - st);
+        for g in 0..(1usize << st) \{
+            for pp in 0..h \{
+                tw[st * (n/2) + g * h + pp] = mod_pow(omega_n, (pp as {wt}) * (1{wt} << st), p) as {et};
+            }
+        }
+    }
     /* Montgomery twiddles for AMO ultra: tw_mont = tw * R mod p */
     let tw_mont: Vec<{et}> = tw.iter().map(|&t| ((t as {wt} * {rVal}) % p) as {et}).collect();
     let orig: Vec<{et}> = (0..n).map(|i| ((i as {wt} * 1000000007) % p) as {et}).collect();

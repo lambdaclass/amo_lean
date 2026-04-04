@@ -27,9 +27,21 @@ def _init_data(n: int, p: int) -> list[int]:
     return [(i * 1000000007) % p for i in range(n)]
 
 
-def _init_twiddles(tw_sz: int, p: int) -> list[int]:
-    """Same fake twiddles as generated code: tw[i] = (i * 7 + 31) % p."""
-    return [(i * 7 + 31) % p for i in range(tw_sz)]
+def _init_twiddles_real(n: int, log_n: int, p: int, g: int) -> list[int]:
+    """Real roots of unity: omega_n = g^((p-1)/n) mod p.
+    tw[st*(n/2) + group*halfSize + pair] = omega_n^(pair * 2^st) mod p.
+    This matches the DIT butterfly twiddle convention in VerifiedPlanCodeGen."""
+    tw_sz = n * log_n
+    omega_n = pow(g, (p - 1) // n, p)
+    tw = [0] * tw_sz
+    for st in range(log_n):
+        h = n >> (st + 1)  # halfSize = n / 2^(st+1)
+        num_groups = 1 << st
+        for grp in range(num_groups):
+            for pair in range(h):
+                exp = pair * (1 << st)
+                tw[st * (n // 2) + grp * h + pair] = pow(omega_n, exp, p)
+    return tw
 
 
 def reference_dit_ntt(data: list[int], twiddles: list[int], p: int, log_n: int) -> list[int]:
@@ -69,13 +81,13 @@ def reference_dit_ntt(data: list[int], twiddles: list[int], p: int, log_n: int) 
 def compute_reference_ntt(field: FieldDef, log_n: int) -> list[int]:
     """Compute the reference NTT for validation.
 
-    Uses the same data init, same fake twiddles, same DIT butterfly
-    as the generated C/Rust code. Returns list of output elements mod p.
+    Uses real roots of unity: omega_n = g^((p-1)/n) mod p.
+    Same DIT butterfly structure as the generated C/Rust code.
+    Returns list of output elements mod p.
     """
     n = 1 << log_n
-    tw_sz = n * log_n
     data = _init_data(n, field.p)
-    twiddles = _init_twiddles(tw_sz, field.p)
+    twiddles = _init_twiddles_real(n, log_n, field.p, field.generator)
     return reference_dit_ntt(data, twiddles, field.p, log_n)
 
 
@@ -90,7 +102,7 @@ if __name__ == "__main__":
     log_n = 3
     n = 8
     data = _init_data(n, p)
-    tw = _init_twiddles(n * log_n, p)
+    tw = _init_twiddles_real(n, log_n, p, g)
     out = reference_dit_ntt(data, tw, p, log_n)
 
     print(f"Input:  {data}")

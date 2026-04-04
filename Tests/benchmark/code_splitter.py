@@ -74,23 +74,46 @@ def build_validation_c(kernel: str, field: FieldDef, log_n: int, func_name: str)
         p_lit = f"{p}U"
         print_fmt = f'    printf("%lld\\n", (long long)(({wide})d[i] % ({wide}){p_lit}));'
 
+    g = field.generator
+
     return f"""{kernel}
 
 #include <stdio.h>
 #include <stdlib.h>
 
+static {wide} val_mod_pow({wide} base, {wide} exp, {wide} m) {{
+    {wide} result = 1;
+    base %= m;
+    while (exp > 0) {{
+        if (exp & 1) result = ({wide})(((unsigned __int128)result * base) % m);
+        base = ({wide})(((unsigned __int128)base * base) % m);
+        exp >>= 1;
+    }}
+    return result;
+}}
+
 int main(void) {{
     size_t n = {n};
+    size_t logn = {log_n};
     size_t tw_sz = {tw_sz};
+    {wide} p_val = ({wide}){p_lit};
     {elem} *d = ({elem}*)malloc(n * sizeof({elem}));
+    {elem} *tw = ({elem}*)malloc(tw_sz * sizeof({elem}));
     {elem} *tw_mont = ({elem}*)malloc(tw_sz * sizeof({elem}));
-    /* Same init as Bench.lean / OptimizedNTTPipeline.lean */
+    /* Data init */
     for (size_t i = 0; i < n; i++)
         d[i] = ({elem})((({wide})i * 1000000007) % {init_cast}{p_lit});
-    for (size_t i = 0; i < tw_sz; i++) {{
-        {wide} base = (({wide})i * 7 + 31) % {init_cast}{p_lit};
-        tw_mont[i] = ({elem})((({wide})base * {r_lit}) % {init_cast}{p_lit});
+    /* Real roots of unity: omega_n = g^((p-1)/n) mod p */
+    {wide} omega_n = val_mod_pow({g}, (p_val - 1) / n, p_val);
+    for (size_t st = 0; st < logn; st++) {{
+        size_t h = 1u << (logn - 1 - st);
+        for (size_t gg = 0; gg < (1u << st); gg++)
+            for (size_t pp = 0; pp < h; pp++)
+                tw[st*(n/2) + gg*h + pp] = ({elem})val_mod_pow(omega_n, pp*(1ULL<<st), p_val);
     }}
+    /* Montgomery twiddles for AMO ultra: tw_mont = tw * R mod p */
+    for (size_t i = 0; i < tw_sz; i++)
+        tw_mont[i] = ({elem})((({wide})tw[i] * {r_lit}) % {init_cast}{p_lit});
     /* Run NTT */
     {func_name}(d, tw_mont);
     /* Print output mod p */
