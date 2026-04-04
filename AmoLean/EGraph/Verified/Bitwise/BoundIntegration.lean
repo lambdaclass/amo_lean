@@ -32,8 +32,8 @@ open AmoLean.EGraph.Verified.Bitwise.BoundProp (ReductionChoice babyBearFactory
   mkFieldFactory stageBoundFactor computeStageBounds buildBoundLookup
   lazyReductionSafe decode_encode)
 open AmoLean.EGraph.Verified.Bitwise.CrossRelNTT (NTTBoundConfig nttStageBoundAnalysis
-  selectReductionForBound costAwareReductionForBound reductionCost
-  nttTotalReductionCost improvementVsNaive lazyReductionSavings)
+  selectReductionForBound costAwareReductionForBound
+  reductionCostForHW nttTotalReductionCost improvementVsNaive lazyReductionSavings)
 open AmoLean.EGraph.Verified.Bitwise (HardwareCost)
 open MixedPipeline (MixedEGraph)
 
@@ -219,16 +219,17 @@ def extractScheduleFromState (state : State) (numStages p : Nat)
         | none => selectReductionForBound effectiveK hwIsSimd arrayIsLarge
       else match hw with
         | some hwCost =>
-          -- Lazy saves reduction cost but pays u64 penalty on butterfly ops (mul+add+sub=3 ops)
+          -- Lazy in codegen = Solinas fold on sum AND diff. Full cost comparison:
+          -- lazyCost = 2 × Solinas fold (sum + diff) + u64 butterfly overhead
+          -- bestRedCost = 2 × cheapest reduction (sum + diff)
           let u64Pen := if hwCost.vectorLength > hwCost.cacheThreshold then hwCost.cachePenalty
                         else if hwCost.isSimd then hwCost.wideningPenalty else 0
-          let lazyCost := 3 * u64Pen  -- butterfly does ~3 ops that stay in u64
-          let bestRedCost := match costAwareReductionForBound hwCost effectiveK p with
-            | .harvey => mixedOpCost hwCost (.harveyReduce 0 p)
-            | .montgomery => mixedOpCost hwCost (.montyReduce 0 p 0)
-            | _ => mixedOpCost hwCost (.reduceGate 0 p)
+          let solinasCost := reductionCostForHW hwCost .lazy  -- = Solinas cost
+          let lazyCost := 2 * solinasCost + 3 * u64Pen
+          let bestRed := costAwareReductionForBound hwCost effectiveK p
+          let bestRedCost := 2 * reductionCostForHW hwCost bestRed
           if lazyCost < bestRedCost then .lazy
-          else costAwareReductionForBound hwCost effectiveK p
+          else bestRed
         | none => .lazy  -- no hw info → default to lazy (backward compat)
     let newBound := stageBoundFactor boundK reduction
     (acc ++ [(stage, reduction, newBound)], newBound)

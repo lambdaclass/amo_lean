@@ -36,7 +36,7 @@ open AmoLean.EGraph.Verified.Bitwise.BoundProp (ReductionChoice mkFieldFactory
   babyBearFactory stageBoundFactor computeStageBounds lazyReductionSafe
   buildBoundLookup encodeBoundFactor decodeBoundFactor)
 open AmoLean.EGraph.Verified.Bitwise.CrossRelNTT (nttStageBoundAnalysis
-  selectReductionForBound reductionCost nttTotalReductionCost lazyReductionSavings)
+  selectReductionForBound lazyReductionSavings)
 open AmoLean.EGraph.Verified.Bitwise.BoundIntegration (optimizeNTTWithBounds mkNTTState
   extractReductionSchedule computeSavings extractScheduleFromState)
 
@@ -135,7 +135,8 @@ def ultraPipeline (g : MixedEGraph)
 
   -- ── Gap 2: Extract per-stage schedule from saturated state ──
   let hwWithN := { cfg.hw with vectorLength := n }
-  let stageSchedule := extractScheduleFromState state' logN p cfg.hw.isSimd false
+  let arrayIsLarge := n > cfg.hw.cacheThreshold
+  let stageSchedule := extractScheduleFromState state' logN p cfg.hw.isSimd arrayIsLarge
     (some hwWithN)
 
   -- ── Phase 23: plan competition (schedule-derived vs generated candidates) ──
@@ -149,10 +150,9 @@ def ultraPipeline (g : MixedEGraph)
       (stgs ++ [mkStg idx red inK outK], outK)) ([], 1)
   let schedulePlan : Plan := { stages := schedStages.toArray, field := p, size := n }
   -- Compete: schedule-derived plan vs 8 candidates (radix-2/4, Solinas/Monty/etc.)
-  let candidates := generateCandidates p n cfg.hw.isSimd false
+  let candidates := generateCandidates p n cfg.hw arrayIsLarge
   let allCandidates := candidates.push schedulePlan
-  let plan := match selectPlan allCandidates cfg.hw.mul32 cfg.hw.add cfg.hw.isSimd
-      cfg.cacheConfig with
+  let plan := match selectPlan allCandidates cfg.hw cfg.cacheConfig with
     | some best => best
     | none => schedulePlan
   -- Validate total NTT coverage (safety net — normalizePlan in lowerNTTFromPlanVerified

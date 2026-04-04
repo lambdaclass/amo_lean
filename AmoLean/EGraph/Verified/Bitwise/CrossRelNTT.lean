@@ -54,24 +54,47 @@ def selectReductionForBound (boundK : Nat) (hwIsSimd : Bool) (arrayIsLarge : Boo
 
 /-- Cost-aware reduction selection: enumerate feasible reductions,
     compute actual hardware cost for each, pick cheapest.
-    Uses mixedOpCost + branchPenalty for butterfly context. -/
-def costAwareReductionForBound (hw : HardwareCost) (boundK p : Nat) :
-    ReductionChoice :=
+    `serialContext` adds branch penalties for serial patterns (FRI fold, dot product).
+    For NTT butterflies (data-parallel), pass `serialContext := false` (default). -/
+def costAwareReductionForBound (hw : HardwareCost) (boundK p : Nat)
+    (serialContext : Bool := false) : ReductionChoice :=
   -- Feasibility: Harvey needs boundK ≤ 2
   let candidates : List (Nat × ReductionChoice) :=
     (if boundK ≤ 2 then [(mixedOpCost hw (.harveyReduce 0 p), .harvey)] else []) ++
     [(mixedOpCost hw (.reduceGate 0 p), .solinasFold),
      (mixedOpCost hw (.montyReduce 0 p 0), .montgomery)]
-  -- In butterfly context: account for branch penalties per reduction
-  let withBranch := candidates.map fun (baseCost, choice) =>
-    let branchAdj := match choice with
-      | .solinasFold => 2 * hw.branchPenalty  -- output < 2p → 2 cond subs
-      | _ => hw.branchPenalty                  -- output < p → 1 cond sub
-    (baseCost + branchAdj, choice)
+  -- Branch penalties only in serial context (FRI fold, dot product — NOT NTT)
+  let withBranch := if serialContext then
+    candidates.map fun (baseCost, choice) =>
+      let branchAdj := match choice with
+        | .solinasFold => 2 * hw.branchPenalty  -- output < 2p → 2 cond subs
+        | _ => hw.branchPenalty                  -- output < p → 1 cond sub
+      (baseCost + branchAdj, choice)
+  else candidates
   -- Pick cheapest
   withBranch.foldl (fun (bestC, bestR) (c, r) =>
     if c < bestC then (c, r) else (bestC, bestR))
     (100000, .montgomery) |>.2
+
+-- ══════════════════════════════════════════════════════════════════
+-- Section 1b: Hardware-Aware Reduction Cost (SINGLE SOURCE OF TRUTH)
+-- ══════════════════════════════════════════════════════════════════
+
+/-- Hardware-aware reduction cost. SINGLE SOURCE OF TRUTH for plan costing.
+    Maps ReductionChoice to cycle count using mixedOpCost from HardwareCost.
+    .lazy cost = Solinas fold cost (matching lowerReductionChoice codegen in
+    VerifiedPlanCodeGen.lean:82-85 which redirects .lazy to Solinas fold). -/
+def reductionCostForHW (hw : HardwareCost) (red : ReductionChoice) : Nat :=
+  match red with
+  | .solinasFold => mixedOpCost hw (.reduceGate 0 0)
+  | .montgomery => mixedOpCost hw (.montyReduce 0 0 0)
+  | .harvey => mixedOpCost hw (.harveyReduce 0 0)
+  | .lazy => mixedOpCost hw (.reduceGate 0 0)  -- codegen does Solinas fold
+
+/-- Butterfly REDC cost (product reduction, always Montgomery subtraction variant).
+    Used by Plan.totalCost to include the REDC in butterfly cost (previously omitted). -/
+def butterflyREDCCost (hw : HardwareCost) : Nat :=
+  mixedOpCost hw (.montyReduce 0 0 0)
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 2: NTT Stage Bound Analysis
@@ -125,8 +148,9 @@ def friFoldReductionChoice (p : Nat) (bitwidth : Nat := 64) : ReductionChoice :=
 -- Section 3: Bound-Informed Cost
 -- ══════════════════════════════════════════════════════════════════
 
-/-- Cost of a reduction operation, informed by the current bound factor.
-    Harvey is cheap when bounds are tight; Montgomery is constant cost. -/
+/-- DEPRECATED: Use reductionCostForHW instead. Hardcoded costs diverge from
+    mixedOpCost for SIMD (Solinas: 8 vs real 14 on NEON). Kept for backward compat
+    with olean-only callers (Phase23Integration, etc.). -/
 def reductionCost (reduction : ReductionChoice) (boundK : Nat)
     (hwIsSimd : Bool) : Nat :=
   match reduction with
@@ -212,9 +236,24 @@ example : computeStageBounds [.lazy, .lazy, .solinasFold] 1 = [1, 2, 3, 2] := by
 example : reductionCost .harvey 1 false < reductionCost .solinasFold 1 false := by
   native_decide
 
-/-- Lazy saves over Solinas. -/
+/-- Lazy saves over Solinas (NOTE: legacy — lazy cost=0 is the bug being fixed). -/
 example : reductionCost .lazy 1 false < reductionCost .solinasFold 1 false := by
   native_decide
+
+/-- reductionCostForHW: ARM NEON Solinas costs 14 (not 8 as reductionCost claims). -/
+example : reductionCostForHW arm_neon_simd .solinasFold = 14 := by native_decide
+/-- reductionCostForHW: ARM NEON Montgomery costs 7. -/
+example : reductionCostForHW arm_neon_simd .montgomery = 7 := by native_decide
+/-- reductionCostForHW: ARM NEON Harvey costs 3 (cheapest for SIMD). -/
+example : reductionCostForHW arm_neon_simd .harvey = 3 := by native_decide
+/-- reductionCostForHW: lazy cost = Solinas cost (matching codegen). -/
+example : reductionCostForHW arm_neon_simd .lazy = reductionCostForHW arm_neon_simd .solinasFold := by native_decide
+/-- reductionCostForHW: ARM scalar Solinas costs 6. -/
+example : reductionCostForHW arm_cortex_a76 .solinasFold = 6 := by native_decide
+/-- costAwareReductionForBound: NEON with tight bounds picks Harvey (cheapest at 3 ops). -/
+example : costAwareReductionForBound arm_neon_simd 2 2013265921 = .harvey := by native_decide
+/-- costAwareReductionForBound: NEON with loose bounds picks Montgomery (7 < 14). -/
+example : costAwareReductionForBound arm_neon_simd 5 2013265921 = .montgomery := by native_decide
 
 end SmokeTests
 

@@ -320,7 +320,7 @@ def optimizedNTTC (fc : FieldConfig) (hw : HardwareCost) (logN iters : Nat)
   let p3Bf := genP3ButterflyC fc
   let p3Loop := genNTTLoopC "p3_bf" logN
   -- Step 6b: Plan-based SIMD (if hardware supports it)
-  let plan := selectBestPlan fc.pNat n hw.mul32 hw.add hw.isSimd
+  let plan := selectBestPlan fc.pNat n hw
   let simdCode := if hw.isSimd then
     let simdCfg := if hw.simdLanes == 8 then avx2Config else neonConfig
     some (lowerNTTFromPlanSIMD plan simdCfg fc.k fc.cNat fc.muNat logN)
@@ -627,7 +627,7 @@ fn amo_bf(a: &mut {et}, b: &mut {et}, w: {et}) \{
   let montyReduce := genMontyReduceRust fc
   let p3Bf := genP3ButterflyRust fc
   -- Step 5b: Plan-based SIMD (if hardware supports it)
-  let plan := selectBestPlan fc.pNat n hw.mul32 hw.add hw.isSimd
+  let plan := selectBestPlan fc.pNat n hw
   let simdCode := if hw.isSimd then
     let simdCfg := if hw.simdLanes == 8 then avx2Config else neonConfig
     some (lowerNTTFromPlanSIMDRust plan simdCfg fc.k fc.cNat fc.muNat logN)
@@ -831,7 +831,7 @@ def emitVerifiedNTTRustFn (fc : FieldConfig) (logN : Nat) : String :=
     per-stage reductions (lazy where safe, Solinas/Monty where needed). -/
 def emitPlanBasedNTTC (fc : FieldConfig) (logN : Nat) (hw : HardwareCost) : String :=
   let n := 2^logN
-  let plan := selectBestPlan fc.pNat n hw.mul32 hw.add hw.isSimd
+  let plan := selectBestPlan fc.pNat n hw
   emitCFromPlanVerified plan fc.k fc.cNat fc.muNat s!"{fc.name.toLower}_ntt_plan"
 
 -- ══════════════════════════════════════════════════════════════════
@@ -948,7 +948,7 @@ example : allFields.length = 4 := by rfl
 example : babybearConfig.pNat = 2013265921 := by rfl
 
 /-- Non-vacuity: plan selection produces a well-formed plan for BabyBear. -/
-example : (selectBestPlan 2013265921 1024 3 1).stages.size > 0 := by native_decide
+example : (selectBestPlan 2013265921 1024 arm_cortex_a76).stages.size > 0 := by native_decide
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 11: Runner (#eval)

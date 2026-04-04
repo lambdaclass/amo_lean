@@ -30,7 +30,9 @@ namespace AmoLean.EGraph.Verified.Bitwise.NTTPlan
 
 open AmoLean.EGraph.Verified.Bitwise.BoundProp (ReductionChoice stageBoundFactor
   lazyReductionSafe boundAfterReduction)
-open AmoLean.EGraph.Verified.Bitwise.CrossRelNTT (selectReductionForBound reductionCost)
+open AmoLean.EGraph.Verified.Bitwise.CrossRelNTT (selectReductionForBound
+  costAwareReductionForBound reductionCostForHW butterflyREDCCost)
+open AmoLean.EGraph.Verified.Bitwise (HardwareCost arm_neon_simd arm_cortex_a76)
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 0: Utilities (avoid Mathlib dependency for Nat.log)
@@ -120,36 +122,42 @@ def mkUniformPlan (p n : Nat) (radix : RadixChoice) (red : ReductionChoice)
   { stages, field := p, size := n }
 
 /-- Build stages recursively with bound tracking.
-    Per-stage: check lazy safety → select reduction → compute output bound. -/
-private def buildBoundAwareStages (numStages p : Nat) (hwIsSimd arrayIsLarge : Bool)
-    (dir : StageDirection) (stage : Nat) (currentK : Nat)
+    When `hw` is provided, uses costAwareReductionForBound (picks cheapest per-stage).
+    When `hw` is none, falls back to heuristic selectReductionForBound (backward compat). -/
+private def buildBoundAwareStages (numStages p : Nat) (hw : Option HardwareCost)
+    (arrayIsLarge : Bool) (dir : StageDirection) (stage : Nat) (currentK : Nat)
     (acc : List NTTStage) : List NTTStage :=
   if stage ≥ numStages then acc.reverse
   else
     let canLazy := lazyReductionSafe (currentK + 1) p
     let mustReduce := stage ≥ numStages - 2
-    let red :=
-      if canLazy && !mustReduce then .lazy
-      else selectReductionForBound (currentK + 1) hwIsSimd arrayIsLarge
+    let red := match hw with
+      | some hwCost =>
+        -- Cost-aware: pick cheapest reduction for current bounds
+        costAwareReductionForBound hwCost (currentK + 1) p
+      | none =>
+        -- Heuristic fallback (no hw info)
+        if canLazy && !mustReduce then .lazy
+        else selectReductionForBound (currentK + 1) false arrayIsLarge
     let outputK := stageBoundFactor currentK red
     let stg : NTTStage :=
       { stageIdx := stage, radix := .r2, reduction := red, direction := dir,
         inputBoundK := currentK, outputBoundK := outputK }
-    buildBoundAwareStages numStages p hwIsSimd arrayIsLarge dir
+    buildBoundAwareStages numStages p hw arrayIsLarge dir
       (stage + 1) outputK (stg :: acc)
   termination_by numStages - stage
 
-def mkBoundAwarePlan (p n : Nat) (hwIsSimd : Bool := false)
+def mkBoundAwarePlan (p n : Nat) (hw : Option HardwareCost := none)
     (arrayIsLarge : Bool := false) (dir : StageDirection := .DIT) : Plan :=
   let numStages := log2 n
-  let stages := buildBoundAwareStages numStages p hwIsSimd arrayIsLarge dir 0 1 []
+  let stages := buildBoundAwareStages numStages p hw arrayIsLarge dir 0 1 []
   { stages := stages.toArray, field := p, size := n }
 
 /-- Build stages with mixed radix: radix-4 for early stages (covers 2 levels each),
     radix-2 for late stages (covers 1 level each). Uses bound-aware reduction.
     Strategy: radix-4 while ≥4 levels remain AND in first half of levels. -/
 private def buildMixedRadixStages (totalLevels p : Nat)
-    (hwIsSimd arrayIsLarge : Bool) (dir : StageDirection)
+    (hw : Option HardwareCost) (arrayIsLarge : Bool) (dir : StageDirection)
     (level : Nat) (stageIdx : Nat) (currentK : Nat)
     (acc : List NTTStage) : List NTTStage :=
   if level ≥ totalLevels then acc.reverse
@@ -159,53 +167,58 @@ private def buildMixedRadixStages (totalLevels p : Nat)
     let radix := if useR4 then RadixChoice.r4 else RadixChoice.r2
     let canLazy := lazyReductionSafe (currentK + 1) p
     let mustReduce := remaining ≤ 2
-    let red :=
-      if canLazy && !mustReduce then ReductionChoice.lazy
-      else selectReductionForBound (currentK + 1) hwIsSimd arrayIsLarge
+    let red := match hw with
+      | some hwCost => costAwareReductionForBound hwCost (currentK + 1) p
+      | none =>
+        if canLazy && !mustReduce then ReductionChoice.lazy
+        else selectReductionForBound (currentK + 1) false arrayIsLarge
     let outputK := stageBoundFactor currentK red
     let stg : NTTStage :=
       { stageIdx := stageIdx, radix := radix, reduction := red, direction := dir,
         inputBoundK := currentK, outputBoundK := outputK }
     if useR4 then
-      buildMixedRadixStages totalLevels p hwIsSimd arrayIsLarge dir
+      buildMixedRadixStages totalLevels p hw arrayIsLarge dir
         (level + 2) (stageIdx + 1) outputK (stg :: acc)
     else
-      buildMixedRadixStages totalLevels p hwIsSimd arrayIsLarge dir
+      buildMixedRadixStages totalLevels p hw arrayIsLarge dir
         (level + 1) (stageIdx + 1) outputK (stg :: acc)
   termination_by totalLevels - level
 
 /-- Mixed-radix plan: radix-4 for early stages, radix-2 for late stages.
     Combines ILP benefits of radix-4 (fewer stages, better pipelining) with
-    simplicity of radix-2 for cache-hostile late stages.
-    Activates Butterfly4Bridge (previously orphaned). -/
-def mkMixedRadixPlan (p n : Nat) (hwIsSimd : Bool := false)
+    simplicity of radix-2 for cache-hostile late stages. -/
+def mkMixedRadixPlan (p n : Nat) (hw : Option HardwareCost := none)
     (arrayIsLarge : Bool := false) (dir : StageDirection := .DIT) : Plan :=
   let totalLevels := log2 n
-  let stages := buildMixedRadixStages totalLevels p hwIsSimd arrayIsLarge dir 0 0 1 []
+  let stages := buildMixedRadixStages totalLevels p hw arrayIsLarge dir 0 0 1 []
   { stages := stages.toArray, field := p, size := n }
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 3: Plan Cost
 -- ══════════════════════════════════════════════════════════════════
 
-/-- Total reduction cost of a plan (sum of per-stage reduction costs). -/
-def Plan.totalReductionCost (plan : Plan) (hwIsSimd : Bool) : Nat :=
+/-- Total reduction cost of a plan using hardware-aware costs. -/
+def Plan.totalReductionCost (plan : Plan) (hw : HardwareCost) : Nat :=
   plan.stages.foldl (fun acc stage =>
-    acc + reductionCost stage.reduction stage.inputBoundK hwIsSimd) 0
+    acc + reductionCostForHW hw stage.reduction) 0
 
-/-- Butterfly arithmetic cost per stage (excluding reduction). -/
-def butterflyCost (radix : RadixChoice) (mulCost addCost : Nat) : Nat :=
+/-- Butterfly arithmetic cost per stage INCLUDING product REDC.
+    R2: 1 twiddle mul (→REDC) + add + sub = mul + 2*add + REDC
+    R4: 3 twiddle muls (→3 REDC) + 8 add/subs + 1 extra REDC = 3*mul + 8*add + 4*REDC -/
+def butterflyCost (radix : RadixChoice) (hw : HardwareCost) : Nat :=
+  let redc := butterflyREDCCost hw
   match radix with
-  | .r2 => mulCost + 2 * addCost   -- 1 twiddle mul + add + sub
-  | .r4 => 3 * mulCost + 8 * addCost  -- 3 twiddle muls + 8 add/subs
+  | .r2 => hw.mul32 + 2 * hw.add + redc
+  | .r4 => 3 * hw.mul32 + 8 * hw.add + 4 * redc
 
-/-- Total arithmetic + reduction cost. -/
-def Plan.totalCost (plan : Plan) (mulCost addCost : Nat) (hwIsSimd : Bool) : Nat :=
+/-- Total arithmetic + reduction cost using hardware-aware model.
+    Reduction cost is 2× per butterfly (applied to both sum and diff). -/
+def Plan.totalCost (plan : Plan) (hw : HardwareCost) : Nat :=
   plan.stages.foldl (fun acc stage =>
     let bfs := match stage.radix with | .r2 => plan.size / 2 | .r4 => plan.size / 4
-    let bfCost := butterflyCost stage.radix mulCost addCost
-    let redCost := reductionCost stage.reduction stage.inputBoundK hwIsSimd
-    acc + bfs * (bfCost + redCost)
+    let bfCost := butterflyCost stage.radix hw
+    let redCost := reductionCostForHW hw stage.reduction
+    acc + bfs * (bfCost + 2 * redCost)
   ) 0
 
 -- ══════════════════════════════════════════════════════════════════
@@ -226,9 +239,15 @@ def Plan.outputFullyBounded (plan : Plan) : Bool :=
   | some last => last.outputBoundK ≤ 2
   | none => true
 
-/-- A plan is well-formed if bounds are consistent and output is bounded. -/
+/-- All stages use the same direction (no DIT+DIF mixing). -/
+def Plan.directionUniform (plan : Plan) : Bool :=
+  plan.stages.toList.all (·.direction == .DIT) ||
+  plan.stages.toList.all (·.direction == .DIF)
+
+/-- A plan is well-formed if bounds are consistent, output is bounded,
+    and direction is uniform (no DIT+DIF mixing). -/
 def Plan.wellFormed (plan : Plan) : Bool :=
-  plan.boundsConsistent && plan.outputFullyBounded
+  plan.boundsConsistent && plan.outputFullyBounded && plan.directionUniform
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 5: Theorems
@@ -242,13 +261,9 @@ theorem mkUniformPlan_numStages (p n : Nat) (red : ReductionChoice) :
 /-- Bound-aware plan produces a plan (operational check via native_decide). -/
 example : (mkBoundAwarePlan 2013265921 1024).numStages = 10 := by native_decide
 
-/-- Lazy butterfly cost is 0. -/
-theorem lazy_no_reduction_cost (k : Nat) (hw : Bool) :
-    reductionCost .lazy k hw = 0 := rfl
-
-/-- Radix-2 butterfly cost. -/
-theorem radix2_bf_cost (m a : Nat) :
-    butterflyCost .r2 m a = m + 2 * a := rfl
+/-- Lazy cost = Solinas cost in hw-aware model (codegen does Solinas fold). -/
+theorem lazy_eq_solinas_cost (hw : HardwareCost) :
+    reductionCostForHW hw .lazy = reductionCostForHW hw .solinasFold := rfl
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 6: Smoke Tests
@@ -262,12 +277,12 @@ example : (mkUniformPlan 2013265921 1024 .r2 .solinasFold).numStages = 10 := by 
 /-- Bound-aware plan for BabyBear N=1024 is well-formed. -/
 example : (mkBoundAwarePlan 2013265921 1024).wellFormed = true := by native_decide
 
-/-- Bound-aware plan saves lazy reductions. -/
+/-- Bound-aware plan (no hw) saves lazy reductions. -/
 example : (mkBoundAwarePlan 2013265921 1024).lazyStages > 0 := by native_decide
 
-/-- Bound-aware plan costs less than uniform Solinas. -/
-example : (mkBoundAwarePlan 2013265921 1024).totalReductionCost false <
-    (mkUniformPlan 2013265921 1024 .r2 .solinasFold).totalReductionCost false := by
+/-- With hw, bound-aware plan uses Harvey (cheaper than Solinas for NEON). -/
+example : (mkBoundAwarePlan 2013265921 1024 (some arm_neon_simd)).totalReductionCost arm_neon_simd <
+    (mkUniformPlan 2013265921 1024 .r2 .solinasFold).totalReductionCost arm_neon_simd := by
   native_decide
 
 /-- Plan validates: bounds consistent. -/
