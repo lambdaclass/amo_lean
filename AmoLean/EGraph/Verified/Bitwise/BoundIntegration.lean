@@ -194,7 +194,8 @@ end SmokeTests
     provides a tighter bound, a cheaper reduction strategy may be selected. -/
 def extractScheduleFromState (state : State) (numStages p : Nat)
     (hwIsSimd arrayIsLarge : Bool)
-    (hw : Option HardwareCost := none) : List (Nat × ReductionChoice × Nat) :=
+    (hw : Option HardwareCost := none)
+    (stageClassIds : Option (Array EClassId) := none) : List (Nat × ReductionChoice × Nat) :=
   -- Get bound lookup from DAG if available
   let maybeLookup : Option (EClassId → Option Nat) :=
     if h : state.relEntries.size > 0 then
@@ -204,9 +205,13 @@ def extractScheduleFromState (state : State) (numStages p : Nat)
   List.range numStages |>.foldl (fun (acc, boundK) stage =>
     -- Static bound: butterfly adds 1 to the bound factor
     let staticK := boundK + 1
-    -- Dynamic bound: query DAG for this stage's class (stage index as proxy)
+    -- Dynamic bound: query DAG for this stage's reduce class
+    -- If stageClassIds provided, use actual class IDs; otherwise fall back to stage index
+    let classId := match stageClassIds with
+      | some ids => if h : stage < ids.size then ids[stage] else stage
+      | none => stage
     let effectiveK := match maybeLookup with
-      | some lookup => match lookup stage with
+      | some lookup => match lookup classId with
         | some dynamicK => min dynamicK staticK
         | none => staticK
       | none => staticK
@@ -265,6 +270,45 @@ def mkSeedEGraph (p : Nat) : MixedEGraph :=
   let (_, g3) := MixedEGraphBuilder.addMixedExpr g2 (.barrettReduceE input p m)
   g3
 
+/-- Compute Montgomery mu for known primes. -/
+private def computeMu (p : Nat) : Nat :=
+  if p == 2013265921 then 0x88000001       -- BabyBear
+  else if p == 2147483647 then 0x80000001  -- Mersenne31
+  else if p == 2130706433 then 0x7F000001  -- KoalaBear approx
+  else p
+
+/-- Create a FULL NTT seed graph: N stages chained via add→reduce.
+    Each stage has: butterfly (addGate of prev reduce outputs)
+    + 4 reduction alternatives as separate e-classes.
+
+    Returns the graph AND per-stage reduce class IDs (for DAG bound lookup).
+
+    Stage 0: reduce(witness(0), p) + alternatives
+    Stage i: addGate(reduce_{i-1}, reduce_{i-1}) → reduce(add, p) + alternatives
+
+    The chain enables bound propagation: mkReductionBoundRule adds sentinel
+    for reduce nodes (bound=1), mkAddBoundRule propagates add bounds (k1+k2).
+    Cross-stage: reduce→1, add→2, reduce→1, add→2, ... -/
+def mkFullNTTSeedGraph (p : Nat) (numStages : Nat) : MixedEGraph × Array EClassId :=
+  let mu := computeMu p
+  let m := 2 ^ 62 / (if p > 0 then p else 1)
+  -- Start with witness(0) as NTT input
+  let (inputId, g0) := MixedEGraphBuilder.addMixedExpr (AmoLean.EGraph.VerifiedExtraction.EGraph.empty) (.witnessE 0)
+  -- Build chain: each stage adds butterfly + 4 reduction alternatives
+  let (_, stageIds, gFinal) :=
+    (List.range numStages).foldl (fun (prevRedId, ids, g) stageIdx =>
+      -- Butterfly: addGate(prev, prev). Stage 0 uses input directly.
+      let (bfId, g1) := if stageIdx == 0 then (prevRedId, g)
+        else g.add ⟨.addGate prevRedId prevRedId⟩
+      -- Reduction alternatives (separate classes for coloredStep merging)
+      let (redId, g2) := g1.add ⟨.reduceGate bfId p⟩
+      let (_, g3) := g2.add ⟨.montyReduce bfId p mu⟩
+      let (_, g4) := g3.add ⟨.harveyReduce bfId p⟩
+      let (_, g5) := g4.add ⟨.barrettReduce bfId p m⟩
+      (redId, ids.push redId, g5)
+    ) (inputId, #[], g0)
+  (gFinal, stageIds)
+
 /-- Semantic match step: apply Ruler-discovered rules by scanning the e-graph
     for classes where both sides of the relation evaluate equally. -/
 def semanticMatchStep (discoveredRules : List DetectedRelation) (s : State) : State :=
@@ -317,5 +361,56 @@ def optimizeNTTFull
   let p := 2013265921  -- BabyBear
   let (s, analysis) := optimizeNTTFull p 10
   IO.println s!"Full pipeline: {s.numNodes} nodes, {s.numRelations} DAGs, {s.totalRelEdges} bound edges, {analysis.length} stages"
+
+-- ══════════════════════════════════════════════════════════════════
+-- Section 7: NE.1 De-risk — mkFullNTTSeedGraph bound propagation
+-- ══════════════════════════════════════════════════════════════════
+
+-- De-risk: verify mkFullNTTSeedGraph + saturation produces sentinel bounds
+-- for ALL stages. GATE for Fase Per-Stage v3.3.0.
+#eval do
+  let p := 2013265921  -- BabyBear
+  let numStages := 14
+  let (g, stageIds) := mkFullNTTSeedGraph p numStages
+  IO.println s!"Seed graph: {g.numClasses} classes, {stageIds.size} stage IDs"
+  IO.println s!"Stage reduce class IDs: {stageIds.toList}"
+  -- Saturate with bound propagation
+  let s := mkNTTState g
+  let factory := mkFieldFactory p 0
+  let s' := saturate [] [] factory { Config.default with totalFuel := 20 } s
+  IO.println s!"Saturated: {s'.numNodes} nodes, {s'.totalRelEdges} bound edges"
+  -- Check bounds per stage
+  let lookup :=
+    if h : s'.relEntries.size > 0 then
+      some (buildBoundLookup (s'.relEntries[0]'(by omega)).dag)
+    else none
+  -- Print per-stage bounds and count how many have bounds
+  let mut boundsFound : Nat := 0
+  for i in List.range numStages do
+    let classId := if h : i < stageIds.size then stageIds[i] else i
+    let bound := match lookup with
+      | some f => f classId
+      | none => none
+    match bound with
+    | some k =>
+      boundsFound := boundsFound + 1
+      IO.println s!"  Stage {i}: class={classId} → bound={k}"
+    | none =>
+      IO.println s!"  Stage {i}: class={classId} → NO BOUND ⚠️"
+  if boundsFound == numStages then
+    IO.println s!"✅ GATE PASS: all {numStages} stages have bounds from DAG"
+  else
+    IO.println s!"❌ GATE FAIL: {boundsFound}/{numStages} stages have bounds"
+  -- Compare with static analysis
+  let staticSched := nttStageBoundAnalysis { numStages, prime := p }
+  let dynamicSched := extractScheduleFromState s' numStages p false false
+    (some arm_cortex_a76) (some stageIds)
+  let mut diffCount : Nat := 0
+  for pair in staticSched.zip dynamicSched do
+    let ((idx, sr, _), (_, dr, _)) := pair
+    if sr != dr then
+      diffCount := diffCount + 1
+      IO.println s!"  Stage {idx}: static={repr sr} → dynamic={repr dr}"
+  IO.println s!"Static vs Dynamic: {diffCount}/{numStages} stages differ"
 
 end AmoLean.EGraph.Verified.Bitwise.BoundIntegration

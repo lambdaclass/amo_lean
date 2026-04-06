@@ -16,9 +16,9 @@ set_option autoImplicit false
 
 namespace AmoLean.EGraph.Verified.Bitwise.Discovery
 
-open AmoLean.EGraph.Verified.Bitwise (MixedNodeOp HardwareCost mixedOpCost)
+open AmoLean.EGraph.Verified.Bitwise (MixedNodeOp HardwareCost mixedOpCost arm_cortex_a76)
 open AmoLean.EGraph.Verified.Bitwise.MixedExtract (MixedExpr)
-open AmoLean.EGraph.Verified.Bitwise.NTTPlan (RadixChoice butterflyCost)
+open AmoLean.EGraph.Verified.Bitwise.NTTPlan (RadixChoice)
 open AmoLean.EGraph.Verified.Bitwise.Discovery.MatEGraphStep (CostOracle MatEGraph
   matSaturateF evaluateAssignment findCheapest generateAssignments)
 
@@ -67,7 +67,10 @@ def discoveryReductionCost (result : DiscoveryResult) (hw : HardwareCost) : Nat 
     Replaces `CostOracle.stageCost` when discovery has found an implementation. -/
 def discoveryAwareStageCost (oracle : CostOracle) (discoveredRedCost : Nat)
     (radix : RadixChoice) : Nat :=
-  let bfCost := butterflyCost radix oracle.mulCost oracle.addCost
+  -- Approximate butterfly cost from oracle params (mirrors MatEGraphStep.stageCost)
+  let bfCost := match radix with
+    | .r2 => oracle.mulCost + 2 * oracle.addCost + oracle.mulCost
+    | .r4 => 3 * oracle.mulCost + 8 * oracle.addCost + 4 * oracle.mulCost
   let bfsPerStage := match radix with
     | .r2 => oracle.arraySize / 2
     | .r4 => oracle.arraySize / 4
@@ -124,11 +127,11 @@ theorem exprCostHW_witness_zero (hw : HardwareCost) (n : Nat) :
 /-- Discovery-aware stage cost scales linearly with butterflies per stage. -/
 theorem discoveryAware_r2_cost (oracle : CostOracle) (drc : Nat) :
     discoveryAwareStageCost oracle drc .r2 =
-      (oracle.arraySize / 2) * (butterflyCost .r2 oracle.mulCost oracle.addCost + drc) := rfl
+      (oracle.arraySize / 2) * (oracle.mulCost + 2 * oracle.addCost + oracle.mulCost + drc) := rfl
 
 theorem discoveryAware_r4_cost (oracle : CostOracle) (drc : Nat) :
     discoveryAwareStageCost oracle drc .r4 =
-      (oracle.arraySize / 4) * (butterflyCost .r4 oracle.mulCost oracle.addCost + drc) := rfl
+      (oracle.arraySize / 4) * (3 * oracle.mulCost + 8 * oracle.addCost + 4 * oracle.mulCost + drc) := rfl
 
 -- ════════════════════════════════════════════════════════════════
 -- Section 4: Smoke tests
@@ -143,11 +146,42 @@ example : exprCostHW arm_cortex_a76 (.addE (.witnessE 0) (.witnessE 1)) =
 
 -- Discovery-aware cost with zero reduction cost reduces to just butterfly cost
 example : discoveryAwareStageCost (CostOracle.armScalar 1024) 0 .r2 =
-    512 * butterflyCost .r2 3 1 := rfl
+    512 * (3 + 2 * 1 + 3 + 0) := rfl
 
 -- discoveryReductionCost returns 100 for failed discovery
 example : discoveryReductionCost
     { optimizedExpr := none, seed := .witnessE 0, prime := 0,
       verified := false } arm_cortex_a76 = 100 := rfl
+
+-- ════════════════════════════════════════════════════════════════
+-- Section 5: Per-Stage OracleAdapter (Fase Per-Stage v3.3.0, NE.4)
+-- ════════════════════════════════════════════════════════════════
+
+/-- Per-stage discovery: runs discoverAllStages and extracts actual hardware
+    costs per stage. Returns Array of per-stage reduction costs.
+
+    Stages where discovery returns .lazy get the Solinas fold cost (matching
+    codegen semantics where lazy = Solinas fold). -/
+def discoveryReductionCostPerStage (p : Nat) (numStages bitwidth : Nat)
+    (hw : HardwareCost) (hwIsSimd : Bool := false) : Array Nat :=
+  if h1 : p > 0 then
+    if h2 : p < 2 ^ bitwidth then
+      let spec : ReduceSpec := { p, w := bitwidth, p_pos := h1, p_lt_bound := h2 }
+      let results := discoverAllStages spec numStages bitwidth hwIsSimd hw
+      results.toArray.map fun r =>
+        match r.optimizedExpr with
+        | some expr => exprCostHW hw expr
+        | none => 100  -- fallback: expensive
+    else (List.replicate numStages 100).toArray
+  else (List.replicate numStages 100).toArray
+
+/-- Per-stage version of evaluateAssignmentWithDiscovery.
+    Uses per-stage costs instead of uniform cost. -/
+def evaluateAssignmentPerStage (assignment : List RadixChoice)
+    (oracle : CostOracle) (perStageCosts : Array Nat) : Nat :=
+  (assignment.zip (List.range assignment.length)).foldl (fun cost (radix, idx) =>
+    let redCost := if h : idx < perStageCosts.size then perStageCosts[idx] else 100
+    cost + discoveryAwareStageCost oracle redCost radix
+  ) 0
 
 end AmoLean.EGraph.Verified.Bitwise.Discovery

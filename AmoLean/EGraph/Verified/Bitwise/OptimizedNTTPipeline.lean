@@ -58,6 +58,7 @@ open AmoLean.EGraph.Verified.Bitwise.PlanSelection (selectBestPlan CacheConfig)
 -- NTTPlanCodeGen/UnifiedCodeGen removed: replaced by VerifiedPlanCodeGen (Plan D Phase 2)
 open AmoLean.EGraph.Verified.Bitwise.ReductionAlternativeRules (reductionAlternativeRules)
 open AmoLean.EGraph.Verified.Bitwise.CrossRelNTT (nttStageBoundAnalysis NTTBoundConfig lazyReductionSavings)
+open AmoLean.EGraph.Verified.Bitwise.BoundIntegration (mkFullNTTSeedGraph)
 -- ReductionChoice now used internally by VerifiedPlanCodeGen
 open AmoLean.EGraph.Verified.Bitwise.VerifiedPlanCodeGen (emitCFromPlanVerified emitRustFromPlanVerified)
 open AmoLean.EGraph.Verified.Bitwise.VerifiedSIMDCodeGen
@@ -435,8 +436,11 @@ private def fieldConfigToUltraConfig (fc : FieldConfig) (hw : HardwareCost) : Ul
 def optimizedNTTC_ultra (fc : FieldConfig) (hw : HardwareCost) (logN iters : Nat) : String :=
   let n := 2^logN
   let ucfg := fieldConfigToUltraConfig fc hw
-  let (nttBody, nttBodyRust, report) := ultraPipeline default [] fc.pNat n ucfg
-    s!"{fc.name.toLower}_ntt_ultra"
+  -- Fase Per-Stage v3.3.0: seed e-graph with NTT chain + pass stage class IDs
+  let (seedGraph, stageIds) := mkFullNTTSeedGraph fc.pNat logN
+  let seedRules := reductionAlternativeRules fc.pNat
+  let (nttBody, nttBodyRust, report) := ultraPipeline seedGraph seedRules fc.pNat n ucfg
+    s!"{fc.name.toLower}_ntt_ultra" (some stageIds)
   -- Generate P3 reference for comparison
   let p3Bf := genP3ButterflyC fc
   let p3Loop := genNTTLoopC "p3_bf" logN
@@ -556,7 +560,7 @@ private def rustWideType (fc : FieldConfig) : String :=
   if fc.k == 64 then "u128" else "u64"
 
 private def rustPLit (fc : FieldConfig) : String :=
-  s!"{fc.pNat}_{rustElemType fc}"
+  s!"{fc.pNat}_{rustWideType fc}"
 
 /-- Generate Montgomery REDC as `p3_reduce` in Rust (Plonky3 reference). -/
 def genMontyReduceRust (fc : FieldConfig) : String :=
@@ -737,8 +741,10 @@ def genOptimizedBenchRust_ultra (fc : FieldConfig) (logN iters : Nat)
   let n := 2^logN
   let ucfg := fieldConfigToUltraConfig fc hw
   let funcBase := s!"{fc.name.toLower}_ntt_ultra"
-  let (_, nttBodyRust, report) := ultraPipeline default [] fc.pNat n ucfg
-    funcBase
+  let (seedGraph, stageIds) := mkFullNTTSeedGraph fc.pNat logN
+  let seedRules := reductionAlternativeRules fc.pNat
+  let (_, nttBodyRust, report) := ultraPipeline seedGraph seedRules fc.pNat n ucfg
+    funcBase (some stageIds)
   -- ultraPipeline generates Rust function as funcBase ++ "_rs"
   let funcNameRs := funcBase ++ "_rs"
   let et := if fc.k == 64 then "u64" else "u32"
