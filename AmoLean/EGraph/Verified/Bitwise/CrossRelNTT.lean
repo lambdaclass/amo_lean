@@ -58,11 +58,12 @@ def selectReductionForBound (boundK : Nat) (hwIsSimd : Bool) (arrayIsLarge : Boo
     For NTT butterflies (data-parallel), pass `serialContext := false` (default). -/
 def costAwareReductionForBound (hw : HardwareCost) (boundK p : Nat)
     (serialContext : Bool := false) : ReductionChoice :=
-  -- Feasibility: Harvey needs boundK ≤ 2
+  -- Feasibility: Harvey needs boundK ≤ 2.
+  -- Montgomery EXCLUDED: REDC gives x*R⁻¹ mod p, only correct for products (tw*b),
+  -- NOT for sums/diffs. All callers use this for per-stage sum/diff reduction.
   let candidates : List (Nat × ReductionChoice) :=
     (if boundK ≤ 2 then [(mixedOpCost hw (.harveyReduce 0 p), .harvey)] else []) ++
-    [(mixedOpCost hw (.reduceGate 0 p), .solinasFold),
-     (mixedOpCost hw (.montyReduce 0 p 0), .montgomery)]
+    [(mixedOpCost hw (.reduceGate 0 p), .solinasFold)]
   -- Branch penalties only in serial context (FRI fold, dot product — NOT NTT)
   let withBranch := if serialContext then
     candidates.map fun (baseCost, choice) =>
@@ -74,7 +75,7 @@ def costAwareReductionForBound (hw : HardwareCost) (boundK p : Nat)
   -- Pick cheapest
   withBranch.foldl (fun (bestC, bestR) (c, r) =>
     if c < bestC then (c, r) else (bestC, bestR))
-    (100000, .montgomery) |>.2
+    (100000, .solinasFold) |>.2
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 1b: Hardware-Aware Reduction Cost (SINGLE SOURCE OF TRUTH)
@@ -252,8 +253,8 @@ example : reductionCostForHW arm_neon_simd .lazy = reductionCostForHW arm_neon_s
 example : reductionCostForHW arm_cortex_a76 .solinasFold = 6 := by native_decide
 /-- costAwareReductionForBound: NEON with tight bounds picks Harvey (cheapest at 3 ops). -/
 example : costAwareReductionForBound arm_neon_simd 2 2013265921 = .harvey := by native_decide
-/-- costAwareReductionForBound: NEON with loose bounds picks Montgomery (7 < 14). -/
-example : costAwareReductionForBound arm_neon_simd 5 2013265921 = .montgomery := by native_decide
+/-- costAwareReductionForBound: NEON with loose bounds picks Solinas (Montgomery excluded — REDC only valid for products). -/
+example : costAwareReductionForBound arm_neon_simd 5 2013265921 = .solinasFold := by native_decide
 
 end SmokeTests
 

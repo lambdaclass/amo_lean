@@ -65,9 +65,10 @@ private def lowerMontyReduceSub (xExpr : LowLevelExpr) (p mu : Nat)
   let stmt := Stmt.seq s1 (Stmt.seq s2 (Stmt.seq s3 (Stmt.seq s4 s5)))
   (stmt, resultVar, cgs5)
 
-/-- Lower a ReductionChoice to TrustLean.Stmt.
-    Dispatches to verified reduction functions. Montgomery uses the subtraction
-    variant (lowerMontyReduceSub) which has no int64 overflow. -/
+/-- Lower a ReductionChoice to TrustLean.Stmt for **sum/diff reduction**.
+    Montgomery REDC is NOT valid here — it produces x*R⁻¹ mod p instead of x mod p.
+    Montgomery is only correct for products (tw_mont*b) where the R factor in the
+    twiddle cancels the R⁻¹. Defense in depth: redirect .montgomery to Solinas fold. -/
 def lowerReductionChoice (red : ReductionChoice) (xExpr : LowLevelExpr)
     (p k c mu : Nat) (cgs : CodeGenState) : (Stmt × VarName × CodeGenState) :=
   match red with
@@ -75,7 +76,9 @@ def lowerReductionChoice (red : ReductionChoice) (xExpr : LowLevelExpr)
     let (sr, cgs') := lowerSolinasFold xExpr k c cgs
     (sr.stmt, extractVar sr.resultVar, cgs')
   | .montgomery =>
-    lowerMontyReduceSub xExpr p mu cgs
+    -- REDC gives x*R⁻¹ mod p, wrong for sums. Fall back to Solinas fold.
+    let (sr, cgs') := lowerSolinasFold xExpr k c cgs
+    (sr.stmt, extractVar sr.resultVar, cgs')
   | .harvey =>
     let (sr, cgs') := lowerHarveyReduce xExpr p cgs
     (sr.stmt, extractVar sr.resultVar, cgs')
