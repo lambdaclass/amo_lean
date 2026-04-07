@@ -47,8 +47,9 @@ def selectReductionForBound (boundK : Nat) (hwIsSimd : Bool) (arrayIsLarge : Boo
     -- Solinas fold is good for scalar with moderate bounds
     .solinasFold
   else if hwIsSimd || arrayIsLarge then
-    -- Montgomery preferred for SIMD (u32 lanes) and large arrays (cache)
-    .montgomery
+    -- Solinas fold: Montgomery REDC is unsound for sums/diffs (only valid for products).
+    -- costAwareReductionForBound correctly excludes Montgomery; this path must match.
+    .solinasFold
   else
     .solinasFold
 

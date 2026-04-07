@@ -24,6 +24,7 @@ namespace AmoLean.EGraph.Verified.Bitwise.SIMDEmitter
 
 open AmoLean.EGraph.Verified.Bitwise.NTTPlan (Plan NTTStage RadixChoice)
 open AmoLean.EGraph.Verified.Bitwise.VerifiedPlanCodeGen (normalizePlan lowerStageVerified)
+open AmoLean.EGraph.Verified.Bitwise.BoundProp (ReductionChoice)
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 1: SIMD Target Configuration
@@ -46,28 +47,14 @@ def simdHeader : SIMDTarget → String
   | .avx2 => "#include <immintrin.h>"
 
 -- ══════════════════════════════════════════════════════════════════
--- Section 2: NEON DIT Butterfly Kernel (NF.1)
+-- Section 2a: Shared NEON butterfly body (load + REDC product + DIT sum/diff)
 -- ══════════════════════════════════════════════════════════════════
 
-/-- Emit NEON DIT butterfly as a C static inline function.
-
-    Processes 4 lanes in parallel:
-    1. Widening product: T = tw * b (32×32→64 via vmull_u32 in 2-lane halves)
-    2. REDC subtraction: m=(T_low*mu)%R, u=m*p, d=T-u, q=d>>32
-    3. Branchless fixup: wb_red = (T<u) ? q+p : q
-    4. DIT sum/diff: sum = a + wb_red, diff = (a+p) - wb_red
-    5. Solinas fold: (x >> k) * c + (x & mask)  [unsigned: values up to 2p]
-
-    Unsigned arithmetic for sum/diff/fold to handle intermediate values > INT32_MAX.
-    Fold output < p < 2^31, fits int32_t for subsequent stages and stores.
-
-    Matches the scalar lowerDIFButterflyByReduction (DIT, REDC sub, v3.0.2). -/
-def emitNeonButterflyDIT_C (p k c mu : Nat) : String :=
-  s!"/* NEON DIT butterfly: p={p}, k={k}, c={c}, mu={mu} */
-static inline void neon_bf_dit(int32_t* a_ptr, int32_t* b_ptr,
-    const int32_t* tw_ptr,
-    uint32x4_t p_vec, uint32x4_t mu_vec, uint32x4_t c_vec, uint32x4_t mask_k) \{
-  int32x4_t a = vld1q_s32(a_ptr);
+/-- Shared NEON DIT butterfly body: load a/b/tw → widening product → REDC sub →
+    branchless fixup → DIT sum/diff. Returns C code fragment ending at diff_raw.
+    Used by both Solinas and Harvey butterfly variants to avoid code duplication. -/
+private def emitNeonButterflyBody : String :=
+  "  int32x4_t a = vld1q_s32(a_ptr);
   int32x4_t b = vld1q_s32(b_ptr);
   int32x4_t tw = vld1q_s32(tw_ptr);
   /* Product T = tw*b: split 4-lane into 2x2-lane, 32x32->64 */
@@ -105,14 +92,48 @@ static inline void neon_bf_dit(int32_t* a_ptr, int32_t* b_ptr,
   uint32x4_t wb_u = vreinterpretq_u32_s32(wb_red);
   uint32x4_t sum_raw = vaddq_u32(a_u, wb_u);
   uint32x4_t diff_raw = vsubq_u32(vaddq_u32(a_u, p_vec), wb_u);
-  /* Solinas fold: (x >> {k}) * c + (x & mask) — unsigned shift (logical, not arithmetic) */
+"
+
+-- ══════════════════════════════════════════════════════════════════
+-- Section 2b: NEON DIT Butterfly Kernels (Solinas + Harvey)
+-- ══════════════════════════════════════════════════════════════════
+
+/-- Emit NEON DIT butterfly with Solinas fold reduction on sum/diff.
+    Uses shared body (load + REDC + sum/diff) + Solinas fold.
+    Fold output < p+c < 2^31, fits int32_t. -/
+def emitNeonButterflyDIT_C (p k c mu : Nat) : String :=
+  s!"/* NEON DIT butterfly (Solinas fold): p={p}, k={k}, c={c}, mu={mu} */
+static inline void neon_bf_dit(int32_t* a_ptr, int32_t* b_ptr,
+    const int32_t* tw_ptr,
+    uint32x4_t p_vec, uint32x4_t mu_vec, uint32x4_t c_vec, uint32x4_t mask_k) \{
+{emitNeonButterflyBody}  /* Solinas fold: (x >> {k}) * c + (x & mask) */
   uint32x4_t sum_hi = vshrq_n_u32(sum_raw, {k});
   uint32x4_t sum_fold = vaddq_u32(vandq_u32(sum_raw, mask_k), vmulq_u32(sum_hi, c_vec));
   uint32x4_t diff_hi = vshrq_n_u32(diff_raw, {k});
   uint32x4_t diff_fold = vaddq_u32(vandq_u32(diff_raw, mask_k), vmulq_u32(diff_hi, c_vec));
-  /* Store (fold output < p < 2^31, fits int32_t) */
   vst1q_s32(a_ptr, vreinterpretq_s32_u32(sum_fold));
   vst1q_s32(b_ptr, vreinterpretq_s32_u32(diff_fold));
+}"
+
+/-- Emit NEON DIT butterfly with Harvey conditional subtraction on sum/diff.
+    Uses shared body (load + REDC + sum/diff) + branchless Harvey reduce.
+    Precondition: sum_raw < 2p, diff_raw < 2p (guaranteed by butterfly structure).
+    Output < p, fits int32_t (Harvey reduce: if x >= p then x - p).
+    Same function signature as Solinas variant (c_vec, mask_k unused but accepted
+    so the call site in emitStageC needs no per-reduction dispatch). -/
+def emitNeonButterflyDIT_Harvey_C (p : Nat) : String :=
+  s!"/* NEON DIT butterfly (Harvey): p={p} */
+static inline void neon_bf_dit_har(int32_t* a_ptr, int32_t* b_ptr,
+    const int32_t* tw_ptr,
+    uint32x4_t p_vec, uint32x4_t mu_vec, uint32x4_t c_vec, uint32x4_t mask_k) \{
+  (void)c_vec; (void)mask_k;  /* unused — Harvey needs only p_vec */
+{emitNeonButterflyBody}  /* Harvey conditional subtract: if x >= p then x - p */
+  uint32x4_t ge_s = vcgeq_u32(sum_raw, p_vec);
+  uint32x4_t sum_red = vsubq_u32(sum_raw, vandq_u32(ge_s, p_vec));
+  uint32x4_t ge_d = vcgeq_u32(diff_raw, p_vec);
+  uint32x4_t diff_red = vsubq_u32(diff_raw, vandq_u32(ge_d, p_vec));
+  vst1q_s32(a_ptr, vreinterpretq_s32_u32(sum_red));
+  vst1q_s32(b_ptr, vreinterpretq_s32_u32(diff_red));
 }"
 
 -- ══════════════════════════════════════════════════════════════════
@@ -215,22 +236,29 @@ static inline void avx2_bf_dit(int32_t* a_ptr, int32_t* b_ptr,
 
 /-- Emit C code for one NTT stage.
     SIMD-eligible (R2, halfSize ≥ lanes): for-group × for-pair(step=lanes) with butterfly call.
+    Dispatches to Harvey or Solinas butterfly based on stage.reduction.
     Scalar fallback (R4 or halfSize < lanes): lowerStageVerified + stmtToC. -/
 private def emitStageC (stage : NTTStage) (n p k c mu : Nat) (lanes : Nat)
-    (bfName : String) : String :=
+    (bfNameSol bfNameHar : String) : String :=
   let stageIdx := stage.stageIdx
   let halfSize := n / (2 ^ (stageIdx + 1))
   let numGroups := 2 ^ stageIdx
-  let isSIMD := bfName != "" && stage.radix != .r4 && halfSize >= lanes
+  -- Select butterfly by per-stage reduction choice
+  let bfUsed := match stage.reduction with
+    | .harvey => bfNameHar
+    | _ => bfNameSol
+  let isSIMD := bfUsed != "" && stage.radix != .r4 && halfSize >= lanes
   if isSIMD then
     let twBase := stageIdx * (n / 2)
-    s!"  /* Stage {stageIdx}: SIMD (halfSize={halfSize}, groups={numGroups}) */
+    let redLabel := match stage.reduction with
+      | .harvey => "Harvey" | _ => "Solinas"
+    s!"  /* Stage {stageIdx}: SIMD {redLabel} (halfSize={halfSize}, groups={numGroups}) */
   for (size_t grp = 0; grp < {numGroups}; grp++) \{
     for (size_t pr = 0; pr < {halfSize}; pr += {lanes}) \{
       size_t i = grp * {2 * halfSize} + pr;
       size_t j = i + {halfSize};
       size_t tw_idx = {twBase} + grp * {halfSize} + pr;
-      {bfName}(&data[i], &data[j], &twiddles[tw_idx], p_vec, mu_vec, c_vec, mask_k);
+      {bfUsed}(&data[i], &data[j], &twiddles[tw_idx], p_vec, mu_vec, c_vec, mask_k);
     }
   }
 "
@@ -275,21 +303,28 @@ def emitSIMDNTTC (plan : Plan) (target : SIMDTarget) (k c mu : Nat)
   let lanes := simdLanes target
   let mask := 2^k - 1
   let elemType := if k == 64 then "int64_t" else "int32_t"
-  -- Select butterfly function for target
-  let (bfDecl, bfName) := match target with
+  -- Select butterfly functions for target (Solinas + Harvey variants)
+  let (bfDeclSol, bfNameSol) := match target with
     | .neon => (emitNeonButterflyDIT_C p k c mu, "neon_bf_dit")
     | .avx2 => (emitAvx2ButterflyDIT_C p k c mu, "avx2_bf_dit")
-  let hasSIMDBf := true
+  let (bfDeclHar, bfNameHar) := match target with
+    | .neon => (emitNeonButterflyDIT_Harvey_C p, "neon_bf_dit_har")
+    | .avx2 => ("", "")  -- AVX2 Harvey deferred
   -- Classify stages
   let stages := plan.stages.toList
+  let needsSolinas := stages.any fun s =>
+    s.reduction != .harvey && s.radix != .r4 && n / (2 ^ (s.stageIdx + 1)) >= lanes
+  let needsHarvey := stages.any fun s =>
+    s.reduction == .harvey && s.radix != .r4 && n / (2 ^ (s.stageIdx + 1)) >= lanes
   let hasScalarFallback := stages.any fun s =>
-    !hasSIMDBf || s.radix == .r4 || n / (2 ^ (s.stageIdx + 1)) < lanes
+    s.radix == .r4 || n / (2 ^ (s.stageIdx + 1)) < lanes
   let hasR4 := stages.any fun s => s.radix == .r4
-  -- Build header section (standard + SIMD includes + butterfly function)
-  let headerSection := if hasSIMDBf then
+  -- Build header section: only emit butterfly functions that are actually used
+  let bfDecls := (if needsSolinas then bfDeclSol ++ "\n\n" else "") ++
+                 (if needsHarvey && bfNameHar != "" then bfDeclHar ++ "\n\n" else "")
+  let headerSection :=
     "#include <stdint.h>\n#include <stddef.h>\n" ++
-    simdHeader target ++ "\n\n" ++ bfDecl ++ "\n\n"
-  else ""
+    simdHeader target ++ "\n\n" ++ bfDecls
   -- Build function body
   let scalarDecls := if hasScalarFallback then scalarTempDecls hasR4 else ""
   let constDecls := match target with
@@ -305,9 +340,9 @@ def emitSIMDNTTC (plan : Plan) (target : SIMDTarget) (k c mu : Nat)
   __m256i c_vec = _mm256_set1_epi32((int32_t){c}U);
   __m256i mask_k = _mm256_set1_epi32((int32_t){mask}U);
 "
-  -- Generate stage code
+  -- Generate stage code with per-stage dispatch
   let stageCode := stages.foldl (fun acc stage =>
-    acc ++ emitStageC stage n p k c mu lanes bfName
+    acc ++ emitStageC stage n p k c mu lanes bfNameSol bfNameHar
   ) ""
   -- Assemble: header + function
   headerSection ++

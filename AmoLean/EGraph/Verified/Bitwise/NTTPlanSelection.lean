@@ -98,7 +98,9 @@ def generateCandidates (p n : Nat) (hw : HardwareCost)
      mkUniformPlan p n .r4 .solinasFold,
      -- 7. Uniform radix-4 + Montgomery
      mkUniformPlan p n .r4 .montgomery,
-     -- 8. Mixed radix (radix-4 early, radix-2 late) + cost-aware
+     -- 8. Uniform radix-4 + Harvey (cheapest reduction, fewer stages)
+     mkUniformPlan p n .r4 .harvey,
+     -- 9. Mixed radix (radix-4 early, radix-2 late) + cost-aware
      mkMixedRadixPlan p n (some hw) arrayIsLarge
   ]
 
@@ -141,7 +143,7 @@ def selectBestPlan (p n : Nat) (hw : HardwareCost)
 
 /-- generateCandidates produces exactly 8 candidates (5 radix-2 + 2 radix-4 + 1 mixed). -/
 theorem generateCandidates_size (p n : Nat) (hw : HardwareCost) :
-    (generateCandidates p n hw).size = 8 := rfl
+    (generateCandidates p n hw).size = 9 := rfl
 
 /-- selectBestPlan returns a well-formed plan for BabyBear N=1024. -/
 example : (selectBestPlan 2013265921 1024 arm_cortex_a76).wellFormed = true := by native_decide
@@ -162,7 +164,7 @@ example : stageCacheMisses 1024 0 .default = 0 := by native_decide
 section SmokeTests
 
 /-- 8 candidates for BabyBear N=1024. -/
-example : (generateCandidates 2013265921 1024 arm_cortex_a76).size = 8 := rfl
+example : (generateCandidates 2013265921 1024 arm_cortex_a76).size = 9 := rfl
 
 /-- selectBestPlan returns a plan (doesn't crash). -/
 example : (selectBestPlan 2013265921 1024 arm_cortex_a76).numStages > 0 := by native_decide

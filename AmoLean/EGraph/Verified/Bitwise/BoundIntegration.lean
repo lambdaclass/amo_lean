@@ -102,7 +102,7 @@ theorem stage_bound_correct (inputK : Nat) (red : ReductionChoice) :
     | .lazy => outputK = inputK + 1
     | .solinasFold => outputK = 2
     | .montgomery => outputK = 1
-    | .harvey => outputK = 2 := by
+    | .harvey => outputK = 1 := by
   cases red <;> simp [stageBoundFactor, BoundProp.boundAfterReduction]
 
 /-- Backward compat: with nullFactory, saturate does equality-only. -/
