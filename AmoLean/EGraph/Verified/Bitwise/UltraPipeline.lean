@@ -64,7 +64,7 @@ open AmoLean.EGraph.Verified.Matrix.CrossEGraph (queryArithmeticCost ArithmeticC
 open AmoLean.EGraph.Verified.Bitwise (arm_cortex_a76 arm_neon_simd x86_avx2_simd)
 -- Phase 24 Discovery: bidirectional Mixed↔Matrix joint optimization (Fase Per-Stage v3.3.0)
 open AmoLean.EGraph.Verified.Bitwise.Discovery (JointResult DiscoveryResult
-  ReduceSpec)
+  ReduceSpec discoveryReductionCostPerStage)
 open AmoLean.EGraph.Verified.Bitwise.Discovery.MatEGraphStep (CostOracle)
 
 -- Phase 25 imports
@@ -98,6 +98,7 @@ structure UltraConfig where
   cacheConfig : CacheConfig := CacheConfig.default
   -- Phase 24: joint optimization
   exploreFuel : Nat := 10
+  jointThreshold : Nat := 256  -- max N for Discovery.jointOptimize (heavy: 3-phase saturation)
   -- Phase 25: colors
   targetColor : ColorId := 0  -- root = universal
   -- Field parameters (for verified codegen and parametric discovery)
@@ -179,12 +180,10 @@ def ultraPipeline (g : MixedEGraph)
     (funcName ++ "_rs")
 
   -- ── Phase 24: joint optimization — Discovery bidirectional (Fase Per-Stage v3.3.0) ──
-  -- Threshold lowered: Discovery.jointOptimize runs guidedOptimizeMixedF (3-phase saturation)
-  -- which is too heavy for n > 64. At runtime (Bench.lean), full sizes are fine.
-  -- For native_decide theorems (compile-time), keep n small.
+  -- cfg.jointThreshold controls max N (default 256 for runtime, set 0 for native_decide)
   let hw := { cfg.hw with vectorLength := n }
   let w := if cfg.k == 64 then 64 else 32
-  let (jointCost, jointPlanLen) := if n ≤ 8 then
+  let (jointCost, jointPlanLen) := if n ≤ cfg.jointThreshold then
     if h1 : p > 0 then
       if h2 : p < 2 ^ w then
         let spec : ReduceSpec := { p, w, p_pos := h1, p_lt_bound := h2 }
@@ -197,6 +196,13 @@ def ultraPipeline (g : MixedEGraph)
   let verifiedResult := if n ≤ 256 then
     AmoLean.EGraph.Verified.Matrix.CrossEGraphBridge.verifiedJointOptimize n p hw
   else none
+
+  -- ── NE.4: Per-stage discovery costs (Fase Per-Stage v3.3.0) ──
+  -- Guarded by jointThreshold (heavy: runs discoverAllStages → guidedOptimizeMixedF per stage)
+  let perStageCosts := if n ≤ cfg.jointThreshold then
+    discoveryReductionCostPerStage p logN
+      (if cfg.k == 64 then 64 else 32) cfg.hw cfg.hw.isSimd
+  else #[]
 
   -- ── Gap 3: Color-aware extraction (informational for report) ──
   let coloredExpr := coloredCostAwareExtractF hw state' 0 cfg.targetColor
@@ -221,9 +227,11 @@ def ultraPipeline (g : MixedEGraph)
     s!"Schedule: {stageSchedule.length} stages (from saturated State)\n" ++
     s!"Plan: {plan.numStages} stages, {plan.lazyStages} lazy (built from schedule)\n" ++
     s!"Well-formed: {plan.wellFormed}\n" ++
+    s!"--- NE.4: Per-Stage Discovery Costs ---\n" ++
+    s!"Per-stage costs ({perStageCosts.size} stages): {perStageCosts.toList}\n" ++
     s!"--- Phase 24: Joint (Discovery bidirectional) ---\n" ++
-    s!"Joint cost: {jointCost} cycles{if n > 256 then " (skipped, N>256)" else ""}\n" ++
-    s!"Joint plan: {jointPlanLen} stages{if n > 256 then " (skipped)" else ""}\n" ++
+    s!"Joint cost: {jointCost} cycles{if n > cfg.jointThreshold then s!" (skipped, N>{cfg.jointThreshold})" else ""}\n" ++
+    s!"Joint plan: {jointPlanLen} stages{if n > cfg.jointThreshold then " (skipped)" else ""}\n" ++
     s!"Verified path: {match verifiedResult with | some r => s!"{r.factorization.1}x{r.factorization.2.1} MatExpr, cost={r.totalCost}" | none => "unavailable"}\n" ++
     s!"--- Gap 3: Colored Extraction ---\n" ++
     s!"Color preference: {repr colorPref}\n" ++
@@ -263,9 +271,9 @@ def goldilocksUltra (n : Nat) (cfg : UltraConfig := {}) : String :=
 -- Section 4: Theorems — Composing all phase guarantees
 -- ══════════════════════════════════════════════════════════════════
 
-/-- Ultra pipeline produces non-empty code (empty graph for fast native_decide). -/
+/-- Ultra pipeline produces non-empty code. jointThreshold=0 skips heavy Discovery path. -/
 theorem ultra_produces_code :
-    (ultraPipeline default [] 2013265921 16).1.length > 0 := by native_decide
+    (ultraPipeline default [] 2013265921 16 { jointThreshold := 0 }).1.length > 0 := by native_decide
 
 /-- Ultra plan is well-formed (bound-aware). -/
 theorem ultra_plan_wellformed :
@@ -309,8 +317,8 @@ section SmokeTests
 -- Note: seeded pipeline tested in BoundIntegration.lean de-risk section (NE.1 gate).
 -- native_decide with seeded graph is too heavy (Ruler + saturation + codegen).
 
-/-- Ultra report is informative (empty graph for fast native_decide). -/
-example : (ultraPipeline default [] 2013265921 16).2.2.length > 100 := by native_decide
+/-- Ultra report is informative. jointThreshold=0 for fast native_decide. -/
+example : (ultraPipeline default [] 2013265921 16 { jointThreshold := 0 }).2.2.length > 100 := by native_decide
 
 /-- Phase 22: encode/decode roundtrip. -/
 example : decodeBoundFactor (encodeBoundFactor 3) = some 3 := by native_decide

@@ -918,6 +918,31 @@ def pipelineReport (fc : FieldConfig) (hw : HardwareCost) : String :=
 {costs}"
 
 -- ══════════════════════════════════════════════════════════════════
+-- Section 8b: Schedule Comparison — Dynamic vs Static (NE.5)
+-- ══════════════════════════════════════════════════════════════════
+
+open AmoLean.EGraph.Verified.Bitwise.BoundIntegration (mkNTTState extractScheduleFromState)
+open AmoLean.EGraph.Verified.Bitwise.BoundProp (mkFieldFactory ReductionChoice)
+
+/-- Compare dynamic (e-graph seeded) schedule vs static analysis.
+    Returns: (staticSchedule, dynamicSchedule, numDifferences). -/
+def scheduleComparison (fc : FieldConfig) (logN : Nat) (hw : HardwareCost) :
+    List (Nat × ReductionChoice × Nat) ×
+    List (Nat × ReductionChoice × Nat) × Nat :=
+  let isLarge := 2^logN > hw.cacheThreshold
+  let staticSched := nttStageBoundAnalysis
+    { numStages := logN, prime := fc.pNat, hwIsSimd := hw.isSimd, arrayIsLarge := isLarge }
+  let (seedGraph, stageIds) := mkFullNTTSeedGraph fc.pNat logN
+  let state := mkNTTState seedGraph
+  let factory := mkFieldFactory fc.pNat
+  let state' := AmoLean.EGraph.Verified.Bitwise.MultiRel.saturate [] []
+    factory AmoLean.EGraph.Verified.Bitwise.MultiRel.Config.default state
+  let dynamicSched := extractScheduleFromState state' logN fc.pNat hw.isSimd
+    isLarge (some hw) (some stageIds)
+  let diffs := staticSched.zip dynamicSched |>.filter fun ((_, sr, _), (_, dr, _)) => sr != dr
+  (staticSched, dynamicSched, diffs.length)
+
+-- ══════════════════════════════════════════════════════════════════
 -- Section 9: Pipeline Correctness Theorems
 -- ══════════════════════════════════════════════════════════════════
 
