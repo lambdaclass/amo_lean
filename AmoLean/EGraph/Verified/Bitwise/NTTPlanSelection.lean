@@ -188,6 +188,14 @@ example : (mkMixedRadixPlan 2013265921 1024).wellFormed = true := by native_deci
 example : (mkUniformPlan 2013265921 1024 .r4 .solinasFold).totalButterflies <
     (mkUniformPlan 2013265921 1024 .r2 .solinasFold).totalButterflies := by native_decide
 
+/-- NEON: R2 Harvey beats R4 Harvey (SIMD throughput discount makes R2 cheaper). -/
+example : (mkUniformPlan 2013265921 1024 .r2 .harvey).totalCost arm_neon_simd <
+    (mkUniformPlan 2013265921 1024 .r4 .harvey).totalCost arm_neon_simd := by native_decide
+
+/-- Scalar: R4 Harvey still beats R2 Harvey (no SIMD discount, fewer stages win). -/
+example : (mkUniformPlan 2013265921 1024 .r4 .harvey).totalCost arm_cortex_a76 <
+    (mkUniformPlan 2013265921 1024 .r2 .harvey).totalCost arm_cortex_a76 := by native_decide
+
 end SmokeTests
 
 end AmoLean.EGraph.Verified.Bitwise.PlanSelection

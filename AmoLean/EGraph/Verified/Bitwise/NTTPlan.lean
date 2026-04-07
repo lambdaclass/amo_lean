@@ -211,15 +211,38 @@ def butterflyCost (radix : RadixChoice) (hw : HardwareCost) : Nat :=
   | .r2 => hw.mul32 + 2 * hw.add + redc
   | .r4 => 3 * hw.mul32 + 8 * hw.add + 4 * redc
 
+/-- Whether a stage at NTT level `level` would be SIMD-vectorized.
+    Mirrors SIMDEmitter.emitStageC eligibility (after normalizePlan):
+    R2 AND halfSize >= lanes, where halfSize = n / 2^(level+1).
+    Always false when hw.isSimd = false (scalar hardware). -/
+def stageSimdEligibleAtLevel (n : Nat) (radix : RadixChoice) (level : Nat)
+    (hw : HardwareCost) : Bool :=
+  hw.isSimd && radix == .r2 && n / (2 ^ (level + 1)) >= hw.simdLanes
+
+/-- stageSimdEligibleAtLevel is always false for non-SIMD hardware. -/
+theorem stageSimdEligible_scalar (n : Nat) (radix : RadixChoice) (level : Nat)
+    (hw : HardwareCost) (h : hw.isSimd = false) :
+    stageSimdEligibleAtLevel n radix level hw = false := by
+  simp [stageSimdEligibleAtLevel, h]
+
 /-- Total arithmetic + reduction cost using hardware-aware model.
-    Reduction cost is 2× per butterfly (applied to both sum and diff). -/
+    Reduction cost is 2× per butterfly (applied to both sum and diff).
+    SIMD throughput: when a stage is SIMD-eligible (R2, halfSize >= lanes),
+    effective cost is divided by (simdLanes - 1) — conservative estimate.
+    Level tracking mirrors normalizePlan: R2 consumes 1 level, R4 consumes 2. -/
 def Plan.totalCost (plan : Plan) (hw : HardwareCost) : Nat :=
-  plan.stages.foldl (fun acc stage =>
+  let (cost, _) := plan.stages.foldl (fun (acc : Nat × Nat) stage =>
+    let (total, level) := acc
     let bfs := match stage.radix with | .r2 => plan.size / 2 | .r4 => plan.size / 4
     let bfCost := butterflyCost stage.radix hw
     let redCost := reductionCostForHW hw stage.reduction
-    acc + bfs * (bfCost + 2 * redCost)
-  ) 0
+    let rawStageCost := bfs * (bfCost + 2 * redCost)
+    let eligible := stageSimdEligibleAtLevel plan.size stage.radix level hw
+    let divisor := if eligible then Nat.max 2 (hw.simdLanes - 1) else 1
+    let levelsConsumed := match stage.radix with | .r2 => 1 | .r4 => 2
+    (total + rawStageCost / divisor, level + levelsConsumed)
+  ) (0, 0)
+  cost
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 4: Plan Validation
