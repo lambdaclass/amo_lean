@@ -9,6 +9,7 @@ lake-packages/
 # Compiled binaries
 *.o
 *.a
+*.pyc
 generated/fri_test
 Tests/poseidon_c/benchmark_merkle
 Tests/poseidon_c/runner_fuzz

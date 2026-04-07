@@ -33,6 +33,7 @@ open AmoLean.EGraph.Verified.Bitwise.BoundIntegration (optimizeNTTWithBounds mkN
   extractReductionSchedule computeSavings)
 open AmoLean.EGraph.Verified.Bitwise.CrossRelNTT (nttStageBoundAnalysis
   selectReductionForBound reductionCost nttTotalReductionCost lazyReductionSavings)
+open AmoLean.EGraph.Verified.Bitwise (HardwareCost arm_cortex_a76)
 open MixedPipeline (MixedEGraph)
 
 -- ══════════════════════════════════════════════════════════════════
@@ -48,26 +49,26 @@ open MixedPipeline (MixedEGraph)
     3. generateNTTFromPlan (Phase 23): emit C from plan -/
 def fullPipeline (g : MixedEGraph)
     (eqRules : List (MixedEMatch.RewriteRule MixedNodeOp))
-    (p n mulCost addCost : Nat) (hwIsSimd : Bool := false)
+    (p n : Nat) (hw : HardwareCost := arm_cortex_a76)
     (funcName : String := "ntt_optimized") : String × String :=
   -- Phase 22: use nttStageBoundAnalysis directly (optimizeNTTWithBounds saturates
   -- an e-graph whose result is discarded — the analysis only uses NTTBoundConfig)
-  let analysis := nttStageBoundAnalysis { numStages := log2 n, prime := p, hwIsSimd }
+  let analysis := nttStageBoundAnalysis { numStages := log2 n, prime := p, hwIsSimd := hw.isSimd }
   -- Phase 23: plan selection + codegen
-  let planC := generateNTTFromPlan p n mulCost addCost hwIsSimd funcName
+  let planC := generateNTTFromPlan p n hw funcName
   -- Also generate savings report
-  let savings := computeSavings analysis hwIsSimd
+  let savings := computeSavings analysis hw.isSimd
   (planC, savings)
 
 /-- Compare plan-driven vs uniform codegen for a given field. -/
-def compareApproaches (p n : Nat) (mulCost addCost : Nat) (hwIsSimd : Bool := false) :
+def compareApproaches (p n : Nat) (hw : HardwareCost := arm_cortex_a76) :
     String :=
-  let planCode := generateNTTFromPlan p n mulCost addCost hwIsSimd "ntt_plan"
+  let planCode := generateNTTFromPlan p n hw "ntt_plan"
   let uniformCode := generateNTTUniform p n .solinasFold "ntt_uniform"
-  let planPlan := selectBestPlan p n mulCost addCost hwIsSimd
+  let planPlan := selectBestPlan p n hw
   let uniformPlan := mkUniformPlan p n .r2 .solinasFold
-  let planCost := planPlan.totalCost mulCost addCost hwIsSimd
-  let uniformCost := uniformPlan.totalCost mulCost addCost hwIsSimd
+  let planCost := planPlan.totalCost hw
+  let uniformCost := uniformPlan.totalCost hw
   s!"Plan-driven: {planCode.length} chars, cost={planCost}\n" ++
   s!"Uniform:     {uniformCode.length} chars, cost={uniformCost}\n" ++
   s!"Lazy stages saved: {planPlan.lazyStages}\n" ++
@@ -89,13 +90,13 @@ theorem radix4_fewer_muls_1024 : radix4TotalMuls 1024 < radix2TotalMuls 1024 := 
 
 /-- Bound-aware plan is at least as good as uniform Solinas. -/
 theorem boundAware_leq_uniform :
-    (mkBoundAwarePlan 2013265921 1024).totalReductionCost false ≤
-    (mkUniformPlan 2013265921 1024 .r2 .solinasFold).totalReductionCost false := by
+    (mkBoundAwarePlan 2013265921 1024).totalReductionCost arm_cortex_a76 ≤
+    (mkUniformPlan 2013265921 1024 .r2 .solinasFold).totalReductionCost arm_cortex_a76 := by
   native_decide
 
 /-- Generated code from plan-driven approach is non-empty. -/
 theorem planCodegen_nonempty :
-    (generateNTTFromPlan 2013265921 1024 3 1).length > 0 := by
+    (generateNTTFromPlan 2013265921 1024).length > 0 := by
   native_decide
 
 -- ══════════════════════════════════════════════════════════════════
@@ -105,10 +106,10 @@ theorem planCodegen_nonempty :
 section SmokeTests
 
 /-- Full pipeline runs on empty graph. -/
-example : (fullPipeline default [] 2013265921 1024 3 1).1.length > 0 := by native_decide
+example : (fullPipeline default [] 2013265921 1024).1.length > 0 := by native_decide
 
 /-- Compare produces readable output. -/
-example : (compareApproaches 2013265921 1024 3 1).length > 0 := by native_decide
+example : (compareApproaches 2013265921 1024).length > 0 := by native_decide
 
 private def bbCfg : Butterfly4Config := { p := 2013265921 }
 
@@ -119,7 +120,7 @@ example : (butterfly4 bbCfg).size = 4 := rfl
 example : (butterfly4WithReduction bbCfg .lazy).size = 4 := rfl
 
 /-- selectBestPlan selects a well-formed plan. -/
-example : (selectBestPlan 2013265921 1024 3 1).wellFormed = true := by native_decide
+example : (selectBestPlan 2013265921 1024 arm_cortex_a76).wellFormed = true := by native_decide
 
 /-- Plan-driven NTT for BabyBear has lazy stages. -/
 example : (mkBoundAwarePlan 2013265921 1024).lazyStages > 0 := by native_decide

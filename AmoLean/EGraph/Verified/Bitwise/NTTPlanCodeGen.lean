@@ -21,6 +21,7 @@ namespace AmoLean.EGraph.Verified.Bitwise.PlanCodeGen
 open AmoLean.EGraph.Verified.Bitwise.NTTPlan (Plan NTTStage RadixChoice StageDirection log2)
 open AmoLean.EGraph.Verified.Bitwise.BoundProp (ReductionChoice)
 open AmoLean.EGraph.Verified.Bitwise.PlanSelection (selectBestPlan CacheConfig)
+open AmoLean.EGraph.Verified.Bitwise (HardwareCost arm_cortex_a76)
 open UnifiedCodeGen (VarName Expr Stmt BinOp BackendEmitter cScalarEmitter)
 
 -- ══════════════════════════════════════════════════════════════════
@@ -136,9 +137,9 @@ def emitCFromPlan (plan : Plan) (funcName : String) : String :=
   preamble ++ "\n" ++ header ++ cBody ++ "\n}\n"
 
 /-- Top-level: select best plan and generate C. -/
-def generateNTTFromPlan (p n mulCost addCost : Nat)
-    (hwIsSimd : Bool := false) (funcName : String := "ntt_plan") : String :=
-  let plan := selectBestPlan p n mulCost addCost hwIsSimd
+def generateNTTFromPlan (p n : Nat) (hw : HardwareCost := arm_cortex_a76)
+    (funcName : String := "ntt_plan") : String :=
+  let plan := selectBestPlan p n hw
   emitCFromPlan plan funcName
 
 /-- Backward compat: generate using uniform radix-2 plan. -/
@@ -205,7 +206,7 @@ theorem lowerStage_is_seq (stage : NTTStage) (n p : Nat) :
 section SmokeTests
 
 /-- Plan-driven codegen produces non-empty C for BabyBear. -/
-example : (generateNTTFromPlan 2013265921 1024 3 1).length > 0 := by native_decide
+example : (generateNTTFromPlan 2013265921 1024).length > 0 := by native_decide
 
 /-- Uniform codegen produces non-empty C. -/
 example : (generateNTTUniform 2013265921 1024).length > 0 := by native_decide
