@@ -1,6 +1,58 @@
 # TRZK: Architecture
 
-## Current Version: 3.4.0
+## Current Version: 3.5.0
+
+
+### REDC-Schedule v3.5.0
+
+**Contents**: Expand NTTStage decision space: REDCMethod (sqdmulh vs vmull), ILPFactor (dual-butterfly interleaving). Calibrate cost model empirically at each step. Benchmark against Plonky3 real.
+
+**Files**:
+- `verification/plonky3/plonky3_shim/src/lib.rs`
+- `verification/plonky3/Makefile`
+- `AmoLean/EGraph/Verified/Bitwise/SIMDEmitter.lean`
+- `AmoLean/EGraph/Verified/Bitwise/NTTPlan.lean`
+- `AmoLean/EGraph/Verified/Bitwise/BoundPropagation.lean`
+- `AmoLean/EGraph/Verified/Bitwise/CrossRelNTT.lean`
+- `AmoLean/EGraph/Verified/Bitwise/NTTPlanSelection.lean`
+- `ARCHITECTURE.md`
+
+#### DAG (3.5.0)
+
+| Nodo | Tipo | Deps | Status |
+|------|------|------|--------|
+| N35.0 Benchmark vs Plonky3 real (monty-31 BabyBear) | FUND | — | ✓ done |
+| N35.1 REDCMethod.sqdmulhMontgomery — 4-lane REDC | CRIT | N35.0 | ✓ done |
+| N35.2 Calibrate cost model — REDCMethod empirical (microbench + InstructionProfile) | PAR | N35.1 | ✓ done |
+| N35.3 ILPFactor — dual-butterfly interleaving | CRIT | N35.2 | ✓ done |
+| N35.4 Calibrate cost model — ILP empirical (compiler auto-interleave check + V0/V1 occupancy) | PAR | N35.3 | ✓ done |
+| N35.5 Decision gate: memory optimization (per-stage profiling → late merge vs cache block vs four-step) | HOJA | N35.4 | ✓ done |
+
+#### Formal Properties (3.5.0)
+
+| Nodo | Propiedad | Tipo | Prioridad |
+|------|-----------|------|-----------|
+| N35.1 | sqdmulh REDC produces output in [0,p) | SOUNDNESS | P0 |
+| N35.1 | REDCMethod transparent to scalar | INVARIANT | P0 |
+| N35.3 | ilpFactor=2 produces identical NTT output | EQUIVALENCE | P0 |
+
+> **Nota**: Propiedades en lenguaje natural (intención de diseño).
+> Los stubs ejecutables están en BENCHMARKS.md § Formal Properties.
+
+#### Bloques
+
+- [x] **Plonky3 Real Benchmark**: N35.0
+- [x] **sqdmulh REDC Implementation**: N35.1
+- [x] **REDC Calibration**: N35.2 — microbench aislado + llvm-mca + InstructionProfile model + effectiveCost calibration. Detalles en TRZK_filosofico.md §B35-2.
+- [x] **ILP Interleaving**: N35.3 — implemented, gain ~0% (compiler auto-interleaves)
+- [x] **ILP Calibration**: N35.4 — clang -O2 already software-pipelines. ilpDiscount = 0. — compiler auto-interleave check + V0/V1 pipe occupancy + ilpGain model + maxDiscount calibration. Detalles en TRZK_filosofico.md §B35-4.
+- [x] **Memory Optimization Decision**: N35.5 — **FINDING: bottleneck is 2 scalar stages (48-63% of NTT time), not cache.** v3.6.0 should vectorize halfSize=2,1 via intra-register trn1/trn2 transposes. — per-stage profiling (N=2^16 + 2^20), evaluate 3 options (late merge / cache block / four-step NTT), decide v3.6.0 scope. Detalles en TRZK_filosofico.md §B35-5.
+
+---
+
+## Previous Versions
+
+### 3.4.0
 
 ### Harvey-SIMD v3.4.0
 
@@ -177,11 +229,7 @@ Actualizar theorems que dependen del output (verificar con grep).
 
 4. **Benchmark** — `--pipeline ultra --hardware arm-neon` vs baseline (si hay regression → investigate)
 
----
 
-## Previous Versions
-
-(none)
 
 ---
 

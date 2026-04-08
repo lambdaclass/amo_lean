@@ -1,0 +1,196 @@
+{
+  "version": "3.4.0",
+  "project": "TRZK",
+  "phases": [
+    {
+      "id": "fase-harvey-simd",
+      "name": "Harvey-SIMD v3.4.0",
+      "status": "pending",
+      "nodes": [
+        {
+          "id": "N34.1",
+          "name": "Tighten Harvey bound to boundK=1",
+          "type": "FUNDACIONAL",
+          "status": "pending",
+          "files": [
+            "AmoLean/EGraph/Verified/Bitwise/BoundPropagation.lean",
+            "AmoLean/EGraph/Verified/Bitwise/BoundIntegration.lean",
+            "AmoLean/EGraph/Verified/Bitwise/Discovery/StageContext.lean"
+          ],
+          "deps": [],
+          "blocks": [
+            "B34-1"
+          ],
+          "metrics": {
+            "loc": 0,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 2,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 0
+          },
+          "study": {
+            "papers": [
+              "NTT/ntt_extended_harvey_butterfly.md"
+            ],
+            "lessons": [
+              "L-201"
+            ],
+            "libraries": [],
+            "notes": "3 definition sites + 1 theorem + 1 example. harveyReduceSpec postcondition says output < p (boundK=1). The conservative boundK=2 prevents chaining. Fix enables Harvey at ALL stages."
+          }
+        },
+        {
+          "id": "N34.2",
+          "name": "SIMD Harvey butterfly kernel + dispatch",
+          "type": "CRITICO",
+          "status": "pending",
+          "files": [
+            "AmoLean/EGraph/Verified/Bitwise/SIMDEmitter.lean"
+          ],
+          "deps": [
+            "N34.1"
+          ],
+          "blocks": [
+            "B34-2"
+          ],
+          "metrics": {
+            "loc": 0,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 1,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 0
+          },
+          "study": {
+            "papers": [
+              "NTT/ntt_extended_harvey_butterfly.md",
+              "NTT/implementing_ntt_simd.md",
+              "Optimization/simd_modular_arithmetic.md"
+            ],
+            "lessons": [
+              "L-308"
+            ],
+            "libraries": [],
+            "notes": "Extract REDC product as helper (lines 74-102 shared). Harvey kernel = vcgeq_u32 + vandq_u32 + vsubq_u32 (3 ops branchless). Scalar reference: lowerHarveyReduce at TrustLeanBridge.lean:374-384. DO NOT duplicate REDC code."
+          }
+        },
+        {
+          "id": "N34.3",
+          "name": "Fix selectReductionForBound Montgomery exclusion",
+          "type": "PARALELO",
+          "status": "pending",
+          "files": [
+            "AmoLean/EGraph/Verified/Bitwise/CrossRelNTT.lean"
+          ],
+          "deps": [],
+          "blocks": [
+            "B34-3"
+          ],
+          "metrics": {
+            "loc": 0,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 1,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 0
+          },
+          "study": {
+            "papers": [],
+            "lessons": [],
+            "libraries": [],
+            "notes": "Lines 49-51: returns .montgomery for SIMD when boundK > 4. Montgomery REDC is unsound for sums/diffs. costAwareReductionForBound correctly excludes it, but nttStageBoundAnalysis calls the buggy selectReductionForBound."
+          }
+        },
+        {
+          "id": "N34.4",
+          "name": "Validation: chaining + NEON correctness + benchmark",
+          "type": "HOJA",
+          "status": "pending",
+          "files": [
+            "Tests/benchmark/deep_diag.lean",
+            "AmoLean/EGraph/Verified/Bitwise/OptimizedNTTPipeline.lean"
+          ],
+          "deps": [
+            "N34.1",
+            "N34.2",
+            "N34.3"
+          ],
+          "blocks": [
+            "B34-3"
+          ],
+          "metrics": {
+            "loc": 0,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 0,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 0
+          },
+          "study": {
+            "papers": [],
+            "lessons": [],
+            "libraries": [],
+            "notes": "3 checks: (1) mkBoundAwarePlan with arm_neon_simd → 5/5 Harvey stages. (2) NEON Harvey output vs scalar Harvey for BabyBear/KoalaBear/Mersenne31. (3) Benchmark Ultra NEON vs P3 baseline."
+          }
+        }
+      ],
+      "blocks": [
+        {
+          "id": "B34-1",
+          "name": "Harvey Bound Tightening",
+          "nodes": [
+            "N34.1"
+          ],
+          "status": "pending",
+          "closed_at": null
+        },
+        {
+          "id": "B34-2",
+          "name": "SIMD Harvey Butterfly",
+          "nodes": [
+            "N34.2"
+          ],
+          "status": "pending",
+          "closed_at": null
+        },
+        {
+          "id": "B34-3",
+          "name": "Montgomery Fix + Validation",
+          "nodes": [
+            "N34.3",
+            "N34.4"
+          ],
+          "status": "pending",
+          "closed_at": null
+        }
+      ]
+    }
+  ],
+  "meta": {
+    "created": "2026-04-07T15:52:54Z",
+    "updated": "2026-04-07T15:52:54Z",
+    "total_nodes": 4,
+    "completed_nodes": 0
+  }
+}

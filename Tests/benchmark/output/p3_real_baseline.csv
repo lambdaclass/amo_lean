@@ -1,0 +1,8 @@
+# Plonky3 Real BabyBear NTT Benchmark
+# Plonky3 Radix2Dit via FFI (monty-31, compiled with release+lto)
+# Platform: aarch64, iters=10
+# field,log_n,n,p3_real_us,melem_s
+babybear,14,16384,208.0,78.8
+babybear,16,65536,1103.4,59.4
+babybear,18,262144,5406.2,48.5
+babybear,20,1048576,23447.5,44.7

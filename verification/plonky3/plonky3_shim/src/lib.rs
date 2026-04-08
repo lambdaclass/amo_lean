@@ -20,12 +20,16 @@ use std::panic::catch_unwind;
 use std::slice;
 
 use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
-use p3_field::{PrimeField64, TwoAdicField};
+use p3_field::{PrimeField32, PrimeField64, TwoAdicField};
 use p3_goldilocks::Goldilocks;
+use p3_baby_bear::BabyBear;
 use p3_matrix::dense::RowMajorMatrix;
 
 /// Goldilocks prime: p = 2^64 - 2^32 + 1
 const GOLDILOCKS_PRIME: u64 = 0xFFFF_FFFF_0000_0001;
+
+/// BabyBear prime: p = 2^31 - 2^27 + 1 = 2013265921
+const BABYBEAR_PRIME: u32 = 2013265921;
 
 // ============================================================================
 // NTT Functions
@@ -171,6 +175,67 @@ pub extern "C" fn plonky3_is_montgomery() -> i32 {
     } else {
         1 // Montgomery
     }
+}
+
+// ============================================================================
+// BabyBear NTT Functions (31-bit prime, MontyField31 internally)
+// ============================================================================
+
+/// Compute forward NTT on BabyBear field elements in place.
+///
+/// Uses Plonky3's Radix2Dit with MontyField31<BabyBearParameters>.
+/// This is the REAL Plonky3 NTT — not a simplified reference.
+/// On ARM, Plonky3 uses NEON intrinsics (sqdmulh Montgomery) automatically.
+///
+/// # Arguments
+/// * `data` - Pointer to array of `len` u32 values (field elements in [0, p))
+/// * `len` - Number of elements (must be power of 2)
+///
+/// # Returns
+/// * 0 on success, -1 on error
+///
+/// # Safety
+/// * `data` must point to a valid array of at least `len` u32 values
+#[no_mangle]
+pub unsafe extern "C" fn plonky3_babybear_ntt_forward(data: *mut u32, len: usize) -> i32 {
+    if data.is_null() || len == 0 || (len & (len - 1)) != 0 {
+        return -1;
+    }
+
+    let result = catch_unwind(|| {
+        let slice = slice::from_raw_parts_mut(data, len);
+        let values: Vec<BabyBear> = slice
+            .iter()
+            .map(|&x| BabyBear::new(x))
+            .collect();
+        let mat = RowMajorMatrix::new(values, 1);
+        let dft: Radix2Dit<BabyBear> = Radix2Dit::default();
+        let result = dft.dft_batch(mat);
+        for (i, v) in result.values.iter().enumerate() {
+            slice[i] = PrimeField32::as_canonical_u32(v);
+        }
+    });
+
+    match result {
+        Ok(_) => 0,
+        Err(_) => -1,
+    }
+}
+
+/// Get the BabyBear prime modulus.
+#[no_mangle]
+pub extern "C" fn plonky3_babybear_prime() -> u32 {
+    BABYBEAR_PRIME
+}
+
+/// Get the two-adic generator for BabyBear at a given size.
+/// BabyBear has 2-adicity of 27.
+#[no_mangle]
+pub extern "C" fn plonky3_babybear_get_omega(log_n: usize) -> u32 {
+    if log_n > 27 {
+        return 0;
+    }
+    BabyBear::two_adic_generator(log_n).as_canonical_u32()
 }
 
 // ============================================================================

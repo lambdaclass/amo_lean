@@ -426,7 +426,8 @@ private def fieldConfigToUltraConfig (fc : FieldConfig) (hw : HardwareCost) : Ul
     k := fc.k
     c := fc.cNat
     mu := fc.muNat
-    targetColor := if hw.isSimd then 2 else 1 }
+    targetColor := if hw.isSimd then 2 else 1
+    useSqdmulh := hw.isSimd }
 
 /-- Generate NTT C code using the Ultra pipeline (all phases + verified codegen).
     Uses the full Ultra pipeline: Ruler discovery → bound-aware saturation
@@ -436,6 +437,11 @@ private def fieldConfigToUltraConfig (fc : FieldConfig) (hw : HardwareCost) : Ul
 def optimizedNTTC_ultra (fc : FieldConfig) (hw : HardwareCost) (logN iters : Nat) : String :=
   let n := 2^logN
   let ucfg := fieldConfigToUltraConfig fc hw
+  -- NTT call expression: includes mu_tw parameter when sqdmulh is active
+  let funcBase := s!"{fc.name.toLower}_ntt_ultra"
+  let nttCall := fun (arr : String) =>
+    if ucfg.useSqdmulh then s!"{funcBase}({arr}, tw_mont, mu_tw)"
+    else s!"{funcBase}({arr}, tw_mont)"
   -- Fase Per-Stage v3.3.0: seed e-graph with NTT chain + pass stage class IDs
   let (seedGraph, stageIds) := mkFullNTTSeedGraph fc.pNat logN
   let seedRules := reductionAlternativeRules fc.pNat
@@ -493,6 +499,9 @@ int main(void) \{
     /* Montgomery twiddles for AMO ultra: tw_mont = tw * R mod p */
     {fc.elemType} *tw_mont=malloc(tw_sz*sizeof({fc.elemType}));
     for(size_t i=0;i<tw_sz;i++) tw_mont[i]=({fc.elemType})(((({fc.wideType})tw[i]*({fc.wideType}){rLit})%({fc.wideType}){fc.pLit}));
+    /* Precomputed mu_tw for sqdmulh REDC: mu_tw[i] = tw_mont[i] * mu mod 2^32 */
+    {fc.elemType} *mu_tw=malloc(tw_sz*sizeof({fc.elemType}));
+    for(size_t i=0;i<tw_sz;i++) mu_tw[i]=({fc.elemType})(((({fc.wideType})tw_mont[i]*({fc.wideType}){fc.muLit})&0xFFFFFFFFULL));
     for(size_t i=0;i<n;i++) orig[i]=({fc.elemType})((i*1000000007ULL)%({fc.wideType}){fc.pLit});
     volatile {fc.elemType} sink;
     struct timespec s,e;
@@ -501,7 +510,7 @@ int main(void) \{
     {fc.elemType} *amo_out=malloc(n*sizeof({fc.elemType}));
     {fc.elemType} *p3_out=malloc(n*sizeof({fc.elemType}));
     for(size_t i=0;i<n;i++) amo_out[i]=orig[i];
-    {fc.name.toLower}_ntt_ultra(amo_out, tw_mont);
+    {nttCall "amo_out"};
     for(size_t i=0;i<n;i++) p3_out[i]=orig[i];
     \{ {fc.elemType} *d=p3_out; {p3Loop} }
     /* Reduce both to [0,p) for comparison */
@@ -518,13 +527,13 @@ int main(void) \{
 
     /* warmup */
     for(size_t i=0;i<n;i++) d[i]=orig[i];
-    {fc.name.toLower}_ntt_ultra(d, tw_mont);
+    {nttCall "d"};
 
     /* Ultra benchmark (uses Montgomery twiddles) */
     clock_gettime(CLOCK_MONOTONIC,&s);
     for(int it=0;it<iters;it++) \{
       for(size_t i=0;i<n;i++) d[i]=orig[i];
-      {fc.name.toLower}_ntt_ultra(d, tw_mont);
+      {nttCall "d"};
       sink=d[0]; }
     clock_gettime(CLOCK_MONOTONIC,&e);
     double amo_us=((e.tv_sec-s.tv_sec)+(e.tv_nsec-s.tv_nsec)/1e9)/iters*1e6;
@@ -540,7 +549,7 @@ int main(void) \{
 
     double melem=({n}.0)/(amo_us/1e6)/1e6;
     printf(\"{fc.name},ultra,%.1f,%.1f,%.1f,%+.1f\\n\",amo_us,p3_us,melem,(1.0-amo_us/p3_us)*100.0);
-    (void)sink; free(d); free(orig); free(tw); free(tw_mont);
+    (void)sink; free(d); free(orig); free(tw); free(tw_mont); free(mu_tw);
     return 0;
 }"
 

@@ -137,6 +137,50 @@ static inline void neon_bf_dit_har(int32_t* a_ptr, int32_t* b_ptr,
 }"
 
 -- ══════════════════════════════════════════════════════════════════
+-- Section 2c: sqdmulh Montgomery NEON Butterfly (v3.5.0 REDCMethod)
+-- ══════════════════════════════════════════════════════════════════
+
+/-- Emit NEON DIT butterfly using sqdmulh Montgomery REDC (4 lanes, ~13 instructions).
+    Product: vqdmulhq_s32 (signed doubling multiply high) stays in int32x4_t lanes —
+    no widening to uint64x2_t, no split into 2-lane halves.
+    Sum/diff canonicalization: vminq_u32 trick (unsigned min of x and x±p).
+    Requires precomputed mu_tw table: mu_tw[i] = tw[i] * mu mod 2^32.
+
+    Signed arithmetic is CONTAINED within the REDC — the output wb is canonicalized
+    to [0, p) before sum/diff, so the butterfly exterior stays unsigned.
+
+    Same function signature as vmull variants (p_vec, mu_vec, c_vec, mask_k accepted
+    but c_vec/mask_k unused). Additionally reads from mu_tw_ptr (precomputed). -/
+def emitNeonButterflyDIT_Sqdmulh_C (p : Nat) : String :=
+  s!"/* NEON DIT butterfly (sqdmulh Montgomery): p={p} */
+static inline void neon_bf_dit_sq(int32_t* a_ptr, int32_t* b_ptr,
+    const int32_t* tw_ptr, const int32_t* mu_tw_ptr,
+    int32x4_t p_vec_s, uint32x4_t p_vec) \{
+  int32x4_t a = vld1q_s32(a_ptr);
+  int32x4_t b = vld1q_s32(b_ptr);
+  int32x4_t tw = vld1q_s32(tw_ptr);
+  int32x4_t mu_tw = vld1q_s32(mu_tw_ptr);
+  /* Montgomery REDC: wb = monty_mul(tw, b) via sqdmulh (4 lanes, int32) */
+  int32x4_t c_hi  = vqdmulhq_s32(tw, b);          /* high32(2 * tw * b) */
+  int32x4_t q     = vmulq_s32(b, mu_tw);           /* b * mu_tw mod 2^32 */
+  int32x4_t qp_hi = vqdmulhq_s32(q, p_vec_s);     /* high32(2 * q * p) */
+  int32x4_t d     = vhsubq_s32(c_hi, qp_hi);       /* (c_hi - qp_hi) / 2 */
+  uint32x4_t uf   = vcltq_s32(c_hi, qp_hi);        /* underflow mask */
+  int32x4_t wb    = vreinterpretq_s32_u32(
+      vmlsq_u32(vreinterpretq_u32_s32(d), uf, p_vec)); /* d - uf*p (fixup) */
+  /* DIT sum/diff + canonicalize via unsigned min trick */
+  int32x4_t sum_s = vaddq_s32(a, wb);
+  uint32x4_t su   = vreinterpretq_u32_s32(sum_s);
+  uint32x4_t sum_canon = vminq_u32(su, vsubq_u32(su, p_vec));
+  int32x4_t dif_s = vsubq_s32(a, wb);
+  uint32x4_t du   = vreinterpretq_u32_s32(dif_s);
+  uint32x4_t dif_canon = vminq_u32(du, vaddq_u32(du, p_vec));
+  /* Store (output in [0, p), fits int32_t) */
+  vst1q_s32(a_ptr, vreinterpretq_s32_u32(sum_canon));
+  vst1q_s32(b_ptr, vreinterpretq_s32_u32(dif_canon));
+}"
+
+-- ══════════════════════════════════════════════════════════════════
 -- Section 3: AVX2 DIT Butterfly Kernel (NF.7 — deferred)
 -- ══════════════════════════════════════════════════════════════════
 
@@ -236,29 +280,43 @@ static inline void avx2_bf_dit(int32_t* a_ptr, int32_t* b_ptr,
 
 /-- Emit C code for one NTT stage.
     SIMD-eligible (R2, halfSize ≥ lanes): for-group × for-pair(step=lanes) with butterfly call.
-    Dispatches to Harvey or Solinas butterfly based on stage.reduction.
+    Dispatches to sqdmulh, Harvey, or Solinas butterfly based on useSqdmulh flag and stage.reduction.
     Scalar fallback (R4 or halfSize < lanes): lowerStageVerified + stmtToC. -/
 private def emitStageC (stage : NTTStage) (n p k c mu : Nat) (lanes : Nat)
-    (bfNameSol bfNameHar : String) : String :=
+    (bfNameSol bfNameHar bfNameSq : String) (useSqdmulh : Bool) : String :=
   let stageIdx := stage.stageIdx
   let halfSize := n / (2 ^ (stageIdx + 1))
   let numGroups := 2 ^ stageIdx
-  -- Select butterfly by per-stage reduction choice
-  let bfUsed := match stage.reduction with
-    | .harvey => bfNameHar
-    | _ => bfNameSol
+  -- Select butterfly: sqdmulh preferred when available, else Harvey/Solinas
+  let (bfUsed, isSq) :=
+    if useSqdmulh && bfNameSq != "" then (bfNameSq, true)
+    else match stage.reduction with
+      | .harvey => (bfNameHar, false)
+      | _ => (bfNameSol, false)
   let isSIMD := bfUsed != "" && stage.radix != .r4 && halfSize >= lanes
   if isSIMD then
     let twBase := stageIdx * (n / 2)
-    let redLabel := match stage.reduction with
+    let redLabel := if isSq then "sqdmulh" else match stage.reduction with
       | .harvey => "Harvey" | _ => "Solinas"
-    s!"  /* Stage {stageIdx}: SIMD {redLabel} (halfSize={halfSize}, groups={numGroups}) */
+    -- sqdmulh butterfly has different call signature (needs mu_tw, p_vec_s)
+    let call := fun (off : String) => if isSq then
+      s!"{bfUsed}(&data[i{off}], &data[j{off}], &twiddles[tw_idx{off}], &mu_tw[tw_idx{off}], p_vec_s, p_vec);"
+    else
+      s!"{bfUsed}(&data[i{off}], &data[j{off}], &twiddles[tw_idx{off}], p_vec, mu_vec, c_vec, mask_k);"
+    -- ILP: dual-butterfly interleaving (2 calls per iteration, step=2*lanes)
+    -- Only when halfSize >= 2*lanes (enough data for 2 independent butterflies)
+    let ilp := stage.ilpFactor
+    let canIlp := ilp > 1 && halfSize >= 2 * lanes
+    let step := if canIlp then 2 * lanes else lanes
+    let ilpLabel := if canIlp then s!", ilp={ilp}" else ""
+    let secondCall := if canIlp then s!"\n      {call s!"+{lanes}"}" else ""
+    s!"  /* Stage {stageIdx}: SIMD {redLabel} (halfSize={halfSize}, groups={numGroups}{ilpLabel}) */
   for (size_t grp = 0; grp < {numGroups}; grp++) \{
-    for (size_t pr = 0; pr < {halfSize}; pr += {lanes}) \{
+    for (size_t pr = 0; pr < {halfSize}; pr += {step}) \{
       size_t i = grp * {2 * halfSize} + pr;
       size_t j = i + {halfSize};
       size_t tw_idx = {twBase} + grp * {halfSize} + pr;
-      {bfUsed}(&data[i], &data[j], &twiddles[tw_idx], p_vec, mu_vec, c_vec, mask_k);
+      {call ""}{secondCall}
     }
   }
 "
@@ -294,40 +352,56 @@ private def scalarTempDecls (hasR4 : Bool) : String :=
     6. Wrap in function with same signature as scalar:
        void funcName(int32_t* data, const int32_t* twiddles)
 
-    For AVX2 target without implemented butterfly, falls back to all-scalar. -/
+    For AVX2 target without implemented butterfly, falls back to all-scalar.
+    When useSqdmulh=true, uses sqdmulh Montgomery REDC (4-lane, ~13 instructions)
+    instead of vmull widening REDC. Requires mu_tw precomputed table. -/
 def emitSIMDNTTC (plan : Plan) (target : SIMDTarget) (k c mu : Nat)
-    (funcName : String) : String :=
+    (funcName : String) (useSqdmulh : Bool := false) : String :=
   let plan := normalizePlan plan
   let p := plan.field
   let n := plan.size
   let lanes := simdLanes target
   let mask := 2^k - 1
   let elemType := if k == 64 then "int64_t" else "int32_t"
-  -- Select butterfly functions for target (Solinas + Harvey variants)
+  -- Select butterfly functions for target (Solinas + Harvey + sqdmulh variants)
   let (bfDeclSol, bfNameSol) := match target with
     | .neon => (emitNeonButterflyDIT_C p k c mu, "neon_bf_dit")
     | .avx2 => (emitAvx2ButterflyDIT_C p k c mu, "avx2_bf_dit")
   let (bfDeclHar, bfNameHar) := match target with
     | .neon => (emitNeonButterflyDIT_Harvey_C p, "neon_bf_dit_har")
-    | .avx2 => ("", "")  -- AVX2 Harvey deferred
+    | .avx2 => ("", "")
+  let (bfDeclSq, bfNameSq) := match target with
+    | .neon => if useSqdmulh then (emitNeonButterflyDIT_Sqdmulh_C p, "neon_bf_dit_sq") else ("", "")
+    | .avx2 => ("", "")  -- AVX2 sqdmulh not applicable
   -- Classify stages
   let stages := plan.stages.toList
-  let needsSolinas := stages.any fun s =>
+  let hasSIMDStage := stages.any fun s =>
+    s.radix != .r4 && n / (2 ^ (s.stageIdx + 1)) >= lanes
+  let needsSolinas := !useSqdmulh && stages.any fun s =>
     s.reduction != .harvey && s.radix != .r4 && n / (2 ^ (s.stageIdx + 1)) >= lanes
-  let needsHarvey := stages.any fun s =>
+  let needsHarvey := !useSqdmulh && stages.any fun s =>
     s.reduction == .harvey && s.radix != .r4 && n / (2 ^ (s.stageIdx + 1)) >= lanes
   let hasScalarFallback := stages.any fun s =>
     s.radix == .r4 || n / (2 ^ (s.stageIdx + 1)) < lanes
   let hasR4 := stages.any fun s => s.radix == .r4
   -- Build header section: only emit butterfly functions that are actually used
-  let bfDecls := (if needsSolinas then bfDeclSol ++ "\n\n" else "") ++
-                 (if needsHarvey && bfNameHar != "" then bfDeclHar ++ "\n\n" else "")
+  let bfDecls :=
+    (if useSqdmulh && bfNameSq != "" then bfDeclSq ++ "\n\n" else "") ++
+    (if needsSolinas then bfDeclSol ++ "\n\n" else "") ++
+    (if needsHarvey && bfNameHar != "" then bfDeclHar ++ "\n\n" else "")
   let headerSection :=
     "#include <stdint.h>\n#include <stddef.h>\n" ++
     simdHeader target ++ "\n\n" ++ bfDecls
   -- Build function body
   let scalarDecls := if hasScalarFallback then scalarTempDecls hasR4 else ""
-  let constDecls := match target with
+  -- sqdmulh needs different constants: signed p_vec_s + unsigned p_vec + mu_tw table
+  let constDecls := if useSqdmulh && hasSIMDStage then match target with
+    | .neon =>
+      s!"  uint32x4_t p_vec = vdupq_n_u32({p}U);
+  int32x4_t p_vec_s = vdupq_n_s32((int32_t){p}U);
+"
+    | .avx2 => ""  -- AVX2 sqdmulh not implemented
+  else match target with
     | .neon =>
       s!"  uint32x4_t p_vec = vdupq_n_u32({p}U);
   uint32x4_t mu_vec = vdupq_n_u32({mu}U);
@@ -342,11 +416,14 @@ def emitSIMDNTTC (plan : Plan) (target : SIMDTarget) (k c mu : Nat)
 "
   -- Generate stage code with per-stage dispatch
   let stageCode := stages.foldl (fun acc stage =>
-    acc ++ emitStageC stage n p k c mu lanes bfNameSol bfNameHar
+    acc ++ emitStageC stage n p k c mu lanes bfNameSol bfNameHar bfNameSq useSqdmulh
   ) ""
+  -- Function signature: sqdmulh needs mu_tw parameter
+  let sig := if useSqdmulh && hasSIMDStage then
+    s!"void {funcName}({elemType}* data, const {elemType}* twiddles, const {elemType}* mu_tw) \{"
+  else
+    s!"void {funcName}({elemType}* data, const {elemType}* twiddles) \{"
   -- Assemble: header + function
-  headerSection ++
-    s!"void {funcName}({elemType}* data, const {elemType}* twiddles) \{
-" ++ scalarDecls ++ constDecls ++ stageCode ++ "}\n"
+  headerSection ++ sig ++ "\n" ++ scalarDecls ++ constDecls ++ stageCode ++ "}\n"
 
 end AmoLean.EGraph.Verified.Bitwise.SIMDEmitter

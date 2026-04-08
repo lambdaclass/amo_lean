@@ -13,6 +13,21 @@ from field_defs import FieldDef
 from lean_driver import GeneratedProgram
 
 
+def _ntt_call(kernel: str, func_name: str, data: str = "d",
+              tw: str = "tw_mont", mu_tw: str = "mu_tw") -> str:
+    """Generate the NTT function call with correct number of arguments.
+    Detects 3-arg (sqdmulh: data, twiddles, mu_tw) vs 2-arg (vmull: data, twiddles)
+    by checking the function signature in the kernel."""
+    # Look for the function signature to count parameters
+    import re
+    sig_match = re.search(rf'void\s+{re.escape(func_name)}\s*\(([^)]*)\)', kernel)
+    if sig_match:
+        params = sig_match.group(1).split(',')
+        if len(params) >= 3:
+            return f"{func_name}({data}, {tw}, {mu_tw})"
+    return f"{func_name}({data}, {tw})"
+
+
 def split_at_main(source: str, lang: str) -> tuple[str, str]:
     """Split source into (kernel, main_section).
 
@@ -114,13 +129,18 @@ int main(void) {{
     /* Montgomery twiddles for AMO ultra: tw_mont = tw * R mod p */
     for (size_t i = 0; i < tw_sz; i++)
         tw_mont[i] = ({elem})((({wide})tw[i] * {r_lit}) % {init_cast}{p_lit});
+    /* Precomputed mu_tw for sqdmulh REDC: mu_tw[i] = tw_mont[i] * mu mod 2^32 */
+    {elem} *mu_tw = ({elem}*)malloc(tw_sz * sizeof({elem}));
+    for (size_t i = 0; i < tw_sz; i++)
+        mu_tw[i] = ({elem})((({wide})tw_mont[i] * ({wide}){field.mu}U) & 0xFFFFFFFFULL);
     /* Run NTT */
-    {func_name}(d, tw_mont);
+    {_ntt_call(kernel, func_name)};
     /* Print output mod p */
     for (size_t i = 0; i < n; i++)
 {print_fmt}
     free(d);
     free(tw_mont);
+    free(mu_tw);
     return 0;
 }}
 """
@@ -328,8 +348,12 @@ int main(void) {{
     for (size_t i = 0; i < tw_sz; i++)
         tw_mont[i] = ({elem})((({wide})tw[i] * {r_lit}) % {init_cast}{p_lit});
 {pre_ntt_debug}
+    /* Precomputed mu_tw for sqdmulh REDC */
+    {elem} *mu_tw = ({elem}*)malloc(tw_sz * sizeof({elem}));
+    for (size_t i = 0; i < tw_sz; i++)
+        mu_tw[i] = ({elem})((({wide})tw_mont[i] * ({wide}){field.mu}U) & 0xFFFFFFFFULL);
     /* Run NTT */
-    {func_name}(d, tw_mont);
+    {_ntt_call(kernel, func_name)};
     /* Print output mod p */
     for (size_t i = 0; i < n; i++)
 {print_fmt}

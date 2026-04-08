@@ -1,24 +1,42 @@
 # AMO-Lean NTT Benchmark Report
-**Date:** 2026-04-07 16:04:57
+**Date:** 2026-04-07 23:15:56
 **Platform:** Darwin arm64
+
+## Column Legend
+
+| Column | Description |
+|--------|-------------|
+| **Lang** | Output language: `c` = compiled C, `rust` = compiled Rust |
+| **HW** | Hardware target: `arm-scalar` = no SIMD, `arm-neon` = ARM NEON 4-lane SIMD |
+| **AMO** | AMO-Lean Ultra pipeline: verified codegen with e-graph optimization |
+| **P3 naive** | Scalar reference using naive `% p` modular reduction (NOT actual Plonky3) |
+| **P3 real** | Actual Plonky3 library via FFI (when available) |
+| **vs P3 naive** | `(P3_naive - AMO) / P3_naive × 100%` — positive = AMO faster |
+| **vs P3 real** | `(P3_real - AMO) / P3_real × 100%` — positive = AMO faster |
 
 ## Validation Summary
 
 | Field | N | Lang | HW | Status | Details |
 |-------|---|------|----|--------|---------|
 | babybear | 2^16 | c | arm-scalar | PASS | 65536 elements |
-| babybear | 2^20 | c | arm-scalar | PASS | 1048576 elements |
-| koalabear | 2^16 | c | arm-scalar | PASS | 65536 elements |
-| koalabear | 2^20 | c | arm-scalar | PASS | 1048576 elements |
 
 ## Performance Results
 
-| Field | N | Lang | HW | AMO (us) | P3 (us) | Melem/s | vs P3 |
-|-------|---|------|----|----------|---------|---------|-------|
-| babybear | 2^16 | c | arm-scalar | 841.7 | 959.5 | 77.9 | +12.3% |
-| babybear | 2^20 | c | arm-scalar | 16856.0 | 21067.0 | 62.2 | +20.0% |
-| koalabear | 2^16 | c | arm-scalar | 837.2 | 978.4 | 78.3 | +14.4% |
-| koalabear | 2^20 | c | arm-scalar | 16890.7 | 21105.2 | 62.1 | +20.0% |
+| Field | N | Lang | HW | AMO (μs) | P3 naive (μs) | vs naive |
+|-------|---|------|----|----------|---------------|----------|
+| babybear | 2^16 | c | arm-scalar | 1030.1 | 1907.8 | +46.0% |
+
+## Notes
+
+**Configurations tested:**
+- `c` / `arm-scalar`: ARM scalar (no SIMD)
+
+**Configurations not tested in this run:**
+- `c` / `arm-neon`
+- `rust` / `arm-neon`
+- `rust` / `arm-scalar`
+
+**P3 real (Plonky3 via FFI):** Not available in this run. The P3 naive column uses scalar `% p` modular reduction — it is NOT representative of actual Plonky3 performance which uses Montgomery SIMD (sqdmulh on NEON, vpmuludq on AVX2).
 
 ## Cost Model Explanations
 
@@ -29,45 +47,6 @@ Field: BabyBear (p = 2013265921)
 Pipeline: Ultra (Ruler + bounds + colored + verified codegen)
    === Truth Ultra Report ===
 Field: p=2013265921, N=65536
-HW: mul32=3 add=1 simd=false, Target color: 1
---- Phase 22: Bounds ---
-Saturation: 20 iterations
-/
-
-```
-```
-=== Cost Model Explanation: babybear N=2^20 (arm-scalar) ===
-AMO-Lean Ultra NTT Benchmark
-Field: BabyBear (p = 2013265921)
-Pipeline: Ultra (Ruler + bounds + colored + verified codegen)
-   === Truth Ultra Report ===
-Field: p=2013265921, N=1048576
-HW: mul32=3 add=1 simd=false, Target color: 1
---- Phase 22: Bounds ---
-Saturation: 20 iterations
-/
-
-```
-```
-=== Cost Model Explanation: koalabear N=2^16 (arm-scalar) ===
-AMO-Lean Ultra NTT Benchmark
-Field: KoalaBear (p = 2130706433)
-Pipeline: Ultra (Ruler + bounds + colored + verified codegen)
-   === Truth Ultra Report ===
-Field: p=2130706433, N=65536
-HW: mul32=3 add=1 simd=false, Target color: 1
---- Phase 22: Bounds ---
-Saturation: 20 iterations
-/
-
-```
-```
-=== Cost Model Explanation: koalabear N=2^20 (arm-scalar) ===
-AMO-Lean Ultra NTT Benchmark
-Field: KoalaBear (p = 2130706433)
-Pipeline: Ultra (Ruler + bounds + colored + verified codegen)
-   === Truth Ultra Report ===
-Field: p=2130706433, N=1048576
 HW: mul32=3 add=1 simd=false, Target color: 1
 --- Phase 22: Bounds ---
 Saturation: 20 iterations

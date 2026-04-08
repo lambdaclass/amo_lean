@@ -1,25 +1,64 @@
 {
-  "version": "3.4.0",
+  "version": "3.5.0",
   "project": "TRZK",
   "phases": [
     {
-      "id": "fase-harvey-simd",
-      "name": "Harvey-SIMD v3.4.0",
+      "id": "fase-redc-schedule",
+      "name": "REDC-Schedule v3.5.0",
       "status": "pending",
       "nodes": [
         {
-          "id": "N34.1",
-          "name": "Tighten Harvey bound to boundK=1",
+          "id": "N35.0",
+          "name": "Benchmark vs Plonky3 real (monty-31 BabyBear)",
           "type": "FUNDACIONAL",
           "status": "pending",
           "files": [
-            "AmoLean/EGraph/Verified/Bitwise/BoundPropagation.lean",
-            "AmoLean/EGraph/Verified/Bitwise/BoundIntegration.lean",
-            "AmoLean/EGraph/Verified/Bitwise/Discovery/StageContext.lean"
+            "verification/plonky3/plonky3_shim/src/lib.rs",
+            "verification/plonky3/Makefile"
           ],
           "deps": [],
           "blocks": [
-            "B34-1"
+            "B35-0"
+          ],
+          "metrics": {
+            "loc": 0,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 0,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 0
+          },
+          "study": {
+            "papers": [
+              "NTT/ntt_extended_harvey_butterfly.md"
+            ],
+            "lessons": [],
+            "libraries": [],
+            "notes": "Extend P3 shim with monty-31 BabyBear FFI. Establishes honest baseline."
+          }
+        },
+        {
+          "id": "N35.1",
+          "name": "REDCMethod.sqdmulhMontgomery — 4-lane REDC",
+          "type": "CRITICO",
+          "status": "pending",
+          "files": [
+            "AmoLean/EGraph/Verified/Bitwise/SIMDEmitter.lean",
+            "AmoLean/EGraph/Verified/Bitwise/NTTPlan.lean",
+            "AmoLean/EGraph/Verified/Bitwise/BoundPropagation.lean",
+            "AmoLean/EGraph/Verified/Bitwise/CrossRelNTT.lean",
+            "AmoLean/EGraph/Verified/Bitwise/NTTPlanSelection.lean"
+          ],
+          "deps": [
+            "N35.0"
+          ],
+          "blocks": [
+            "B35-1"
           ],
           "metrics": {
             "loc": 0,
@@ -36,103 +75,29 @@
           },
           "study": {
             "papers": [
-              "NTT/ntt_extended_harvey_butterfly.md"
-            ],
-            "lessons": [
-              "L-201"
-            ],
-            "libraries": [],
-            "notes": "3 definition sites + 1 theorem + 1 example. harveyReduceSpec postcondition says output < p (boundK=1). The conservative boundK=2 prevents chaining. Fix enables Harvey at ALL stages."
-          }
-        },
-        {
-          "id": "N34.2",
-          "name": "SIMD Harvey butterfly kernel + dispatch",
-          "type": "CRITICO",
-          "status": "pending",
-          "files": [
-            "AmoLean/EGraph/Verified/Bitwise/SIMDEmitter.lean"
-          ],
-          "deps": [
-            "N34.1"
-          ],
-          "blocks": [
-            "B34-2"
-          ],
-          "metrics": {
-            "loc": 0,
-            "theorems": 0,
-            "lemmas": 0,
-            "defs": 0,
-            "sorry": 0
-          },
-          "properties": {
-            "total": 1,
-            "passing": 0,
-            "failing": 0,
-            "not_runnable": 0
-          },
-          "study": {
-            "papers": [
               "NTT/ntt_extended_harvey_butterfly.md",
-              "NTT/implementing_ntt_simd.md",
               "Optimization/simd_modular_arithmetic.md"
             ],
             "lessons": [
               "L-308"
             ],
             "libraries": [],
-            "notes": "Extract REDC product as helper (lines 74-102 shared). Harvey kernel = vcgeq_u32 + vandq_u32 + vsubq_u32 (3 ops branchless). Scalar reference: lowerHarveyReduce at TrustLeanBridge.lean:374-384. DO NOT duplicate REDC code."
+            "notes": "Signed arithmetic CONTAINED in REDC. Reference: UnifiedCodeGen.lean:439-465. 15 vs 26 instructions."
           }
         },
         {
-          "id": "N34.3",
-          "name": "Fix selectReductionForBound Montgomery exclusion",
+          "id": "N35.2",
+          "name": "Calibrate cost model — REDCMethod empirical",
           "type": "PARALELO",
           "status": "pending",
           "files": [
             "AmoLean/EGraph/Verified/Bitwise/CrossRelNTT.lean"
           ],
-          "deps": [],
-          "blocks": [
-            "B34-3"
-          ],
-          "metrics": {
-            "loc": 0,
-            "theorems": 0,
-            "lemmas": 0,
-            "defs": 0,
-            "sorry": 0
-          },
-          "properties": {
-            "total": 1,
-            "passing": 0,
-            "failing": 0,
-            "not_runnable": 0
-          },
-          "study": {
-            "papers": [],
-            "lessons": [],
-            "libraries": [],
-            "notes": "Lines 49-51: returns .montgomery for SIMD when boundK > 4. Montgomery REDC is unsound for sums/diffs. costAwareReductionForBound correctly excludes it, but nttStageBoundAnalysis calls the buggy selectReductionForBound."
-          }
-        },
-        {
-          "id": "N34.4",
-          "name": "Validation: chaining + NEON correctness + benchmark",
-          "type": "HOJA",
-          "status": "pending",
-          "files": [
-            "Tests/benchmark/deep_diag.lean",
-            "AmoLean/EGraph/Verified/Bitwise/OptimizedNTTPipeline.lean"
-          ],
           "deps": [
-            "N34.1",
-            "N34.2",
-            "N34.3"
+            "N35.1"
           ],
           "blocks": [
-            "B34-3"
+            "B35-2"
           ],
           "metrics": {
             "loc": 0,
@@ -151,35 +116,169 @@
             "papers": [],
             "lessons": [],
             "libraries": [],
-            "notes": "3 checks: (1) mkBoundAwarePlan with arm_neon_simd → 5/5 Harvey stages. (2) NEON Harvey output vs scalar Harvey for BabyBear/KoalaBear/Mersenne31. (3) Benchmark Ultra NEON vs P3 baseline."
+            "notes": "Benchmark sqdmulh vs vmull vs P3-real. Adjust redcCost if off >20%."
+          }
+        },
+        {
+          "id": "N35.3",
+          "name": "ILPFactor — dual-butterfly interleaving",
+          "type": "CRITICO",
+          "status": "pending",
+          "files": [
+            "AmoLean/EGraph/Verified/Bitwise/SIMDEmitter.lean",
+            "AmoLean/EGraph/Verified/Bitwise/NTTPlan.lean",
+            "AmoLean/EGraph/Verified/Bitwise/NTTPlanSelection.lean"
+          ],
+          "deps": [
+            "N35.2"
+          ],
+          "blocks": [
+            "B35-3"
+          ],
+          "metrics": {
+            "loc": 0,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 1,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 0
+          },
+          "study": {
+            "papers": [
+              "NTT/ntt_extended_harvey_butterfly.md"
+            ],
+            "lessons": [],
+            "libraries": [],
+            "notes": "ilpFactor=2: 2 bf calls per iteration. Reference: InstructionScheduling.lean:214-260."
+          }
+        },
+        {
+          "id": "N35.4",
+          "name": "Calibrate cost model — ILP empirical",
+          "type": "PARALELO",
+          "status": "pending",
+          "files": [
+            "AmoLean/EGraph/Verified/Bitwise/NTTPlan.lean"
+          ],
+          "deps": [
+            "N35.3"
+          ],
+          "blocks": [
+            "B35-4"
+          ],
+          "metrics": {
+            "loc": 0,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 0,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 0
+          },
+          "study": {
+            "papers": [],
+            "lessons": [],
+            "libraries": [],
+            "notes": "Measure real ILP gain. Adjust ilpDiscount if off >20%."
+          }
+        },
+        {
+          "id": "N35.5",
+          "name": "Decision gate: stage merging viability",
+          "type": "HOJA",
+          "status": "pending",
+          "files": [
+            "ARCHITECTURE.md"
+          ],
+          "deps": [
+            "N35.4"
+          ],
+          "blocks": [
+            "B35-5"
+          ],
+          "metrics": {
+            "loc": 0,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 0,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 0
+          },
+          "study": {
+            "papers": [
+              "NTT/ntt_extended_harvey_butterfly.md"
+            ],
+            "lessons": [],
+            "libraries": [],
+            "notes": "Profile late stages. If >25%: plan v3.6.0. If <25%: defer."
           }
         }
       ],
       "blocks": [
         {
-          "id": "B34-1",
-          "name": "Harvey Bound Tightening",
+          "id": "B35-0",
+          "name": "Plonky3 Real Benchmark",
           "nodes": [
-            "N34.1"
+            "N35.0"
           ],
           "status": "pending",
           "closed_at": null
         },
         {
-          "id": "B34-2",
-          "name": "SIMD Harvey Butterfly",
+          "id": "B35-1",
+          "name": "sqdmulh REDC Implementation",
           "nodes": [
-            "N34.2"
+            "N35.1"
           ],
           "status": "pending",
           "closed_at": null
         },
         {
-          "id": "B34-3",
-          "name": "Montgomery Fix + Validation",
+          "id": "B35-2",
+          "name": "REDC Calibration",
           "nodes": [
-            "N34.3",
-            "N34.4"
+            "N35.2"
+          ],
+          "status": "pending",
+          "closed_at": null
+        },
+        {
+          "id": "B35-3",
+          "name": "ILP Interleaving",
+          "nodes": [
+            "N35.3"
+          ],
+          "status": "pending",
+          "closed_at": null
+        },
+        {
+          "id": "B35-4",
+          "name": "ILP Calibration",
+          "nodes": [
+            "N35.4"
+          ],
+          "status": "pending",
+          "closed_at": null
+        },
+        {
+          "id": "B35-5",
+          "name": "Stage Merging Decision",
+          "nodes": [
+            "N35.5"
           ],
           "status": "pending",
           "closed_at": null
@@ -189,8 +288,8 @@
   ],
   "meta": {
     "created": "2026-04-07T15:52:54Z",
-    "updated": "2026-04-07T15:52:54Z",
-    "total_nodes": 4,
+    "updated": "2026-04-07T22:50:16Z",
+    "total_nodes": 6,
     "completed_nodes": 0
   }
 }
