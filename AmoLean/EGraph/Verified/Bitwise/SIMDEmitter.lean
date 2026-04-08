@@ -181,6 +181,110 @@ static inline void neon_bf_dit_sq(int32_t* a_ptr, int32_t* b_ptr,
 }"
 
 -- ══════════════════════════════════════════════════════════════════
+-- Section 2d: Small SIMD Butterflies for halfSize < 4 (v3.6.0)
+-- ══════════════════════════════════════════════════════════════════
+
+/-- Emit NEON butterfly for halfSize=2 using sqdmulh REDC.
+    Processes 2 groups per call (4 butterflies total, filling all 4 NEON lanes).
+    Group g has data layout: [a0, a1, b0, b1] at data[g*4..g*4+3].
+    Two groups g and g+1: combine their a's and b's into full 4-lane registers.
+
+    Layout in registers:
+      a_vec = [a0_g, a1_g, a0_{g+1}, a1_{g+1}]  (4 lanes)
+      b_vec = [b0_g, b1_g, b0_{g+1}, b1_{g+1}]  (4 lanes)
+      tw_vec = [tw0_g, tw1_g, tw0_{g+1}, tw1_{g+1}]  (4 lanes)
+
+    The a's are contiguous at data[g*4] and data[(g+1)*4].
+    The b's are contiguous at data[g*4+2] and data[(g+1)*4+2].
+    The tw's are contiguous at tw[base + g*2] and tw[base + (g+1)*2]. -/
+def emitNeonButterflyDIT_HS2_C (p : Nat) : String :=
+  s!"/* NEON DIT butterfly halfSize=2 (sqdmulh, 2 groups × 2 bf = 4 lanes) */
+static inline void neon_bf_dit_hs2(
+    int32_t* data_g0, int32_t* data_g1,
+    const int32_t* tw_g0, const int32_t* tw_g1,
+    const int32_t* mu_tw_g0, const int32_t* mu_tw_g1,
+    int32x4_t p_vec_s, uint32x4_t p_vec) \{
+  /* Load: 2 a-values + 2 b-values from each group, combine into 4 lanes */
+  int32x2_t a_lo = vld1_s32(data_g0);          /* [a0_g0, a1_g0] */
+  int32x2_t a_hi = vld1_s32(data_g1);          /* [a0_g1, a1_g1] */
+  int32x4_t a = vcombine_s32(a_lo, a_hi);
+  int32x2_t b_lo = vld1_s32(data_g0 + 2);      /* [b0_g0, b1_g0] */
+  int32x2_t b_hi = vld1_s32(data_g1 + 2);      /* [b0_g1, b1_g1] */
+  int32x4_t b = vcombine_s32(b_lo, b_hi);
+  int32x2_t tw_lo = vld1_s32(tw_g0);           /* [tw0_g0, tw1_g0] */
+  int32x2_t tw_hi = vld1_s32(tw_g1);           /* [tw0_g1, tw1_g1] */
+  int32x4_t tw = vcombine_s32(tw_lo, tw_hi);
+  int32x2_t mt_lo = vld1_s32(mu_tw_g0);
+  int32x2_t mt_hi = vld1_s32(mu_tw_g1);
+  int32x4_t mu_tw = vcombine_s32(mt_lo, mt_hi);
+  /* sqdmulh REDC: 4 lanes in parallel */
+  int32x4_t c_hi  = vqdmulhq_s32(tw, b);
+  int32x4_t q     = vmulq_s32(b, mu_tw);
+  int32x4_t qp_hi = vqdmulhq_s32(q, p_vec_s);
+  int32x4_t d     = vhsubq_s32(c_hi, qp_hi);
+  uint32x4_t uf   = vcltq_s32(c_hi, qp_hi);
+  int32x4_t wb    = vreinterpretq_s32_u32(
+      vmlsq_u32(vreinterpretq_u32_s32(d), uf, p_vec));
+  /* Canonicalize + sum/diff */
+  int32x4_t sum_s = vaddq_s32(a, wb);
+  uint32x4_t su   = vreinterpretq_u32_s32(sum_s);
+  uint32x4_t sum_c = vminq_u32(su, vsubq_u32(su, p_vec));
+  int32x4_t dif_s = vsubq_s32(a, wb);
+  uint32x4_t du   = vreinterpretq_u32_s32(dif_s);
+  uint32x4_t dif_c = vminq_u32(du, vaddq_u32(du, p_vec));
+  /* Store: split back to 2-lane halves for each group */
+  vst1_s32(data_g0,     vget_low_s32(vreinterpretq_s32_u32(sum_c)));
+  vst1_s32(data_g0 + 2, vget_low_s32(vreinterpretq_s32_u32(dif_c)));
+  vst1_s32(data_g1,     vget_high_s32(vreinterpretq_s32_u32(sum_c)));
+  vst1_s32(data_g1 + 2, vget_high_s32(vreinterpretq_s32_u32(dif_c)));
+}"
+
+/-- Emit NEON butterfly for halfSize=1 using sqdmulh REDC.
+    Processes 4 groups per call (4 butterflies, 4 lanes).
+    Group g has data layout: [a, b] at data[g*2..g*2+1].
+    Four groups g..g+3: load 8 contiguous elements, deinterleave a's and b's.
+
+    Layout:
+      memory: [a0, b0, a1, b1, a2, b2, a3, b3]  (8 elements, 4 groups)
+      after deinterleave:
+        a_vec = [a0, a1, a2, a3]  (4 lanes)
+        b_vec = [b0, b1, b2, b3]  (4 lanes)
+
+    Deinterleave via vld2_s32 (load-and-deinterleave intrinsic). -/
+def emitNeonButterflyDIT_HS1_C (p : Nat) : String :=
+  s!"/* NEON DIT butterfly halfSize=1 (sqdmulh, 4 groups × 1 bf = 4 lanes) */
+static inline void neon_bf_dit_hs1(
+    int32_t* data_ptr, const int32_t* tw_ptr, const int32_t* mu_tw_ptr,
+    int32x4_t p_vec_s, uint32x4_t p_vec) \{
+  /* Load + deinterleave: 4 groups × 2 elements = 8 elements */
+  int32x4x2_t ab = vld2q_s32(data_ptr);         /* ab.val[0]=[a0,a1,a2,a3], ab.val[1]=[b0,b1,b2,b3] */
+  int32x4_t a = ab.val[0];
+  int32x4_t b = ab.val[1];
+  int32x4_t tw = vld1q_s32(tw_ptr);
+  int32x4_t mu_tw = vld1q_s32(mu_tw_ptr);
+  /* sqdmulh REDC: 4 lanes in parallel */
+  int32x4_t c_hi  = vqdmulhq_s32(tw, b);
+  int32x4_t q     = vmulq_s32(b, mu_tw);
+  int32x4_t qp_hi = vqdmulhq_s32(q, p_vec_s);
+  int32x4_t d     = vhsubq_s32(c_hi, qp_hi);
+  uint32x4_t uf   = vcltq_s32(c_hi, qp_hi);
+  int32x4_t wb    = vreinterpretq_s32_u32(
+      vmlsq_u32(vreinterpretq_u32_s32(d), uf, p_vec));
+  /* Canonicalize + sum/diff */
+  int32x4_t sum_s = vaddq_s32(a, wb);
+  uint32x4_t su   = vreinterpretq_u32_s32(sum_s);
+  uint32x4_t sum_c = vminq_u32(su, vsubq_u32(su, p_vec));
+  int32x4_t dif_s = vsubq_s32(a, wb);
+  uint32x4_t du   = vreinterpretq_u32_s32(dif_s);
+  uint32x4_t dif_c = vminq_u32(du, vaddq_u32(du, p_vec));
+  /* Interleave + store: [sum0,dif0,sum1,dif1,sum2,dif2,sum3,dif3] */
+  int32x4x2_t result;
+  result.val[0] = vreinterpretq_s32_u32(sum_c);
+  result.val[1] = vreinterpretq_s32_u32(dif_c);
+  vst2q_s32(data_ptr, result);
+}"
+
+-- ══════════════════════════════════════════════════════════════════
 -- Section 3: AVX2 DIT Butterfly Kernel (NF.7 — deferred)
 -- ══════════════════════════════════════════════════════════════════
 
@@ -283,10 +387,15 @@ static inline void avx2_bf_dit(int32_t* a_ptr, int32_t* b_ptr,
     Dispatches to sqdmulh, Harvey, or Solinas butterfly based on useSqdmulh flag and stage.reduction.
     Scalar fallback (R4 or halfSize < lanes): lowerStageVerified + stmtToC. -/
 private def emitStageC (stage : NTTStage) (n p k c mu : Nat) (lanes : Nat)
-    (bfNameSol bfNameHar bfNameSq : String) (useSqdmulh : Bool) : String :=
+    (bfNameSol bfNameHar bfNameSq : String) (useSqdmulh : Bool)
+    (profiled : Bool := false) : String :=
   let stageIdx := stage.stageIdx
   let halfSize := n / (2 ^ (stageIdx + 1))
   let numGroups := 2 ^ stageIdx
+  -- CNTVCT fence marker for per-stage profiling (N36.5a)
+  let fence := if profiled then
+    s!"  asm volatile(\"isb\\nmrs %0, CNTVCT_EL0\" : \"=r\"(_ticks[{stageIdx}]) :: \"memory\");\n"
+  else ""
   -- Select butterfly: sqdmulh preferred when available, else Harvey/Solinas
   let (bfUsed, isSq) :=
     if useSqdmulh && bfNameSq != "" then (bfNameSq, true)
@@ -294,7 +403,7 @@ private def emitStageC (stage : NTTStage) (n p k c mu : Nat) (lanes : Nat)
       | .harvey => (bfNameHar, false)
       | _ => (bfNameSol, false)
   let isSIMD := bfUsed != "" && stage.radix != .r4 && halfSize >= lanes
-  if isSIMD then
+  fence ++ if isSIMD then
     let twBase := stageIdx * (n / 2)
     let redLabel := if isSq then "sqdmulh" else match stage.reduction with
       | .harvey => "Harvey" | _ => "Solinas"
@@ -318,6 +427,29 @@ private def emitStageC (stage : NTTStage) (n p k c mu : Nat) (lanes : Nat)
       size_t tw_idx = {twBase} + grp * {halfSize} + pr;
       {call ""}{secondCall}
     }
+  }
+"
+  else if useSqdmulh && stage.radix != .r4 && halfSize == 2 && numGroups >= 2 then
+    -- Small SIMD: halfSize=2, process 2 groups per call via neon_bf_dit_hs2
+    let twBase := stageIdx * (n / 2)
+    s!"  /* Stage {stageIdx}: small-SIMD hs2 (halfSize=2, groups={numGroups}) */
+  for (size_t grp = 0; grp < {numGroups}; grp += 2) \{
+    size_t g0 = grp * 4;
+    size_t g1 = (grp + 1) * 4;
+    size_t tw0 = {twBase} + grp * 2;
+    size_t tw1 = {twBase} + (grp + 1) * 2;
+    neon_bf_dit_hs2(&data[g0], &data[g1], &twiddles[tw0], &twiddles[tw1],
+                    &mu_tw[tw0], &mu_tw[tw1], p_vec_s, p_vec);
+  }
+"
+  else if useSqdmulh && stage.radix != .r4 && halfSize == 1 && numGroups >= 4 then
+    -- Small SIMD: halfSize=1, process 4 groups per call via neon_bf_dit_hs1
+    let twBase := stageIdx * (n / 2)
+    s!"  /* Stage {stageIdx}: small-SIMD hs1 (halfSize=1, groups={numGroups}) */
+  for (size_t grp = 0; grp < {numGroups}; grp += 4) \{
+    size_t base = grp * 2;
+    size_t tw_base = {twBase} + grp;
+    neon_bf_dit_hs1(&data[base], &twiddles[tw_base], &mu_tw[tw_base], p_vec_s, p_vec);
   }
 "
   else
@@ -356,7 +488,8 @@ private def scalarTempDecls (hasR4 : Bool) : String :=
     When useSqdmulh=true, uses sqdmulh Montgomery REDC (4-lane, ~13 instructions)
     instead of vmull widening REDC. Requires mu_tw precomputed table. -/
 def emitSIMDNTTC (plan : Plan) (target : SIMDTarget) (k c mu : Nat)
-    (funcName : String) (useSqdmulh : Bool := false) : String :=
+    (funcName : String) (useSqdmulh : Bool := false)
+    (profiled : Bool := false) : String :=
   let plan := normalizePlan plan
   let p := plan.field
   let n := plan.size
@@ -381,12 +514,23 @@ def emitSIMDNTTC (plan : Plan) (target : SIMDTarget) (k c mu : Nat)
     s.reduction != .harvey && s.radix != .r4 && n / (2 ^ (s.stageIdx + 1)) >= lanes
   let needsHarvey := !useSqdmulh && stages.any fun s =>
     s.reduction == .harvey && s.radix != .r4 && n / (2 ^ (s.stageIdx + 1)) >= lanes
+  -- With sqdmulh + small SIMD, only R4 stages need scalar fallback
   let hasScalarFallback := stages.any fun s =>
-    s.radix == .r4 || n / (2 ^ (s.stageIdx + 1)) < lanes
+    s.radix == .r4 || (!useSqdmulh && n / (2 ^ (s.stageIdx + 1)) < lanes)
   let hasR4 := stages.any fun s => s.radix == .r4
+  -- Small SIMD butterflies for halfSize < lanes (v3.6.0)
+  let hasSmallSIMD := useSqdmulh && stages.any fun s =>
+    s.radix != .r4 && n / (2 ^ (s.stageIdx + 1)) < lanes
+  let (bfDeclHS2, bfDeclHS1) := match target with
+    | .neon => if hasSmallSIMD then
+        (emitNeonButterflyDIT_HS2_C p, emitNeonButterflyDIT_HS1_C p)
+      else ("", "")
+    | .avx2 => ("", "")
   -- Build header section: only emit butterfly functions that are actually used
   let bfDecls :=
     (if useSqdmulh && bfNameSq != "" then bfDeclSq ++ "\n\n" else "") ++
+    (if bfDeclHS2 != "" then bfDeclHS2 ++ "\n\n" else "") ++
+    (if bfDeclHS1 != "" then bfDeclHS1 ++ "\n\n" else "") ++
     (if needsSolinas then bfDeclSol ++ "\n\n" else "") ++
     (if needsHarvey && bfNameHar != "" then bfDeclHar ++ "\n\n" else "")
   let headerSection :=
@@ -416,14 +560,31 @@ def emitSIMDNTTC (plan : Plan) (target : SIMDTarget) (k c mu : Nat)
 "
   -- Generate stage code with per-stage dispatch
   let stageCode := stages.foldl (fun acc stage =>
-    acc ++ emitStageC stage n p k c mu lanes bfNameSol bfNameHar bfNameSq useSqdmulh
+    acc ++ emitStageC stage n p k c mu lanes bfNameSol bfNameHar bfNameSq useSqdmulh profiled
   ) ""
   -- Function signature: sqdmulh needs mu_tw parameter
   let sig := if useSqdmulh && hasSIMDStage then
     s!"void {funcName}({elemType}* data, const {elemType}* twiddles, const {elemType}* mu_tw) \{"
   else
     s!"void {funcName}({elemType}* data, const {elemType}* twiddles) \{"
+  -- Profiling: CNTVCT ticks array + final fence + print loop (N36.5a)
+  let numStages := stages.length
+  let profileDecl := if profiled then
+    s!"  uint64_t _ticks[{numStages + 1}];\n"
+  else ""
+  let profileEnd := if profiled then
+    let fenceFinal := s!"  asm volatile(\"isb\\nmrs %0, CNTVCT_EL0\" : \"=r\"(_ticks[{numStages}]) :: \"memory\");\n"
+    let printLoop := s!"  \{ uint64_t _freq = 24000000; double _total = 0;\n" ++
+      s!"    for (int _s = 0; _s < {numStages}; _s++) \{\n" ++
+      s!"      double _us = (double)(_ticks[_s+1] - _ticks[_s]) / _freq * 1e6;\n" ++
+      s!"      _total += _us;\n" ++
+      s!"      fprintf(stderr, \"stage,%d,%.2f\\n\", _s, _us);\n" ++
+      s!"    }\n" ++
+      s!"    fprintf(stderr, \"total,%.2f\\n\", _total);\n  }\n"
+    fenceFinal ++ printLoop
+  else ""
+  let profileInclude := if profiled then "#include <stdio.h>\n" else ""
   -- Assemble: header + function
-  headerSection ++ sig ++ "\n" ++ scalarDecls ++ constDecls ++ stageCode ++ "}\n"
+  headerSection ++ profileInclude ++ sig ++ "\n" ++ profileDecl ++ scalarDecls ++ constDecls ++ stageCode ++ profileEnd ++ "}\n"
 
 end AmoLean.EGraph.Verified.Bitwise.SIMDEmitter

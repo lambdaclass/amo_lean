@@ -239,6 +239,11 @@ pub extern "C" fn plonky3_babybear_get_omega(log_n: usize) -> u32 {
 }
 
 // ============================================================================
+// NOTE: Mersenne31 NTT is NOT available via Radix2Dit.
+// Mersenne31 (p = 2^31 - 1) is NOT two-adic (2-adicity = 1).
+// Plonky3 uses Complex<Mersenne31> (quadratic extension) for NTT.
+// Direct comparison with our base-field Mersenne31 NTT is not applicable.
+// ============================================================================
 // Debug/Test Functions
 // ============================================================================
 

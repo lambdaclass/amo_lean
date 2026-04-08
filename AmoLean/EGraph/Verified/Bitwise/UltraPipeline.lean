@@ -107,6 +107,8 @@ structure UltraConfig where
   mu : Nat := 0x88000001     -- Montgomery mu (BabyBear default)
   -- v3.5.0: sqdmulh Montgomery REDC (4-lane vqdmulhq_s32 instead of 2-lane vmull_u32)
   useSqdmulh : Bool := false  -- true for NEON targets (auto-set in .neon preset)
+  -- v3.6.0: CNTVCT per-stage profiling (N36.5a)
+  profiled : Bool := false    -- true emits ARM cycle counter fences between stages
   deriving Repr
 
 def UltraConfig.scalar : UltraConfig := { hw := arm_cortex_a76, targetColor := 1 }
@@ -175,7 +177,7 @@ def ultraPipeline (g : MixedEGraph)
   -- ── Gap 4: Verified codegen via TrustLean.Stmt ──
   let simdTarget := if cfg.hw.simdLanes == 8 then SIMDTarget.avx2 else SIMDTarget.neon
   let code := if cfg.hw.isSimd then
-    emitSIMDNTTC plan simdTarget cfg.k cfg.c cfg.mu funcName cfg.useSqdmulh
+    emitSIMDNTTC plan simdTarget cfg.k cfg.c cfg.mu funcName cfg.useSqdmulh cfg.profiled
   else
     emitCFromPlanVerified plan cfg.k cfg.c cfg.mu funcName
   let rustCode := emitRustFromPlanVerified plan cfg.k cfg.c cfg.mu

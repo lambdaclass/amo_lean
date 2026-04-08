@@ -1208,3 +1208,558 @@ interleave(bf₁,bf₂) ≡ seq(bf₁,bf₂)  -- trivially true (datos independi
 
 El plan v3.5.0 es el primer paso hacia este objetivo: expandir el espacio de decisiones
 del Plan manteniendo la rigurosidad formal del framework.
+
+---
+
+## v3.6.0 — Vectorizar Scalar Stages (halfSize < 4)
+
+**Fecha de planificación**: 2026-04-08
+**Prerequisito**: v3.5.0 completa (B35-5 finding: 2 scalar stages = 48% del NTT)
+**Branch**: TBD
+
+### Hallazgo que motiva esta fase
+
+B35-5 profiling reveló que el bottleneck del NTT NEON NO es cache (como asumíamos)
+sino 2 stages scalar que caen a fallback porque `halfSize < lanes` (4 para NEON).
+
+```
+BabyBear N=2^16:  SIMD stages (0-13) = 272μs (51.4%), Scalar stages (14-15) = 257μs (48.6%)
+BabyBear N=2^20:  SIMD stages (0-17) = 9397μs (58.4%), Scalar stages (18-19) = 6696μs (41.6%)
+```
+
+Cada stage SIMD: ~19μs. Cada stage scalar: ~128μs (6.7× más lento).
+
+Las opciones A (late merge), B (cache blocking), C (four-step NTT) evaluadas en B35-5
+no atacan este bottleneck. La Opción D (vectorizar halfSize<4) sí.
+
+### Plan de implementación
+
+#### N36.1: `emitNeonButterflyDIT_HalfSize2_C` (FUNDACIONAL, 1-2 días)
+
+Para halfSize=2: butterfly pairs `(data[i], data[i+2])` y `(data[i+1], data[i+3])`.
+
+**Approach**: Cargar 4 elementos contiguos `[a0, a1, a2, a3]` en 1 registro NEON.
+Los butterfly pairs son `(a0, a2)` y `(a1, a3)` — los elementos low `[a0, a1]` son
+los "a" y los elementos high `[a2, a3]` son los "b". Split natural con
+`vget_low_s32` / `vget_high_s32`.
+
+```c
+static inline void neon_bf_dit_hs2(int32_t* data_ptr, const int32_t* tw_ptr,
+    const int32_t* mu_tw_ptr, int32x4_t p_vec_s, uint32x4_t p_vec) {
+  // Load: 4 contiguous elements [a0, a1, b0, b1] where b = data+halfSize
+  int32x4_t all = vld1q_s32(data_ptr);        // [a0, a1, a2, a3]
+  int32x4_t tw4 = vld1q_s32(tw_ptr);          // [tw0, tw1, ?, ?]
+
+  // Split: a=[a0,a1], b=[a2,a3] — natural low/high split, NO transpose needed
+  // ... sqdmulh REDC on 4 lanes (2 butterflies in parallel) ...
+  // NOTE: tw4 must have tw0 at [0], tw1 at [1] matching b0=[2], b1=[3]
+  // This requires REDC to multiply b_half × tw_half — using 2-lane vmull or
+  // restructuring so all 4 lanes have meaningful (b, tw) pairs.
+
+  // Harvey reduce + recombine
+  // Store: 4 elements back
+  vst1q_s32(data_ptr, result);
+}
+```
+
+**Detalle clave del REDC**: Para halfSize=2, hay dos butterflies independientes.
+Si usamos sqdmulh REDC (4-lane), necesitamos que las 4 lanes contengan datos
+válidos. Approach: cargar 4 b-values y 4 twiddles de 2 grupos de butterflies
+consecutivos (no 2 del mismo grupo), hacer sqdmulh en 4 lanes, y store los
+4 resultados a las posiciones correctas.
+
+**Alternativa más simple**: procesar 2 grupos del outer loop en cada iteración.
+Cada grupo tiene halfSize=2 → 2 butterflies → 4 b-values. Cargar los 4 b-values
+de 2 grupos distintos, hacer sqdmulh × 4 lanes, Harvey × 4 lanes.
+
+**Gate**: Compilación exitosa + output idéntico a scalar para BabyBear N=16,64,256.
+
+#### N36.2: `emitNeonButterflyDIT_HalfSize1_C` (FUNDACIONAL, 1-2 días)
+
+Para halfSize=1: butterfly pairs `(data[i], data[i+1])`. Datos almacenados como
+pares contiguos `[a0, b0, a1, b1, a2, b2, a3, b3]`.
+
+**Approach**: Cargar 4 elementos `[a0, b0, a1, b1]`, deinterleave con `vuzp` para
+separar a's `[a0, a1]` y b's `[b0, b1]`, hacer 2 butterflies en paralelo con
+sqdmulh REDC en 4 lanes (rellenando con datos de siguiente par si posible),
+interleave con `vzip`, store.
+
+```c
+static inline void neon_bf_dit_hs1(int32_t* data_ptr, const int32_t* tw_ptr,
+    const int32_t* mu_tw_ptr, int32x4_t p_vec_s, uint32x4_t p_vec) {
+  // Load 4 consecutive: [a0, b0, a1, b1]
+  int32x4_t packed = vld1q_s32(data_ptr);
+
+  // Deinterleave: separate a's and b's
+  // vuzp1_s32([a0,b0], [a1,b1]) = [a0, a1]
+  // vuzp2_s32([a0,b0], [a1,b1]) = [b0, b1]
+  int32x2_t lo = vget_low_s32(packed);   // [a0, b0]
+  int32x2_t hi = vget_high_s32(packed);  // [a1, b1]
+  int32x2_t a_half = vuzp1_s32(lo, hi);  // [a0, a1]
+  int32x2_t b_half = vuzp2_s32(lo, hi);  // [b0, b1]
+
+  // REDC product: tw * b — need full 4-lane register
+  // Pack 2 butterfly pairs from adjacent groups into 4 lanes:
+  int32x4_t b_vec = vcombine_s32(b_half, b_half2);  // [b0, b1, b2, b3]
+  int32x4_t tw_vec = vld1q_s32(tw_ptr);             // [tw0, tw1, tw2, tw3]
+
+  // sqdmulh REDC on 4 lanes (4 butterflies in parallel)
+  // ... sqdmulh + canonicalize → wb_red[0..3] ...
+
+  // Harvey reduce: sum = a + wb_red, diff = (a+p) - wb_red
+  // ... 4 lanes ...
+
+  // Reinterleave: [sum0, diff0, sum1, diff1]
+  int32x2_t res_lo = vzip1_s32(sum_lo, diff_lo);  // [sum0, diff0]
+  int32x2_t res_hi = vzip1_s32(sum_hi, diff_hi);  // [sum1, diff1]
+  int32x4_t result = vcombine_s32(res_lo, res_hi);
+
+  // Store 4 elements back
+  vst1q_s32(data_ptr, result);
+}
+```
+
+**Gate**: Compilación exitosa + output idéntico a scalar para BabyBear N=16,64,256.
+
+#### N36.3: Modificar `emitStageC` para dispatch (CRÍTICO, 1 día)
+
+Cuando `halfSize < lanes && halfSize >= 1`, usar la función correspondiente:
+
+```lean
+let isSIMD := bfUsed != "" && stage.radix != .r4 && halfSize >= lanes
+let isSmallSIMD := halfSize < lanes && halfSize >= 1 && stage.radix != .r4
+if isSIMD then
+  -- existing SIMD path
+else if isSmallSIMD then
+  -- new: emit loop calling neon_bf_dit_hs2 or neon_bf_dit_hs1
+  let bfSmall := if halfSize == 2 then "neon_bf_dit_hs2" else "neon_bf_dit_hs1"
+  -- loop structure: process 2-4 groups per iteration
+  ...
+else
+  -- scalar fallback (only for R4 now)
+```
+
+**Gate**: `lake build` exitoso, stages 14-15 ya no caen a scalar.
+
+#### N36.4: Validación exhaustiva (PARALELO, 1 día)
+
+1. Comparar output element-by-element contra Python reference:
+   - BabyBear: N = 2^10, 2^12, 2^14, 2^16, 2^18, 2^20
+   - KoalaBear: N = 2^10, 2^14, 2^16, 2^20
+   - Mersenne31: N = 2^10, 2^14, 2^16
+2. Verificar propiedad: output[i] < p para todo i (Harvey guarantee)
+3. Verificar invertibilidad: NTT → iNTT = identity (si iNTT está implementado)
+4. Registrar resultados en BENCHMARKS.md
+
+**Gate**: 0 mismatches en todos los test vectors.
+
+#### N36.5: Benchmark + calibración (ORIGINAL — SUPERSEDED por N36.5a/N36.5b)
+
+> **NOTA**: Este bloque fue reemplazado después de que B36-1+B36-2 mostraron 0% gain
+> a pesar de correctness confirmada. El profiler standalone (bench_per_stage.c) no era
+> representativo del código generado monolítico. Ver N36.5a y N36.5b abajo.
+
+~~1. Benchmark BabyBear N=2^16 y N=2^20, C NEON~~
+~~2. Comparar contra v3.5.0 (con scalar stages) y P3-real~~
+~~3. Per-stage profiling: confirmar que stages 14-15 ahora son ~19-30μs (no ~128μs)~~
+~~4. Ajustar cost model si necesario: agregar `smallSIMDCost` a `Plan.totalCost`~~
+~~5. Registrar en BENCHMARKS.md~~
+
+~~**Gain esperado**: ~530μs → ~310-340μs para N=2^16 (~36-40% mejora).~~
+
+---
+
+### Post-B36-1/B36-2: El resultado inesperado y qué aprendimos
+
+**Resultado**: N36.1-N36.4 completados exitosamente. 4/4 validaciones PASS, zero
+mismatches. PERO: 264μs (v3.6.0 con hs2+hs1) vs 253μs (v3.5.0 sin ellos) = **~0% gain**.
+
+**Por qué la predicción falló**: El profiler standalone (`bench_per_stage.c`) medía
+funciones separadas compiladas independientemente. Cada stage era una función aislada
+con `clock_gettime` alrededor. En ese contexto, los scalar stages (halfSize=2,1)
+efectivamente tardaban ~128μs cada uno.
+
+Pero el código generado real es **una función monolítica de ~1500 líneas** donde:
+- Todas las butterflies son `static inline` → el compilador las inlinea
+- Los 16 stages son bloques secuenciales DENTRO de una función → el compilador puede
+  reordenar instrucciones entre stages
+- El OoO engine del ARM solapa el final de un stage con el inicio del siguiente
+- clang `-O2` puede auto-vectorizar los scalar loops (los reconoce como patterns)
+
+El resultado: los "scalar stages" en el código generado probablemente NUNCA fueron
+el bottleneck real. El compilador ya los optimizaba en el contexto monolítico.
+
+**Lección fundamental para el proceso de fine-tuning**: Los microbenchmarks aislados
+son útiles para calibrar costos de INSTRUCCIONES individuales (bench_redc_isolated.c
+acertó en el ratio vmull/sqdmulh). Pero NO sirven para predecir bottlenecks a nivel
+de STAGE porque no capturan las optimizaciones inter-stage del compilador.
+
+Para predecir bottlenecks de stage, hay que medir DENTRO del código generado real.
+
+---
+
+#### N36.5a: CNTVCT Per-Stage Profiling (CRÍTICO, 1 día)
+
+**Objetivo**: Medir el tiempo real de cada stage DENTRO del código generado monolítico,
+usando ARM cycle counters con fence markers que preservan las optimizaciones intra-stage.
+
+**Por qué CNTVCT y no clock_gettime**: La instrucción ARM `mrs x0, CNTVCT_EL0` lee
+el contador de ciclos del sistema con:
+- Overhead: 0.4 ns (bare) o 13.2 ns (con `isb` serialization barrier)
+- Resolución: 41.7 ns en Apple Silicon (24 MHz), 10-20 ns en Graviton
+- Para stages de ~15μs, el overhead de 13.2 ns es 0.09% — imperceptible
+
+La combinación `isb` + `mrs` + clobber `memory` actúa como **optimization barrier**:
+el compilador NO puede mover loads/stores a través de ella. Esto re-establece
+boundaries de stage en el binario sin destruir las optimizaciones DENTRO de cada stage.
+
+**Implementación**: Agregar flag `profiled : Bool := false` a `emitSIMDNTTC`.
+Cuando `profiled = true`, emitir fence markers entre stages:
+
+```c
+void ntt_ultra_profiled(int32_t* data, const int32_t* twiddles, const int32_t* mu_tw) {
+  uint64_t _ticks[17];  // 16 stages + 1 end marker
+
+  // Constants (unchanged)
+  uint32x4_t p_vec = vdupq_n_u32(2013265921U);
+  int32x4_t p_vec_s = vdupq_n_s32((int32_t)2013265921U);
+  // ...
+
+  // Fence 0: start
+  asm volatile("isb\nmrs %0, CNTVCT_EL0" : "=r"(_ticks[0]) :: "memory");
+
+  /* Stage 0: SIMD sqdmulh (halfSize=32768, groups=1) */
+  for (size_t grp = 0; grp < 1; grp++) {
+    for (size_t pr = 0; pr < 32768; pr += 4) {
+      // ... butterfly ...
+    }
+  }
+
+  // Fence 1: end of stage 0
+  asm volatile("isb\nmrs %0, CNTVCT_EL0" : "=r"(_ticks[1]) :: "memory");
+
+  /* Stage 1: SIMD sqdmulh (halfSize=16384, groups=2) */
+  // ...
+
+  // Fence 16: end of stage 15
+  asm volatile("isb\nmrs %0, CNTVCT_EL0" : "=r"(_ticks[16]) :: "memory");
+
+  // Print timing (24 MHz on Apple Silicon — adjust for other platforms)
+  uint64_t _freq = 24000000;
+  double _total = 0;
+  for (int _s = 0; _s < 16; _s++) {
+    double _us = (double)(_ticks[_s+1] - _ticks[_s]) / _freq * 1e6;
+    _total += _us;
+    printf("  Stage %2d (hs=%5d): %7.2f us\\n", _s,
+           /* halfSize for this stage */, _us);
+  }
+  printf("  Total: %.2f us\\n", _total);
+}
+```
+
+**Overhead total**: 17 fence markers × 13.2 ns = 224 ns sobre ~253μs = **0.09%**.
+La medición no distorsiona lo que mide.
+
+**Tareas concretas**:
+
+1. Agregar parámetro `profiled : Bool := false` a `emitSIMDNTTC` en SIMDEmitter.lean.
+   Cuando true: emitir `uint64_t _ticks[numStages+1];` al inicio de la función.
+
+2. En `emitStageC`: cuando `profiled = true`, emitir el fence marker
+   `asm volatile("isb\\nmrs %0, CNTVCT_EL0" : "=r"(_ticks[{stageIdx}]) :: "memory");`
+   ANTES de cada stage block.
+
+3. Al final de la función (en `emitSIMDNTTC`): emitir el fence marker final + el
+   loop de print.
+
+4. En OptimizedNTTPipeline.lean: agregar flag `--profiled` que pasa `profiled := true`
+   a `emitSIMDNTTC`.
+
+5. Compilar y correr: `./ntt_bench --profiled` con BabyBear N=2^16 (200 iteraciones,
+   promediar). Registrar la tabla de tiempos per-stage.
+
+**Archivos a modificar**: `SIMDEmitter.lean` (emitSIMDNTTC, emitStageC),
+  `OptimizedNTTPipeline.lean` (flag --profiled)
+**Archivos a crear**: ninguno (se emite en el C generado)
+
+**A qué resultados aspiramos y por qué**:
+
+Esperamos ver UNO de tres patrones:
+
+**Patrón 1: Distribución uniforme (~15-17μs por stage)**
+```
+Stage  0 (hs=32768): 17.1 us (6.8%)
+Stage  1 (hs=16384): 16.8 us (6.6%)
+...
+Stage 14 (hs=    2): 15.9 us (6.3%)
+Stage 15 (hs=    1): 15.5 us (6.1%)
+Total: 253.0 us
+```
+**Significado**: El NTT ya está bien balanceado. Todos los stages cuestan lo mismo
+porque el compilador optimiza eficientemente el código monolítico. No hay un
+bottleneck localizado — mejorar requiere optimizar TODAS las butterflies (cambio
+algorítmico) o reducir tráfico de memoria global (four-step NTT para N grande).
+
+**Implicación**: El +64% vs P3-reference y ~253μs es cercano al óptimo para
+esta arquitectura de codegen. Las ganancias marginales futuras vendrían de:
+- Negacyclic twist merge (~5-8%)
+- Four-step NTT para N=2^20 donde cache misses sí importan
+- Otros primitivos (FRI fold, polynomial commitment)
+
+**Patrón 2: Early stages lentos (stages 0-3 > 20μs, resto ~14μs)**
+```
+Stage  0 (hs=32768): 24.3 us (9.6%)
+Stage  1 (hs=16384): 22.1 us (8.7%)
+Stage  2 (hs= 8192): 19.8 us (7.8%)
+Stage  3 (hs= 4096): 17.2 us (6.8%)
+...
+Stage 15 (hs=    1): 13.8 us (5.5%)
+Total: 253.0 us
+```
+**Significado**: Cache misses en early stages (stride >> L1). El hardware prefetcher
+mitiga parcialmente pero no elimina la penalty. Los early stages pagan ~40-70% más
+que los late stages.
+
+**Implicación**: Four-step NTT (Bailey's algorithm) es la siguiente optimización.
+Descomponer N=65536 como 256×256 sub-NTTs que caben en L1. Gain estimado: ~15-20%
+para N=2^16, mayor para N=2^20.
+
+**Patrón 3: Un stage es outlier (2× o más que los demás)**
+```
+Stage  0 (hs=32768): 16.5 us (6.5%)
+...
+Stage  7 (hs=  256): 31.2 us (12.3%)  ← OUTLIER
+...
+Stage 15 (hs=    1): 15.1 us (6.0%)
+Total: 270.0 us
+```
+**Significado**: Bug o ineficiencia localizada en un stage específico. Puede ser:
+- Compilador genera código subóptimo para un tamaño de loop específico
+- Alignment issue (datos no alineados a 16 bytes para vld1q)
+- Branch misprediction en el loop del stage
+- Transition entre butterfly functions (cambio de signature entre stages)
+
+**Implicación**: Fix puntual de alto ROI. Investigar con `perf annotate` o
+Instruments "CPU Counters" sobre ESE stage específico.
+
+**Gate**:
+1. Profiling compila y corre, produce tabla de 16 stages con tiempos en μs
+2. Tiempos suman ≈ benchmark total (±5%)
+3. Patrón identificado (1, 2, o 3)
+4. Resultados registrados en BENCHMARKS.md con timestamp y configuración
+
+---
+
+#### N36.5b: Decision Gate — Siguiente optimización o pivot (HOJA, medio día)
+
+**Objetivo**: Con datos reales de N36.5a, decidir la siguiente fase del proyecto.
+
+**Decisión basada en el patrón observado**:
+
+| Patrón | Próxima acción | Versión |
+|--------|---------------|---------|
+| **1 (uniforme)** | NTT cercano al óptimo para esta arch. Pivotar a: (a) negacyclic twist merge (5-8% gratis), (b) otros primitivos (FRI fold), (c) v3.7.0 verificación formal | v3.7.0 = verificación |
+| **2 (early stages lentos)** | Four-step NTT (Bailey 256×256). Gain ~15-20% para N=2^16, más para N=2^20. | v3.7.0 = four-step NTT |
+| **3 (outlier)** | Fix puntual + re-profile. Después decidir entre (1) y (2). | Fix en v3.6.1, luego re-evaluar |
+
+**Reflexión sobre el proceso de fine-tuning**: N36.5b también debe documentar
+las lecciones del proceso v3.5.0 → v3.6.0:
+
+1. **Microbenchmarks aislados vs código generado monolítico**: El profiler standalone
+   predijo un bottleneck que no existía en el código real. Los microbenchmarks
+   de INSTRUCCIONES (bench_redc_isolated.c) sí fueron precisos. Los microbenchmarks
+   de STAGES (bench_per_stage.c) no. La diferencia: el compilador optimiza inter-stage
+   en código monolítico pero no puede hacerlo entre funciones separadas.
+
+2. **El costo de optimizar sin medir correctamente**: N36.1-N36.3 implementaron
+   código correcto pero sin gain. El esfuerzo no fue desperdiciado (el código es
+   correcto y puede ser útil en otros contextos — por ejemplo, si se desactiva
+   inlining con `__attribute__((noinline))`), pero el ROI fue 0% porque el
+   diagnóstico era incorrecto.
+
+3. **CNTVCT debería haber sido el PRIMER paso de B35-5**: Si hubiéramos instrumentado
+   el código generado directamente en vez de crear un profiler standalone, habríamos
+   visto la distribución real y evitado implementar hs2/hs1 sin gain. El profiler
+   standalone era la herramienta incorrecta para la pregunta.
+
+4. **El cost model calibrado (B35-2, B35-4) SÍ funcionó**: Las calibraciones de
+   instrucciones individuales fueron precisas (sqdmulh ratio, ILP discount = 0).
+   El fallo fue en la PREDICCIÓN de bottleneck, no en el cost model per se. Esto
+   sugiere que el cost model necesita un componente de MEMORIA (cache misses,
+   bandwidth) además del componente ALU que ya tiene.
+
+**Documentar** en ARCHITECTURE.md:
+- Datos de profiling CNTVCT per-stage
+- Patrón observado
+- Decisión para v3.7.0
+- Lecciones del proceso v3.5.0 → v3.6.0
+
+**Gate**:
+1. Decisión documentada en ARCHITECTURE.md
+2. Lecciones registradas (para que futuros ciclos de optimización eviten el mismo error)
+3. Si se elige four-step NTT: DAG topológico para v3.7.0
+
+### DAG (v3.6.0 actualizado)
+
+```
+N36.1 [FUND] ──→ N36.3 [CRIT] ──→ N36.4 [PAR] ──→ N36.5a [CRIT] ──→ N36.5b [HOJA]
+N36.2 [FUND] ──┘                                       ↑
+                                            (diagnosticar 0% gain)
+```
+
+N36.1-N36.4 completados. N36.5a es el diagnóstico con CNTVCT. N36.5b es la decisión.
+
+### Verificación: Enfoque Pragmático (mismo nivel que SIMDEmitter existente)
+
+**Decisión**: Los nuevos butterflies se emiten como strings C (Enfoque C del análisis
+de verificación). Esto es consistente con cómo se implementó todo el SIMDEmitter
+existente — `emitNeonButterflyBody`, `emitNeonButterflyDIT_Harvey_C`,
+`emitNeonButterflyDIT_Sqdmulh_C` son TODOS string emission sin theorems.
+
+**La frontera de verificación formal es el path scalar** (VerifiedPlanCodeGen →
+TrustLean.Stmt → stmtToC). El SIMDEmitter completo está fuera de esta frontera.
+Agregar los butterflies halfSize<4 como strings no degrada las garantías existentes.
+
+**Validación empírica**:
+- Element-by-element vs Python reference (N36.4)
+- Property testing: output < p (N36.4)
+- Invertibilidad NTT → iNTT (N36.4)
+
+**La verificación formal del path SIMD se planifica para v3.7.0** (ver siguiente sección).
+
+---
+
+## v3.7.0 — Verificación Formal del Path SIMD via TrustLean.Stmt
+
+**Fecha de planificación**: 2026-04-08
+**Prerequisito**: v3.6.0 completa
+**Objetivo**: Unificar los paths scalar y SIMD bajo el mismo framework verificado.
+
+### Motivación
+
+Hoy hay dos pipelines de codegen paralelos:
+
+```
+Path Verificado (scalar):
+  VerifiedPlanCodeGen → Stmt → TrustLean.stmtToC → C scalar
+  ↑ theorems: lowerReductionChoice_sound, etc.
+
+Path No Verificado (SIMD):
+  SIMDEmitter → String → C NEON
+  ↑ zero theorems, validación empírica solamente
+```
+
+v3.7.0 unifica ambos: las instrucciones NEON se modelan como constructores de
+`TrustLean.Stmt`, con semántica formal y traducción a C via `stmtToC`.
+
+### Plan
+
+#### 1. Extender TrustLean.Stmt con constructores NEON (~5-7 días)
+
+Agregar al IR de TrustLean constructores que modelan instrucciones NEON relevantes:
+
+```lean
+-- En TrustLean/Stmt.lean (o Bridge/TrustLean.lean):
+inductive Stmt where
+  | ... -- existentes
+  -- NEON vector operations (new):
+  | neonLoad4 (dst : VarName) (ptr : LowLevelExpr)        -- vld1q_s32
+  | neonStore4 (ptr : LowLevelExpr) (src : VarName)       -- vst1q_s32
+  | neonTrn1 (dst src1 src2 : VarName)                    -- vtrn1q_s32
+  | neonTrn2 (dst src1 src2 : VarName)                    -- vtrn2q_s32
+  | neonUzp1 (dst src1 src2 : VarName)                    -- vuzp1_s32
+  | neonUzp2 (dst src1 src2 : VarName)                    -- vuzp2_s32
+  | neonZip1 (dst src1 src2 : VarName)                    -- vzip1_s32
+  | neonZip2 (dst src1 src2 : VarName)                    -- vzip2_s32
+  | neonSqdmulh (dst src1 src2 : VarName)                 -- vqdmulhq_s32
+  | neonMul (dst src1 src2 : VarName)                     -- vmulq_s32
+  | neonHsub (dst src1 src2 : VarName)                    -- vhsubq_s32
+  | neonAdd (dst src1 src2 : VarName)                     -- vaddq_u32
+  | neonSub (dst src1 src2 : VarName)                     -- vsubq_u32
+  | neonCmpGe (dst src1 src2 : VarName)                   -- vcgeq_u32
+  | neonAnd (dst src1 src2 : VarName)                     -- vandq_u32
+  | neonBroadcast (dst : VarName) (val : Nat)             -- vdupq_n_s32
+```
+
+Cada constructor modela UNA instrucción NEON con semántica formal sobre
+vectores de 4 elementos.
+
+#### 2. Extender stmtToC para emitir NEON intrinsics (~2 días)
+
+```lean
+def stmtToC (indent : Nat) : Stmt → String
+  | ... -- existentes
+  | .neonLoad4 dst ptr =>
+    pad indent ++ s!"int32x4_t {dst} = vld1q_s32({exprToC ptr});"
+  | .neonSqdmulh dst s1 s2 =>
+    pad indent ++ s!"int32x4_t {dst} = vqdmulhq_s32({s1}, {s2});"
+  | .neonTrn1 dst s1 s2 =>
+    pad indent ++ s!"int32x4_t {dst} = vtrn1q_s32({s1}, {s2});"
+  -- etc.
+```
+
+#### 3. Reescribir butterflies como Stmt (~3-5 días)
+
+```lean
+def lowerHalfSize2ButterflyNeon (dataPtr twPtr muTwPtr : VarName)
+    (p : Nat) (cgs : CodeGenState) : Stmt :=
+  -- Load 4 contiguous elements
+  let (allReg, cgs1) := cgs.freshVar
+  let s1 := Stmt.neonLoad4 allReg (.varRef dataPtr)
+  -- Split low/high
+  let (aReg, cgs2) := cgs1.freshVar
+  let (bReg, cgs3) := cgs2.freshVar
+  let s2 := Stmt.neonGetLow aReg allReg
+  let s3 := Stmt.neonGetHigh bReg allReg
+  -- sqdmulh REDC on combined register
+  -- ... (sequence of neonSqdmulh, neonMul, neonHsub for REDC) ...
+  -- Harvey reduce
+  -- ... (neonCmpGe, neonAnd, neonSub) ...
+  -- Recombine and store
+  Stmt.seq s1 (Stmt.seq s2 (Stmt.seq s3 ...))
+```
+
+#### 4. Probar soundness del butterfly NEON via Stmt (~5-7 días)
+
+```lean
+/-- The NEON halfSize=2 butterfly produces the same output as the scalar butterfly
+    when applied to 4 contiguous elements paired as (0,2) and (1,3). -/
+theorem lowerHalfSize2ButterflyNeon_sound
+    (data : Array Int) (tw : Array Int) (p : Nat) (hp : 0 < p)
+    (h_len : data.size ≥ 4) (h_tw : tw.size ≥ 2)
+    (h_bound : ∀ i, i < 4 → 0 ≤ data[i]! ∧ data[i]! < p) :
+    let result_neon := evalStmt (lowerHalfSize2ButterflyNeon ...) env
+    let result_scalar := evalStmt (lowerScalarButterfly ...) env
+    -- Element-wise equivalence mod p
+    ∀ i, i < 4 → result_neon[i] % p = result_scalar[i] % p := by
+  sorry -- TODO: prove in v3.7.0
+```
+
+El `sorry` se reemplaza con la prueba formal que conecta la semántica de las
+instrucciones NEON con la semántica aritmética de la butterfly.
+
+### Estimación total: ~3-4 semanas
+
+| Tarea | Días | Prerequisito |
+|-------|------|-------------|
+| Extender TrustLean.Stmt | 5-7 | — |
+| Extender stmtToC | 2 | Stmt extensions |
+| Reescribir butterflies como Stmt | 3-5 | Stmt + stmtToC |
+| Probar soundness | 5-7 | Todo lo anterior |
+| **Total** | **15-21** | |
+
+### Impacto
+
+Después de v3.7.0, TODO el codegen NEON pasa por el path verificado:
+
+```
+Path Unificado:
+  VerifiedPlanCodeGen → Stmt (con constructores NEON) → stmtToC → C NEON
+  ↑ theorems: lowerReductionChoice_sound, lowerHalfSize2ButterflyNeon_sound, etc.
+```
+
+El SIMDEmitter se convierte en un wrapper que llama a `lowerStageVerified` (ahora
+con NEON-awareness) y `stmtToC`. La string emission ad-hoc desaparece.
+
+**Nota**: `stmtToC` sigue siendo TRUSTED (no probado). Pero ahora es el ÚNICO punto
+de confianza, en vez de tener un path trusted (scalar) y un path no trusted (SIMD).

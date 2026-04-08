@@ -1,5 +1,5 @@
 # AMO-Lean NTT Benchmark Report
-**Date:** 2026-04-07 23:15:56
+**Date:** 2026-04-08 10:21:24
 **Platform:** Darwin arm64
 
 ## Column Legend
@@ -24,7 +24,7 @@
 
 | Field | N | Lang | HW | AMO (μs) | P3 naive (μs) | vs naive |
 |-------|---|------|----|----------|---------------|----------|
-| babybear | 2^16 | c | arm-scalar | 1030.1 | 1907.8 | +46.0% |
+| babybear | 2^16 | c | arm-scalar | 1459.7 | 1449.4 | -0.7% |
 
 ## Notes
 

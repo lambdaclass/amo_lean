@@ -1,7 +1,51 @@
 # TRZK: Architecture
 
-## Current Version: 3.5.0
+## Current Version: 3.6.0
 
+
+### Vectorize Scalar Stages v3.6.0
+
+**Contents**: Vectorize the 2 scalar NTT stages (halfSize=2,1) that consume 48-63% of NEON NTT time. Uses intra-register butterflies with deinterleave/interleave via vuzp/vzip, processing multiple groups per NEON call.
+
+**Files**:
+- `AmoLean/EGraph/Verified/Bitwise/SIMDEmitter.lean`
+- `Tests/benchmark/`
+
+#### DAG (3.6.0)
+
+| Nodo | Tipo | Deps | Status |
+|------|------|------|--------|
+| N36.1 emitNeonButterflyDIT_HalfSize2_C | FUND | — | ✓ done |
+| N36.2 emitNeonButterflyDIT_HalfSize1_C | FUND | — | ✓ done |
+| N36.3 Modify emitStageC dispatch for halfSize<4 | CRIT | N36.1, N36.2 | ✓ done |
+| N36.4 Validation: element-by-element vs Python reference | PAR | N36.3 | ✓ done (4/4 PASS, 0% gain) |
+| N36.5a CNTVCT per-stage profiling — diagnose why 0% gain | CRIT | N36.4 | ✓ done |
+| N36.5b Decision gate — next optimization or pivot based on profiling data | HOJA | N36.5a | ✓ done |
+
+#### Formal Properties (3.6.0)
+
+| Nodo | Propiedad | Tipo | Prioridad |
+|------|-----------|------|-----------|
+| N36.1 | halfSize=2 NEON butterfly produces same output as scalar | EQUIVALENCE | P0 |
+| N36.2 | halfSize=1 NEON butterfly produces same output as scalar | EQUIVALENCE | P0 |
+| N36.3 | No stage falls to scalar fallback for R2 plans | INVARIANT | P0 |
+
+> **Nota**: Propiedades en lenguaje natural (intención de diseño).
+> Los stubs ejecutables están en BENCHMARKS.md § Formal Properties.
+
+#### Bloques
+
+- [x] **Small SIMD Butterfly Kernels**: N36.1, N36.2 — hs2 (2 groups/call) and hs1 (4 groups/call via vld2q/vst2q) implemented
+- [x] **Dispatch Integration**: N36.3 — 3-way dispatch in emitStageC (SIMD / hs2 / hs1 / scalar)
+- [x] **Validation**: N36.4 — 4/4 PASS (BabyBear+KoalaBear, N=2^16+2^20), correctness confirmed. **Finding: ~0% performance gain** (264μs vs 253μs, within noise). Standalone profiler prediction of 48% scalar bottleneck was WRONG for generated code.
+- [x] **CNTVCT Per-Stage Profiling**: N36.5a — N=2^16: uniform (~39μs/stage), hs2/hs1 ~1.3-1.4×. N=2^20: moderate cache penalty (~1.19× early vs late). — Insert ARM cycle counter fence markers between stages in emitted C. Diagnose actual per-stage time distribution. Detalles en TRZK_filosofico.md §N36.5a.
+- [x] **Decision Gate**: N36.5b — **DECISION: NTT near-optimal for this codegen arch.** N=2^16 uniform, N=2^20 cache penalty ~19% (moderate, doesn't justify four-step NTT). Pivot to: (1) negacyclic twist merge for free 5-8%, (2) other ZK primitives (FRI fold), (3) formal verification of SIMD path (v3.7.0). — Based on N36.5a data, decide next optimization target. Detalles en TRZK_filosofico.md §N36.5b.
+
+---
+
+## Previous Versions
+
+### 3.5.0
 
 ### REDC-Schedule v3.5.0
 
@@ -48,9 +92,6 @@
 - [x] **ILP Calibration**: N35.4 — clang -O2 already software-pipelines. ilpDiscount = 0. — compiler auto-interleave check + V0/V1 pipe occupancy + ilpGain model + maxDiscount calibration. Detalles en TRZK_filosofico.md §B35-4.
 - [x] **Memory Optimization Decision**: N35.5 — **FINDING: bottleneck is 2 scalar stages (48-63% of NTT time), not cache.** v3.6.0 should vectorize halfSize=2,1 via intra-register trn1/trn2 transposes. — per-stage profiling (N=2^16 + 2^20), evaluate 3 options (late merge / cache block / four-step NTT), decide v3.6.0 scope. Detalles en TRZK_filosofico.md §B35-5.
 
----
-
-## Previous Versions
 
 ### 3.4.0
 
