@@ -1,0 +1,5 @@
+usage: update_docs.py [-h] --project PROJECT
+                      (--done NODE_ID | --close-block BLOCK_ID | --sync-arch | --bump-version VERSION | --status)
+                      [--metrics METRICS] [--result RESULT]
+                      [--lessons LESSONS]
+update_docs.py: error: unrecognized arguments: - a = a), (2) derive injectivity by applying convertBack to both sides. Without the forward roundtrip, injectivity cannot be established even if backward roundtrip is proven.", "keywords": ["injectivity", "roundtrip", "partial-function", "Option", "lean4-proofs", "proof-strategy"]}, {"title": "Custom recursive list conversions avoid List.mapM accumulator mismatch in proofs", "body": "Using List.mapM with Option for list conversion causes induction hypothesis mismatch because List.mapM.loop uses an accumulator that complicates structural induction. Solution: define custom recursive functions (convertScalarVarList, convertBackScalarVarList) that directly pattern-match on list structure. Clean structural induction proofs follow naturally.", "keywords": ["List.mapM", "lean4-proofs", "structural-induction", "accumulator", "list-conversion"]}]
