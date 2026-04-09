@@ -18,7 +18,7 @@ set_option autoImplicit false
 
 namespace AmoLean.EGraph.Verified.Bitwise.VerifiedPlanCodeGen
 
-open _root_.TrustLean (Stmt VarName LowLevelExpr BinOp StmtResult CodeGenState)
+open _root_.TrustLean (Stmt VarName LowLevelExpr BinOp UnaryOp StmtResult CodeGenState)
 open AmoLean.EGraph.Verified.Bitwise.VerifiedCodeGen
   (lowerDIFButterflyStmt lowerRadix4ButterflyStmt solinasFoldLLE)
 open AmoLean.EGraph.Verified.Bitwise.TrustLeanBridge
@@ -174,6 +174,26 @@ private def nttTwiddleIndex (stageIdx : Nat) (groupVar pairVar : VarName)
       (.binOp .mul (.varRef groupVar) (.litInt ↑halfSize))
       (.varRef pairVar))
 
+/-- Load from int32 array into int64 temp with sign-extension.
+    Uses a temporary variable matching the array element type (i32) to avoid
+    Rust's type mismatch (i32 array element → i64 variable).
+    In C: both assignments work (implicit promotion).
+    In Rust: tmp_ld = data[idx] (i32→i32), then var = (tmp_ld as i64) (i32→i64). -/
+private def loadWiden (var : VarName) (base idx : LowLevelExpr) : Stmt :=
+  let tmpName := match var with
+    | .user s => s ++ "_ld"
+    | .temp n => s!"t{n}_ld"
+    | .array b i => s!"{b}_{i}_ld"
+  let tmpVar := VarName.user tmpName
+  .seq (.load tmpVar base idx)
+       (.assign var (.unaryOp .widen32to64 (.varRef tmpVar)))
+
+/-- Store int64 value to int32 array with truncation.
+    Emits in C: data[idx] = (int32_t)val; (explicit, C truncates implicitly)
+    Emits in Rust: data[idx as usize] = (val as i32); (required, Rust has no implicit truncation) -/
+private def storeTrunc (base idx val : LowLevelExpr) : Stmt :=
+  .store base idx (.unaryOp .trunc64to32 val)
+
 /-- Lower a radix-4 NTT stage to TrustLean.Stmt.
     Covers 2 NTT levels (L and L+1) in one stage. Uses 4 data loads, 4 twiddle loads,
     the fixed R4 butterfly, and 4 stores. Twiddle indices reuse nttTwiddleIndex + offset.
@@ -217,20 +237,20 @@ private def lowerStageR4 (stage : NTTStage) (n p k c mu : Nat) : Stmt :=
     let (bf, pos0, pos1, pos2, pos3, _) :=
       lowerRadix4ButterflyByReduction aVar bVar cVar dVar
         w1Var w1pVar w2Var w3Var stage.reduction p k c mu cgs
-    -- Load 4 data + 4 twiddles → butterfly → store 4 results
-    Stmt.seq (Stmt.load aVar (.varRef dataVar) i0)
-      (Stmt.seq (Stmt.load bVar (.varRef dataVar) i1)
-        (Stmt.seq (Stmt.load cVar (.varRef dataVar) i2)
-          (Stmt.seq (Stmt.load dVar (.varRef dataVar) i3)
-            (Stmt.seq (Stmt.load w2Var (.varRef twVar) tw2)
-              (Stmt.seq (Stmt.load w3Var (.varRef twVar) tw3)
-                (Stmt.seq (Stmt.load w1Var (.varRef twVar) tw1)
-                  (Stmt.seq (Stmt.load w1pVar (.varRef twVar) tw1p)
+    -- Load 4 data + 4 twiddles (with i32→i64 widen) → butterfly → store 4 (with i64→i32 trunc)
+    Stmt.seq (loadWiden aVar (.varRef dataVar) i0)
+      (Stmt.seq (loadWiden bVar (.varRef dataVar) i1)
+        (Stmt.seq (loadWiden cVar (.varRef dataVar) i2)
+          (Stmt.seq (loadWiden dVar (.varRef dataVar) i3)
+            (Stmt.seq (loadWiden w2Var (.varRef twVar) tw2)
+              (Stmt.seq (loadWiden w3Var (.varRef twVar) tw3)
+                (Stmt.seq (loadWiden w1Var (.varRef twVar) tw1)
+                  (Stmt.seq (loadWiden w1pVar (.varRef twVar) tw1p)
                     (Stmt.seq bf
-                      (Stmt.seq (Stmt.store (.varRef dataVar) i0 (.varRef pos0))
-                        (Stmt.seq (Stmt.store (.varRef dataVar) i1 (.varRef pos1))
-                          (Stmt.seq (Stmt.store (.varRef dataVar) i2 (.varRef pos2))
-                            (Stmt.store (.varRef dataVar) i3 (.varRef pos3)))))))))))))
+                      (Stmt.seq (storeTrunc (.varRef dataVar) i0 (.varRef pos0))
+                        (Stmt.seq (storeTrunc (.varRef dataVar) i1 (.varRef pos1))
+                          (Stmt.seq (storeTrunc (.varRef dataVar) i2 (.varRef pos2))
+                            (storeTrunc (.varRef dataVar) i3 (.varRef pos3)))))))))))))
   Stmt.for_
     (.assign groupVar (.litInt 0)) (.binOp .ltOp (.varRef groupVar) (.litInt ↑numGroups))
     (.assign groupVar (.binOp .add (.varRef groupVar) (.litInt 1)))
@@ -261,13 +281,13 @@ def lowerStageVerified (stage : NTTStage) (n p k c mu : Nat) : Stmt :=
     let twExpr := nttTwiddleIndex stage.stageIdx groupVar pairVar halfSize n
     let (bf, sumVar, diffVar, _) :=
       lowerDIFButterflyByReduction aVar bVar wVar stage.reduction p k c mu cgs
-    -- Load → butterfly → store
-    Stmt.seq (Stmt.load aVar (.varRef (VarName.user "data")) iExpr)
-      (Stmt.seq (Stmt.load bVar (.varRef (VarName.user "data")) jExpr)
-        (Stmt.seq (Stmt.load wVar (.varRef (VarName.user "twiddles")) twExpr)
+    -- Load (with i32→i64 widen) → butterfly → store (with i64→i32 trunc)
+    Stmt.seq (loadWiden aVar (.varRef (VarName.user "data")) iExpr)
+      (Stmt.seq (loadWiden bVar (.varRef (VarName.user "data")) jExpr)
+        (Stmt.seq (loadWiden wVar (.varRef (VarName.user "twiddles")) twExpr)
           (Stmt.seq bf
-            (Stmt.seq (Stmt.store (.varRef (VarName.user "data")) iExpr (.varRef sumVar))
-              (Stmt.store (.varRef (VarName.user "data")) jExpr (.varRef diffVar))))))
+            (Stmt.seq (storeTrunc (.varRef (VarName.user "data")) iExpr (.varRef sumVar))
+              (storeTrunc (.varRef (VarName.user "data")) jExpr (.varRef diffVar))))))
   -- Wrap in nested for-loops
   Stmt.for_
     (.assign groupVar (.litInt 0)) (.binOp .ltOp (.varRef groupVar) (.litInt ↑numGroups))
@@ -345,9 +365,14 @@ def emitCFromPlanVerified (plan : Plan) (k c mu : Nat)
   let r4Decls := if hasR4 then
     "\n  int64_t c_val, d_val, w1_val, w1p_val, w2_val, w3_val;"
   else ""
+  -- Load temp vars (i32, matching array element type) for loadWiden pattern
+  let r4LoadDecls := if hasR4 then
+    s!"\n  {elemType} c_val_ld, d_val_ld, w1_val_ld, w1p_val_ld, w2_val_ld, w3_val_ld;"
+  else ""
   let tempDecls := if numTemps == 0 then "" else
     "  int64_t " ++ String.intercalate ", " (List.range numTemps |>.map (s!"t{·}")) ++ ";\n" ++
-    "  int64_t group, pair, a_val, b_val, w_val;" ++ r4Decls ++ "\n"
+    s!"  int64_t group, pair, a_val, b_val, w_val;" ++ r4Decls ++
+    s!"\n  {elemType} a_val_ld, b_val_ld, w_val_ld;" ++ r4LoadDecls ++ "\n"
   let bodyC := _root_.TrustLean.stmtToC 1 stmt
   s!"void {funcName}({elemType}* data, const {elemType}* twiddles) \{\n{tempDecls}{bodyC}\n}"
 
@@ -374,6 +399,13 @@ def emitRustFromPlanVerified (plan : Plan) (k c mu : Nat)
     s!"  let mut w1_val: {wideType};\n  let mut w1p_val: {wideType};\n" ++
     s!"  let mut w2_val: {wideType};\n  let mut w3_val: {wideType};\n"
   else ""
+  -- Load temp vars (i32, matching array element type) for loadWiden pattern
+  let loadDecls := s!"  let mut a_val_ld: {elemType};\n  let mut b_val_ld: {elemType};\n  let mut w_val_ld: {elemType};\n"
+  let r4LoadDecls := if hasR4 then
+    s!"  let mut c_val_ld: {elemType};\n  let mut d_val_ld: {elemType};\n" ++
+    s!"  let mut w1_val_ld: {elemType};\n  let mut w1p_val_ld: {elemType};\n" ++
+    s!"  let mut w2_val_ld: {elemType};\n  let mut w3_val_ld: {elemType};\n"
+  else ""
   let loopDecls := s!"  let mut group: {wideType};\n  let mut pair: {wideType};\n" ++
     s!"  let mut a_val: {wideType};\n  let mut b_val: {wideType};\n  let mut w_val: {wideType};\n" ++
     r4Decls
@@ -382,18 +414,8 @@ def emitRustFromPlanVerified (plan : Plan) (k c mu : Nat)
     s!"  let data: &mut [{elemType}] = unsafe \{ &mut *(data as *mut [{uElemType}] as *mut [{elemType}]) };\n" ++
     s!"  let twiddles: &[{elemType}] = unsafe \{ &*(twiddles as *const [{uElemType}] as *const [{elemType}]) };\n"
   let bodyRust := _root_.TrustLean.stmtToRust 1 stmt
-  -- Patch loads: i32 → i64 sign-extension (matching C's int32→int64 promotion)
-  let bodyRust := bodyRust.replace " as usize];" s!" as usize] as {wideType};"
-  -- Patch stores: i64 → i32 truncation (matching C's (int32_t) cast)
-  let lines := bodyRust.splitOn "\n"
-  let fixedLines := lines.map fun line =>
-    let isStore := (line.splitOn "data[").length > 1 &&
-                   (line.splitOn "] = ").length > 1 &&
-                   !((line.splitOn s!" as {wideType};").length > 1)
-    if isStore then line.replace ";" s!" as {elemType};"
-    else line
-  let bodyRust := "\n".intercalate fixedLines
-  s!"fn {funcName}(data: &mut [{uElemType}], twiddles: &[{uElemType}]) \{\n{tempDecls}{loopDecls}{transmute}{bodyRust}\n}"
+  -- Casts i32↔i64 are now in the IR (loadWiden/storeTrunc), no string patches needed
+  s!"fn {funcName}(data: &mut [{uElemType}], twiddles: &[{uElemType}]) \{\n{tempDecls}{loopDecls}{loadDecls}{r4LoadDecls}{transmute}{bodyRust}\n}"
 
 -- ══════════════════════════════════════════════════════════════════
 -- Block 2.8: Theorems
