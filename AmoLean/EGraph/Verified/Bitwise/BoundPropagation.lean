@@ -30,7 +30,7 @@ def reductionBoundFactor : MixedNodeOp → Nat
   | .reduceGate _ _ => 1
   | .montyReduce _ _ _ => 1
   | .barrettReduce _ _ _ => 1
-  | .harveyReduce _ _ => 2
+  | .harveyReduce _ _ => 1  -- Harvey output < p (harveyReduceSpec postcondition)
   | _ => 0
 
 theorem reduce_bound (x p : Nat) (hp : 0 < p) : x % p < 1 * p := by
@@ -149,7 +149,7 @@ inductive ReductionChoice where
   deriving Repr, BEq, DecidableEq, Inhabited
 
 def boundAfterReduction : ReductionChoice → Nat
-  | .solinasFold => 2 | .montgomery => 1 | .harvey => 2 | .lazy => 0
+  | .solinasFold => 2 | .montgomery => 1 | .harvey => 1 | .lazy => 0
 
 def stageBoundFactor (inputK : Nat) (reduction : ReductionChoice) : Nat :=
   match reduction with
@@ -393,7 +393,7 @@ example : lazyReductionSafe 100 2013265921 = true := by native_decide
 example : computeStageBounds [.lazy, .lazy, .solinasFold] 1 = [1, 2, 3, 2] := by native_decide
 example : decodeBoundFactor (encodeBoundFactor 3) = some 3 := by native_decide
 example : reductionBoundFactor (.montyReduce 0 0 0) = 1 := rfl
-example : reductionBoundFactor (.harveyReduce 0 0) = 2 := rfl
+example : reductionBoundFactor (.harveyReduce 0 0) = 1 := rfl
 
 /-- Factory produces non-empty rules for a state with a bounds DAG. -/
 example : (babyBearFactory (State.empty.addRelation "bounds")).length = 2 := rfl

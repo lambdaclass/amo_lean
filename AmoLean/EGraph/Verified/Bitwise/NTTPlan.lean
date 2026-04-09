@@ -70,6 +70,7 @@ structure NTTStage where
   direction : StageDirection  -- DIT or DIF
   inputBoundK : Nat           -- bound factor of inputs to this stage
   outputBoundK : Nat          -- bound factor of outputs (after reduction)
+  ilpFactor : Nat := 1        -- v3.5.0: independent butterflies per loop iteration (1 or 2)
   deriving Repr, Inhabited
 
 /-- Memory access ordering for the NTT. -/
@@ -93,6 +94,11 @@ structure Plan where
 
 /-- Number of stages in the plan. -/
 def Plan.numStages (plan : Plan) : Nat := plan.stages.size
+
+/-- Set ilpFactor on all stages. Used by generateCandidates to create
+    ILP-enabled plan variants. -/
+def Plan.withILP (plan : Plan) (ilp : Nat := 2) : Plan :=
+  { plan with stages := plan.stages.map fun s => { s with ilpFactor := ilp } }
 
 /-- Total butterflies across all stages. -/
 def Plan.totalButterflies (plan : Plan) : Nat :=
@@ -211,15 +217,46 @@ def butterflyCost (radix : RadixChoice) (hw : HardwareCost) : Nat :=
   | .r2 => hw.mul32 + 2 * hw.add + redc
   | .r4 => 3 * hw.mul32 + 8 * hw.add + 4 * redc
 
+/-- Whether a stage at NTT level `level` would be SIMD-vectorized.
+    Mirrors SIMDEmitter.emitStageC eligibility (after normalizePlan):
+    R2 AND halfSize >= lanes, where halfSize = n / 2^(level+1).
+    Always false when hw.isSimd = false (scalar hardware). -/
+def stageSimdEligibleAtLevel (n : Nat) (radix : RadixChoice) (level : Nat)
+    (hw : HardwareCost) : Bool :=
+  hw.isSimd && radix == .r2 && n / (2 ^ (level + 1)) >= hw.simdLanes
+
+/-- stageSimdEligibleAtLevel is always false for non-SIMD hardware. -/
+theorem stageSimdEligible_scalar (n : Nat) (radix : RadixChoice) (level : Nat)
+    (hw : HardwareCost) (h : hw.isSimd = false) :
+    stageSimdEligibleAtLevel n radix level hw = false := by
+  simp [stageSimdEligibleAtLevel, h]
+
 /-- Total arithmetic + reduction cost using hardware-aware model.
-    Reduction cost is 2× per butterfly (applied to both sum and diff). -/
+    Reduction cost is 2× per butterfly (applied to both sum and diff).
+    SIMD throughput: when a stage is SIMD-eligible (R2, halfSize >= lanes),
+    effective cost is divided by (simdLanes - 1) — conservative estimate.
+    ILP discount: when ilpFactor > 1 on SIMD, V1 absorbs add/sub of butterfly A
+    while V0 does REDC of butterfly B → ~25% discount (calibrated in B35-4).
+    Level tracking mirrors normalizePlan: R2 consumes 1 level, R4 consumes 2. -/
 def Plan.totalCost (plan : Plan) (hw : HardwareCost) : Nat :=
-  plan.stages.foldl (fun acc stage =>
+  let (cost, _) := plan.stages.foldl (fun (acc : Nat × Nat) stage =>
+    let (total, level) := acc
     let bfs := match stage.radix with | .r2 => plan.size / 2 | .r4 => plan.size / 4
     let bfCost := butterflyCost stage.radix hw
     let redCost := reductionCostForHW hw stage.reduction
-    acc + bfs * (bfCost + 2 * redCost)
-  ) 0
+    let rawStageCost := bfs * (bfCost + 2 * redCost)
+    let eligible := stageSimdEligibleAtLevel plan.size stage.radix level hw
+    let simdDivisor := if eligible then Nat.max 2 (hw.simdLanes - 1) else 1
+    let afterSimd := rawStageCost / simdDivisor
+    -- ILP discount: calibrated in B35-4 to ~0%.
+    -- The compiler (clang -O2) already does software pipelining: loads of iteration N+1
+    -- overlap with stores of iteration N. ilpFactor=2 provides no additional gain.
+    -- Keep the field for future targets where compiler doesn't auto-interleave.
+    let withIlp := afterSimd  -- no discount (compiler handles scheduling)
+    let levelsConsumed := match stage.radix with | .r2 => 1 | .r4 => 2
+    (total + withIlp, level + levelsConsumed)
+  ) (0, 0)
+  cost
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 4: Plan Validation

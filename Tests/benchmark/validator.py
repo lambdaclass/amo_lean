@@ -32,6 +32,7 @@ def validate(
     work_dir: Path,
     timeout: int = 120,
     scalar_program: "GeneratedProgram | None" = None,
+    rust_simd: bool = False,
 ) -> ValidationResult:
     """Full validation pipeline:
     1. Build validation program (prints NTT output elements)
@@ -48,7 +49,7 @@ def validate(
     # No need for scalar fallback — validate the actual generated code directly.
     val_prog = program
     try:
-        val_source = generate_validation_program(val_prog, field)
+        val_source = generate_validation_program(val_prog, field, rust_simd=rust_simd)
     except Exception as e:
         return ValidationResult(False, program.field, program.log_n, program.lang,
                                 program.hardware, 0, -1, 0, 0, f"Split error: {e}")

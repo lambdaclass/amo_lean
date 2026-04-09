@@ -7,7 +7,7 @@ FRI fold computes `alpha * f_odd[i] + f_even[i]` per element. After mul+add,
 the bound is ~2p (same as an NTT butterfly). This module instantiates the
 existing bound-aware reduction infrastructure for FRI fold operations.
 
-Key insight: `selectReductionForBound` and `reductionCost` are generic —
+Key insight: `selectReductionForBound` and `reductionCostForHW` are generic —
 they take bounds and return reductions. FRI fold just provides different
 initial bounds than NTT.
 
@@ -21,7 +21,8 @@ namespace AmoLean.EGraph.Verified.Bitwise.FRIFoldPlan
 
 open AmoLean.EGraph.Verified.Bitwise.BoundProp (ReductionChoice stageBoundFactor
   lazyReductionSafe boundAfterReduction)
-open AmoLean.EGraph.Verified.Bitwise.CrossRelNTT (selectReductionForBound reductionCost)
+open AmoLean.EGraph.Verified.Bitwise.CrossRelNTT (selectReductionForBound reductionCostForHW)
+open AmoLean.EGraph.Verified.Bitwise (HardwareCost arm_cortex_a76)
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 1: FRI Fold Configuration
@@ -61,25 +62,25 @@ def selectFRIReduction (cfg : FRIFoldConfig) : ReductionChoice :=
   let outputBound := friFoldOutputBound cfg.inputBoundK
   selectReductionForBound outputBound cfg.hwIsSimd cfg.arrayIsLarge
 
-/-- Cost of one FRI fold element (mul + add + reduction). -/
-def friFoldElementCost (cfg : FRIFoldConfig) (mulCost addCost : Nat) : Nat :=
+/-- Cost of one FRI fold element (mul + add + reduction).
+    Uses reductionCostForHW (SSOT) instead of legacy reductionCost. -/
+def friFoldElementCost (cfg : FRIFoldConfig) (hw : HardwareCost) (mulCost addCost : Nat) : Nat :=
   let reduction := selectFRIReduction cfg
-  let outputBound := friFoldOutputBound cfg.inputBoundK
-  mulCost + addCost + reductionCost reduction outputBound cfg.hwIsSimd
+  mulCost + addCost + reductionCostForHW hw reduction
 
 /-- Total cost of a FRI fold round (N/2 elements per round).
     N halves each round: N, N/2, N/4, ..., so total elements = N-1. -/
-def friFoldRoundCost (cfg : FRIFoldConfig) (elementsInRound : Nat)
+def friFoldRoundCost (cfg : FRIFoldConfig) (hw : HardwareCost) (elementsInRound : Nat)
     (mulCost addCost : Nat) : Nat :=
-  elementsInRound * friFoldElementCost cfg mulCost addCost
+  elementsInRound * friFoldElementCost cfg hw mulCost addCost
 
 /-- Analyze all FRI rounds: for each round, return (roundIdx, reduction, cost). -/
-def friFoldAnalysis (cfg : FRIFoldConfig) (initialN : Nat)
+def friFoldAnalysis (cfg : FRIFoldConfig) (hw : HardwareCost) (initialN : Nat)
     (mulCost addCost : Nat) : List (Nat × ReductionChoice × Nat) :=
   List.range cfg.numRounds |>.map fun round =>
     let elementsInRound := initialN / (2 ^ (round + 1))
     let reduction := selectFRIReduction cfg
-    let cost := friFoldRoundCost cfg elementsInRound mulCost addCost
+    let cost := friFoldRoundCost cfg hw elementsInRound mulCost addCost
     (round, reduction, cost)
 
 -- ══════════════════════════════════════════════════════════════════
@@ -98,14 +99,15 @@ theorem friFoldReduction_simd_reduced :
     selectFRIReduction { prime := 2013265921, numRounds := 10, hwIsSimd := true }
     = .harvey := rfl
 
-/-- FRI fold with SIMD + unreduced inputs (inputK=3) selects Montgomery. -/
+/-- FRI fold with SIMD + unreduced inputs (inputK=3) selects Solinas (not Montgomery).
+    Montgomery REDC is unsound for sums — fixed in v3.4.0 (selectReductionForBound). -/
 theorem friFoldReduction_simd_unreduced :
     selectFRIReduction { prime := 2013265921, numRounds := 10, hwIsSimd := true, inputBoundK := 3 }
-    = .montgomery := rfl
+    = .solinasFold := rfl
 
-/-- FRI fold cost is computable. -/
+/-- FRI fold cost is computable (scalar ARM: mul=3, add=1, harvey=3 → total=7). -/
 theorem friFoldElementCost_babybear_scalar :
-    friFoldElementCost { prime := 2013265921, numRounds := 10 } 3 1 = 7 := rfl
+    friFoldElementCost { prime := 2013265921, numRounds := 10 } arm_cortex_a76 3 1 = 7 := rfl
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 4: Smoke Tests
@@ -123,19 +125,19 @@ example : selectFRIReduction { prime := 2013265921, numRounds := 10 } = .harvey 
 example : selectFRIReduction { prime := 2013265921, numRounds := 10, hwIsSimd := true }
     = .harvey := rfl
 
-/-- SIMD with unreduced inputs (inputK=3) → bound=12 → Montgomery. -/
+/-- SIMD with unreduced inputs (inputK=3) → bound=12 → Solinas (not Montgomery). -/
 example : selectFRIReduction { prime := 2013265921, numRounds := 10, hwIsSimd := true, inputBoundK := 3 }
-    = .montgomery := rfl
+    = .solinasFold := rfl
 
 /-- Goldilocks FRI fold uses Harvey (scalar, reduced inputs). -/
 example : selectFRIReduction { prime := 18446744069414584321, numRounds := 10 }
     = .harvey := rfl
 
 /-- FRI fold analysis produces correct number of rounds. -/
-example : (friFoldAnalysis { prime := 2013265921, numRounds := 5 } 1024 3 1).length = 5 := rfl
+example : (friFoldAnalysis { prime := 2013265921, numRounds := 5 } arm_cortex_a76 1024 3 1).length = 5 := rfl
 
 /-- FRI fold element cost: mul(3) + add(1) + harvey(3) = 7. -/
-example : friFoldElementCost { prime := 2013265921, numRounds := 10 } 3 1 = 7 := rfl
+example : friFoldElementCost { prime := 2013265921, numRounds := 10 } arm_cortex_a76 3 1 = 7 := rfl
 
 end SmokeTests
 

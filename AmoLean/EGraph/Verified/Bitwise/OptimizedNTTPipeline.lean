@@ -426,16 +426,23 @@ private def fieldConfigToUltraConfig (fc : FieldConfig) (hw : HardwareCost) : Ul
     k := fc.k
     c := fc.cNat
     mu := fc.muNat
-    targetColor := if hw.isSimd then 2 else 1 }
+    targetColor := if hw.isSimd then 2 else 1
+    useSqdmulh := hw.isSimd }
 
 /-- Generate NTT C code using the Ultra pipeline (all phases + verified codegen).
     Uses the full Ultra pipeline: Ruler discovery → bound-aware saturation
     → dynamic schedule → verified codegen via TrustLean.Stmt.
 
     CRITICAL: does NOT modify the legacy optimizedNTTC path. -/
-def optimizedNTTC_ultra (fc : FieldConfig) (hw : HardwareCost) (logN iters : Nat) : String :=
+def optimizedNTTC_ultra (fc : FieldConfig) (hw : HardwareCost) (logN iters : Nat)
+    (useVerifiedSIMD : Bool := false) (rustSIMD : Bool := false) : String :=
   let n := 2^logN
-  let ucfg := fieldConfigToUltraConfig fc hw
+  let ucfg := { fieldConfigToUltraConfig fc hw with useVerifiedSIMD, rustSIMD }
+  -- NTT call expression: includes mu_tw parameter when sqdmulh is active
+  let funcBase := s!"{fc.name.toLower}_ntt_ultra"
+  let nttCall := fun (arr : String) =>
+    if ucfg.useSqdmulh then s!"{funcBase}({arr}, tw_mont, mu_tw)"
+    else s!"{funcBase}({arr}, tw_mont)"
   -- Fase Per-Stage v3.3.0: seed e-graph with NTT chain + pass stage class IDs
   let (seedGraph, stageIds) := mkFullNTTSeedGraph fc.pNat logN
   let seedRules := reductionAlternativeRules fc.pNat
@@ -493,6 +500,9 @@ int main(void) \{
     /* Montgomery twiddles for AMO ultra: tw_mont = tw * R mod p */
     {fc.elemType} *tw_mont=malloc(tw_sz*sizeof({fc.elemType}));
     for(size_t i=0;i<tw_sz;i++) tw_mont[i]=({fc.elemType})(((({fc.wideType})tw[i]*({fc.wideType}){rLit})%({fc.wideType}){fc.pLit}));
+    /* Precomputed mu_tw for sqdmulh REDC: mu_tw[i] = tw_mont[i] * mu mod 2^32 */
+    {fc.elemType} *mu_tw=malloc(tw_sz*sizeof({fc.elemType}));
+    for(size_t i=0;i<tw_sz;i++) mu_tw[i]=({fc.elemType})(((({fc.wideType})tw_mont[i]*({fc.wideType}){fc.muLit})&0xFFFFFFFFULL));
     for(size_t i=0;i<n;i++) orig[i]=({fc.elemType})((i*1000000007ULL)%({fc.wideType}){fc.pLit});
     volatile {fc.elemType} sink;
     struct timespec s,e;
@@ -501,7 +511,7 @@ int main(void) \{
     {fc.elemType} *amo_out=malloc(n*sizeof({fc.elemType}));
     {fc.elemType} *p3_out=malloc(n*sizeof({fc.elemType}));
     for(size_t i=0;i<n;i++) amo_out[i]=orig[i];
-    {fc.name.toLower}_ntt_ultra(amo_out, tw_mont);
+    {nttCall "amo_out"};
     for(size_t i=0;i<n;i++) p3_out[i]=orig[i];
     \{ {fc.elemType} *d=p3_out; {p3Loop} }
     /* Reduce both to [0,p) for comparison */
@@ -518,13 +528,13 @@ int main(void) \{
 
     /* warmup */
     for(size_t i=0;i<n;i++) d[i]=orig[i];
-    {fc.name.toLower}_ntt_ultra(d, tw_mont);
+    {nttCall "d"};
 
     /* Ultra benchmark (uses Montgomery twiddles) */
     clock_gettime(CLOCK_MONOTONIC,&s);
     for(int it=0;it<iters;it++) \{
       for(size_t i=0;i<n;i++) d[i]=orig[i];
-      {fc.name.toLower}_ntt_ultra(d, tw_mont);
+      {nttCall "d"};
       sink=d[0]; }
     clock_gettime(CLOCK_MONOTONIC,&e);
     double amo_us=((e.tv_sec-s.tv_sec)+(e.tv_nsec-s.tv_nsec)/1e9)/iters*1e6;
@@ -540,14 +550,15 @@ int main(void) \{
 
     double melem=({n}.0)/(amo_us/1e6)/1e6;
     printf(\"{fc.name},ultra,%.1f,%.1f,%.1f,%+.1f\\n\",amo_us,p3_us,melem,(1.0-amo_us/p3_us)*100.0);
-    (void)sink; free(d); free(orig); free(tw); free(tw_mont);
+    (void)sink; free(d); free(orig); free(tw); free(tw_mont); free(mu_tw);
     return 0;
 }"
 
 /-- Ultra benchmark C generator (drop-in alternative to genOptimizedBenchC). -/
 def genOptimizedBenchC_ultra (fc : FieldConfig) (logN iters : Nat)
-    (hw : HardwareCost := arm_cortex_a76) : String :=
-  optimizedNTTC_ultra fc hw logN iters
+    (hw : HardwareCost := arm_cortex_a76)
+    (useVerifiedSIMD : Bool := false) (rustSIMD : Bool := false) : String :=
+  optimizedNTTC_ultra fc hw logN iters useVerifiedSIMD rustSIMD
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 5b: Rust Code Emission Helpers
@@ -737,9 +748,9 @@ def genOptimizedBenchRust (fc : FieldConfig) (logN iters : Nat)
     Uses the verified Rust NTT from ultraPipeline + P3 Montgomery reference.
     Includes correctness check (element-by-element mod p comparison). -/
 def genOptimizedBenchRust_ultra (fc : FieldConfig) (logN iters : Nat)
-    (hw : HardwareCost := arm_cortex_a76) : String :=
+    (hw : HardwareCost := arm_cortex_a76) (rustSIMD : Bool := false) : String :=
   let n := 2^logN
-  let ucfg := fieldConfigToUltraConfig fc hw
+  let ucfg := { fieldConfigToUltraConfig fc hw with rustSIMD }
   let funcBase := s!"{fc.name.toLower}_ntt_ultra"
   let (seedGraph, stageIds) := mkFullNTTSeedGraph fc.pNat logN
   let seedRules := reductionAlternativeRules fc.pNat
@@ -794,11 +805,15 @@ fn main() \{
     }
     /* Montgomery twiddles for AMO ultra: tw_mont = tw * R mod p */
     let tw_mont: Vec<{et}> = tw.iter().map(|&t| ((t as {wt} * {rVal}) % p) as {et}).collect();
+    let mu_tw: Vec<{et}> = tw_mont.iter().map(|&t| ((t as {wt} * {ucfg.mu}{wt}) & 0xFFFFFFFF) as {et}).collect();
     let orig: Vec<{et}> = (0..n).map(|i| ((i as {wt} * 1000000007) % p) as {et}).collect();
 
     /* Correctness check: compare Ultra vs P3 outputs */
     let mut amo_out = orig.clone();
-    {funcNameRs}(&mut amo_out, &tw_mont);
+    {if rustSIMD then
+      s!"unsafe \{ {funcNameRs}(amo_out.as_mut_ptr() as *mut i32, tw_mont.as_ptr() as *const i32, mu_tw.as_ptr() as *const i32) }"
+    else
+      s!"{funcNameRs}(&mut amo_out, &tw_mont)"};
     let mut p3_out = orig.clone();
     for st in 0..logn \{ let h = 1usize << (logn-st-1);
       for g in 0..(1usize<<st) \{ for pp in 0..h \{
@@ -816,14 +831,20 @@ fn main() \{
 
     /* warmup */
     let mut d = orig.clone();
-    {funcNameRs}(&mut d, &tw_mont);
+    {if rustSIMD then
+      s!"unsafe \{ {funcNameRs}(d.as_mut_ptr() as *mut i32, tw_mont.as_ptr() as *const i32, mu_tw.as_ptr() as *const i32) }"
+    else
+      s!"{funcNameRs}(&mut d, &tw_mont)"};
     std::hint::black_box(&d);
 
     /* Ultra benchmark (Montgomery twiddles) */
     let start = std::time::Instant::now();
     for _ in 0..iters \{
       let mut d = orig.clone();
-      {funcNameRs}(&mut d, &tw_mont);
+      {if rustSIMD then
+        s!"unsafe \{ {funcNameRs}(d.as_mut_ptr() as *mut i32, tw_mont.as_ptr() as *const i32, mu_tw.as_ptr() as *const i32) }"
+      else
+        s!"{funcNameRs}(&mut d, &tw_mont)"};
       std::hint::black_box(&d);
     }
     let amo_us = start.elapsed().as_secs_f64() / iters as f64 * 1e6;

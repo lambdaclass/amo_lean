@@ -28,21 +28,37 @@ def generate_report(
     with open(csv_path, 'w', newline='') as f:
         w = csv.writer(f)
         w.writerow(["field", "log_n", "lang", "hardware", "validated",
-                     "strategy", "amo_us", "p3_us", "melem", "diff_pct", "error"])
+                     "strategy", "amo_us", "p3_naive_us", "melem",
+                     "vs_p3_naive_pct", "p3_real_us", "vs_p3_real_pct", "error"])
         for b in benchmarks:
             val = next((v for v in validations
                        if v.field == b.field and v.log_n == b.log_n
                        and v.lang == b.lang and v.hardware == b.hardware), None)
             validated = val.passed if val else False
+            p3_real = f"{b.p3_real_us:.1f}" if b.p3_real_us > 0 else "N/A"
+            vs_real = f"{b.vs_p3_real_pct:+.1f}" if b.p3_real_us > 0 else "N/A"
             w.writerow([b.field, b.log_n, b.lang, b.hardware, validated,
                        b.strategy, f"{b.amo_us:.1f}", f"{b.p3_us:.1f}",
-                       f"{b.melem:.1f}", f"{b.diff_pct:+.1f}", b.error])
+                       f"{b.melem:.1f}", f"{b.diff_pct:+.1f}",
+                       p3_real, vs_real, b.error])
 
     # Markdown
     lines = [
         f"# AMO-Lean NTT Benchmark Report",
         f"**Date:** {now}",
         f"**Platform:** {arch}",
+        "",
+        "## Column Legend",
+        "",
+        "| Column | Description |",
+        "|--------|-------------|",
+        "| **Lang** | Output language: `c` = compiled C, `rust` = compiled Rust |",
+        "| **HW** | Hardware target: `arm-scalar` = no SIMD, `arm-neon` = ARM NEON 4-lane SIMD |",
+        "| **AMO** | AMO-Lean Ultra pipeline: verified codegen with e-graph optimization |",
+        "| **P3 naive** | Scalar reference using naive `% p` modular reduction (NOT actual Plonky3) |",
+        "| **P3 real** | Actual Plonky3 library via FFI (when available) |",
+        "| **vs P3 naive** | `(P3_naive - AMO) / P3_naive × 100%` — positive = AMO faster |",
+        "| **vs P3 real** | `(P3_real - AMO) / P3_real × 100%` — positive = AMO faster |",
         "",
         "## Validation Summary",
         "",
@@ -61,18 +77,55 @@ def generate_report(
     valid_benchmarks = [b for b in benchmarks
                        if (b.field, b.log_n, b.lang, b.hardware) in valid_set and not b.error]
 
+    has_p3_real = any(b.p3_real_us > 0 for b in valid_benchmarks)
+
     if valid_benchmarks:
-        lines += [
-            "| Field | N | Lang | HW | AMO (us) | P3 (us) | Melem/s | vs P3 |",
-            "|-------|---|------|----|----------|---------|---------|-------|",
-        ]
-        for b in valid_benchmarks:
-            lines.append(
-                f"| {b.field} | 2^{b.log_n} | {b.lang} | {b.hardware} | "
-                f"{b.amo_us:.1f} | {b.p3_us:.1f} | {b.melem:.1f} | {b.diff_pct:+.1f}% |"
-            )
+        if has_p3_real:
+            lines += [
+                "| Field | N | Lang | HW | AMO (μs) | P3 naive (μs) | vs naive | P3 real (μs) | vs real |",
+                "|-------|---|------|----|----------|---------------|----------|--------------|---------|",
+            ]
+            for b in valid_benchmarks:
+                p3r = f"{b.p3_real_us:.1f}" if b.p3_real_us > 0 else "—"
+                vsr = f"{b.vs_p3_real_pct:+.1f}%" if b.p3_real_us > 0 else "—"
+                lines.append(
+                    f"| {b.field} | 2^{b.log_n} | {b.lang} | {b.hardware} | "
+                    f"{b.amo_us:.1f} | {b.p3_us:.1f} | {b.diff_pct:+.1f}% | {p3r} | {vsr} |"
+                )
+        else:
+            lines += [
+                "| Field | N | Lang | HW | AMO (μs) | P3 naive (μs) | vs naive |",
+                "|-------|---|------|----|----------|---------------|----------|",
+            ]
+            for b in valid_benchmarks:
+                lines.append(
+                    f"| {b.field} | 2^{b.log_n} | {b.lang} | {b.hardware} | "
+                    f"{b.amo_us:.1f} | {b.p3_us:.1f} | {b.diff_pct:+.1f}% |"
+                )
     else:
         lines.append("*No valid benchmark results.*")
+
+    # Notes on what was tested and what was not
+    lines += ["", "## Notes", ""]
+    tested_combos = {(b.lang, b.hardware) for b in valid_benchmarks}
+    all_combos = {("c", "arm-scalar"), ("c", "arm-neon"), ("rust", "arm-scalar"), ("rust", "arm-neon")}
+    missing = all_combos - tested_combos
+    if tested_combos:
+        lines.append("**Configurations tested:**")
+        for lang, hw in sorted(tested_combos):
+            hw_desc = "ARM scalar (no SIMD)" if hw == "arm-scalar" else "ARM NEON (4-lane uint32 SIMD)"
+            lines.append(f"- `{lang}` / `{hw}`: {hw_desc}")
+    if missing:
+        lines.append("")
+        lines.append("**Configurations not tested in this run:**")
+        for lang, hw in sorted(missing):
+            lines.append(f"- `{lang}` / `{hw}`")
+    if not has_p3_real:
+        lines.append("")
+        lines.append("**P3 real (Plonky3 via FFI):** Not available in this run. "
+                     "The P3 naive column uses scalar `% p` modular reduction — "
+                     "it is NOT representative of actual Plonky3 performance which uses "
+                     "Montgomery SIMD (sqdmulh on NEON, vpmuludq on AVX2).")
 
     # Errors
     errors = [b for b in benchmarks if b.error]

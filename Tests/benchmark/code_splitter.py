@@ -13,6 +13,21 @@ from field_defs import FieldDef
 from lean_driver import GeneratedProgram
 
 
+def _ntt_call(kernel: str, func_name: str, data: str = "d",
+              tw: str = "tw_mont", mu_tw: str = "mu_tw") -> str:
+    """Generate the NTT function call with correct number of arguments.
+    Detects 3-arg (sqdmulh: data, twiddles, mu_tw) vs 2-arg (vmull: data, twiddles)
+    by checking the function signature in the kernel."""
+    # Look for the function signature to count parameters
+    import re
+    sig_match = re.search(rf'void\s+{re.escape(func_name)}\s*\(([^)]*)\)', kernel)
+    if sig_match:
+        params = sig_match.group(1).split(',')
+        if len(params) >= 3:
+            return f"{func_name}({data}, {tw}, {mu_tw})"
+    return f"{func_name}({data}, {tw})"
+
+
 def split_at_main(source: str, lang: str) -> tuple[str, str]:
     """Split source into (kernel, main_section).
 
@@ -114,13 +129,18 @@ int main(void) {{
     /* Montgomery twiddles for AMO ultra: tw_mont = tw * R mod p */
     for (size_t i = 0; i < tw_sz; i++)
         tw_mont[i] = ({elem})((({wide})tw[i] * {r_lit}) % {init_cast}{p_lit});
+    /* Precomputed mu_tw for sqdmulh REDC: mu_tw[i] = tw_mont[i] * mu mod 2^32 */
+    {elem} *mu_tw = ({elem}*)malloc(tw_sz * sizeof({elem}));
+    for (size_t i = 0; i < tw_sz; i++)
+        mu_tw[i] = ({elem})((({wide})tw_mont[i] * ({wide}){field.mu}U) & 0xFFFFFFFFULL);
     /* Run NTT */
-    {func_name}(d, tw_mont);
+    {_ntt_call(kernel, func_name)};
     /* Print output mod p */
     for (size_t i = 0; i < n; i++)
 {print_fmt}
     free(d);
     free(tw_mont);
+    free(mu_tw);
     return 0;
 }}
 """
@@ -328,8 +348,12 @@ int main(void) {{
     for (size_t i = 0; i < tw_sz; i++)
         tw_mont[i] = ({elem})((({wide})tw[i] * {r_lit}) % {init_cast}{p_lit});
 {pre_ntt_debug}
+    /* Precomputed mu_tw for sqdmulh REDC */
+    {elem} *mu_tw = ({elem}*)malloc(tw_sz * sizeof({elem}));
+    for (size_t i = 0; i < tw_sz; i++)
+        mu_tw[i] = ({elem})((({wide})tw_mont[i] * ({wide}){field.mu}U) & 0xFFFFFFFFULL);
     /* Run NTT */
-    {func_name}(d, tw_mont);
+    {_ntt_call(kernel, func_name)};
     /* Print output mod p */
     for (size_t i = 0; i < n; i++)
 {print_fmt}
@@ -341,7 +365,8 @@ int main(void) {{
 """
 
 
-def build_validation_rust(kernel: str, field: FieldDef, log_n: int, func_name: str) -> str:
+def build_validation_rust(kernel: str, field: FieldDef, log_n: int, func_name: str,
+                          rust_simd: bool = False) -> str:
     """Build a Rust validation program that prints all NTT output elements.
     Uses real roots of unity in Montgomery form matching the benchmark harness."""
     n = 1 << log_n
@@ -379,7 +404,7 @@ fn main() {{
     }}
     /* Montgomery twiddles: tw_mont = tw * R mod p */
     let tw_mont: Vec<{et}> = tw.iter().map(|&t| ((t as {wt} * {r_val}) % p) as {et}).collect();
-    {func_name}(&mut d, &tw_mont);
+    {"let mu: " + wt + " = " + str(field.mu) + "; let mu_tw: Vec<" + et + "> = tw_mont.iter().map(|&t| ((t as " + wt + " * mu) & 0xFFFFFFFF) as " + et + ").collect(); unsafe { " + func_name + "(d.as_mut_ptr() as *mut i32, tw_mont.as_ptr() as *const i32, mu_tw.as_ptr() as *const i32) }" if rust_simd else func_name + "(&mut d, &tw_mont)"};
     for i in 0..n {{
         let v = (d[i] as {wt}).rem_euclid(p);
         println!("{{}}", v);
@@ -389,7 +414,7 @@ fn main() {{
 
 
 def generate_validation_program(program: GeneratedProgram, field: FieldDef,
-                                debug: bool = False) -> str:
+                                debug: bool = False, rust_simd: bool = False) -> str:
     """Extract NTT kernel from generated program and build validation wrapper.
 
     If debug=True, injects printf instrumentation for NEON butterfly debugging.
@@ -402,4 +427,4 @@ def generate_validation_program(program: GeneratedProgram, field: FieldDef,
             return build_debug_validation_c(kernel, field, program.log_n, func_name)
         return build_validation_c(kernel, field, program.log_n, func_name)
     else:
-        return build_validation_rust(kernel, field, program.log_n, func_name)
+        return build_validation_rust(kernel, field, program.log_n, func_name, rust_simd=rust_simd)

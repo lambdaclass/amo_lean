@@ -8,7 +8,7 @@ require mathlib from git
   "https://github.com/leanprover-community/mathlib4.git" @ "v4.26.0"
 
 require TrustLean from git
-  "https://github.com/manuelpuebla/trust-lean"
+  "https://github.com/manuelpuebla/trust-lean" @ "main"
 
 @[default_target]
 lean_lib «AmoLean» where

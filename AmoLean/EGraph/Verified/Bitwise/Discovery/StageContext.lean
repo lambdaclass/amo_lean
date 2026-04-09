@@ -68,7 +68,7 @@ def outputBoundK (ctx : StageContext) : Nat :=
   | .lazy => ctx.inputBoundK + 1  -- one more addition without reduce
   | .solinasFold => 2             -- output < 2p
   | .montgomery => 1              -- output < p
-  | .harvey => 2                  -- output < 2p
+  | .harvey => 1                  -- output < p (harveyReduceSpec postcondition)
 
 /-- Build stage contexts for a full NTT. -/
 def buildStageContexts (numStages prime bitwidth : Nat)

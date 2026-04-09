@@ -20,7 +20,8 @@ set_option autoImplicit false
 namespace AmoLean.EGraph.Verified.Bitwise.PrimitivesIntegration
 
 open AmoLean.EGraph.Verified.Bitwise.BoundProp (ReductionChoice)
-open AmoLean.EGraph.Verified.Bitwise.CrossRelNTT (selectReductionForBound reductionCost)
+open AmoLean.EGraph.Verified.Bitwise.CrossRelNTT (selectReductionForBound reductionCostForHW)
+open AmoLean.EGraph.Verified.Bitwise (HardwareCost arm_cortex_a76)
 open AmoLean.EGraph.Verified.Bitwise.FRIFoldPlan (FRIFoldConfig selectFRIReduction
   friFoldElementCost friFoldOutputBound)
 open AmoLean.EGraph.Verified.Bitwise.PoseidonStagePlan (PoseidonConfig PoseidonRoundType
@@ -69,14 +70,15 @@ structure PrimitiveCostReport where
   reductionCost : Nat
   deriving Repr, Inhabited
 
-/-- Generate a cost report for each primitive on the given field + hardware. -/
+/-- Generate a cost report for each primitive on the given field + hardware.
+    Uses reductionCostForHW (SSOT) instead of legacy reductionCost. -/
 def analyzePrimitives (prime : Nat) (stateWidth : Nat := 8) (sboxExp : Nat := 7)
-    (hwIsSimd : Bool := false) (mulCost : Nat := 3) (addCost : Nat := 1)
+    (hw : HardwareCost := arm_cortex_a76) (mulCost : Nat := 3) (addCost : Nat := 1)
     : List PrimitiveCostReport :=
   [.nttButterfly, .friFold, .poseidonFullRound, .poseidonPartialRound].map fun prim =>
     let bound := primitiveBound prim stateWidth sboxExp 1
-    let red := selectReductionForBound bound hwIsSimd false
-    let cost := reductionCost red bound hwIsSimd
+    let red := selectReductionForBound bound hw.isSimd false
+    let cost := reductionCostForHW hw red
     { primitive := prim, reduction := red, boundFactor := bound, reductionCost := cost }
 
 -- ══════════════════════════════════════════════════════════════════
@@ -108,9 +110,10 @@ theorem poseidon_full_uses_solinas :
 theorem poseidon_partial_uses_solinas :
     selectPrimitiveReduction .poseidonPartialRound = .solinasFold := rfl
 
-/-- SIMD with high-bound primitives → Montgomery. -/
-theorem poseidon_simd_uses_montgomery :
-    selectPrimitiveReduction .poseidonFullRound (hwIsSimd := true) = .montgomery := rfl
+/-- SIMD with high-bound primitives → Solinas (not Montgomery).
+    Montgomery REDC is unsound for sums — selectReductionForBound excludes it (v3.4.0 fix). -/
+theorem poseidon_simd_uses_solinas :
+    selectPrimitiveReduction .poseidonFullRound (hwIsSimd := true) = .solinasFold := rfl
 
 /-- Cost analysis produces 4 entries (one per primitive). -/
 theorem analyzePrimitives_length (p : Nat) :
@@ -138,8 +141,8 @@ example : (analyzePrimitives 2013265921).length = 4 := rfl
 example : (selectPrimitiveReduction .nttButterfly ==
     selectPrimitiveReduction .poseidonFullRound) = false := rfl
 
-/-- SIMD Poseidon: Montgomery (SIMD + high bound). -/
-example : selectPrimitiveReduction .poseidonFullRound (hwIsSimd := true) = .montgomery := rfl
+/-- SIMD Poseidon: Solinas (Montgomery excluded for soundness — REDC only valid for products). -/
+example : selectPrimitiveReduction .poseidonFullRound (hwIsSimd := true) = .solinasFold := rfl
 
 /-- Goldilocks analysis is computable. -/
 example : (analyzePrimitives 18446744069414584321).length = 4 := rfl

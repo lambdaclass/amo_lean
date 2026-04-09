@@ -84,7 +84,8 @@ def bowersAdjustment (plan : Plan) (cache : CacheConfig) : Nat :=
     When hw is provided, bound-aware plans use cost-aware reduction selection. -/
 def generateCandidates (p n : Nat) (hw : HardwareCost)
     (arrayIsLarge : Bool := false) : Array Plan :=
-  #[ -- 1. Uniform radix-2 + Solinas (baseline)
+  let baseCandidates := #[
+     -- 1. Uniform radix-2 + Solinas (baseline)
      mkUniformPlan p n .r2 .solinasFold,
      -- 2. Uniform radix-2 + Montgomery
      mkUniformPlan p n .r2 .montgomery,
@@ -98,9 +99,15 @@ def generateCandidates (p n : Nat) (hw : HardwareCost)
      mkUniformPlan p n .r4 .solinasFold,
      -- 7. Uniform radix-4 + Montgomery
      mkUniformPlan p n .r4 .montgomery,
-     -- 8. Mixed radix (radix-4 early, radix-2 late) + cost-aware
+     -- 8. Uniform radix-4 + Harvey (cheapest reduction, fewer stages)
+     mkUniformPlan p n .r4 .harvey,
+     -- 9. Mixed radix (radix-4 early, radix-2 late) + cost-aware
      mkMixedRadixPlan p n (some hw) arrayIsLarge
   ]
+  -- 10. R2 Harvey + ilpFactor=2 (dual-butterfly interleaving for NEON)
+  if hw.isSimd then
+    baseCandidates.push ((mkUniformPlan p n .r2 .harvey).withILP 2)
+  else baseCandidates
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 3: Plan Selection
@@ -139,9 +146,9 @@ def selectBestPlan (p n : Nat) (hw : HardwareCost)
 -- Section 4: Theorems
 -- ══════════════════════════════════════════════════════════════════
 
-/-- generateCandidates produces exactly 8 candidates (5 radix-2 + 2 radix-4 + 1 mixed). -/
-theorem generateCandidates_size (p n : Nat) (hw : HardwareCost) :
-    (generateCandidates p n hw).size = 8 := rfl
+/-- generateCandidates produces 9 candidates for scalar, 10 for SIMD (+ILP variant). -/
+example : (generateCandidates 2013265921 1024 arm_cortex_a76).size = 9 := by native_decide
+example : (generateCandidates 2013265921 1024 arm_neon_simd).size = 10 := by native_decide
 
 /-- selectBestPlan returns a well-formed plan for BabyBear N=1024. -/
 example : (selectBestPlan 2013265921 1024 arm_cortex_a76).wellFormed = true := by native_decide
@@ -162,7 +169,7 @@ example : stageCacheMisses 1024 0 .default = 0 := by native_decide
 section SmokeTests
 
 /-- 8 candidates for BabyBear N=1024. -/
-example : (generateCandidates 2013265921 1024 arm_cortex_a76).size = 8 := rfl
+example : (generateCandidates 2013265921 1024 arm_cortex_a76).size = 9 := rfl
 
 /-- selectBestPlan returns a plan (doesn't crash). -/
 example : (selectBestPlan 2013265921 1024 arm_cortex_a76).numStages > 0 := by native_decide
@@ -185,6 +192,14 @@ example : (mkMixedRadixPlan 2013265921 1024).wellFormed = true := by native_deci
 /-- Radix-4 has fewer butterflies than radix-2 for same N. -/
 example : (mkUniformPlan 2013265921 1024 .r4 .solinasFold).totalButterflies <
     (mkUniformPlan 2013265921 1024 .r2 .solinasFold).totalButterflies := by native_decide
+
+/-- NEON: R2 Harvey beats R4 Harvey (SIMD throughput discount makes R2 cheaper). -/
+example : (mkUniformPlan 2013265921 1024 .r2 .harvey).totalCost arm_neon_simd <
+    (mkUniformPlan 2013265921 1024 .r4 .harvey).totalCost arm_neon_simd := by native_decide
+
+/-- Scalar: R4 Harvey still beats R2 Harvey (no SIMD discount, fewer stages win). -/
+example : (mkUniformPlan 2013265921 1024 .r4 .harvey).totalCost arm_cortex_a76 <
+    (mkUniformPlan 2013265921 1024 .r2 .harvey).totalCost arm_cortex_a76 := by native_decide
 
 end SmokeTests
 

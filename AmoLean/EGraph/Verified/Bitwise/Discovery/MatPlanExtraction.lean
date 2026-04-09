@@ -29,7 +29,8 @@ open AmoLean.EGraph.Verified.Bitwise.NTTPlan (RadixChoice StageDirection Plan NT
   mkUniformPlan mkBoundAwarePlan log2)
 open AmoLean.EGraph.Verified.Bitwise.BoundProp (ReductionChoice stageBoundFactor
   lazyReductionSafe)
-open AmoLean.EGraph.Verified.Bitwise.CrossRelNTT (selectReductionForBound reductionCost)
+open AmoLean.EGraph.Verified.Bitwise.CrossRelNTT (selectReductionForBound)
+open AmoLean.EGraph.Verified.Bitwise (HardwareCost arm_cortex_a76)
 open AmoLean.EGraph.Verified.Bitwise.Discovery.MatEGraphStep (CostOracle MatEGraph
   matSaturateAndExtract totalCoverage radixLevels generateAssignmentsAux
   generateAssignmentsAux_valid)
@@ -86,17 +87,17 @@ def assignmentToPlan (assignment : List RadixChoice) (p n : Nat)
     3. Extract best assignment
     4. Convert to NTTPlan with bound-aware reduction
     Falls back to generateCandidates if exploration yields nothing. -/
-def selectBestPlanExplored (p n : Nat) (mulCost addCost : Nat)
-    (hwIsSimd : Bool := false) (arrayIsLarge : Bool := false)
-    (fuel : Nat := 500) : Plan :=
+def selectBestPlanExplored (p n : Nat) (hw : HardwareCost := arm_cortex_a76)
+    (arrayIsLarge : Bool := false) (fuel : Nat := 500) : Plan :=
   let oracle : CostOracle :=
-    { mulCost, addCost, arraySize := n, hwIsSimd, arrayIsLarge }
+    { mulCost := hw.mul32, addCost := hw.add, arraySize := n,
+      hwIsSimd := hw.isSimd, arrayIsLarge }
   let bestAssignment := matSaturateAndExtract n oracle fuel
   if bestAssignment.isEmpty then
     -- Fallback: use existing hardcoded candidates
-    selectBestPlan p n mulCost addCost hwIsSimd arrayIsLarge
+    selectBestPlan p n hw
   else
-    assignmentToPlan bestAssignment p n hwIsSimd arrayIsLarge
+    assignmentToPlan bestAssignment p n hw.isSimd arrayIsLarge
 
 /-- Refinement: post-extraction bound optimization.
     After extracting a plan, re-evaluate each stage's reduction choice
@@ -146,15 +147,15 @@ theorem assignmentToPlan_stages_length (assignment : List RadixChoice)
 
 /-- selectBestPlanExplored returns a plan with stages > 0 for BabyBear N=1024. -/
 theorem selectBestPlanExplored_nonempty_babybear :
-    (selectBestPlanExplored 2013265921 1024 3 1).stages.size > 0 := by native_decide
+    (selectBestPlanExplored 2013265921 1024 arm_cortex_a76).stages.size > 0 := by native_decide
 
 /-- selectBestPlanExplored returns a plan with stages > 0 for Mersenne31 N=1024. -/
 theorem selectBestPlanExplored_nonempty_mersenne31 :
-    (selectBestPlanExplored 2147483647 1024 3 1).stages.size > 0 := by native_decide
+    (selectBestPlanExplored 2147483647 1024 arm_cortex_a76).stages.size > 0 := by native_decide
 
 /-- selectBestPlanExplored returns a plan with stages > 0 for Goldilocks N=1024. -/
 theorem selectBestPlanExplored_nonempty_goldilocks :
-    (selectBestPlanExplored 18446744069414584321 1024 4 1).stages.size > 0 := by native_decide
+    (selectBestPlanExplored 18446744069414584321 1024 arm_cortex_a76).stages.size > 0 := by native_decide
 
 /-- refinePlanBounds preserves the number of stages. -/
 theorem refinePlanBounds_preserves_size (plan : Plan) :
@@ -183,13 +184,13 @@ example : (assignmentToPlan (List.replicate 5 .r4) 2013265921 1024).stages.size 
   native_decide
 
 /-- Explored plan is well-formed for BabyBear N=1024. -/
-example : (selectBestPlanExplored 2013265921 1024 3 1).wellFormed = true := by native_decide
+example : (selectBestPlanExplored 2013265921 1024 arm_cortex_a76).wellFormed = true := by native_decide
 
 /-- Explored plan has > 0 stages. -/
-example : (selectBestPlanExplored 2013265921 1024 3 1).stages.size > 0 := by native_decide
+example : (selectBestPlanExplored 2013265921 1024 arm_cortex_a76).stages.size > 0 := by native_decide
 
 /-- Explored plan produces a different (potentially better) plan than uniform. -/
-example : (selectBestPlanExplored 2013265921 1024 3 1).stages.size ≤ 10 := by native_decide
+example : (selectBestPlanExplored 2013265921 1024 arm_cortex_a76).stages.size ≤ 10 := by native_decide
 
 /-- assignmentToPlan with concrete mixed assignment. -/
 example :

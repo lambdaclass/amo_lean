@@ -16,10 +16,12 @@ class BenchmarkResult:
     hardware: str
     strategy: str          # "ultra" or e-graph result
     amo_us: float          # AMO time in microseconds
-    p3_us: float           # P3 reference time in microseconds
+    p3_us: float           # P3 naive reference time (scalar % p, NOT actual Plonky3)
     melem: float           # Million elements/second
-    diff_pct: float        # % difference (positive = AMO faster)
+    diff_pct: float        # % difference vs P3 naive (positive = AMO faster)
     error: str = ""
+    p3_real_us: float = 0.0     # Actual Plonky3 via FFI (0 = not available)
+    vs_p3_real_pct: float = 0.0 # % difference vs P3 real (positive = AMO faster)
 
 
 def run_benchmark(

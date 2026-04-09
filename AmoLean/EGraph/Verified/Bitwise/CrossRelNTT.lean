@@ -47,8 +47,9 @@ def selectReductionForBound (boundK : Nat) (hwIsSimd : Bool) (arrayIsLarge : Boo
     -- Solinas fold is good for scalar with moderate bounds
     .solinasFold
   else if hwIsSimd || arrayIsLarge then
-    -- Montgomery preferred for SIMD (u32 lanes) and large arrays (cache)
-    .montgomery
+    -- Solinas fold: Montgomery REDC is unsound for sums/diffs (only valid for products).
+    -- costAwareReductionForBound correctly excludes Montgomery; this path must match.
+    .solinasFold
   else
     .solinasFold
 
@@ -91,6 +92,30 @@ def reductionCostForHW (hw : HardwareCost) (red : ReductionChoice) : Nat :=
   | .montgomery => mixedOpCost hw (.montyReduce 0 0 0)
   | .harvey => mixedOpCost hw (.harveyReduce 0 0)
   | .lazy => mixedOpCost hw (.reduceGate 0 0)  -- codegen does Solinas fold
+
+/-- Instruction profile for modelling execution cost on dual-pipe ARM NEON.
+    Calibrated empirically in B35-2 (bench_redc_isolated.c).
+    Key insight: V0 throughput dominates, not critical path, because OoO hides latency. -/
+structure InstructionProfile where
+  v0OnlyInstructions : Nat    -- instructions exclusive to V0 (mul, sqdmulh, mls)
+  dualIssueInstructions : Nat -- instructions for V0 or V1 (add, sub, cmp, and, shsub)
+  deriving Repr
+
+/-- Effective cost on dual-pipe NEON: V0 throughput is the bottleneck.
+    Empirically validated: vmull(6 V0) → 6.8ns, sqdmulh(3 V0) → 3.8ns.
+    Ratio 6/3 = 2.0× predicted, 1.79× measured. V0 throughput explains ~90%. -/
+def InstructionProfile.effectiveCost (p : InstructionProfile) : Nat :=
+  p.v0OnlyInstructions
+
+/-- vmull widening REDC profile (measured: 6.80 ns/call on Cortex-A76).
+    V0-only: vmull×4 + vmul×2 = 6 instructions. -/
+def redcProfile_vmull : InstructionProfile :=
+  { v0OnlyInstructions := 6, dualIssueInstructions := 12 }
+
+/-- sqdmulh Montgomery REDC profile (measured: 3.80 ns/call on Cortex-A76).
+    V0-only: sqdmulh×2 + mul×1 = 3 instructions. -/
+def redcProfile_sqdmulh : InstructionProfile :=
+  { v0OnlyInstructions := 3, dualIssueInstructions := 4 }
 
 /-- Butterfly REDC cost (product reduction, always Montgomery subtraction variant).
     Used by Plan.totalCost to include the REDC in butterfly cost (previously omitted). -/
@@ -163,17 +188,19 @@ def reductionCost (reduction : ReductionChoice) (boundK : Nat)
     else 7                                      -- multiple comparisons
   | .lazy => 0                                  -- no reduction = free
 
-/-- Total reduction cost for an NTT (sum over all stages). -/
+/-- Total reduction cost for an NTT (sum over all stages).
+    Uses reductionCostForHW (SSOT) instead of legacy reductionCost. -/
 def nttTotalReductionCost (analysis : List (Nat × ReductionChoice × Nat))
-    (hwIsSimd : Bool) : Nat :=
-  analysis.foldl (fun acc (_, red, boundK) =>
-    acc + reductionCost red boundK hwIsSimd) 0
+    (hw : HardwareCost) : Nat :=
+  analysis.foldl (fun acc (_, red, _) =>
+    acc + reductionCostForHW hw red) 0
 
-/-- Improvement ratio: cost with bound-informed selection vs naive (all Solinas). -/
+/-- Improvement ratio: cost with bound-informed selection vs naive (all Solinas).
+    Uses reductionCostForHW (SSOT) for both informed and naive costs. -/
 def improvementVsNaive (analysis : List (Nat × ReductionChoice × Nat))
-    (hwIsSimd : Bool) : Nat × Nat :=
-  let informed := nttTotalReductionCost analysis hwIsSimd
-  let naive := analysis.length * (if hwIsSimd then 8 else 6)
+    (hw : HardwareCost) : Nat × Nat :=
+  let informed := nttTotalReductionCost analysis hw
+  let naive := analysis.length * (reductionCostForHW hw .solinasFold)
   (informed, naive)
 
 -- ══════════════════════════════════════════════════════════════════
