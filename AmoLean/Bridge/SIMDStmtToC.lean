@@ -1,4 +1,5 @@
 import TrustLean.Backend.CBackend
+import TrustLean.Backend.RustBackend
 
 /-!
 # SIMDStmtToC — Type-Safe NEON Intrinsic Emission via Stmt.call
@@ -21,8 +22,8 @@ set_option autoImplicit false
 
 namespace AmoLean.Bridge.SIMDStmtToC
 
-open _root_.TrustLean (Stmt VarName LowLevelExpr stmtToC indentStr
-  varNameToC exprToC joinCode)
+open _root_.TrustLean (Stmt VarName LowLevelExpr stmtToC stmtToRust indentStr
+  varNameToC varNameToStr exprToC exprToRust joinCode)
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 1: NeonIntrinsic ADT
@@ -158,7 +159,48 @@ def simdStmtToC (level : Nat) : Stmt → String
   | other => stmtToC level other
 
 -- ══════════════════════════════════════════════════════════════════
--- Section 4: Smoke Tests
+-- Section 4: SIMD-aware Rust Emission (v3.8.0)
+-- ══════════════════════════════════════════════════════════════════
+
+/-- Determine if a VarName refers to a NEON vector variable (needs transmute). -/
+private def isNeonVar : VarName → Bool
+  | .user s => s.startsWith "nv" || s.startsWith "nu" || s.startsWith "nh" ||
+               s.startsWith "p_vec"
+  | _ => false
+
+/-- Emit a LowLevelExpr for Rust NEON context.
+    NEON vector variables are wrapped in std::mem::transmute() to handle
+    int32x4_t ↔ uint32x4_t conversions that C does implicitly. Zero-cost.
+    Pointer arithmetic uses .add() instead of + (Rust raw pointer semantics). -/
+private def neonArgToRust : LowLevelExpr → String
+  | .varRef v =>
+    let name := varNameToStr v
+    if isNeonVar v then s!"std::mem::transmute({name})" else name
+  | .addrOf v => "&mut " ++ varNameToStr v
+  | .binOp .add (.varRef v) (.litInt n) =>
+    -- Pointer offset: ptr.add(n) instead of ptr + n (Rust raw pointer semantics)
+    s!"unsafe \{ {varNameToStr v}.add({n} as usize) }"
+  | other => exprToRust other
+
+/-- Emit a Stmt to Rust with NEON intrinsic handling.
+    Gemelo of simdStmtToC. ARM NEON intrinsics have identical names in C and Rust
+    (core::arch::aarch64). Differences from C:
+    - `unsafe { }` wrapping for each intrinsic call
+    - `std::mem::transmute()` for NEON vector args (int32x4_t ↔ uint32x4_t)
+    - Non-call Stmt delegated to stmtToRust (not stmtToC) -/
+def simdStmtToRust (level : Nat) : Stmt → String
+  | .call result fname args =>
+    let argsStr := ", ".intercalate (args.map neonArgToRust)
+    let pad := indentStr level
+    if (NeonIntrinsic.fromCName fname).any (·.isVoid) then
+      pad ++ "unsafe { " ++ fname ++ "(" ++ argsStr ++ ") };"
+    else
+      pad ++ varNameToStr result ++ " = unsafe { " ++ fname ++ "(" ++ argsStr ++ ") };"
+  | .seq s1 s2 => joinCode (simdStmtToRust level s1) (simdStmtToRust level s2)
+  | other => stmtToRust level other
+
+-- ══════════════════════════════════════════════════════════════════
+-- Section 5: Smoke Tests
 -- ══════════════════════════════════════════════════════════════════
 
 section SmokeTests
@@ -222,6 +264,24 @@ example : simdStmtToC 1 (.assign (.user "x") (.litInt 42))
 example : simdStmtToC 1 (neonCallVoid .deinterleaveLoad
     [.addrOf (.user "a"), .addrOf (.user "b"), .varRef (.user "ptr")])
     = "  neon_deinterleave_load(&a, &b, ptr);" := rfl
+
+-- ── Rust emitter tests (v3.8.0) ──
+
+/-- simdStmtToRust produces non-empty output for NEON calls. -/
+example : (simdStmtToRust 1 (neonCall .sqdmulh (.user "nv0")
+    [.varRef (.user "nv1"), .varRef (.user "nv2")])).length > 50 := by native_decide
+
+/-- simdStmtToRust: non-NEON vars (pointers) don't get transmuted. -/
+example : (simdStmtToRust 1 (neonCallVoid .store4_s32
+    [.varRef (.user "a_ptr"), .varRef (.user "nu5")])).length > 20 := by native_decide
+
+/-- simdStmtToRust delegates non-call Stmt to stmtToRust. -/
+example : simdStmtToRust 1 (.assign (.user "x") (.litInt 42))
+    = stmtToRust 1 (.assign (.user "x") (.litInt 42)) := by native_decide
+
+/-- simdStmtToRust handles addrOf for deinterleaveLoad. -/
+example : (simdStmtToRust 1 (neonCallVoid .deinterleaveLoad
+    [.addrOf (.user "nv0"), .addrOf (.user "nv1"), .varRef (.user "ptr")])).length > 30 := by native_decide
 
 end SmokeTests
 

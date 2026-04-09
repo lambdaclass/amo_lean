@@ -54,7 +54,7 @@ open AmoLean.EGraph.Verified.Bitwise.PlanSelection (CacheConfig
 open AmoLean.EGraph.Verified.Bitwise.VerifiedPlanCodeGen (emitCFromPlanVerified
   emitRustFromPlanVerified lowerNTTFromPlanVerified)
 -- SIMD emission (Fase SIMD v3.1.0)
-open AmoLean.EGraph.Verified.Bitwise.SIMDEmitter (emitSIMDNTTC SIMDTarget)
+open AmoLean.EGraph.Verified.Bitwise.SIMDEmitter (emitSIMDNTTC emitSIMDNTTRust SIMDTarget)
 
 -- Phase 24 imports
 open AmoLean.EGraph.Verified.Matrix (TransformId FactorizationTree BreakdownRule
@@ -111,6 +111,8 @@ structure UltraConfig where
   profiled : Bool := false    -- true emits ARM cycle counter fences between stages
   -- v3.7.0: verified SIMD codegen (Stmt.call + simdStmtToC instead of string emission)
   useVerifiedSIMD : Bool := true
+  -- v3.8.0: Rust SIMD codegen (simdStmtToRust — core::arch::aarch64 intrinsics)
+  rustSIMD : Bool := false
   deriving Repr
 
 def UltraConfig.scalar : UltraConfig := { hw := arm_cortex_a76, targetColor := 1 }
@@ -182,8 +184,10 @@ def ultraPipeline (g : MixedEGraph)
     emitSIMDNTTC plan simdTarget cfg.k cfg.c cfg.mu funcName cfg.useSqdmulh cfg.useVerifiedSIMD cfg.profiled
   else
     emitCFromPlanVerified plan cfg.k cfg.c cfg.mu funcName
-  let rustCode := emitRustFromPlanVerified plan cfg.k cfg.c cfg.mu
-    (funcName ++ "_rs")
+  let rustCode := if cfg.rustSIMD && cfg.hw.isSimd then
+    emitSIMDNTTRust plan simdTarget cfg.k cfg.c cfg.mu (funcName ++ "_rs") cfg.useSqdmulh
+  else
+    emitRustFromPlanVerified plan cfg.k cfg.c cfg.mu (funcName ++ "_rs")
 
   -- ── Phase 24: joint optimization — Discovery bidirectional (Fase Per-Stage v3.3.0) ──
   -- cfg.jointThreshold controls max N (default 256 for runtime, set 0 for native_decide)

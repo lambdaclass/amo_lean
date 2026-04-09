@@ -1,8 +1,197 @@
 # TRZK: Architecture
 
-## Next Version: 3.7.0
+## Next Version: 3.8.0
 
-### Verified SIMD Codegen v3.7.0 (Option D: Stmt.call + simdStmtToC)
+### Verified Rust SIMD NTT v3.8.0
+
+**Contents**: Emit Rust NEON NTT from the same verified Stmt IR that produces C NEON.
+Reuses v3.7.0 butterflies (Stmt.call sequences) + NeonIntrinsic ADT. New: `simdStmtToRust`
+emitter (Rust `core::arch::aarch64` intrinsics in `unsafe` blocks), Rust helpers, and
+`emitSIMDNTTRust` pipeline. Enables apple-to-apple benchmark vs Plonky3 monty-31.
+
+**Design**: Extend, don't duplicate. ARM NEON intrinsics have identical names in C and Rust.
+The only differences: `unsafe { }` wrapping, tuple struct decomposition (`.0/.1` vs `.val[0]`),
+raw pointer setup (`as_ptr().add(i)` vs `&data[i]`), and variable declarations
+(`let mut nv0: int32x4_t` vs `int32x4_t nv0`). See TRZK_rust_insights.md §5-6.
+
+**Key reuse from v3.7.0** (zero modification):
+- `sqdmulhButterflyStmt`, `hs2ButterflyStmt`, `hs1ButterflyStmt` — Stmt-pure, backend-agnostic
+- `NeonIntrinsic` ADT (21 constructors), `isVoid`, `fromCName`, `neonCall`/`neonCallVoid`
+- `countCalls`, `collectCallNames`, `allCallsKnown` — structural verification infra
+- All 12 theorems in `VerifiedSIMDButterflyProofs.lean` — apply to Rust path too (same Stmt)
+
+**New components**:
+- `NeonIntrinsic.toRustCall` — wraps `toCName` in `unsafe { }`
+- `simdStmtToRust` — Rust SIMD emitter (gemelo de `simdStmtToC`)
+- `neonTempDeclsRust`, `deinterleaveHelperRust`, `interleaveStoreHelperRust`
+- `emitStageRust`, `emitSIMDNTTRust` — Rust pipeline (gemelo de C pipeline)
+- `UltraConfig.rustSIMD` flag + benchmark wiring
+
+**Lessons applied**: L-730 (audit wiring — no string bypass), L-728 (fuel-free Stmt chains),
+L-309 (Rust idioms: `as usize`, unsafe blocks, raw pointers).
+
+**Files**:
+- `AmoLean/Bridge/SIMDStmtToC.lean` (MODIFY — add toRustCall + simdStmtToRust)
+- `AmoLean/EGraph/Verified/Bitwise/SIMDEmitter.lean` (MODIFY — add Rust helpers + emitSIMDNTTRust)
+- `AmoLean/EGraph/Verified/Bitwise/UltraPipeline.lean` (MODIFY — rustSIMD flag)
+- `AmoLean/EGraph/Verified/Bitwise/OptimizedNTTPipeline.lean` (MODIFY — Rust SIMD wiring)
+- `Tests/benchmark/emit_code.lean` (MODIFY — --rust-simd flag)
+- `Tests/benchmark/lean_driver.py` (MODIFY — rust_simd param)
+- `Tests/benchmark/benchmark.py` (MODIFY — --rust-simd flag)
+
+#### DAG (3.8.0)
+
+| Nodo | Tipo | Deps | Status |
+|------|------|------|--------|
+| N38.1 toRustCall + simdStmtToRust emitter | FUND | — | pending |
+| N38.2 Rust SIMD helpers + temp declarations | FUND | — | pending |
+| N38.3 emitSIMDNTTRust — full Rust SIMD NTT generator | CRIT | N38.1, N38.2 | done |
+| N38.4 Pipeline integration (rustSIMD flag + wiring) | CRIT | N38.3 | done |
+| N38.5 Validation + benchmark vs Plonky3 | HOJA | N38.4 | done |
+
+#### Formal Properties (3.8.0)
+
+| Nodo | Propiedad | Tipo | Prioridad |
+|------|-----------|------|-----------|
+| N38.1 | simdStmtToRust produces non-empty output for all 3 butterflies | INVARIANT | P0 |
+| N38.1 | simdStmtToRust delegates non-call Stmt to stmtToRust | EQUIVALENCE | P0 |
+| N38.1 | toRustCall wraps every intrinsic in unsafe block | INVARIANT | P0 |
+| N38.3 | emitSIMDNTTRust produces compilable Rust for BabyBear 2^14 | INVARIANT | P0 |
+| N38.4 | benchmark.py --rust-simd --validation-only PASS (end-to-end chain) | SOUNDNESS | P0 |
+| N38.5 | Rust SIMD output validates against Python NTT reference (performance run) | SOUNDNESS | P0 |
+| N38.5 | Performance within ±10% of C SIMD verified path | OPTIMIZATION | P1 |
+| N38.5 | Plonky3 monty-31 direct comparison with concrete μs numbers | OPTIMIZATION | P0 |
+
+> **Trust boundary**: Identical to v3.7.0. `evalStmt(.call) = none`. The 12 structural
+> theorems from v3.7.0 apply unchanged — the Stmt is the same, only the emitter differs.
+> Rust intrinsic semantics are trusted (ARM-specified, same as C).
+
+#### Bloques
+
+- [ ] **Bloque 0 — Rust Emitter (N38.1 + N38.2)**: Add `toRustCall` + `simdStmtToRust` to SIMDStmtToC.lean. Add Rust helpers + temp decls to SIMDEmitter.lean. Gate: `lake build` + smoke tests with butterfly → Rust string.
+- [ ] **Bloque 1 — Rust NTT Generator (N38.3)**: Create `emitStageRust` + `emitSIMDNTTRust` in SIMDEmitter.lean. Gate: generates complete Rust NTT function for BabyBear 2^14.
+- [ ] **Bloque 2 — Pipeline + Benchmark (N38.4 + N38.5)**: Wire rustSIMD flag end-to-end. N38.4 gate: `benchmark.py --rust-simd --validation-only --fields babybear --sizes 14` PASS (full chain). N38.5 gate: performance benchmark + Plonky3 direct comparison with concrete numbers.
+
+#### Bloque 0 Detail — Rust Emitter (N38.1 + N38.2)
+
+**N38.1: toRustCall + simdStmtToRust** (SIMDStmtToC.lean, ~60 líneas nuevas)
+
+Infraestructura reutilizada (0 cambios):
+- `NeonIntrinsic` inductive (line 35-64) — 21 constructors
+- `toCName` (line 68-89) — used by toRustCall internally
+- `isVoid` (line 92-94) — shared for void detection
+- `fromCName` (line 119-141) — shared for reverse lookup
+- `neonCall`/`neonCallVoid` (line 103-110) — Stmt builders unchanged
+
+Infraestructura nueva:
+```lean
+/-- Map NeonIntrinsic to Rust unsafe call expression. Same names as C (ARM NEON
+    intrinsics are identical in core::arch::aarch64), wrapped in unsafe. -/
+def NeonIntrinsic.toRustCall (intr : NeonIntrinsic) (argsStr : String) : String :=
+  s!"unsafe \{ {intr.toCName}({argsStr}) }"
+```
+
+```lean
+/-- Emit Stmt to Rust with NEON intrinsic handling.
+    Gemelo of simdStmtToC. Differences:
+    - Void: "unsafe { fname(args) };" (no result)
+    - Value: "result = unsafe { fname(args) };" (with result)
+    - Delegation: stmtToRust (not stmtToC) for non-call Stmt
+    - joinCode reused as-is -/
+def simdStmtToRust (level : Nat) : Stmt → String
+```
+
+Smoke tests: 5+ examples covering value-returning, void, addrOf, delegation, butterfly output.
+
+**N38.2: Rust helpers + temp declarations** (SIMDEmitter.lean, ~50 líneas nuevas)
+
+Infraestructura reutilizada:
+- `deinterleaveHelperC` (line 546-554) — template for Rust version
+- `interleaveStoreHelperC` (line 560-569) — template for Rust version
+- `neonTempDecls` (line 575-580) — template for Rust version
+
+Infraestructura nueva:
+```lean
+def deinterleaveHelperRust : String  -- uses .0/.1 tuple access (not .val[0])
+def interleaveStoreHelperRust : String  -- uses int32x4x2_t(a, b) tuple constructor
+def neonTempDeclsRust (numSigned numUnsigned numHalf : Nat) : String
+  -- "let mut nv0: int32x4_t; ..." (MaybeUninit::uninit().assume_init() for each)
+```
+
+Gate: `lake build SIMDEmitter` + helpers produce non-empty compilable Rust fragments.
+
+#### Bloque 1 Detail — Rust NTT Generator (N38.3)
+
+**N38.3: emitStageRust + emitSIMDNTTRust** (SIMDEmitter.lean, ~120 líneas nuevas)
+
+Infraestructura reutilizada:
+- `emitStageC` dispatch structure (line 393-460) — template for Rust dispatch
+- `emitSIMDNTTC` orchestrator (line 594-698) — template for Rust orchestrator
+- `sqdmulhButterflyStmt` / `hs2ButterflyStmt` / `hs1ButterflyStmt` — IDENTICAL Stmts
+- `simdStmtToRust` (from N38.1) — emitter
+
+Infraestructura nueva:
+```lean
+/-- Emit one NTT stage as Rust code. Dispatches by halfSize:
+    ≥4 → sqdmulhButterflyStmt via simdStmtToRust
+    =2 → hs2ButterflyStmt via simdStmtToRust
+    =1 → hs1ButterflyStmt via simdStmtToRust
+    Pointer setup: data.as_mut_ptr().add(offset) for raw ptrs. -/
+private def emitStageRust (stage : NTTStage) ... : String
+
+/-- Emit complete Rust SIMD NTT function.
+    Structure: use statement + helpers + fn sig + temp decls + const broadcasts + stages.
+    Output: unsafe fn with #[cfg(target_arch = "aarch64")]. -/
+def emitSIMDNTTRust (plan : Plan) (target : SIMDTarget) (k c mu : Nat)
+    (funcName : String) (useSqdmulh : Bool) : String
+```
+
+Key Rust-specific differences from C in emitStageRust:
+- Pointer setup: `let a_ptr = data.as_mut_ptr().add(idx);` (not `int32_t* a_ptr = &data[idx];`)
+- Const broadcast: `unsafe { vdupq_n_u32(p) }` (not `vdupq_n_u32(p)`)
+- Loop syntax: `for grp in 0..{numGroups} {` (not `for (size_t grp = 0; ...)`)
+- Variable init: `let mut nv0: int32x4_t = unsafe { vdupq_n_s32(0) };` (Rust requires init)
+
+Gate: `emitSIMDNTTRust` produces non-empty Rust for BabyBear 2^14 plan.
+
+#### Bloque 2 Detail — Pipeline + Benchmark (N38.4 + N38.5)
+
+**N38.4: Pipeline wiring** (~30 líneas across 5 files)
+
+| Archivo | Cambio | Líneas |
+|---------|--------|--------|
+| `UltraPipeline.lean:112` | Add `rustSIMD : Bool := false` to UltraConfig | +1 |
+| `UltraPipeline.lean:180` | When rustSIMD, call emitSIMDNTTRust instead of emitSIMDNTTC | +3 |
+| `OptimizedNTTPipeline.lean:437` | Add rustSIMD param to optimizedNTTC_ultra | +2 |
+| `OptimizedNTTPipeline.lean:557` | Add rustSIMD to genOptimizedBenchRust_ultra_simd | +5 |
+| `Tests/benchmark/emit_code.lean:30-55` | Add --rust-simd arg, call Rust SIMD path | +8 |
+| `Tests/benchmark/lean_driver.py:22-36` | Pass rust_simd flag to Lean | +3 |
+| `Tests/benchmark/benchmark.py:36-45` | Add --rust-simd CLI flag | +3 |
+
+Gate: `benchmark.py --rust-simd --validation-only --fields babybear --sizes 14` **PASS**.
+This requires the ENTIRE chain to be connected end-to-end:
+benchmark.py → lean_driver.py → emit_code.lean → ultraPipeline → emitSIMDNTTRust →
+.rs file → rustc → execution → numerical validation against Python NTT reference.
+`lake build` alone is NOT sufficient — the gate is runtime correctness.
+
+**N38.5: Validation + Benchmark vs Plonky3** (~1 día)
+
+1. Performance benchmark:
+   `benchmark.py --rust-simd --fields babybear --sizes 14` (full run, not --validation-only)
+2. Compare times:
+   - Rust SIMD verified (new) vs C SIMD verified (v3.7.0)
+   - Performance delta must be within ±10%
+3. **Plonky3 direct comparison** (mandatory, not optional):
+   - Build `Tests/benchmark/bench_plonky3_comparison/` with `p3-baby-bear`, `p3-ntt`, `p3-monty-31`
+   - Run `criterion` benchmark for BabyBear NTT on same N, same hardware
+   - Report: our Rust SIMD verified vs Plonky3 monty-31 real (μs + % difference)
+
+Gate: `benchmark.py --rust-simd --fields babybear --sizes 14` **PASS** (validation + performance)
++ Plonky3 comparison report with concrete numbers.
+
+---
+
+### v3.7.0 Planning Detail (Option D: Stmt.call + simdStmtToC)
 
 **Contents**: Route NEON butterflies through TrustLean.Stmt IR using Stmt.call constructor + AmoLean wrapper for void/struct intrinsics. TrustLean expanded with `LowLevelExpr.addrOf` (commit 5d42bae) for pointer emission. Includes cleanup: FRIFoldPlan Montgomery fix + reductionCost migration.
 
@@ -69,12 +258,12 @@
 
 ---
 
-## Current Version: 3.7.0
+## Current Version: 3.7.0 (COMPLETE)
 
 
 ### Verified SIMD Codegen v3.7.0 (Option D: Stmt.call + simdStmtToC)
 
-**Contents**: Route NEON butterflies through TrustLean.Stmt IR using Stmt.call constructor + AmoLean wrapper. TrustLean expanded with `LowLevelExpr.addrOf` (commit 5d42bae). Includes cleanup: FRIFoldPlan Montgomery fix + reductionCost migration.
+**Contents**: Route NEON butterflies through TrustLean.Stmt IR using Stmt.call constructor + AmoLean wrapper. TrustLean expanded with `LowLevelExpr.addrOf` (commit 5d42bae). Includes cleanup: FRIFoldPlan Montgomery fix + reductionCost migration. All 9 DAG nodes done. 12 theorems, 0 sorry. Benchmark: verified path +3.9% vs legacy.
 
 **Files**:
 - `AmoLean/EGraph/Verified/Bitwise/FRIFoldPlan.lean`

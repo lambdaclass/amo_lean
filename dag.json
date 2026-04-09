@@ -1,5 +1,5 @@
 {
-  "version": "3.7.0",
+  "version": "3.8.0",
   "project": "TRZK",
   "phases": [
     {
@@ -362,12 +362,100 @@
           "closed_at": null
         }
       ]
+    },
+    {
+      "id": "fase-rust-simd",
+      "name": "Verified Rust SIMD NTT v3.8.0",
+      "status": "pending",
+      "nodes": [
+        {
+          "id": "N38.1",
+          "name": "toRustCall + simdStmtToRust emitter",
+          "type": "FUNDACIONAL",
+          "status": "pending",
+          "deps": [],
+          "files": ["AmoLean/Bridge/SIMDStmtToC.lean"],
+          "study": {
+            "papers": [],
+            "lessons": ["L-730", "L-309"],
+            "libraries": [],
+            "notes": "Same intrinsic names in C/Rust. Wrap toCName in unsafe. Clone simdStmtToC pattern."
+          }
+        },
+        {
+          "id": "N38.2",
+          "name": "Rust SIMD helpers + temp declarations",
+          "type": "FUNDACIONAL",
+          "status": "pending",
+          "deps": [],
+          "files": ["AmoLean/EGraph/Verified/Bitwise/SIMDEmitter.lean"],
+          "study": {
+            "papers": [],
+            "lessons": ["L-309"],
+            "libraries": [],
+            "notes": "Rust tuples .0/.1 not .val[0]. MaybeUninit for NEON vars. let mut syntax."
+          }
+        },
+        {
+          "id": "N38.3",
+          "name": "emitSIMDNTTRust — full Rust SIMD NTT generator",
+          "type": "CRITICO",
+          "status": "pending",
+          "deps": ["N38.1", "N38.2"],
+          "files": ["AmoLean/EGraph/Verified/Bitwise/SIMDEmitter.lean"],
+          "study": {
+            "papers": [],
+            "lessons": ["L-730", "L-728"],
+            "libraries": [],
+            "notes": "Clone emitSIMDNTTC structure. Rust pointers: as_mut_ptr().add(). for-range loops."
+          }
+        },
+        {
+          "id": "N38.4",
+          "name": "Pipeline integration (rustSIMD flag + wiring)",
+          "type": "CRITICO",
+          "status": "pending",
+          "deps": ["N38.3"],
+          "files": [
+            "AmoLean/EGraph/Verified/Bitwise/UltraPipeline.lean",
+            "AmoLean/EGraph/Verified/Bitwise/OptimizedNTTPipeline.lean",
+            "Tests/benchmark/emit_code.lean",
+            "Tests/benchmark/lean_driver.py",
+            "Tests/benchmark/benchmark.py"
+          ],
+          "study": {
+            "papers": [],
+            "lessons": ["L-730"],
+            "libraries": [],
+            "notes": "Same pattern as useVerifiedSIMD wiring in v3.7.0. Audit all paths."
+          }
+        },
+        {
+          "id": "N38.5",
+          "name": "Validation + benchmark vs Plonky3",
+          "type": "HOJA",
+          "status": "pending",
+          "deps": ["N38.4"],
+          "files": ["Tests/benchmark/"],
+          "study": {
+            "papers": ["plonky3-security-audit"],
+            "lessons": [],
+            "libraries": [],
+            "notes": "rustc +nightly required for core::arch::aarch64. Compare vs C SIMD + P3 real."
+          }
+        }
+      ],
+      "blocks": [
+        {"id": "B38.0", "name": "Rust Emitter", "nodes": ["N38.1", "N38.2"]},
+        {"id": "B38.1", "name": "Rust NTT Generator", "nodes": ["N38.3"]},
+        {"id": "B38.2", "name": "Pipeline + Benchmark", "nodes": ["N38.4", "N38.5"]}
+      ]
     }
   ],
   "meta": {
     "created": "2026-04-07T15:52:54Z",
-    "updated": "2026-04-08T18:24:21Z",
-    "total_nodes": 9,
-    "completed_nodes": 0
+    "updated": "2026-04-09T09:00:00Z",
+    "total_nodes": 14,
+    "completed_nodes": 9
   }
 }

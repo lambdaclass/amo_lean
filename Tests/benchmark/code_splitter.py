@@ -365,7 +365,8 @@ int main(void) {{
 """
 
 
-def build_validation_rust(kernel: str, field: FieldDef, log_n: int, func_name: str) -> str:
+def build_validation_rust(kernel: str, field: FieldDef, log_n: int, func_name: str,
+                          rust_simd: bool = False) -> str:
     """Build a Rust validation program that prints all NTT output elements.
     Uses real roots of unity in Montgomery form matching the benchmark harness."""
     n = 1 << log_n
@@ -403,7 +404,7 @@ fn main() {{
     }}
     /* Montgomery twiddles: tw_mont = tw * R mod p */
     let tw_mont: Vec<{et}> = tw.iter().map(|&t| ((t as {wt} * {r_val}) % p) as {et}).collect();
-    {func_name}(&mut d, &tw_mont);
+    {"let mu: " + wt + " = " + str(field.mu) + "; let mu_tw: Vec<" + et + "> = tw_mont.iter().map(|&t| ((t as " + wt + " * mu) & 0xFFFFFFFF) as " + et + ").collect(); unsafe { " + func_name + "(d.as_mut_ptr() as *mut i32, tw_mont.as_ptr() as *const i32, mu_tw.as_ptr() as *const i32) }" if rust_simd else func_name + "(&mut d, &tw_mont)"};
     for i in 0..n {{
         let v = (d[i] as {wt}).rem_euclid(p);
         println!("{{}}", v);
@@ -413,7 +414,7 @@ fn main() {{
 
 
 def generate_validation_program(program: GeneratedProgram, field: FieldDef,
-                                debug: bool = False) -> str:
+                                debug: bool = False, rust_simd: bool = False) -> str:
     """Extract NTT kernel from generated program and build validation wrapper.
 
     If debug=True, injects printf instrumentation for NEON butterfly debugging.
@@ -426,4 +427,4 @@ def generate_validation_program(program: GeneratedProgram, field: FieldDef,
             return build_debug_validation_c(kernel, field, program.log_n, func_name)
         return build_validation_c(kernel, field, program.log_n, func_name)
     else:
-        return build_validation_rust(kernel, field, program.log_n, func_name)
+        return build_validation_rust(kernel, field, program.log_n, func_name, rust_simd=rust_simd)

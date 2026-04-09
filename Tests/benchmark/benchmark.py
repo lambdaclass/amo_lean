@@ -44,6 +44,8 @@ def main():
                         help="Skip validation, only measure (DANGEROUS)")
     parser.add_argument("--verified-simd", action="store_true",
                         help="Use verified SIMD path (Stmt.call + simdStmtToC, v3.7.0)")
+    parser.add_argument("--rust-simd", action="store_true",
+                        help="Use Rust SIMD path (core::arch::aarch64, v3.8.0)")
     args = parser.parse_args()
 
     # Resolve paths
@@ -97,6 +99,7 @@ def main():
                             project_root, field_name, log_n, lang,
                             hardware, args.pipeline,
                             verified_simd=args.verified_simd,
+                            rust_simd=args.rust_simd,
                         )
                         print("OK")
                     except LeanGenerationError as e:
@@ -119,7 +122,8 @@ def main():
                                 )
                             except Exception:
                                 pass  # Fall back to validating the SIMD code directly
-                        vr = validate(program, field, work_dir, scalar_program=scalar_ref)
+                        vr = validate(program, field, work_dir, scalar_program=scalar_ref,
+                                      rust_simd=args.rust_simd)
                         validations.append(vr)
                         if vr.passed:
                             print(f"PASS ({vr.num_checked} elements)")

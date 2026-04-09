@@ -579,6 +579,42 @@ def neonTempDecls (numSignedVars : Nat := 30) (numUnsignedVars : Nat := 10)
   let nh := String.intercalate ", " (List.range numHalfVars |>.map (s!"nh{·}"))
   s!"  int32x4_t {nv};\n  uint32x4_t {nu};\n  int32x2_t {nh};\n"
 
+-- ══════════════════════════════════════════════════════════════════
+-- Section 5b: Rust SIMD Helpers (v3.8.0)
+-- ══════════════════════════════════════════════════════════════════
+
+/-- Rust version of deinterleaveHelperC.
+    Rust int32x4x2_t is a tuple (int32x4_t, int32x4_t), accessed via .0/.1. -/
+def deinterleaveHelperRust : String :=
+  "#[inline(always)]
+unsafe fn neon_deinterleave_load(a: &mut int32x4_t, b: &mut int32x4_t, ptr: *const i32) {
+    let tmp = vld2q_s32(ptr);
+    *a = tmp.0;
+    *b = tmp.1;
+}
+"
+
+/-- Rust version of interleaveStoreHelperC.
+    Constructs int32x4x2_t tuple and calls vst2q_s32. -/
+def interleaveStoreHelperRust : String :=
+  "#[inline(always)]
+unsafe fn neon_interleave_store(ptr: *mut i32, a: int32x4_t, b: int32x4_t) {
+    vst2q_s32(ptr, int32x4x2_t(a, b));
+}
+"
+
+/-- Rust NEON temp variable declarations (v3.8.0).
+    Uses MaybeUninit to avoid requiring initialization for SIMD types.
+    Same variable naming convention as C (nv*, nu*, nh*). -/
+def neonTempDeclsRust (numSignedVars : Nat := 30) (numUnsignedVars : Nat := 10)
+    (numHalfVars : Nat := 12) : String :=
+  let mkDecl (ty tag : String) (n : Nat) : String :=
+    String.join (List.range n |>.map fun i =>
+      s!"    let mut {tag}{i}: {ty} = unsafe \{ core::mem::MaybeUninit::uninit().assume_init() };\n")
+  mkDecl "int32x4_t" "nv" numSignedVars ++
+  mkDecl "uint32x4_t" "nu" numUnsignedVars ++
+  mkDecl "int32x2_t" "nh" numHalfVars
+
 /-- Emit a complete SIMD NTT function from a Plan.
     1. Normalize plan (stageIdx = NTT level)
     2. Classify stages: SIMD-eligible vs scalar fallback
@@ -698,7 +734,106 @@ def emitSIMDNTTC (plan : Plan) (target : SIMDTarget) (k c mu : Nat)
   headerSection ++ profileInclude ++ sig ++ "\n" ++ profileDecl ++ scalarDecls ++ neonDecls ++ constDecls ++ stageCode ++ profileEnd ++ "}\n"
 
 -- ══════════════════════════════════════════════════════════════════
--- Section 6: Smoke Tests for N37.2 + N37.3
+-- Section 7: Rust SIMD NTT Generation (v3.8.0, N38.3)
+-- ══════════════════════════════════════════════════════════════════
+
+open AmoLean.Bridge.SIMDStmtToC (simdStmtToRust)
+
+/-- Emit one NTT stage as Rust SIMD code (v3.8.0).
+    Uses same butterfly Stmts as C path, but emits via simdStmtToRust.
+    Pointers use Rust raw pointer arithmetic: as_mut_ptr().add(offset). -/
+private def emitStageRust (stage : NTTStage) (n p : Nat) (lanes : Nat) : String :=
+  let stageIdx := stage.stageIdx
+  let halfSize := n / (2 ^ (stageIdx + 1))
+  let numGroups := 2 ^ stageIdx
+  let twBase := stageIdx * (n / 2)
+  if stage.radix == .r4 then
+    -- R4 not supported in Rust SIMD yet — fallback marker
+    s!"    // Stage {stageIdx}: R4 not yet supported in Rust SIMD\n"
+  else if halfSize >= lanes then
+    let step := lanes
+    let bfStmt := sqdmulhButterflyStmt
+      (.user "a_ptr") (.user "b_ptr") (.user "tw_ptr") (.user "mu_tw_ptr")
+      (.user "p_vec_s") (.user "p_vec")
+    let body := simdStmtToRust 3 bfStmt
+    s!"    // Stage {stageIdx}: SIMD sqdmulh (halfSize={halfSize}, groups={numGroups})
+    for grp in 0..{numGroups} \{
+        for pr in (0..{halfSize}).step_by({step}) \{
+            let a_ptr = unsafe \{ data.add(grp * {2 * halfSize} + pr) };
+            let b_ptr = unsafe \{ data.add(grp * {2 * halfSize} + pr + {halfSize}) };
+            let tw_ptr = unsafe \{ twiddles.add({twBase} + grp * {halfSize} + pr) };
+            let mu_tw_ptr = unsafe \{ mu_tw.add({twBase} + grp * {halfSize} + pr) };
+{body}
+        }
+    }
+"
+  else if halfSize == 2 && numGroups >= 2 then
+    let bfStmt := hs2ButterflyStmt
+      (.user "dg0") (.user "dg1") (.user "tg0") (.user "tg1")
+      (.user "mg0") (.user "mg1") (.user "p_vec_s") (.user "p_vec")
+    let body := simdStmtToRust 2 bfStmt
+    s!"    // Stage {stageIdx}: SIMD hs2 (halfSize=2, groups={numGroups})
+    for grp in (0..{numGroups}).step_by(2) \{
+        let dg0 = unsafe \{ data.add(grp * 4) };
+        let dg1 = unsafe \{ data.add((grp + 1) * 4) };
+        let tg0 = unsafe \{ twiddles.add({twBase} + grp * 2) };
+        let tg1 = unsafe \{ twiddles.add({twBase} + (grp + 1) * 2) };
+        let mg0 = unsafe \{ mu_tw.add({twBase} + grp * 2) };
+        let mg1 = unsafe \{ mu_tw.add({twBase} + (grp + 1) * 2) };
+{body}
+    }
+"
+  else if halfSize == 1 && numGroups >= 4 then
+    let bfStmt := hs1ButterflyStmt
+      (.user "data_ptr") (.user "tw_ptr") (.user "mu_tw_ptr")
+      (.user "p_vec_s") (.user "p_vec")
+    let body := simdStmtToRust 2 bfStmt
+    s!"    // Stage {stageIdx}: SIMD hs1 (halfSize=1, groups={numGroups})
+    for grp in (0..{numGroups}).step_by(4) \{
+        let data_ptr = unsafe \{ data.add(grp * 2) };
+        let tw_ptr = unsafe \{ twiddles.add({twBase} + grp) };
+        let mu_tw_ptr = unsafe \{ mu_tw.add({twBase} + grp) };
+{body}
+    }
+"
+  else
+    s!"    // Stage {stageIdx}: unsupported configuration\n"
+
+/-- Emit a complete Rust SIMD NTT function (v3.8.0, N38.3).
+    Emits `core::arch::aarch64` intrinsics in unsafe blocks.
+    Uses same butterfly Stmts as C path — only the emitter differs. -/
+def emitSIMDNTTRust (plan : Plan) (target : SIMDTarget) (k c mu : Nat)
+    (funcName : String) (useSqdmulh : Bool := false) : String :=
+  let plan := normalizePlan plan
+  let p := plan.field
+  let n := plan.size
+  let lanes := simdLanes target
+  let stages := plan.stages.toList
+  -- Use statement + helpers
+  let header :=
+    "#![allow(unused_imports, unused_variables, unused_mut, unused_unsafe)]\n" ++
+    "#![allow(non_snake_case, non_camel_case_types)]\n" ++
+    "use std::arch::aarch64::*;\n\n" ++
+    deinterleaveHelperRust ++ "\n" ++
+    interleaveStoreHelperRust ++ "\n"
+  -- Temp declarations (MaybeUninit for NEON types)
+  let neonDecls := neonTempDeclsRust 30 10 12
+  -- Constant broadcasts (unsafe for NEON intrinsics)
+  let constDecls :=
+    s!"    let p_vec: uint32x4_t = unsafe \{ vdupq_n_u32({p}u32) };\n" ++
+    s!"    let p_vec_s: int32x4_t = unsafe \{ vdupq_n_s32({p}i32) };\n"
+  -- Stage code
+  let stageCode := stages.foldl (fun acc stage =>
+    acc ++ emitStageRust stage n p lanes
+  ) ""
+  -- Function: unsafe fn with raw pointer params
+  let sig :=
+    s!"pub unsafe fn {funcName}(data: *mut i32, twiddles: *const i32, mu_tw: *const i32) \{"
+  -- Assemble
+  header ++ sig ++ "\n" ++ neonDecls ++ constDecls ++ stageCode ++ "}\n"
+
+-- ══════════════════════════════════════════════════════════════════
+-- Section 8: Smoke Tests
 -- ══════════════════════════════════════════════════════════════════
 
 section SmokeTests
@@ -736,6 +871,15 @@ example : (emitSIMDNTTC testPlan .neon 31 1 0x88000001 "ntt_test"
 /-- Verified path produces non-empty output. -/
 example : (emitSIMDNTTC testPlan .neon 31 1 0x88000001 "ntt_test"
     (useSqdmulh := true) (useVerifiedSIMD := true)).length > 100 := by native_decide
+
+/-- Rust SIMD path produces non-empty output (v3.8.0). -/
+example : (emitSIMDNTTRust testPlan .neon 31 1 0x88000001 "ntt_test"
+    (useSqdmulh := true)).length > 100 := by native_decide
+
+/-- Rust SIMD helpers are non-empty. -/
+example : deinterleaveHelperRust.length > 50 := by native_decide
+example : interleaveStoreHelperRust.length > 50 := by native_decide
+example : (neonTempDeclsRust 3 2 2).length > 50 := by native_decide
 
 end SmokeTests
 
