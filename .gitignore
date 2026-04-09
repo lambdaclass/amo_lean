@@ -9,6 +9,7 @@ lake-packages/
 # Compiled binaries
 *.o
 *.a
+*.pyc
 generated/fri_test
 Tests/poseidon_c/benchmark_merkle
 Tests/poseidon_c/runner_fuzz
@@ -41,12 +42,6 @@ Tests/Plonky3/Hardening/*.txt
 # Phase 6B build artifacts
 Tests/NTT/cached_benchmark
 generated/ntt_cached_test
-
-# Rust build artifacts (all interop benchmarks)
-Tests/interop/*/target/
-Tests/interop/*/Cargo.lock
-benchmark_output/rust/target/
-benchmark_output/rust/Cargo.lock
 
 # Binary documents (keep in local biblioteca, not in git)
 *.pdf

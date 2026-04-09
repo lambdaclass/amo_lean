@@ -34,6 +34,9 @@ lean_exe «oracle-test» where
 lean_exe «fri-benchmark» where
   root := `Benchmarks.NativeBenchmark
 
+lean_exe «bench» where
+  root := `Bench
+
 -- Phase 0 test script: run all tests
 script «phase0-test» do
   IO.println "╔══════════════════════════════════════════════════════════════╗"

@@ -1,0 +1,7 @@
+field,log_n,lang,hardware,validated,strategy,amo_us,p3_us,melem,diff_pct,error
+babybear,14,c,arm-scalar,True,ultra,286.4,273.0,57.2,-4.9,
+babybear,16,c,arm-scalar,True,ultra,1424.0,1280.8,46.0,-11.2,
+koalabear,14,c,arm-scalar,True,ultra,286.4,273.1,57.2,-4.9,
+koalabear,16,c,arm-scalar,True,ultra,1424.9,1279.5,46.0,-11.4,
+mersenne31,14,c,arm-scalar,True,ultra,253.6,351.7,64.6,+27.9,
+mersenne31,16,c,arm-scalar,True,ultra,1095.4,1373.2,59.8,+20.2,

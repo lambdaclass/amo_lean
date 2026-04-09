@@ -1,8 +1,0 @@
-[package]
-name = "amolean-fields"
-version = "0.1.0"
-edition = "2021"
-
-[lib]
-name = "amolean_fields"
-path = "lib.rs"
