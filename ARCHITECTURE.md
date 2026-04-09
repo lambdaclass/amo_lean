@@ -1,7 +1,130 @@
 # TRZK: Architecture
 
-## Current Version: 3.6.0
+## Next Version: 3.7.0
 
+### Verified SIMD Codegen v3.7.0 (Option D: Stmt.call + simdStmtToC)
+
+**Contents**: Route NEON butterflies through TrustLean.Stmt IR using Stmt.call constructor + AmoLean wrapper for void/struct intrinsics. TrustLean expanded with `LowLevelExpr.addrOf` (commit 5d42bae) for pointer emission. Includes cleanup: FRIFoldPlan Montgomery fix + reductionCost migration.
+
+**Design**: Option D — chosen after 6 adversarial debates evaluating Options A/A'/B/C/D/D'. See TRZK_filosofico.md §v3.7.0 for full analysis. Post-Block-1 audit identified `&` emission gap resolved via TrustLean expansion + decision to use Approach A (all butterflies via Stmt, including hs2).
+
+**Files**:
+- `AmoLean/Bridge/SIMDStmtToC.lean` (NEW — NeonIntrinsic ADT + simdStmtToC wrapper)
+- `AmoLean/EGraph/Verified/Bitwise/VerifiedSIMDButterfly.lean` (NEW — butterflies as Stmt)
+- `AmoLean/EGraph/Verified/Bitwise/VerifiedSIMDButterflyProofs.lean` (NEW — structural theorems)
+- `AmoLean/EGraph/Verified/Bitwise/SIMDEmitter.lean` (dispatch + NEON decls + helper)
+- `AmoLean/EGraph/Verified/Bitwise/FRIFoldPlan.lean` (C1: Montgomery fix)
+- `AmoLean/EGraph/Verified/Bitwise/CrossRelNTT.lean` (C2: reductionCost migration)
+- `AmoLean/EGraph/Verified/Bitwise/PrimitivesIntegration.lean` (C2: reductionCost migration)
+
+#### Post-Block-1 Audit Decisions (2026-04-08)
+
+1. **`&` issue resolved**: `LowLevelExpr.addrOf` added to TrustLean (commit 5d42bae). `exprToC (.addrOf v)` emits `"&" ++ varNameToC v`. TRZK dependency updated to consume this. Use `.addrOf` for deinterleaveLoad output pointer args.
+
+2. **Approach A for hs2**: ALL butterflies (sqdmulh, hs1, hs2) go through verified Stmt path. No legacy string-emission exceptions. Requires extending NeonIntrinsic ADT with ~6 constructors for 2-lane ops + `sub_s32`.
+
+3. **`sub_s32` as insurance**: Added to ADT regardless of whether unsigned-only restructuring works. Allows fallback to proven signed subtract if needed.
+
+4. **`neonTempDecls` needs `int32x2_t`**: hs2 uses 2-lane intrinsics. Add `int32x2_t nh0, nh1, ...;` declarations alongside existing `nv*` and `nu*`.
+
+5. **`voidIntrinsicNames` sync risk**: Replace string-list lookup with `fromCName : String → Option NeonIntrinsic` reverse map + `isVoid` query. Single source of truth.
+
+6. **`deinterleaveLoad` docstring**: Fix "each constructor maps to one ARM NEON intrinsic" — deinterleaveLoad maps to a custom C helper, not a hardware intrinsic.
+
+#### DAG (3.7.0)
+
+| Nodo | Tipo | Deps | Status |
+|------|------|------|--------|
+| C1 Fix FRIFoldPlan Montgomery bug | FIX | — | done |
+| C2 Migrate reductionCost callers to reductionCostForHW | CLEANUP | — | done |
+| N37.1 NeonIntrinsic ADT + simdStmtToC wrapper | FUND | — | done |
+| N37.2 Deinterleave helper function (vld2q decomposition) | FUND | — | done |
+| N37.3 NEON temp variable declarations in emitSIMDNTTC | FUND | — | done |
+| N37.4 Rewrite all NEON butterflies as Stmt.call sequences | CRIT | N37.1, N37.2, N37.3 | done |
+| N37.5 Connect verified SIMD path to emitStageC pipeline | CRIT | N37.4 | done |
+| N37.6 Structural verification theorems + trust boundary doc | CRIT | N37.5 | done |
+| N37.7 Benchmark regression check (±3% vs v3.6.0) | HOJA | N37.5 | done |
+
+#### Formal Properties (3.7.0)
+
+| Nodo | Propiedad | Tipo | Prioridad |
+|------|-----------|------|-----------|
+| N37.4 | Butterflies produce valid Stmt sequences (all calls use NeonIntrinsic names) | INVARIANT | P0 |
+| N37.6 | sqdmulh butterfly has 17 operations (structural count) | EQUIVALENCE | P0 |
+| N37.6 | All calls in butterfly use known NEON intrinsics (exhaustive check) | INVARIANT | P0 |
+| N37.6 | Data flow pattern matches scalar butterfly (prod→reduce→sum→diff→harvey) | EQUIVALENCE | P1 |
+| C1 | FRIFoldPlan never returns Montgomery for sums | SOUNDNESS | P0 |
+
+> **Nota**: Trust boundary: `evalStmt(.call) = none`. NEON intrinsics are trusted
+> external calls, same as `stmtToC` is trusted for scalar emission.
+> Structural proofs verify the ALGORITHM is correct; intrinsic semantics are TRUSTED.
+
+#### Bloques
+
+- [x] **Bloque 0 — Cleanup (C1 + C2)**: C1 FRIFoldPlan Montgomery fix, C2 reductionCost migration. DONE.
+- [x] **Bloque 1 — Foundation (N37.1 + N37.2 + N37.3)**: NeonIntrinsic ADT, deinterleave helper, NEON temp decls. DONE. Post-audit: TrustLean expanded with `LowLevelExpr.addrOf` (commit 5d42bae). Approach A decided for hs2.
+- [ ] **Bloque 2 — Butterflies as Stmt (N37.4)**: Rewrite sqdmulh, hs1, hs2 butterflies as Stmt.call sequences. PRE-REQUISITES before butterfly rewrite: (1) extend NeonIntrinsic ADT with `sub_s32` + 2-lane ops for hs2 (`load2_s32`, `store2_s32`, `combine_s32`, `get_low_s32`, `get_high_s32`), (2) add `fromCName` reverse map replacing `voidIntrinsicNames`, (3) extend `neonTempDecls` with `int32x2_t nh*` variables, (4) use `.addrOf` for `deinterleaveLoad` output pointer args. See TRZK_filosofico.md §Post-Block-1 Audit.
+- [ ] **Bloque 3 — Pipeline Integration (N37.5)**: Add useVerifiedSIMD dispatch to emitStageC.
+- [ ] **Bloque 4 — Verification + Benchmark (N37.6 + N37.7)**: Structural theorems + regression check.
+
+---
+
+## Current Version: 3.7.0
+
+
+### Verified SIMD Codegen v3.7.0 (Option D: Stmt.call + simdStmtToC)
+
+**Contents**: Route NEON butterflies through TrustLean.Stmt IR using Stmt.call constructor + AmoLean wrapper. TrustLean expanded with `LowLevelExpr.addrOf` (commit 5d42bae). Includes cleanup: FRIFoldPlan Montgomery fix + reductionCost migration.
+
+**Files**:
+- `AmoLean/EGraph/Verified/Bitwise/FRIFoldPlan.lean`
+- `AmoLean/EGraph/Verified/Bitwise/CrossRelNTT.lean`
+- `AmoLean/EGraph/Verified/Bitwise/PrimitivesIntegration.lean`
+- `AmoLean/EGraph/Verified/Bitwise/CrossEGraphProtocol.lean`
+- `AmoLean/Bridge/SIMDStmtToC.lean`
+- `AmoLean/EGraph/Verified/Bitwise/SIMDEmitter.lean`
+- `AmoLean/EGraph/Verified/Bitwise/VerifiedSIMDButterfly.lean`
+- `AmoLean/EGraph/Verified/Bitwise/VerifiedSIMDButterflyProofs.lean`
+- `Tests/benchmark/`
+
+#### DAG (3.7.0)
+
+| Nodo | Tipo | Deps | Status |
+|------|------|------|--------|
+| C1 Fix FRIFoldPlan Montgomery bug | PAR | — | done |
+| C2 Migrate reductionCost callers to reductionCostForHW | PAR | — | done |
+| N37.1 NeonIntrinsic ADT + simdStmtToC wrapper | FUND | — | done |
+| N37.2 Deinterleave helper function | FUND | — | done |
+| N37.3 NEON temp variable declarations | FUND | — | done |
+| N37.4 Rewrite NEON butterflies as Stmt.call sequences | CRIT | N37.1, N37.2, N37.3 | done |
+| N37.5 Connect verified SIMD path to emitStageC | CRIT | N37.4 | done |
+| N37.6 Structural verification theorems | CRIT | N37.5 | done |
+| N37.7 Benchmark regression check | HOJA | N37.5 | done |
+
+#### Formal Properties (3.7.0)
+
+| Nodo | Propiedad | Tipo | Prioridad |
+|------|-----------|------|-----------|
+| N37.4 | Butterflies produce valid Stmt (all calls use NeonIntrinsic names) | INVARIANT | P0 |
+| N37.6 | sqdmulh butterfly has 17 operations | EQUIVALENCE | P0 |
+| C1 | FRIFoldPlan never returns Montgomery for sums | SOUNDNESS | P0 |
+
+> **Nota**: Propiedades en lenguaje natural (intención de diseño).
+> Los stubs ejecutables están en BENCHMARKS.md § Formal Properties.
+
+#### Bloques
+
+- [x] **Bloque 0 — Cleanup**: C1, C2. DONE.
+- [x] **Bloque 1 — Foundation**: N37.1, N37.2, N37.3. DONE. TrustLean expanded (addrOf). Approach A for hs2.
+- [ ] **Bloque 2 — Butterflies as Stmt**: N37.4. Pre-reqs: extend ADT + fromCName + neonTempDecls int32x2_t.
+- [ ] **Bloque 3 — Pipeline Integration**: N37.5.
+- [ ] **Bloque 4 — Verification + Benchmark**: N37.6, N37.7.
+
+---
+
+## Previous Versions
+
+### 3.6.0
 
 ### Vectorize Scalar Stages v3.6.0
 
@@ -41,9 +164,6 @@
 - [x] **CNTVCT Per-Stage Profiling**: N36.5a — N=2^16: uniform (~39μs/stage), hs2/hs1 ~1.3-1.4×. N=2^20: moderate cache penalty (~1.19× early vs late). — Insert ARM cycle counter fence markers between stages in emitted C. Diagnose actual per-stage time distribution. Detalles en TRZK_filosofico.md §N36.5a.
 - [x] **Decision Gate**: N36.5b — **DECISION: NTT near-optimal for this codegen arch.** N=2^16 uniform, N=2^20 cache penalty ~19% (moderate, doesn't justify four-step NTT). Pivot to: (1) negacyclic twist merge for free 5-8%, (2) other ZK primitives (FRI fold), (3) formal verification of SIMD path (v3.7.0). — Based on N36.5a data, decide next optimization target. Detalles en TRZK_filosofico.md §N36.5b.
 
----
-
-## Previous Versions
 
 ### 3.5.0
 

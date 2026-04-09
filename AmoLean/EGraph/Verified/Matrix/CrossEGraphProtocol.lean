@@ -17,7 +17,7 @@
   - MatNodeOps: FactorizationTree, BreakdownRule, exploreFact, standardRules
   - NTTPlan: Plan, mkBoundAwarePlan, RadixChoice
   - NTTPlanSelection: selectBestPlan, CacheConfig, planCacheCost
-  - CrossRelNTT: reductionCost, selectReductionForBound
+  - CrossRelNTT: reductionCostForHW, selectReductionForBound
   - BoundPropagation: ReductionChoice, stageBoundFactor
 
   Consumed by:
@@ -38,7 +38,7 @@ open AmoLean.EGraph.Verified.Bitwise.NTTPlan (Plan NTTStage RadixChoice StageDir
 open AmoLean.EGraph.Verified.Bitwise.PlanSelection (CacheConfig)
 open AmoLean.EGraph.Verified.Bitwise.BoundProp (ReductionChoice stageBoundFactor
   lazyReductionSafe)
-open AmoLean.EGraph.Verified.Bitwise.CrossRelNTT (selectReductionForBound reductionCost)
+open AmoLean.EGraph.Verified.Bitwise.CrossRelNTT (selectReductionForBound reductionCostForHW)
 open AmoLean.EGraph.Verified.Bitwise (HardwareCost arm_cortex_a76)
 
 -- ══════════════════════════════════════════════════════════════════
@@ -64,14 +64,14 @@ structure ArithmeticCostResponse where
     Uses the REAL HardwareCost model from CostModelDef.lean:
     - mul32 for twiddle multiplications
     - add for butterfly additions
-    - reductionCost for the chosen reduction strategy
+    - reductionCostForHW for the chosen reduction strategy
 
     This is the cross-e-graph query: given algorithmic context (radix, bounds, hw),
     the arithmetic level computes the cheapest implementation cost. -/
 def queryArithmeticCost (q : ArithmeticCostQuery) : ArithmeticCostResponse :=
   let red := selectReductionForBound (q.inputBoundK + 1) q.hw.isSimd
     (q.hw.vectorLength > q.hw.cacheThreshold)
-  let redCost := reductionCost red q.inputBoundK q.hw.isSimd
+  let redCost := reductionCostForHW q.hw red
   -- Use REAL hardware costs, not hardcoded values
   let bfArithCost := match q.radix with
     | .r2 => q.hw.mul32 + 2 * q.hw.add  -- 1 twiddle mul + 2 adds (sum, diff)

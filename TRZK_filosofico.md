@@ -1629,11 +1629,23 @@ Agregar los butterflies halfSize<4 como strings no degrada las garantías existe
 
 ---
 
-## v3.7.0 — Verificación Formal del Path SIMD via TrustLean.Stmt
+## v3.7.0 — Verificación Formal del Path SIMD (Option D: Stmt.call + simdStmtToC)
 
-**Fecha de planificación**: 2026-04-08
+**Fecha de planificación**: 2026-04-08 (revisada 2026-04-08 post-debates)
 **Prerequisito**: v3.6.0 completa
-**Objetivo**: Unificar los paths scalar y SIMD bajo el mismo framework verificado.
+**Objetivo**: Unificar los paths scalar y SIMD bajo el mismo IR (TrustLean.Stmt)
+sin modificar TrustLean, usando Stmt.call para intrinsics NEON + wrapper en AmoLean.
+
+### Contexto: 6 opciones evaluadas en debates adversariales
+
+| Opción | Veredicto | Por qué |
+|--------|-----------|---------|
+| A (extend Stmt) | Rechazada | 26 archivos, 325 pattern matches rotos |
+| A' (fork + genericSIMD) | Rechazada | Fork management + 26 archivos |
+| B (revivir VecStmt) | Rechazada | Two-IR schism, proof inexistente |
+| C (Stmt.call puro) | Rechazada | void/struct return blocker |
+| **D (Stmt.call + wrapper)** | **Elegida** | Zero TrustLean changes, single IR, 3 special cases |
+| D' (fork + intrinsic) | Alternativa viable | Si D resulta insuficiente a futuro |
 
 ### Motivación
 
@@ -1649,12 +1661,364 @@ Path No Verificado (SIMD):
   ↑ zero theorems, validación empírica solamente
 ```
 
-v3.7.0 unifica ambos: las instrucciones NEON se modelan como constructores de
-`TrustLean.Stmt`, con semántica formal y traducción a C via `stmtToC`.
+v3.7.0 unifica ambos: las instrucciones NEON se modelan como `Stmt.call` (constructor
+que YA EXISTE en TrustLean) + un wrapper `simdStmtToC` en AmoLean que maneja los
+3 special cases (void stores, struct returns, type declarations).
 
-### Plan
+**Zero modificaciones a TrustLean. Zero constructores nuevos. Single IR.**
 
-#### 1. Extender TrustLean.Stmt con constructores NEON (~5-7 días)
+### Decisión de diseño: Por qué Stmt.call
+
+[FACT verificado] `TrustLean/Core/Stmt.lean:47`:
+```lean
+| call : VarName → String → List LowLevelExpr → Stmt
+```
+[FACT verificado] `TrustLean/Backend/CBackend.lean:115-118` emite:
+```c
+result = sanitizeIdentifier(fname)(args);
+```
+[FACT verificado] `TrustLean/Core/Eval.lean:126`: `evalStmt(.call) = none` (trusted external).
+[FACT verificado] `sanitizeIdentifier` NO mangla nombres NEON (solo prefija `tl_` para C99 keywords).
+[FACT verificado] 20+ value-returning NEON intrinsics encajan en `Stmt.call` directamente.
+Solo 3 intrinsics necesitan tratamiento especial: `vst1q_s32` (void), `vst2q_s32` (void),
+`vld2q_s32` (struct return).
+
+### Plan: 7 nodos + 2 cleanup tasks
+
+#### N37.1: NeonIntrinsic ADT + simdStmtToC wrapper (FUNDACIONAL, 1 día)
+
+**Archivo nuevo**: `AmoLean/Bridge/SIMDStmtToC.lean` (~80 líneas)
+
+```lean
+namespace AmoLean.Bridge.SIMDStmtToC
+
+open _root_.TrustLean (Stmt VarName LowLevelExpr stmtToC indentStr varNameToC exprToC joinCode)
+
+/-- Type-safe NEON intrinsic names. Eliminates string typos. -/
+inductive NeonIntrinsic where
+  -- Arithmetic (value-returning, int32x4_t → int32x4_t)
+  | sqdmulh | mul_s32 | hsub | add_u32 | sub_u32 | add_s32
+  -- Bitwise/Compare (value-returning, uint32x4_t)
+  | cmpGe_u32 | and_u32 | min_u32 | clt_s32
+  -- Special (value-returning)
+  | mls_u32    -- multiply-subtract: a - b*c
+  -- Memory (value-returning)
+  | load4_s32  -- vld1q_s32: load 4 × int32
+  -- Memory (VOID — no return value)
+  | store4_s32   -- vst1q_s32: store 4 × int32
+  | store4x2_s32 -- vst2q_s32: store and interleave
+  -- Memory (STRUCT decomposed — helper function in header)
+  | deinterleaveLoad -- neon_deinterleave_load: vld2q + extract .val[0]/.val[1]
+  deriving BEq, Repr
+
+/-- Map ADT to C intrinsic name. Single source of truth for naming. -/
+def NeonIntrinsic.toCName : NeonIntrinsic → String
+  | .sqdmulh => "vqdmulhq_s32"
+  | .mul_s32 => "vmulq_s32"
+  | .hsub => "vhsubq_s32"
+  | .add_u32 => "vaddq_u32"
+  | .sub_u32 => "vsubq_u32"
+  | .add_s32 => "vaddq_s32"
+  | .cmpGe_u32 => "vcgeq_u32"
+  | .and_u32 => "vandq_u32"
+  | .min_u32 => "vminq_u32"
+  | .clt_s32 => "vcltq_s32"
+  | .mls_u32 => "vmlsq_u32"
+  | .load4_s32 => "vld1q_s32"
+  | .store4_s32 => "vst1q_s32"
+  | .store4x2_s32 => "vst2q_s32"
+  | .deinterleaveLoad => "neon_deinterleave_load"
+
+/-- Is this a void-return intrinsic? -/
+def NeonIntrinsic.isVoid : NeonIntrinsic → Bool
+  | .store4_s32 | .store4x2_s32 | .deinterleaveLoad => true
+  | _ => false
+
+/-- Build a Stmt.call from a NeonIntrinsic. Type-safe wrapper. -/
+def neonCall (intr : NeonIntrinsic) (result : VarName)
+    (args : List LowLevelExpr) : Stmt :=
+  Stmt.call result intr.toCName args
+
+/-- Build a void Stmt.call (stores). Uses sentinel VarName. -/
+def neonCallVoid (intr : NeonIntrinsic) (args : List LowLevelExpr) : Stmt :=
+  Stmt.call (.user "__void") intr.toCName args
+
+/-- Emit Stmt to C with NEON intrinsic handling.
+    Delegates non-call Stmt to TrustLean.stmtToC.
+    Handles: void intrinsics (no result=), struct decomposition (helper call). -/
+def simdStmtToC (level : Nat) : Stmt → String
+  | .call result fname args =>
+    let argsStr := ", ".intercalate (args.map exprToC)
+    let pad := indentStr level
+    -- Void intrinsics: emit without "result ="
+    if fname == "vst1q_s32" || fname == "vst2q_s32" || fname == "neon_deinterleave_load" then
+      pad ++ fname ++ "(" ++ argsStr ++ ");"
+    else
+      -- Value-returning: variable pre-declared with type at function top
+      pad ++ varNameToC result ++ " = " ++ fname ++ "(" ++ argsStr ++ ");"
+  | .seq s1 s2 => joinCode (simdStmtToC level s1) (simdStmtToC level s2)
+  | other => stmtToC level other
+```
+
+**Por qué NeonIntrinsic ADT**: Gemini objetó (correctamente) que strings son frágiles.
+El ADT convierte typos en errores de tipo. `neonCall .sqdmulh` compila; `neonCall "vqrdmulh"` no.
+La función `toCName` es el ÚNICO lugar donde los strings de intrinsics aparecen.
+
+**Gate**: `lake build` exitoso. `simdStmtToC` compila y puede emitir C para un Stmt.call simple.
+
+#### N37.2: Deinterleave helper function en header (FUNDACIONAL, 0.5 días)
+
+**Archivo a modificar**: `SIMDEmitter.lean` — agregar helper function en `emitSIMDNTTC`
+
+El `vld2q_s32` retorna `int32x4x2_t` (struct). En vez de descomponerlo en 2 calls
+(que causaría doble load), emitir UN helper `static inline` en el header:
+
+```c
+/* Emitido en el header del NTT function, junto a las butterflies */
+static inline void neon_deinterleave_load(int32x4_t* a, int32x4_t* b,
+    const int32_t* ptr) {
+    int32x4x2_t tmp = vld2q_s32(ptr);
+    *a = tmp.val[0];
+    *b = tmp.val[1];
+}
+```
+
+En el Stmt: `neonCallVoid .deinterleaveLoad [.varRef aVec, .varRef bVec, .varRef ptr]`
+simdStmtToC emite: `neon_deinterleave_load(&aVec, &bVec, ptr);`
+
+**Gate**: Helper function compila y produce output correcto.
+
+#### N37.3: NEON temp variable declarations (FUNDACIONAL, 0.5 días)
+
+**Archivo a modificar**: `SIMDEmitter.lean` — función `emitSIMDNTTC` (líneas ~485-565)
+
+Agregar pre-declaraciones de variables NEON al inicio de la función generada,
+IGUAL que el path scalar ya declara `int64_t t0, t1, ..., t79;`:
+
+```lean
+private def neonTempDecls (numNeonVars : Nat) : String :=
+  let nv := String.intercalate ", " (List.range numNeonVars |>.map (s!"nv{·}"))
+  let nu := String.intercalate ", " (List.range (numNeonVars / 3) |>.map (s!"nu{·}"))
+  s!"  int32x4_t {nv};\n  uint32x4_t {nu};\n"
+```
+
+Agregar en `emitSIMDNTTC` cuando `useVerifiedSIMD = true`:
+```lean
+let neonDecls := if useVerifiedSIMD then neonTempDecls 30 else ""
+```
+
+Con esto, `Stmt.call nv0 "vqdmulhq_s32" [...]` emite `nv0 = vqdmulhq_s32(...);`
+y `nv0` ya está declarado como `int32x4_t`.
+
+**Infraestructura existente reutilizada**: `scalarTempDecls` (SIMDEmitter.lean:~278-296)
+usa exactamente este patrón para variables escalares.
+
+**Gate**: Función C generada compila sin errores de tipos.
+
+#### N37.4: Reescribir sqdmulh butterfly como Stmt.call sequence (CRÍTICO, 2-3 días)
+
+**Archivo nuevo**: `AmoLean/EGraph/Verified/Bitwise/VerifiedSIMDButterfly.lean` (~300 líneas)
+
+Referencia: `SIMDEmitter.lean:154-181` (emitNeonButterflyDIT_Sqdmulh_C) contiene la
+butterfly como string C. Reescribirla como secuencia de Stmt.call usando NeonIntrinsic ADT.
+
+```lean
+import AmoLean.Bridge.SIMDStmtToC
+open AmoLean.Bridge.SIMDStmtToC (NeonIntrinsic neonCall neonCallVoid)
+open _root_.TrustLean (Stmt VarName LowLevelExpr CodeGenState)
+
+/-- CodeGenState extension for NEON variables. -/
+def CodeGenState.freshNeonVar (cgs : CodeGenState) : (VarName × CodeGenState) :=
+  let name := VarName.user s!"nv{cgs.nextVar}"
+  (name, { cgs with nextVar := cgs.nextVar + 1 })
+
+/-- sqdmulh Montgomery REDC butterfly as Stmt.call sequence.
+    Computes: wb_red = (tw * b) mod p via sqdmulh Montgomery,
+    then DIT sum/diff + Harvey conditional subtraction.
+    
+    Reference: SIMDEmitter.lean:154-181 (string emission version).
+    Trust boundary: each Stmt.call is trusted (evalStmt = none).
+    Structural equivalence to scalar: proven in N37.6. -/
+def lowerSqdmulhButterflyStmt
+    (aPtr bPtr twPtr muTwPtr : VarName)
+    (pVecS pVec : VarName)
+    (cgs : CodeGenState) : (Stmt × VarName × VarName × CodeGenState) :=
+  -- Phase 1: sqdmulh Montgomery REDC (4 intrinsics)
+  let (cHi, cgs1) := cgs.freshNeonVar
+  let s1 := neonCall .sqdmulh cHi [.varRef bPtr, .varRef twPtr]  -- b * tw high
+  let (q, cgs2) := cgs1.freshNeonVar
+  let s2 := neonCall .mul_s32 q [.varRef bPtr, .varRef muTwPtr]   -- b * mu_tw
+  let (qpHi, cgs3) := cgs2.freshNeonVar
+  let s3 := neonCall .sqdmulh qpHi [.varRef q, .varRef pVecS]    -- q * p high
+  let (raw, cgs4) := cgs3.freshNeonVar
+  let s4 := neonCall .hsub raw [.varRef cHi, .varRef qpHi]       -- (cHi - qpHi) / 2
+
+  -- Phase 2: Canonicalize (-p, p) → [0, p) via vminq trick (3 intrinsics)
+  let (rawPlusP, cgs5) := cgs4.freshNeonVar
+  let s5 := neonCall .add_u32 rawPlusP [.varRef raw, .varRef pVec]
+  let (wbRed, cgs6) := cgs5.freshNeonVar
+  let s6 := neonCall .min_u32 wbRed [.varRef rawPlusP, .varRef pVec]
+
+  -- Phase 3: DIT sum/diff (3 intrinsics)
+  let (sumRaw, cgs7) := cgs6.freshNeonVar
+  let s7 := neonCall .add_u32 sumRaw [.varRef aPtr, .varRef wbRed]
+  let (aPlusP, cgs8) := cgs7.freshNeonVar
+  let s8 := neonCall .add_u32 aPlusP [.varRef aPtr, .varRef pVec]
+  let (diffRaw, cgs9) := cgs8.freshNeonVar
+  let s9 := neonCall .sub_u32 diffRaw [.varRef aPlusP, .varRef wbRed]
+
+  -- Phase 4: Harvey conditional subtract on sum (3 intrinsics)
+  let (geS, cgs10) := cgs9.freshNeonVar
+  let s10 := neonCall .cmpGe_u32 geS [.varRef sumRaw, .varRef pVec]
+  let (fixS, cgs11) := cgs10.freshNeonVar
+  let s11 := neonCall .and_u32 fixS [.varRef geS, .varRef pVec]
+  let (sumRed, cgs12) := cgs11.freshNeonVar
+  let s12 := neonCall .sub_u32 sumRed [.varRef sumRaw, .varRef fixS]
+
+  -- Phase 5: Harvey conditional subtract on diff (3 intrinsics)
+  let (geD, cgs13) := cgs12.freshNeonVar
+  let s13 := neonCall .cmpGe_u32 geD [.varRef diffRaw, .varRef pVec]
+  let (fixD, cgs14) := cgs13.freshNeonVar
+  let s14 := neonCall .and_u32 fixD [.varRef geD, .varRef pVec]
+  let (diffRed, cgs15) := cgs14.freshNeonVar
+  let s15 := neonCall .sub_u32 diffRed [.varRef diffRaw, .varRef fixD]
+
+  -- Phase 6: Stores (void — handled by simdStmtToC)
+  let s16 := neonCallVoid .store4_s32 [.varRef aPtr, .varRef sumRed]
+  let s17 := neonCallVoid .store4_s32 [.varRef bPtr, .varRef diffRed]
+
+  -- Compose all 17 statements
+  let fullStmt := Stmt.seq s1 (Stmt.seq s2 (Stmt.seq s3 (Stmt.seq s4
+    (Stmt.seq s5 (Stmt.seq s6 (Stmt.seq s7 (Stmt.seq s8 (Stmt.seq s9
+      (Stmt.seq s10 (Stmt.seq s11 (Stmt.seq s12 (Stmt.seq s13
+        (Stmt.seq s14 (Stmt.seq s15 (Stmt.seq s16 s17)))))))))))))))
+  (fullStmt, sumRed, diffRed, cgs15)
+```
+
+**Archivos adicionales en este nodo**: Harvey butterfly (~80 LOC), hs2 butterfly (~100 LOC),
+hs1 butterfly con deinterleaveLoad (~120 LOC).
+
+**Infraestructura existente reutilizada**:
+- `SIMDEmitter.lean:154-181` como spec de referencia para sqdmulh
+- `SIMDEmitter.lean:124-137` como spec para Harvey
+- `SIMDEmitter.lean:200-285` como spec para hs2/hs1
+- `VerifiedPlanCodeGen.lean` `CodeGenState` para fresh variable generation
+
+**Gate**: Todas las butterflies producen Stmt. `simdStmtToC` produce C correcto
+para cada una. Compilación sin errores.
+
+#### N37.5: Conectar al pipeline (CRÍTICO, 1 día)
+
+**Archivo a modificar**: `SIMDEmitter.lean` — función `emitStageC` (líneas ~389-454)
+
+Agregar tercer branch al dispatch:
+
+```lean
+-- En emitStageC, ANTES del check isSIMD:
+if useVerifiedSIMD && bfUsed != "" && stage.radix != .r4 && halfSize >= lanes then
+  -- NEW: emit via Stmt → simdStmtToC
+  let (bfStmt, _, _, _) := lowerSqdmulhButterflyStmt aVar bVar wVar muTwVar pVecSVar pVecVar cgs
+  let loopBody := SIMDStmtToC.simdStmtToC 3 bfStmt
+  -- Wrap in loop nest (same structure as existing SIMD path)
+  s!"  /* Stage {stageIdx}: verified-SIMD sqdmulh ... */\n" ++
+  s!"  for (size_t grp = 0; grp < {numGroups}; grp++) \{\n" ++
+  s!"    for (size_t pr = 0; pr < {halfSize}; pr += {lanes}) \{\n" ++
+  -- ... index computation (same as lines 316-318) ...
+  loopBody ++ "\n    }\n  }\n"
+else if isSIMD then
+  -- EXISTING: string emission (kept as legacy/comparison)
+  ...
+else
+  -- EXISTING: scalar fallback
+  ...
+```
+
+**Archivo a modificar**: `SIMDEmitter.lean` — función `emitSIMDNTTC`
+- Agregar parámetro `useVerifiedSIMD : Bool := false`
+- Agregar NEON temp declarations (N37.3) cuando `useVerifiedSIMD = true`
+- Agregar deinterleave helper (N37.2) en el header section
+
+**Infraestructura existente**: El loop nest de `emitStageC` (lines 313-321) se
+reutiliza idénticamente — solo cambia el body del inner loop.
+
+**Gate**: `lake build` + NTT genera C correcto + validación Python PASS.
+
+#### N37.6: Structural verification theorems (CRÍTICO, 2-3 días)
+
+**Archivo nuevo**: `AmoLean/EGraph/Verified/Bitwise/VerifiedSIMDButterflyProofs.lean`
+
+Probar que la secuencia de Stmt.call del butterfly SIMD tiene la misma estructura
+operacional que el butterfly scalar:
+
+```lean
+/-- The sqdmulh butterfly Stmt has exactly 17 operations:
+    4 REDC + 3 canonicalize + 3 DIT + 3 Harvey sum + 3 Harvey diff + 2 stores. -/
+theorem sqdmulh_butterfly_operation_count
+    (aPtr bPtr twPtr muTwPtr pVecS pVec : VarName) (cgs : CodeGenState) :
+    let (stmt, _, _, _) := lowerSqdmulhButterflyStmt aPtr bPtr twPtr muTwPtr pVecS pVec cgs
+    stmtCallCount stmt = 17 := by
+  simp [lowerSqdmulhButterflyStmt, stmtCallCount]
+  rfl
+
+/-- All calls in the sqdmulh butterfly use known NEON intrinsics. -/
+theorem sqdmulh_butterfly_all_calls_neon
+    (aPtr bPtr twPtr muTwPtr pVecS pVec : VarName) (cgs : CodeGenState) :
+    let (stmt, _, _, _) := lowerSqdmulhButterflyStmt aPtr bPtr twPtr muTwPtr pVecS pVec cgs
+    allCallsAreNeon stmt = true := by
+  simp [lowerSqdmulhButterflyStmt, allCallsAreNeon]
+  decide
+
+/-- The sqdmulh butterfly has the same data flow pattern as the scalar butterfly:
+    product(tw, b) → reduce → sum(a, wb) → diff(a+p, wb) → harvey(sum) → harvey(diff). -/
+theorem sqdmulh_butterfly_dataflow_matches_scalar
+    (aPtr bPtr twPtr muTwPtr pVecS pVec : VarName) (cgs : CodeGenState) :
+    let (simdStmt, _, _, _) := lowerSqdmulhButterflyStmt aPtr bPtr twPtr muTwPtr pVecS pVec cgs
+    stmtDataFlowPattern simdStmt = .prodReduceSumDiffHarvey := by
+  sorry -- structural proof: analyze the Stmt.seq chain
+```
+
+**Trust boundary explícito**:
+```lean
+/-- TRUST DECLARATION: The NEON intrinsic calls in the sqdmulh butterfly are
+    semantically equivalent to the scalar operations they replace.
+    This is NOT proven — it is the trust boundary.
+    Each Stmt.call is trusted (evalStmt returns none for calls).
+    
+    Specifically, we TRUST that:
+    - vqdmulhq_s32(a, b) computes floor(2*a*b / 2^32) with saturation, per lane
+    - vhsubq_s32(a, b) computes (a - b) / 2, per lane
+    - vaddq_u32(a, b) computes a + b mod 2^32, per lane
+    - vcgeq_u32(a, b) computes 0xFFFFFFFF if a >= b else 0, per lane
+    - etc.
+    
+    These are ARM-specified semantics for each intrinsic.
+    The structural theorems above prove that IF these intrinsics are correct,
+    THEN the butterfly computes the same algorithm as the scalar version. -/
+```
+
+**Gate**: Al menos 2 theorems sin sorry. Trust boundary documentado.
+
+#### N37.7: Benchmark regression check (HOJA, 0.5 días)
+
+Verificar que el path verificado (Stmt.call → simdStmtToC) produce el MISMO
+performance que el path legacy (string emission directa):
+
+```
+# Con verified SIMD (nuevo)
+Tests/benchmark/benchmark.py --pipeline ultra --hardware arm-neon --verified-simd
+
+# Sin verified SIMD (legacy)
+Tests/benchmark/benchmark.py --pipeline ultra --hardware arm-neon
+
+# Deben dar ±3%
+```
+
+**Gate**: Sin regresión. Si hay regresión > 5%, investigar si simdStmtToC emite
+código subóptimo vs string emission.
+
+---
+
+### Cleanup tasks (paralelas con N37.1-N37.7)
 
 Agregar al IR de TrustLean constructores que modelan instrucciones NEON relevantes:
 
@@ -1763,3 +2127,294 @@ con NEON-awareness) y `stmtToC`. La string emission ad-hoc desaparece.
 
 **Nota**: `stmtToC` sigue siendo TRUSTED (no probado). Pero ahora es el ÚNICO punto
 de confianza, en vez de tener un path trusted (scalar) y un path no trusted (SIMD).
+
+---
+
+### Cleanup: Migración de `reductionCost` legacy y fixes pendientes
+
+v3.7.0 también incluye cleanup de deuda técnica identificada durante v3.4.0–v3.6.0.
+Estos cambios se agrupan aquí porque tocan los mismos módulos que la verificación
+formal y conviene hacerlos en un solo refactor.
+
+#### C1: Fix FRIFoldPlan Montgomery bug (SOUNDNESS, 1 hora)
+
+**Bug**: `selectFRIReduction` (`FRIFoldPlan.lean:60-62`) llama a
+`selectReductionForBound` que puede retornar `.montgomery` para SIMD con
+`boundK > 4`. FRI fold computa `a + alpha*b` — es una suma. Montgomery en
+una suma da `(a + alpha*b) * R⁻¹ mod p`, que es **incorrecto**.
+
+**Ejemplo concreto** (`FRIFoldPlan.lean:101-104`):
+```lean
+theorem friFoldReduction_simd_unreduced :
+    selectFRIReduction { prime := 2013265921, numRounds := 10,
+      hwIsSimd := true, inputBoundK := 3 }
+    = .montgomery := rfl  -- ← WRONG: Montgomery on a sum is unsound
+```
+
+**Fix**: Cambiar `selectFRIReduction` para usar `costAwareReductionForBound`
+(que excluye Montgomery correctamente, `CrossRelNTT.lean:63-64`).
+
+**Obstáculo**: `selectFRIReduction` no recibe `HardwareCost`, solo `FRIFoldConfig`
+con `hwIsSimd : Bool`. Dos opciones:
+
+- **Opción rápida**: En `selectReductionForBound`, cambiar la rama SIMD
+  (`CrossRelNTT.lean:49-51`) de `.montgomery` a `.solinasFold`. Esto fue hecho
+  para NTT en v3.4.0 pero no se propagó a FRI fold. Fix de 1 línea, zero riesgo.
+  PERO: esto cambia `selectReductionForBound` globalmente. Verificar que ningún
+  caller legítimo necesita Montgomery para SIMD.
+
+- **Opción correcta**: Agregar `hw : Option HardwareCost := none` a `FRIFoldConfig`.
+  Cuando `hw = some hwCost`, usar `costAwareReductionForBound`. Cuando `none`,
+  usar `selectReductionForBound` (backward compat). Esto se alinea con la
+  migración general de `Bool → HardwareCost` en C2.
+
+**Impacto en producción hoy**: Bajo. El bug solo se manifiesta con `inputBoundK ≥ 3`
+Y `hwIsSimd = true`. Los callers actuales usan `inputBoundK := 1` (inputs reducidos).
+Pero es un bug latente que explotaría si se implementa FRI fold con lazy inputs.
+
+**Gate**: Theorem `friFoldReduction_simd_unreduced` cambia de `= .montgomery`
+a `= .solinasFold` o `= .harvey` (dependiendo de la opción de fix).
+
+#### C2: Migrar callers de `reductionCost` a `reductionCostForHW` (CLEANUP, 2-3 días)
+
+**Problema**: Hay dos funciones de costo para reducciones:
+
+```lean
+-- SSOT (correcto): parametrizado por HardwareCost
+def reductionCostForHW (hw : HardwareCost) (red : ReductionChoice) : Nat
+
+-- Legacy (incorrecto): hardcoded, lazy=0, Solinas NEON=8 (real=14)
+def reductionCost (reduction : ReductionChoice) (boundK : Nat) (hwIsSimd : Bool) : Nat
+```
+
+La legacy existe por **backward compat con olean-only callers** (`Phase23Integration`).
+Nota en `CrossRelNTT.lean:177-178`:
+> "Kept for backward compat with olean-only callers (Phase23Integration, etc.)"
+
+**Callers activos de `reductionCost`** (que DEBEN migrar):
+
+| Archivo | Línea | Función | Cambio necesario |
+|---------|-------|---------|-----------------|
+| `CrossRelNTT.lean:195` | `nttTotalReductionCost` | Toma `hwIsSimd : Bool` → cambiar a `hw : HardwareCost` |
+| `FRIFoldPlan.lean:68` | `friFoldElementCost` | `FRIFoldConfig` necesita `HardwareCost` (alineado con C1) |
+| `PrimitivesIntegration.lean:79` | `generateCostReports` | Toma `hwIsSimd : Bool` → cambiar a `hw : HardwareCost` |
+| `CrossEGraphProtocol.lean:74` | `crossProtocolCost` | Ya tiene `hw` en `CrossProtocolQuery` → migración directa |
+
+**Callers olean-only** (que NO se tocan):
+
+| Archivo | Status |
+|---------|--------|
+| `Phase23Integration.lean` | Olean-only. No se puede recompilar. Sigue usando legacy. |
+
+**Proceso de migración**:
+
+1. **NO borrar `reductionCost`** — Phase23Integration la necesita para linkar.
+2. Cambiar signatures de `nttTotalReductionCost`, `FRIFoldConfig`, `generateCostReports`:
+   `hwIsSimd : Bool` → `hw : HardwareCost`.
+3. Internamente, reemplazar `reductionCost red boundK hwIsSimd` por
+   `reductionCostForHW hw red`.
+4. Actualizar callers de las funciones modificadas (~10-15 call sites).
+5. Los theorems sobre `reductionCost` (`lazy_cost_zero`, `harvey_cheapest_tight`,
+   `monty_constant`) se mantienen como theorems sobre la función legacy.
+   Agregar equivalentes para `reductionCostForHW` si es necesario.
+
+**Riesgo**: Medio. Los cambios de signature propagan a callers upstream.
+Verificar con `lake build` después de cada archivo modificado. NO hacer
+`lake clean` — los oleans legacy se perderían.
+
+**Gate**: `lake build` sin errores. `reductionCost` solo referenciada por
+Phase23Integration y sus propios theorems.
+
+#### C3: Nota sobre bound propagation para `mul/sub` (REGISTRO, no implementar)
+
+`mkFieldFactory` (`BoundPropagation.lean:132-137`) solo genera rules para `add` y
+`reduce`. No modela `mul`, `sub`, ni `smul`. Esto limita la bound propagation
+dinámica para expresiones que involucran multiplicaciones (como FRI fold: `a + alpha*b`).
+
+**Por qué no implementar ahora**: Para el NTT con Harvey chaining, la ausencia de
+`mkMulBoundRule` no afecta porque cada producto `tw * b` es inmediatamente reducido
+por REDC, y `mkReductionBoundRule` captura el bound del resultado (= 1).
+
+**Cuándo sería necesario**: Si se implementa FRI fold como primitiva optimizada
+donde `alpha * b` podría no tener REDC inmediato (lazy FRI fold). En ese caso,
+`mkMulBoundRule` propagaría `bound(alpha * b) = bound(alpha) * bound(b)` y
+permitiría decidir si se puede diferir la reducción.
+
+**Registro**: Este item queda como prerequisito para una futura fase de FRI fold,
+no como parte de v3.7.0. Si v3.8.0 es FRI fold, incluir `mkMulBoundRule` en su DAG.
+
+---
+
+### DAG (v3.7.0)
+
+```
+C1 [FIX, 0.5d] ─────────────────────────────────────────────────┐
+C2 [CLEANUP, 2-3d] ─────────────────────────────────────────────┤
+N37.1 [ADT + simdStmtToC, FUND, 1d] ────┐                       │
+N37.2 [Deinterleave helper, FUND, 0.5d] ─┤                       │
+N37.3 [NEON temp decls, FUND, 0.5d] ─────┤                       │
+                                          ↓                       │
+N37.4 [Butterflies as Stmt, CRIT, 2-3d] ──┐                     │
+                                            ↓                     │
+N37.5 [Connect pipeline, CRIT, 1d] ────────┐                    │
+                                            ↓                     │
+N37.6 [Structural proofs, CRIT, 2-3d] ─────┐                    │
+                                             ↓                    │
+N37.7 [Benchmark regression, HOJA, 0.5d] ───────────────────────┤
+                                                                  ↓
+                                                       v3.7.0 complete
+```
+
+- C1, C2 independientes del main track (paralelas)
+- N37.1, N37.2, N37.3 paralelos entre sí (todos fundacionales)
+- N37.4 depende de N37.1+N37.2+N37.3
+- N37.5 depende de N37.4
+- N37.6 depende de N37.5 (proofs sobre el Stmt producido)
+- N37.7 depende de N37.5 (benchmark del código generado)
+
+### Estimación total v3.7.0: ~2-3 semanas
+
+| Tarea | Días | Tipo |
+|-------|------|------|
+| C1: Fix FRIFoldPlan Montgomery | 0.5 | SOUNDNESS FIX |
+| C2: Migrar reductionCost callers | 2-3 | CLEANUP |
+| N37.1: NeonIntrinsic ADT + simdStmtToC | 1 | FUNDACIONAL |
+| N37.2: Deinterleave helper function | 0.5 | FUNDACIONAL |
+| N37.3: NEON temp declarations | 0.5 | FUNDACIONAL |
+| N37.4: Reescribir butterflies como Stmt | 2-3 | CRÍTICO |
+| N37.5: Conectar al pipeline | 1 | CRÍTICO |
+| N37.6: Structural verification theorems | 2-3 | CRÍTICO |
+| N37.7: Benchmark regression check | 0.5 | HOJA |
+| **Total** | **11-13** | |
+
+### Resumen de archivos
+
+| Archivo | Acción | Líneas | Modifica existente? |
+|---------|--------|--------|-------------------|
+| `AmoLean/Bridge/SIMDStmtToC.lean` | **NUEVO** | ~80 | No |
+| `AmoLean/EGraph/Verified/Bitwise/VerifiedSIMDButterfly.lean` | **NUEVO** | ~450 | No |
+| `AmoLean/EGraph/Verified/Bitwise/VerifiedSIMDButterflyProofs.lean` | **NUEVO** | ~100 | No |
+| `SIMDEmitter.lean` | Agregar dispatch + temp decls + helper | ~50 | Sí (aditivo) |
+| `FRIFoldPlan.lean` | Fix Montgomery bug (C1) | ~5 | Sí |
+| `CrossRelNTT.lean` | Migrar callers (C2) | ~10 | Sí |
+| `PrimitivesIntegration.lean` | Migrar callers (C2) | ~5 | Sí |
+| **TrustLean/** | `LowLevelExpr.addrOf` (commit 5d42bae) | **6** | **Sí** |
+
+### Post-Block-1 Audit (2026-04-08)
+
+Auditoría adversarial (Claude + Gemini) del Bloque 1 identificó issues y decisiones:
+
+#### Issue 1 (RESUELTO): `&` emission para deinterleaveLoad
+
+**Problema**: `simdStmtToC` no podía emitir `&var` porque `LowLevelExpr` no tenía
+constructor `addrOf`. El helper `neon_deinterleave_load(int32x4_t* a, int32x4_t* b, ...)`
+necesita `&` para los output pointers. `sanitizeIdentifier` filtra `&` (no es
+`isValidCIdentChar`), así que no se puede hackear en el nombre de variable.
+
+**Resolución**: Se extendió TrustLean con `LowLevelExpr.addrOf : VarName → LowLevelExpr`
+(commit 5d42bae, push a github.com/manuelpuebla/trust-lean main). Impacto real: 10
+archivos en TrustLean, 23 LOC, 0 sorry. La dependencia en TRZK fue actualizada.
+
+- `exprToC (.addrOf v)` emite `"&" ++ varNameToC v` (con `&`)
+- `exprToMicroC (.addrOf v)` emite `.varRef (varNameToC v)` (sin `&` — MicroC no procesa SIMD)
+- `evalExpr (.addrOf v)` retorna `some (env v)` (como varRef — addrOf es backend-only)
+- Bridge theorems (`MicroC/Bridge.lean`, `MicroRust/Bridge.lean`) reparados
+
+Uso en N37.4:
+```lean
+-- Para deinterleaveLoad, usar .addrOf en los output pointers:
+neonCallVoid .deinterleaveLoad [.addrOf aVec, .addrOf bVec, .varRef ptr]
+-- simdStmtToC emitirá: neon_deinterleave_load(&aVec, &bVec, ptr);
+```
+
+#### Issue 2 (DECISIÓN): Approach A para hs2 — ALL butterflies via Stmt
+
+**Contexto**: hs2 (halfSize=2) usa intrinsics 2-lane (`vld1_s32`, `vcombine_s32`,
+`vget_low_s32`, `vget_high_s32`, `vst1_s32`) no presentes en el ADT. Se evaluaron
+dos approaches: (A) extender ADT con ~6 constructores para hs2, (B) mantener hs2
+como string emission legacy.
+
+**Decisión**: Approach A. Justificación: hs2 es 1 stage por NTT, pero mantener un
+path mixto (string + Stmt) debilita el claim "Verified SIMD Codegen" y confunde a
+futuros mantenedores. Los constructores extra son mecánicos (1 línea cada uno).
+
+**Constructores nuevos para N37.4** (agregar a `NeonIntrinsic` en `SIMDStmtToC.lean`):
+```lean
+  | sub_s32          -- vsubq_s32: signed subtract (insurance: fallback si unsigned-only falla)
+  | load2_s32        -- vld1_s32: 2-lane load (int32x2_t)
+  | store2_s32       -- vst1_s32: 2-lane store
+  | combine_s32      -- vcombine_s32: combine 2×int32x2_t → int32x4_t
+  | get_low_s32      -- vget_low_s32: extract lower int32x2_t from int32x4_t
+  | get_high_s32     -- vget_high_s32: extract upper int32x2_t from int32x4_t
+```
+
+**`sub_s32` como insurance**: El spec N37.4 reestructura el algoritmo para usar
+unsigned-only ops (evitando `vsubq_s32`). Si el approach unsigned-only tiene issues
+de correctness (edge cases), `sub_s32` permite fallback al algoritmo probado.
+Costo: 1 línea. Riesgo sin él: bloqueo mid-implementation.
+
+#### Issue 3 (REQUERIDO): neonTempDecls necesita int32x2_t
+
+hs2 opera sobre `int32x2_t` (2-lane). `neonTempDecls` (SIMDEmitter.lean:497-500) solo
+declara `int32x4_t nv*` y `uint32x4_t nu*`. Agregar un tercer tipo:
+
+```c
+int32x4_t nv0, nv1, ...;     // existente (signed 4-lane)
+uint32x4_t nu0, nu1, ...;    // existente (unsigned 4-lane)
+int32x2_t nh0, nh1, ...;     // NUEVO (signed 2-lane, para hs2)
+```
+
+Cambio: ~3 líneas en `neonTempDecls`.
+
+#### Issue 4 (REQUERIDO): fromCName reverse map
+
+`voidIntrinsicNames` (SIMDStmtToC.lean:103-107) es una lista manual sincronizada con
+`isVoid`. Reemplazar con:
+```lean
+def NeonIntrinsic.fromCName : String → Option NeonIntrinsic
+  | "vqdmulhq_s32" => some .sqdmulh
+  | "vst1q_s32" => some .store4_s32
+  -- ... etc para todos los constructores
+  | _ => none
+```
+Luego en `simdStmtToC`: `if (NeonIntrinsic.fromCName fname).any (·.isVoid) then ...`
+
+Esto establece al ADT como single source of truth para void detection.
+
+#### Issue 5 (MENOR): Fix docstring NeonIntrinsic
+
+SIMDStmtToC.lean:31-32 dice "Each constructor maps to exactly one ARM NEON intrinsic".
+Falso: `deinterleaveLoad` mapea a un helper C custom. Corregir docstring.
+
+### Criterios de éxito v3.7.0
+
+**Verificación formal (Option D)**:
+- Butterflies NEON representadas como `Stmt.call` sequences (no string emission)
+- `simdStmtToC` emite C idéntico al string emitter actual (A/B comparison)
+- `NeonIntrinsic` ADT elimina strings de intrinsics del lowering (type-safe)
+- Trust boundary explícitamente documentado: `evalStmt(.call) = none` para intrinsics
+- Al menos 2 structural theorems sin sorry (operation count, data flow pattern)
+- SIMDEmitter mantiene path legacy para comparación
+
+**Cleanup**:
+- FRIFoldPlan no puede retornar Montgomery para sumas (soundness fix)
+- Ningún caller activo usa `reductionCost` legacy (solo olean-only modules)
+
+**Regresión**:
+- `lake build` sin errores
+- Benchmark NTT sin regresión (±3% vs v3.6.0)
+- Todos los test vectors pasan (Python reference comparison)
+
+### Evolución futura: de structural a semantic verification
+
+Option D permite una ESCALERA de verificación incremental:
+
+**Nivel 0 (actual, v3.6.0)**: String emission. Zero verificación.
+**Nivel 1 (v3.7.0)**: Stmt.call sequences. Structural proofs (misma forma que scalar).
+**Nivel 2 (futuro)**: Axiomas por intrinsic (`vqdmulhq_s32_spec`). Semantic proofs
+(cada call computa la operación correcta, dado los axiomas).
+**Nivel 3 (futuro lejano)**: Fork TrustLean si Nivel 2 es insuficiente. Agregar
+`Stmt.intrinsic` con semántica formal completa. Full verification.
+
+Cada nivel es incrementalmente más fuerte y solo se justifica si el nivel anterior
+resulta insuficiente para los objetivos del proyecto (publicación, auditoría, etc.).

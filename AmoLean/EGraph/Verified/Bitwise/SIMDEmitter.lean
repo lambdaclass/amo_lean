@@ -17,6 +17,7 @@
   NO import of VerifiedSIMDCodeGen — clean implementation.
 -/
 import AmoLean.EGraph.Verified.Bitwise.VerifiedPlanCodeGen
+import AmoLean.EGraph.Verified.Bitwise.VerifiedSIMDButterfly
 
 set_option autoImplicit false
 
@@ -25,6 +26,9 @@ namespace AmoLean.EGraph.Verified.Bitwise.SIMDEmitter
 open AmoLean.EGraph.Verified.Bitwise.NTTPlan (Plan NTTStage RadixChoice)
 open AmoLean.EGraph.Verified.Bitwise.VerifiedPlanCodeGen (normalizePlan lowerStageVerified)
 open AmoLean.EGraph.Verified.Bitwise.BoundProp (ReductionChoice)
+open AmoLean.EGraph.Verified.Bitwise.VerifiedSIMDButterfly
+  (sqdmulhButterflyStmt hs2ButterflyStmt hs1ButterflyStmt)
+open AmoLean.Bridge.SIMDStmtToC (simdStmtToC)
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 1: SIMD Target Configuration
@@ -388,6 +392,7 @@ static inline void avx2_bf_dit(int32_t* a_ptr, int32_t* b_ptr,
     Scalar fallback (R4 or halfSize < lanes): lowerStageVerified + stmtToC. -/
 private def emitStageC (stage : NTTStage) (n p k c mu : Nat) (lanes : Nat)
     (bfNameSol bfNameHar bfNameSq : String) (useSqdmulh : Bool)
+    (useVerifiedSIMD : Bool := false)
     (profiled : Bool := false) : String :=
   let stageIdx := stage.stageIdx
   let halfSize := n / (2 ^ (stageIdx + 1))
@@ -396,7 +401,65 @@ private def emitStageC (stage : NTTStage) (n p k c mu : Nat) (lanes : Nat)
   let fence := if profiled then
     s!"  asm volatile(\"isb\\nmrs %0, CNTVCT_EL0\" : \"=r\"(_ticks[{stageIdx}]) :: \"memory\");\n"
   else ""
-  -- Select butterfly: sqdmulh preferred when available, else Harvey/Solinas
+  -- Verified SIMD path: butterflies via Stmt.call + simdStmtToC (N37.5)
+  let canVerified := useVerifiedSIMD && useSqdmulh && stage.radix != .r4
+  if canVerified && halfSize >= lanes then
+    let twBase := stageIdx * (n / 2)
+    let step := lanes
+    -- Build butterfly Stmt with pointer VarNames (set in loop body)
+    let bfStmt := sqdmulhButterflyStmt
+      (.user "a_ptr") (.user "b_ptr") (.user "tw_ptr") (.user "mu_tw_ptr")
+      (.user "p_vec_s") (.user "p_vec")
+    let body := simdStmtToC 3 bfStmt
+    fence ++
+    s!"  /* Stage {stageIdx}: verified-SIMD sqdmulh (halfSize={halfSize}, groups={numGroups}) */
+  for (size_t grp = 0; grp < {numGroups}; grp++) \{
+    for (size_t pr = 0; pr < {halfSize}; pr += {step}) \{
+      int32_t* a_ptr = &data[grp * {2 * halfSize} + pr];
+      int32_t* b_ptr = a_ptr + {halfSize};
+      const int32_t* tw_ptr = &twiddles[{twBase} + grp * {halfSize} + pr];
+      const int32_t* mu_tw_ptr = &mu_tw[{twBase} + grp * {halfSize} + pr];
+{body}
+    }
+  }
+"
+  else if canVerified && halfSize == 2 && numGroups >= 2 then
+    let twBase := stageIdx * (n / 2)
+    -- hs2: 2 groups at a time via verified Stmt path
+    let bfStmt := hs2ButterflyStmt
+      (.user "dg0") (.user "dg1") (.user "tg0") (.user "tg1")
+      (.user "mg0") (.user "mg1") (.user "p_vec_s") (.user "p_vec")
+    let body := simdStmtToC 2 bfStmt
+    fence ++
+    s!"  /* Stage {stageIdx}: verified-SIMD hs2 (halfSize=2, groups={numGroups}) */
+  for (size_t grp = 0; grp < {numGroups}; grp += 2) \{
+    int32_t* dg0 = &data[grp * 4];
+    int32_t* dg1 = &data[(grp + 1) * 4];
+    const int32_t* tg0 = &twiddles[{twBase} + grp * 2];
+    const int32_t* tg1 = &twiddles[{twBase} + (grp + 1) * 2];
+    const int32_t* mg0 = &mu_tw[{twBase} + grp * 2];
+    const int32_t* mg1 = &mu_tw[{twBase} + (grp + 1) * 2];
+{body}
+  }
+"
+  else if canVerified && halfSize == 1 && numGroups >= 4 then
+    let twBase := stageIdx * (n / 2)
+    -- hs1: 4 groups at a time via verified Stmt path with deinterleave
+    let bfStmt := hs1ButterflyStmt
+      (.user "data_ptr") (.user "tw_ptr") (.user "mu_tw_ptr")
+      (.user "p_vec_s") (.user "p_vec")
+    let body := simdStmtToC 2 bfStmt
+    fence ++
+    s!"  /* Stage {stageIdx}: verified-SIMD hs1 (halfSize=1, groups={numGroups}) */
+  for (size_t grp = 0; grp < {numGroups}; grp += 4) \{
+    int32_t* data_ptr = &data[grp * 2];
+    const int32_t* tw_ptr = &twiddles[{twBase} + grp];
+    const int32_t* mu_tw_ptr = &mu_tw[{twBase} + grp];
+{body}
+  }
+"
+  else
+  -- Legacy string-emission path below (unchanged)
   let (bfUsed, isSq) :=
     if useSqdmulh && bfNameSq != "" then (bfNameSq, true)
     else match stage.reduction with
@@ -475,6 +538,47 @@ private def scalarTempDecls (hasR4 : Bool) : String :=
   int64_t group, pair, a_val, b_val, w_val;{r4Extra}
 "
 
+/-- Deinterleave helper for vld2q_s32 struct decomposition (N37.2).
+    vld2q_s32 returns int32x4x2_t (C struct), which Stmt.call cannot represent
+    directly. This static inline helper decomposes the struct into two int32x4_t
+    outputs via pointer parameters.
+    Emitted in the C header when the verified SIMD path is active. -/
+def deinterleaveHelperC : String :=
+  "/* vld2q_s32 returns int32x4x2_t struct — decompose via helper */
+static inline void neon_deinterleave_load(int32x4_t* a, int32x4_t* b,
+    const int32_t* ptr) {
+    int32x4x2_t tmp = vld2q_s32(ptr);
+    *a = tmp.val[0];
+    *b = tmp.val[1];
+}
+"
+
+/-- Interleave store helper for vst2q_s32 struct construction (N37.4 fix).
+    vst2q_s32 takes int32x4x2_t struct, which Stmt.call cannot construct.
+    This static inline helper takes two vectors and constructs the struct.
+    Symmetric to deinterleaveHelperC. -/
+def interleaveStoreHelperC : String :=
+  "/* vst2q_s32 takes int32x4x2_t struct — construct via helper */
+static inline void neon_interleave_store(int32_t* ptr,
+    int32x4_t a, int32x4_t b) {
+    int32x4x2_t tmp;
+    tmp.val[0] = a;
+    tmp.val[1] = b;
+    vst2q_s32(ptr, tmp);
+}
+"
+
+/-- NEON temp variable declarations for verified SIMD path (N37.3).
+    Pre-declares int32x4_t (nv0..nvN-1) and uint32x4_t (nu0..nuM-1) temps
+    at function top, matching the pattern of scalarTempDecls for scalar vars.
+    Variables are assigned by simdStmtToC via `nvX = intrinsic(args);`. -/
+def neonTempDecls (numSignedVars : Nat := 30) (numUnsignedVars : Nat := 10)
+    (numHalfVars : Nat := 10) : String :=
+  let nv := String.intercalate ", " (List.range numSignedVars |>.map (s!"nv{·}"))
+  let nu := String.intercalate ", " (List.range numUnsignedVars |>.map (s!"nu{·}"))
+  let nh := String.intercalate ", " (List.range numHalfVars |>.map (s!"nh{·}"))
+  s!"  int32x4_t {nv};\n  uint32x4_t {nu};\n  int32x2_t {nh};\n"
+
 /-- Emit a complete SIMD NTT function from a Plan.
     1. Normalize plan (stageIdx = NTT level)
     2. Classify stages: SIMD-eligible vs scalar fallback
@@ -489,6 +593,7 @@ private def scalarTempDecls (hasR4 : Bool) : String :=
     instead of vmull widening REDC. Requires mu_tw precomputed table. -/
 def emitSIMDNTTC (plan : Plan) (target : SIMDTarget) (k c mu : Nat)
     (funcName : String) (useSqdmulh : Bool := false)
+    (useVerifiedSIMD : Bool := false)
     (profiled : Bool := false) : String :=
   let plan := normalizePlan plan
   let p := plan.field
@@ -533,11 +638,16 @@ def emitSIMDNTTC (plan : Plan) (target : SIMDTarget) (k c mu : Nat)
     (if bfDeclHS1 != "" then bfDeclHS1 ++ "\n\n" else "") ++
     (if needsSolinas then bfDeclSol ++ "\n\n" else "") ++
     (if needsHarvey && bfNameHar != "" then bfDeclHar ++ "\n\n" else "")
+  -- Verified SIMD path: emit struct helpers (deinterleave + interleave) in header
+  let verifiedHelpers := if useVerifiedSIMD && useSqdmulh then
+    deinterleaveHelperC ++ "\n" ++ interleaveStoreHelperC ++ "\n"
+  else ""
   let headerSection :=
     "#include <stdint.h>\n#include <stddef.h>\n" ++
-    simdHeader target ++ "\n\n" ++ bfDecls
+    simdHeader target ++ "\n\n" ++ verifiedHelpers ++ bfDecls
   -- Build function body
   let scalarDecls := if hasScalarFallback then scalarTempDecls hasR4 else ""
+  let neonDecls := if useVerifiedSIMD && useSqdmulh then neonTempDecls 30 10 12 else ""
   -- sqdmulh needs different constants: signed p_vec_s + unsigned p_vec + mu_tw table
   let constDecls := if useSqdmulh && hasSIMDStage then match target with
     | .neon =>
@@ -560,7 +670,7 @@ def emitSIMDNTTC (plan : Plan) (target : SIMDTarget) (k c mu : Nat)
 "
   -- Generate stage code with per-stage dispatch
   let stageCode := stages.foldl (fun acc stage =>
-    acc ++ emitStageC stage n p k c mu lanes bfNameSol bfNameHar bfNameSq useSqdmulh profiled
+    acc ++ emitStageC stage n p k c mu lanes bfNameSol bfNameHar bfNameSq useSqdmulh useVerifiedSIMD profiled
   ) ""
   -- Function signature: sqdmulh needs mu_tw parameter
   let sig := if useSqdmulh && hasSIMDStage then
@@ -585,6 +695,48 @@ def emitSIMDNTTC (plan : Plan) (target : SIMDTarget) (k c mu : Nat)
   else ""
   let profileInclude := if profiled then "#include <stdio.h>\n" else ""
   -- Assemble: header + function
-  headerSection ++ profileInclude ++ sig ++ "\n" ++ profileDecl ++ scalarDecls ++ constDecls ++ stageCode ++ profileEnd ++ "}\n"
+  headerSection ++ profileInclude ++ sig ++ "\n" ++ profileDecl ++ scalarDecls ++ neonDecls ++ constDecls ++ stageCode ++ profileEnd ++ "}\n"
+
+-- ══════════════════════════════════════════════════════════════════
+-- Section 6: Smoke Tests for N37.2 + N37.3
+-- ══════════════════════════════════════════════════════════════════
+
+section SmokeTests
+
+/-- Deinterleave helper is non-empty and well-formed. -/
+example : deinterleaveHelperC.length > 100 := by native_decide
+
+/-- neonTempDecls produces non-empty output. -/
+example : (neonTempDecls 3 2).length > 0 := by native_decide
+
+/-- neonTempDecls with small args produces expected format (3 types). -/
+example : neonTempDecls 3 2 2 =
+    "  int32x4_t nv0, nv1, nv2;\n  uint32x4_t nu0, nu1;\n  int32x2_t nh0, nh1;\n" := rfl
+
+/-- neonTempDecls default (30+10+10) is non-trivial. -/
+example : (neonTempDecls).length > 200 := by native_decide
+
+/-- Interleave store helper is non-empty. -/
+example : interleaveStoreHelperC.length > 100 := by native_decide
+
+/-- Verified SIMD path produces output when useVerifiedSIMD=true.
+    Uses a minimal BabyBear 2^4 plan to verify integration. -/
+private def testPlan : Plan :=
+  let stages := #[
+    { stageIdx := 0, radix := .r2, reduction := .harvey,
+      direction := .DIT, inputBoundK := 1, outputBoundK := 1 },
+    { stageIdx := 1, radix := .r2, reduction := .harvey,
+      direction := .DIT, inputBoundK := 1, outputBoundK := 1 }]
+  { stages, field := 2013265921, size := 4 }
+
+/-- Legacy path produces non-empty output. -/
+example : (emitSIMDNTTC testPlan .neon 31 1 0x88000001 "ntt_test"
+    (useSqdmulh := true) (useVerifiedSIMD := false)).length > 100 := by native_decide
+
+/-- Verified path produces non-empty output. -/
+example : (emitSIMDNTTC testPlan .neon 31 1 0x88000001 "ntt_test"
+    (useSqdmulh := true) (useVerifiedSIMD := true)).length > 100 := by native_decide
+
+end SmokeTests
 
 end AmoLean.EGraph.Verified.Bitwise.SIMDEmitter

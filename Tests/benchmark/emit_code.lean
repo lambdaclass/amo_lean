@@ -28,7 +28,12 @@ def getHW (name : String) : HardwareCost :=
   | _ => arm_cortex_a76
 
 def main (args : List String) : IO Unit := do
-  match args with
+  -- Parse optional --verified-simd flag
+  let (args', verifiedSIMD) :=
+    if args.contains "--verified-simd" then
+      (args.filter (· != "--verified-simd"), true)
+    else (args, false)
+  match args' with
   | [field, logNStr, lang, hw] =>
     let some fc := getField field
       | IO.eprintln s!"Unknown field: {field}" ; return
@@ -39,11 +44,12 @@ def main (args : List String) : IO Unit := do
     let code := if lang == "rust" then
       genOptimizedBenchRust_ultra fc logN iters hwCost
     else
-      genOptimizedBenchC_ultra fc logN iters hwCost
+      genOptimizedBenchC_ultra fc logN iters hwCost verifiedSIMD
     IO.println code
   | _ =>
-    IO.eprintln "Usage: emit_code <field> <logN> <lang> <hardware>"
+    IO.eprintln "Usage: emit_code <field> <logN> <lang> <hardware> [--verified-simd]"
     IO.eprintln "  field:    babybear | koalabear | mersenne31 | goldilocks"
     IO.eprintln "  logN:     14 | 16 | 18 | 20 | 22"
     IO.eprintln "  lang:     c | rust"
     IO.eprintln "  hardware: arm-scalar | arm-neon | x86-avx2"
+    IO.eprintln "  --verified-simd: use Stmt.call verified path (v3.7.0)"

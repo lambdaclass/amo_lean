@@ -22,7 +22,8 @@ namespace AmoLean.EGraph.Verified.Bitwise.PoseidonStagePlan
 
 open AmoLean.EGraph.Verified.Bitwise.BoundProp (ReductionChoice stageBoundFactor
   lazyReductionSafe boundAfterReduction)
-open AmoLean.EGraph.Verified.Bitwise.CrossRelNTT (selectReductionForBound reductionCost)
+open AmoLean.EGraph.Verified.Bitwise.CrossRelNTT (selectReductionForBound reductionCostForHW)
+open AmoLean.EGraph.Verified.Bitwise (HardwareCost arm_cortex_a76)
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 1: Poseidon Configuration
@@ -137,8 +138,9 @@ def poseidonRoundAnalysis (cfg : PoseidonConfig)
     (acc ++ [(idx, rtype, reduction, finalBound)], finalBound)
   ) ([], 1) |>.1
 
-/-- Cost of one Poseidon round (per state element). -/
-def poseidonRoundCost (cfg : PoseidonConfig) (roundType : PoseidonRoundType)
+/-- Cost of one Poseidon round (per state element).
+    Uses reductionCostForHW (SSOT) instead of legacy reductionCost. -/
+def poseidonRoundCost (cfg : PoseidonConfig) (hw : HardwareCost) (roundType : PoseidonRoundType)
     (currentBound : Nat) (mulCost addCost : Nat) : Nat :=
   -- S-box cost: d-1 multiplications (square-and-multiply for x^d)
   let sboxMuls := match roundType with
@@ -155,7 +157,7 @@ def poseidonRoundCost (cfg : PoseidonConfig) (roundType : PoseidonRoundType)
     | .partialRound => partialRoundOutputBound cfg currentBound
   let doReduce := shouldReduceAfterRound cfg roundType outputBound
   let redCost := if doReduce then
-    cfg.stateWidth * reductionCost (selectPoseidonReduction cfg outputBound) outputBound cfg.hwIsSimd
+    cfg.stateWidth * reductionCostForHW hw (selectPoseidonReduction cfg outputBound)
   else 0
   sboxMuls + mdsCost + rcCost + redCost
 
@@ -235,8 +237,8 @@ example : selectPoseidonReduction babybear_t8 9 = .solinasFold := rfl
 /-- BabyBear t=8 analysis has 21 rounds (8 full + 13 partial). -/
 example : (poseidonRoundAnalysis babybear_t8).length = 21 := by native_decide
 
-/-- Round cost is computable for concrete config. -/
-example : poseidonRoundCost babybear_t8 .full 1 3 1 > 0 := by native_decide
+/-- Round cost is computable for concrete config (scalar ARM). -/
+example : poseidonRoundCost babybear_t8 arm_cortex_a76 .full 1 3 1 > 0 := by native_decide
 
 end SmokeTests
 

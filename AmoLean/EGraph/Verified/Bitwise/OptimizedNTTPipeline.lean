@@ -434,9 +434,10 @@ private def fieldConfigToUltraConfig (fc : FieldConfig) (hw : HardwareCost) : Ul
     → dynamic schedule → verified codegen via TrustLean.Stmt.
 
     CRITICAL: does NOT modify the legacy optimizedNTTC path. -/
-def optimizedNTTC_ultra (fc : FieldConfig) (hw : HardwareCost) (logN iters : Nat) : String :=
+def optimizedNTTC_ultra (fc : FieldConfig) (hw : HardwareCost) (logN iters : Nat)
+    (useVerifiedSIMD : Bool := false) : String :=
   let n := 2^logN
-  let ucfg := fieldConfigToUltraConfig fc hw
+  let ucfg := { fieldConfigToUltraConfig fc hw with useVerifiedSIMD }
   -- NTT call expression: includes mu_tw parameter when sqdmulh is active
   let funcBase := s!"{fc.name.toLower}_ntt_ultra"
   let nttCall := fun (arr : String) =>
@@ -555,8 +556,9 @@ int main(void) \{
 
 /-- Ultra benchmark C generator (drop-in alternative to genOptimizedBenchC). -/
 def genOptimizedBenchC_ultra (fc : FieldConfig) (logN iters : Nat)
-    (hw : HardwareCost := arm_cortex_a76) : String :=
-  optimizedNTTC_ultra fc hw logN iters
+    (hw : HardwareCost := arm_cortex_a76)
+    (useVerifiedSIMD : Bool := false) : String :=
+  optimizedNTTC_ultra fc hw logN iters useVerifiedSIMD
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 5b: Rust Code Emission Helpers

@@ -109,6 +109,8 @@ structure UltraConfig where
   useSqdmulh : Bool := false  -- true for NEON targets (auto-set in .neon preset)
   -- v3.6.0: CNTVCT per-stage profiling (N36.5a)
   profiled : Bool := false    -- true emits ARM cycle counter fences between stages
+  -- v3.7.0: verified SIMD codegen (Stmt.call + simdStmtToC instead of string emission)
+  useVerifiedSIMD : Bool := true
   deriving Repr
 
 def UltraConfig.scalar : UltraConfig := { hw := arm_cortex_a76, targetColor := 1 }
@@ -177,7 +179,7 @@ def ultraPipeline (g : MixedEGraph)
   -- ── Gap 4: Verified codegen via TrustLean.Stmt ──
   let simdTarget := if cfg.hw.simdLanes == 8 then SIMDTarget.avx2 else SIMDTarget.neon
   let code := if cfg.hw.isSimd then
-    emitSIMDNTTC plan simdTarget cfg.k cfg.c cfg.mu funcName cfg.useSqdmulh cfg.profiled
+    emitSIMDNTTC plan simdTarget cfg.k cfg.c cfg.mu funcName cfg.useSqdmulh cfg.useVerifiedSIMD cfg.profiled
   else
     emitCFromPlanVerified plan cfg.k cfg.c cfg.mu funcName
   let rustCode := emitRustFromPlanVerified plan cfg.k cfg.c cfg.mu

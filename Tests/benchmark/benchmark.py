@@ -42,6 +42,8 @@ def main():
                         help="Only validate correctness, skip performance")
     parser.add_argument("--skip-validation", action="store_true",
                         help="Skip validation, only measure (DANGEROUS)")
+    parser.add_argument("--verified-simd", action="store_true",
+                        help="Use verified SIMD path (Stmt.call + simdStmtToC, v3.7.0)")
     args = parser.parse_args()
 
     # Resolve paths
@@ -93,7 +95,8 @@ def main():
                     try:
                         program = generate_program(
                             project_root, field_name, log_n, lang,
-                            hardware, args.pipeline
+                            hardware, args.pipeline,
+                            verified_simd=args.verified_simd,
                         )
                         print("OK")
                     except LeanGenerationError as e:

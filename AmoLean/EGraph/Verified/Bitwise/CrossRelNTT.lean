@@ -188,17 +188,19 @@ def reductionCost (reduction : ReductionChoice) (boundK : Nat)
     else 7                                      -- multiple comparisons
   | .lazy => 0                                  -- no reduction = free
 
-/-- Total reduction cost for an NTT (sum over all stages). -/
+/-- Total reduction cost for an NTT (sum over all stages).
+    Uses reductionCostForHW (SSOT) instead of legacy reductionCost. -/
 def nttTotalReductionCost (analysis : List (Nat × ReductionChoice × Nat))
-    (hwIsSimd : Bool) : Nat :=
-  analysis.foldl (fun acc (_, red, boundK) =>
-    acc + reductionCost red boundK hwIsSimd) 0
+    (hw : HardwareCost) : Nat :=
+  analysis.foldl (fun acc (_, red, _) =>
+    acc + reductionCostForHW hw red) 0
 
-/-- Improvement ratio: cost with bound-informed selection vs naive (all Solinas). -/
+/-- Improvement ratio: cost with bound-informed selection vs naive (all Solinas).
+    Uses reductionCostForHW (SSOT) for both informed and naive costs. -/
 def improvementVsNaive (analysis : List (Nat × ReductionChoice × Nat))
-    (hwIsSimd : Bool) : Nat × Nat :=
-  let informed := nttTotalReductionCost analysis hwIsSimd
-  let naive := analysis.length * (if hwIsSimd then 8 else 6)
+    (hw : HardwareCost) : Nat × Nat :=
+  let informed := nttTotalReductionCost analysis hw
+  let naive := analysis.length * (reductionCostForHW hw .solinasFold)
   (informed, naive)
 
 -- ══════════════════════════════════════════════════════════════════

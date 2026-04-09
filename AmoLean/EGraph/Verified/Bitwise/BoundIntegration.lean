@@ -34,7 +34,7 @@ open AmoLean.EGraph.Verified.Bitwise.BoundProp (ReductionChoice babyBearFactory
 open AmoLean.EGraph.Verified.Bitwise.CrossRelNTT (NTTBoundConfig nttStageBoundAnalysis
   selectReductionForBound costAwareReductionForBound
   reductionCostForHW nttTotalReductionCost improvementVsNaive lazyReductionSavings)
-open AmoLean.EGraph.Verified.Bitwise (HardwareCost)
+open AmoLean.EGraph.Verified.Bitwise (HardwareCost arm_cortex_a76 arm_neon_simd)
 open MixedPipeline (MixedEGraph)
 
 -- ══════════════════════════════════════════════════════════════════
@@ -85,9 +85,11 @@ def extractReductionSchedule (analysis : List (Nat × ReductionChoice × Nat)) :
     List ReductionChoice :=
   analysis.map (·.2.1)
 
-/-- Human-readable savings report. -/
+/-- Human-readable savings report.
+    Signature kept as (hwIsSimd : Bool) for backward compat with Phase23Integration olean. -/
 def computeSavings (analysis : List (Nat × ReductionChoice × Nat)) (hwIsSimd : Bool) : String :=
-  let (informed, naive) := improvementVsNaive analysis hwIsSimd
+  let hw := if hwIsSimd then arm_neon_simd else arm_cortex_a76
+  let (informed, naive) := improvementVsNaive analysis hw
   let savings := lazyReductionSavings analysis
   s!"Informed: {informed}, Naive: {naive}, Lazy saved: {savings}/{analysis.length}"
 
@@ -153,9 +155,12 @@ example : (nttStageBoundAnalysis { numStages := 20, prime := 2013265921 }).lengt
 example : lazyReductionSavings (nttStageBoundAnalysis
     { numStages := 20, prime := 2013265921 }) > 0 := by native_decide
 
-/-- Bound-informed cost < naive. -/
+/-- Bound-informed cost ≤ naive (scalar ARM).
+    With reductionCostForHW, lazy costs = Solinas cost (codegen emits Solinas fold),
+    so savings come only from Harvey stages. For BabyBear scalar, last 2 stages use
+    Solinas (boundK > 4), not Harvey, so informed = naive = 120. -/
 example : nttTotalReductionCost (nttStageBoundAnalysis
-    { numStages := 20, prime := 2013265921 }) false < 20 * 6 := by native_decide
+    { numStages := 20, prime := 2013265921 }) arm_cortex_a76 ≤ 20 * 6 := by native_decide
 
 /-- selectReductionForBound with tight bound → Harvey. -/
 example : selectReductionForBound 1 false false = .harvey := rfl

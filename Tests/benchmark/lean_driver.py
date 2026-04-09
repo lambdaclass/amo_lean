@@ -27,6 +27,7 @@ def generate_program(
     hardware: str = "arm-scalar",
     pipeline: str = "ultra",
     timeout: int = 300,
+    verified_simd: bool = False,
 ) -> GeneratedProgram:
     """Invoke emit_code.lean to generate raw C/Rust source code."""
     cmd = [
@@ -34,6 +35,8 @@ def generate_program(
         "Tests/benchmark/emit_code.lean",
         field, str(log_n), lang, hardware,
     ]
+    if verified_simd:
+        cmd.append("--verified-simd")
     result = subprocess.run(
         cmd,
         capture_output=True,
