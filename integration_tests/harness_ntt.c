@@ -35,10 +35,9 @@
 /* Declare the generated NTT function */
 void NTT_FUNC(int32_t* data, const int32_t* twiddles);
 
-/* Declare the generated helpers (defined as static in the generated file,
-   so we need to be in the same compilation unit or redefine them) */
+/* Declare the generated helpers */
 extern uint64_t mod_pow(uint64_t base, uint64_t exp, uint64_t mod);
-extern void compute_twiddles(uint32_t* tw, size_t n, size_t logn, uint64_t p, uint64_t gen);
+extern void compute_twiddles(uint32_t* tw, uint32_t* tw_mont, size_t n, size_t logn, uint64_t p, uint64_t gen);
 
 int main(int argc, char* argv[]) {
     int n_args = argc - 1;
@@ -52,12 +51,13 @@ int main(int argc, char* argv[]) {
     for (int i = 0; i < n_args; i++)
         data[i] = (int32_t)atoll(argv[i + 1]);
 
-    /* Compute twiddle factors */
+    /* Compute twiddle factors (plain and Montgomery form) */
     uint32_t tw[NTT_SIZE * NTT_LOGN];
-    compute_twiddles(tw, NTT_SIZE, NTT_LOGN, NTT_PRIME, NTT_GEN);
+    uint32_t tw_mont[NTT_SIZE * NTT_LOGN];
+    compute_twiddles(tw, tw_mont, NTT_SIZE, NTT_LOGN, NTT_PRIME, NTT_GEN);
 
-    /* Run NTT */
-    NTT_FUNC(data, (const int32_t*)tw);
+    /* Run NTT with Montgomery twiddles */
+    NTT_FUNC(data, (const int32_t*)tw_mont);
 
     /* Print output */
     for (int i = 0; i < NTT_SIZE; i++) {

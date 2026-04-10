@@ -286,11 +286,11 @@ def lower (m n : Nat) (state : LowerState) (mExpr : MatExpr α m n) : (SigmaExpr
       let (innerExpr1, state2) := lower half half state1 (MatExpr.dft half : MatExpr α half half)
       let body1 := adjustBlock loopVar1 half half innerExpr1
       let stage1 := SigmaExpr.loop 2 loopVar1 body1
-      -- Stage 2 (DFT_2 ⊗ I_{n/2}): loop over n/2 pairs with stride
+      -- Stage 2 (DFT_2 ⊗ I_{n/2}): strided access, loop over n/2 positions
       let (loopVar2, state3) := freshLoopVar state2
       let dft2Kernel : SigmaExpr :=
         .compute (.dft 2) (Gather.contiguous 2 (.const 0)) (Scatter.contiguous 2 (.const 0))
-      let body2 := adjustBlock loopVar2 (half * 2) half dft2Kernel
+      let body2 := adjustStride loopVar2 half 2 2 dft2Kernel
       let stage2 := SigmaExpr.loop half loopVar2 body2
       -- Compose: stage1 writes to temp, stage2 reads from temp
       (.temp n' (.seq stage1 stage2), state3)

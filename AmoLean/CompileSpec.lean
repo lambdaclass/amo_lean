@@ -90,6 +90,7 @@ decreasing_by omega
 private def nttPreamble (fc : FieldConfig) : String :=
   let wt := fc.wideType
   let et := fc.elemType
+  let rLit := if fc.k > 32 then s!"(({wt})1 << 64)" else s!"(({wt})1 << 32)"
   s!"#include <stdint.h>
 #include <stdlib.h>
 #include <stddef.h>
@@ -105,13 +106,16 @@ private def nttPreamble (fc : FieldConfig) : String :=
   return result;
 }
 
-void compute_twiddles({et}* tw, size_t n, size_t logn, {wt} p, {wt} gen) \{
+void compute_twiddles({et}* tw, {et}* tw_mont, size_t n, size_t logn, {wt} p, {wt} gen) \{
   {wt} omega_n = mod_pow(gen, (p - 1) / ({wt})n, p);
   for (size_t st = 0; st < logn; st++) \{
     size_t h = (size_t)1 << (logn - 1 - st);
     for (size_t g = 0; g < ((size_t)1 << st); g++)
-      for (size_t pp = 0; pp < h; pp++)
-        tw[st * (n/2) + g * h + pp] = ({et})mod_pow(omega_n, ({wt})(pp * ((size_t)1 << st)), p);
+      for (size_t pp = 0; pp < h; pp++) \{
+        {wt} w = mod_pow(omega_n, ({wt})(pp * ((size_t)1 << st)), p);
+        tw[st * (n/2) + g * h + pp] = ({et})w;
+        tw_mont[st * (n/2) + g * h + pp] = ({et})((w * {rLit}) % p);
+      }
   }
 }
 

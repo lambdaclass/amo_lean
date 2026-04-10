@@ -58,9 +58,26 @@ def compose_matrix(a, b):
             result[i][j] = sum(a[i][p] * b[p][j] for p in range(k1))
     return result
 
+def bit_reverse(x, bits):
+    """Reverse the lowest `bits` bits of x."""
+    result = 0
+    for _ in range(bits):
+        result = (result << 1) | (x & 1)
+        x >>= 1
+    return result
+
+def bit_reverse_permute(data, n):
+    """Apply bit-reversal permutation to data."""
+    logn = n.bit_length() - 1
+    result = [0] * n
+    for i in range(n):
+        result[bit_reverse(i, logn)] = data[i]
+    return result
+
 def ntt_reference(data, p, g, n):
-    """Reference NTT (DIT radix-2) over Z_p."""
-    result = list(data)
+    """Reference NTT (DIT radix-2) over Z_p.
+    Standard Cooley-Tukey DIT with omega = g^((p-1)/n)."""
+    result = [x % p for x in data]
     logn = n.bit_length() - 1
     omega_n = pow(g, (p - 1) // n, p)
     m = 1
