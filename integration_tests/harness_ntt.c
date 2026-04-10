@@ -46,15 +46,16 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    int32_t data[NTT_SIZE];
-    for (int i = 0; i < NTT_SIZE; i++) data[i] = 0;
-    for (int i = 0; i < n_args; i++)
-        data[i] = (int32_t)atoll(argv[i + 1]);
-
     /* Compute twiddle factors (plain and Montgomery form) */
     uint32_t tw[NTT_SIZE * NTT_LOGN];
     uint32_t tw_mont[NTT_SIZE * NTT_LOGN];
     compute_twiddles(tw, tw_mont, NTT_SIZE, NTT_LOGN, NTT_PRIME, NTT_GEN);
+
+    /* Data stays in standard form — REDC(tw_mont * data) = tw * data mod p */
+    int32_t data[NTT_SIZE];
+    for (int i = 0; i < NTT_SIZE; i++) data[i] = 0;
+    for (int i = 0; i < n_args; i++)
+        data[i] = (int32_t)(atoll(argv[i + 1]) % NTT_PRIME);
 
     /* Run NTT with Montgomery twiddles */
     NTT_FUNC(data, (const int32_t*)tw_mont);
