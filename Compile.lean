@@ -34,6 +34,9 @@ def showHelp : IO Unit := do
   IO.println "  --help             Show this help"
   IO.println ""
   IO.println "Spec file must define:  def spec : MatExpr Int m n := ..."
+  IO.println ""
+  IO.println "Intermediate representations are written to an artifacts/ directory"
+  IO.println "next to the output file."
 
 /-- Remove `import` lines from user code (the runner provides its own imports). -/
 def stripImports (source : String) : String :=
@@ -44,7 +47,7 @@ def stripImports (source : String) : String :=
 
 /-- Construct the runner source that wraps user code with imports and codegen. -/
 def buildRunner (userCode : String) (target : String) (funcName : String)
-    (outputPath : String) : String :=
+    (outputPath : String) (artifactsDir : String) (baseName : String) : String :=
   let (codegenImport, codegenOpen, codegenFn) := match target with
     | "rust" =>
       ("import AmoLean.Backends.Rust",
@@ -63,9 +66,29 @@ open AmoLean.Matrix (MatExpr)
 {userCode}
 
 def main : IO Unit := do
+  IO.FS.createDirAll \"{artifactsDir}\"
+  let sigma := AmoLean.Sigma.lowerFresh _ _ spec
+  IO.FS.writeFile \"{artifactsDir}/{baseName}.sigma\" (toString sigma)
+  let expanded := AmoLean.Sigma.expandSigmaExpr sigma
+  IO.FS.writeFile \"{artifactsDir}/{baseName}.expanded\" (toString expanded)
   let code := {codegenFn} \"{funcName}\" _ _ spec
   IO.FS.writeFile \"{outputPath}\" code
 "
+
+/-- Extract the directory part of a file path (everything before the last /). -/
+def dirOf (path : String) : String :=
+  match path.splitOn "/" |>.dropLast with
+  | [] => "."
+  | parts => String.intercalate "/" parts
+
+/-- Extract the filename without extension from a path. -/
+def stemOf (path : String) : String :=
+  let filename := match path.splitOn "/" with
+    | [] => path
+    | parts => parts.getLast!
+  if filename.endsWith ".c" then filename.dropRight 2
+  else if filename.endsWith ".rs" then filename.dropRight 3
+  else filename
 
 def main (args : List String) : IO UInt32 := do
   let cfg := parseArgs args {}
@@ -95,6 +118,11 @@ def main (args : List String) : IO UInt32 := do
         else specFile
       base ++ ext
 
+  -- Compute artifacts directory and base name
+  let outputDir := dirOf outputPath
+  let artifactsDir := s!"{outputDir}/artifacts"
+  let baseName := stemOf outputPath
+
   -- Read spec file
   unless (← System.FilePath.pathExists ⟨specFile⟩) do
     IO.eprintln s!"Error: file '{specFile}' not found."
@@ -103,7 +131,7 @@ def main (args : List String) : IO UInt32 := do
 
   -- Build runner
   let cleanCode := stripImports userCode
-  let runner := buildRunner cleanCode cfg.target cfg.funcName outputPath
+  let runner := buildRunner cleanCode cfg.target cfg.funcName outputPath artifactsDir baseName
 
   -- Write temp runner file
   let tmpPath := "/tmp/trzk_runner.lean"
@@ -124,4 +152,5 @@ def main (args : List String) : IO UInt32 := do
     return 1
 
   IO.println s!"Generated: {outputPath}"
+  IO.println s!"IR:        {artifactsDir}/{baseName}.sigma, {artifactsDir}/{baseName}.expanded"
   return 0
