@@ -1,0 +1,55 @@
+name: Integration Tests
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master, develop ]
+
+jobs:
+  integration-tests:
+    name: DFT_4 Integration Tests
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Install elan
+      run: |
+        curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh -s -- -y --default-toolchain none
+        echo "$HOME/.elan/bin" >> $GITHUB_PATH
+
+    - name: Cache Lake packages
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.elan
+          .lake
+        key: ${{ runner.os }}-lake-${{ hashFiles('lean-toolchain', 'lakefile.lean', 'lake-manifest.json') }}
+        restore-keys: |
+          ${{ runner.os }}-lake-
+
+    - name: Fetch Mathlib cache
+      run: lake exe cache get
+
+    - name: Build full pipeline module
+      run: lake build AmoLean.FullPipeline
+
+    - name: Run full pipeline (Lean tests + code generation)
+      run: lake env lean AmoLean/FullPipeline.lean
+
+    - name: Install clang
+      run: sudo apt-get update && sudo apt-get install -y clang
+
+    - name: Compile generated C binary
+      run: clang -O2 -o generated/dft4 generated/dft4.c
+
+    - name: Compile generated Rust binary
+      run: rustc -o generated/dft4_rs generated/dft4.rs
+
+    - name: Verify C binary against test vectors
+      run: python3 integration_tests/verify_dft4.py --binary generated/dft4 integration_tests/test_vectors.txt
+
+    - name: Verify Rust binary against test vectors
+      run: python3 integration_tests/verify_dft4.py --binary generated/dft4_rs integration_tests/test_vectors.txt
