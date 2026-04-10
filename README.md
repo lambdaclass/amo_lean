@@ -109,6 +109,54 @@ cd verification/plonky3/plonky3_shim && cargo build --release && cd ..
 ./oracle_test
 ```
 
+### Compiler Driver
+
+The `trzk` compiler driver lets you write an algorithm spec in Lean and compile it to C or Rust in one step.
+
+**1. Write your spec.** Create a `.lean` file with your algorithm expressed as matrix operations:
+
+```lean
+-- my_transform.lean
+open AmoLean.Matrix (MatExpr)
+
+def spec : MatExpr Int 8 8 :=
+  let stage1 : MatExpr Int 8 8 := .kron (.identity 4) (.dft 2)
+  let stage2 : MatExpr Int 8 8 := .kron (.identity 2) (.kron (.dft 2) (.identity 2))
+  .compose stage2 stage1
+```
+
+No imports or boilerplate needed — just the algorithm definition.
+
+**2. Compile it:**
+
+```bash
+lake build trzk
+.lake/build/bin/trzk my_transform.lean --target c --name my_transform
+```
+
+**3. Use the generated code.** The compiler writes `my_transform.c` (or `.rs` for `--target rust`), which you can drop into your own project:
+
+```c
+// my_transform.c (generated)
+void my_transform(double* restrict in, double* restrict out) {
+  for (int i0 = 0; i0 < 4; i0++) {
+    out[2 * i0 + 0] = (in[2 * i0 + 0] + in[2 * i0 + 1]);
+    out[2 * i0 + 1] = (in[2 * i0 + 0] - in[2 * i0 + 1]);
+  }
+  // ... stage 2
+}
+```
+
+Available matrix operations: `.dft`, `.identity`, `.kron` (Kronecker product), `.compose`, `.add`, `.smul`, `.transpose`, `.perm`, `.diag`, `.twiddle`, `.elemwise`. See the `examples/` directory for more specs.
+
+**Options:**
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--target c\|rust` | Output language | `c` |
+| `--output <path>` | Output file path | `<spec>.c` or `<spec>.rs` |
+| `--name <func>` | Function name in generated code | `spec` |
+
 ### Using libamolean (Header-Only C Library)
 
 ```c
