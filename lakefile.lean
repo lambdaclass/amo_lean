@@ -37,6 +37,9 @@ lean_exe «fri-benchmark» where
 lean_exe «bench» where
   root := `Bench
 
+lean_exe «trzk» where
+  root := `Compile
+
 -- Phase 0 test script: run all tests
 script «phase0-test» do
   IO.println "╔══════════════════════════════════════════════════════════════╗"
