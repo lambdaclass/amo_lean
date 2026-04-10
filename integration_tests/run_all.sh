@@ -89,74 +89,49 @@ run_matrix_test "compose_ct4" "compose_test"
 echo ""
 echo "── NTT ──"
 
-NTT_SPEC="$SPECS_DIR/ntt_babybear_16.lean"
-if [ -f "$NTT_SPEC" ]; then
-    if "$TRZK" "$NTT_SPEC" --target c --name ntt16 --output "$BUILD_DIR/ntt16.c" 2>/dev/null; then
-        # The generated NTT file is self-contained (has mod_pow, compute_twiddles, kernel).
-        # Append a test main that computes twiddles and runs the NTT.
-        cat >> "$BUILD_DIR/ntt16.c" << 'NTT_MAIN'
+run_ntt_test() {
+    local name="$1"
+    local func_name="$2"
+    local size="$3"
+    local logn="$4"
+    local prime="$5"
+    local gen="$6"
+    local spec_file="$SPECS_DIR/${name}.lean"
 
-/* Test harness — appended by integration test */
-#include <stdio.h>
-#include <string.h>
+    if [ ! -f "$spec_file" ]; then
+        echo "  SKIP $name: spec file not found"
+        SKIPPED=$((SKIPPED + 1))
+        return
+    fi
 
-int main(int argc, char* argv[]) {
-    if (argc < 2) { fprintf(stderr, "Usage: %s <x0> [x1] ...\n", argv[0]); return 1; }
-    int n = argc - 1;
-    int32_t data[16] = {0};
-    for (int i = 0; i < n && i < 16; i++)
-        data[i] = (int32_t)atoll(argv[i + 1]);
+    if ! "$TRZK" "$spec_file" --target c --name "$func_name" --output "$BUILD_DIR/${name}.c" 2>/dev/null; then
+        echo "  FAIL $name: trzk codegen failed"
+        FAILED=$((FAILED + 1))
+        return
+    fi
 
-    /* Compute twiddles */
-    size_t logn = 4;  /* log2(16) */
-    uint64_t p = 2013265921ULL;
-    uint64_t gen = 31ULL;
-    uint32_t tw[16 * 4];
-    compute_twiddles(tw, 16, logn, p, gen);
+    if ! clang -O2 \
+         -DNTT_FUNC="$func_name" \
+         -DNTT_SIZE="$size" \
+         -DNTT_LOGN="$logn" \
+         -DNTT_PRIME="${prime}" \
+         -DNTT_GEN="${gen}" \
+         -o "$BUILD_DIR/${name}" \
+         "$BUILD_DIR/${name}.c" "$SCRIPT_DIR/harness_ntt.c" 2>/dev/null; then
+        echo "  FAIL $name: compilation failed"
+        FAILED=$((FAILED + 1))
+        return
+    fi
 
-    /* The generated function name from emitPlanBasedNTTC */
-    /* Find the function — it's named babybear_ntt_plan */
-    babybear_ntt_plan(data, (const int32_t*)tw);
-
-    for (int i = 0; i < 16; i++) {
-        if (i > 0) printf(" ");
-        printf("%d", data[i]);
-    }
-    printf("\n");
-    return 0;
-}
-NTT_MAIN
-
-        if clang -O2 -o "$BUILD_DIR/ntt16" "$BUILD_DIR/ntt16.c" 2>/dev/null; then
-            # Run with a simple test vector and check it doesn't crash
-            # and outputs 16 values
-            OUTPUT=$("$BUILD_DIR/ntt16" 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 2>/dev/null || true)
-            COUNT=$(echo "$OUTPUT" | wc -w | tr -d ' ')
-            if [ "$COUNT" = "16" ]; then
-                echo ""
-                echo "  ntt_babybear_16 (16 elements, BabyBear field)"
-                echo "    PASS (compiled and produced 16-element output)"
-                PASSED=$((PASSED + 1))
-            else
-                echo ""
-                echo "  ntt_babybear_16"
-                echo "    FAIL: expected 16 values, got $COUNT"
-                FAILED=$((FAILED + 1))
-            fi
-        else
-            echo ""
-            echo "  ntt_babybear_16"
-            echo "    FAIL: compilation failed"
-            FAILED=$((FAILED + 1))
-        fi
+    # Verify against Python reference NTT
+    if python3 "$VERIFIER" --test "$name" --binary "$BUILD_DIR/${name}"; then
+        PASSED=$((PASSED + 1))
     else
-        echo "  FAIL ntt_babybear_16: trzk codegen failed"
         FAILED=$((FAILED + 1))
     fi
-else
-    echo "  SKIP ntt_babybear_16: spec not found"
-    SKIPPED=$((SKIPPED + 1))
-fi
+}
+
+run_ntt_test "ntt_babybear_16" "babybear_ntt_plan" 16 4 "2013265921ULL" "31ULL"
 
 # ────────────────────────────────────────────────────
 # Poseidon S-box test

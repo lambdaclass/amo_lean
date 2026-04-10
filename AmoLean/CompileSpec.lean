@@ -94,7 +94,7 @@ private def nttPreamble (fc : FieldConfig) : String :=
 #include <stdlib.h>
 #include <stddef.h>
 
-static {wt} mod_pow({wt} base, {wt} exp, {wt} mod) \{
+{wt} mod_pow({wt} base, {wt} exp, {wt} mod) \{
   {wt} result = 1;
   base %= mod;
   while (exp > 0) \{
@@ -105,7 +105,7 @@ static {wt} mod_pow({wt} base, {wt} exp, {wt} mod) \{
   return result;
 }
 
-static void compute_twiddles({et}* tw, size_t n, size_t logn, {wt} p, {wt} gen) \{
+void compute_twiddles({et}* tw, size_t n, size_t logn, {wt} p, {wt} gen) \{
   {wt} omega_n = mod_pow(gen, (p - 1) / ({wt})n, p);
   for (size_t st = 0; st < logn; st++) \{
     size_t h = (size_t)1 << (logn - 1 - st);

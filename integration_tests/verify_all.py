@@ -162,6 +162,46 @@ def verify_matrix_test(name, binary):
         print(f"    {passed}/{len(vectors)} passed, {failed} FAILED")
     return failed == 0
 
+def verify_ntt(name, binary, p, g, n):
+    """Verify NTT binary against reference implementation."""
+    random.seed(42)
+    vectors = []
+    # Basis-like vectors
+    for i in range(min(n, 4)):
+        v = [0] * n
+        v[i] = 1
+        vectors.append(v)
+    # All ones
+    vectors.append([1] * n)
+    # Sequential
+    vectors.append([i % p for i in range(1, n + 1)])
+    # Random values mod p
+    while len(vectors) < 15:
+        vectors.append([random.randint(0, min(p - 1, 10000)) for _ in range(n)])
+
+    passed = 0
+    failed = 0
+    print(f"\n  {name} (NTT size {n}, p={p}, {len(vectors)} vectors)")
+    for i, vec in enumerate(vectors):
+        output, err = run_binary(binary, vec)
+        if err:
+            failed += 1
+            print(f"    FAIL vector {i}: {err}")
+            continue
+        expected = ntt_reference(vec, p, g, n)
+        if output == expected:
+            passed += 1
+        else:
+            failed += 1
+            print(f"    FAIL vector {i}: input={vec[:4]}...")
+            print(f"      got      = {output[:4]}...")
+            print(f"      expected = {expected[:4]}...")
+    if failed == 0:
+        print(f"    PASS ({passed}/{len(vectors)})")
+    else:
+        print(f"    {passed}/{len(vectors)} passed, {failed} FAILED")
+    return failed == 0
+
 def verify_sbox(binary, p=18446744069414584321, exp=5):
     """Verify Poseidon S-box: output should be x^exp mod p."""
     test_values = [0, 1, 2, 3, 7, 42, 100, 999, 2013265921, 123456789]
@@ -212,6 +252,8 @@ def main():
 
     if test_name == "poseidon_sbox":
         ok = verify_sbox(binary)
+    elif test_name == "ntt_babybear_16":
+        ok = verify_ntt(test_name, binary, p=2013265921, g=31, n=16)
     elif test_name in MATRIX_TESTS:
         ok = verify_matrix_test(test_name, binary)
     else:
