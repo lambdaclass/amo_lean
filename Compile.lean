@@ -1,7 +1,8 @@
 /-
-  trzk — Compile MatExpr specs to C/Rust
+  trzk — Compile Spec files to C/Rust
 
-  Usage: .lake/build/bin/trzk <spec.lean> [--target c|rust] [--output <file>] [--name <funcname>]
+  Usage: .lake/build/bin/trzk <spec.lean> [--target c|rust] [--output <file>]
+                                          [--name <funcname>] [--hardware scalar|neon|avx2]
 -/
 
 structure CompileConfig where
@@ -9,6 +10,7 @@ structure CompileConfig where
   target : String := "c"
   output : Option String := none
   funcName : String := "spec"
+  hardware : String := "scalar"
   help : Bool := false
 
 partial def parseArgs : List String → CompileConfig → CompileConfig
@@ -16,6 +18,7 @@ partial def parseArgs : List String → CompileConfig → CompileConfig
   | "--target" :: v :: rest, cfg => parseArgs rest { cfg with target := v }
   | "--output" :: v :: rest, cfg => parseArgs rest { cfg with output := some v }
   | "--name" :: v :: rest, cfg => parseArgs rest { cfg with funcName := v }
+  | "--hardware" :: v :: rest, cfg => parseArgs rest { cfg with hardware := v }
   | "--help" :: rest, cfg => parseArgs rest { cfg with help := true }
   | v :: rest, cfg =>
     if cfg.specFile.isNone && !v.startsWith "--"
@@ -23,65 +26,61 @@ partial def parseArgs : List String → CompileConfig → CompileConfig
     else parseArgs rest cfg
 
 def showHelp : IO Unit := do
-  IO.println "trzk — Compile MatExpr specs to C/Rust"
+  IO.println "trzk — Compile algorithm specs to C/Rust"
   IO.println ""
   IO.println "Usage: .lake/build/bin/trzk <spec.lean> [options]"
   IO.println ""
   IO.println "Options:"
-  IO.println "  --target c|rust    Target language (default: c)"
-  IO.println "  --output <file>    Output file path (default: <spec>.c or <spec>.rs)"
-  IO.println "  --name <funcname>  Function name in generated code (default: \"spec\")"
-  IO.println "  --help             Show this help"
+  IO.println "  --target c|rust          Target language (default: c)"
+  IO.println "  --output <file>          Output file path (default: <spec>.c or <spec>.rs)"
+  IO.println "  --name <funcname>        Function name in generated code (default: \"spec\")"
+  IO.println "  --hardware scalar|neon|avx2  Hardware target for NTT optimization (default: scalar)"
+  IO.println "  --help                   Show this help"
   IO.println ""
-  IO.println "Spec file must define:  def spec : MatExpr Int m n := ..."
+  IO.println "Spec file must define:  def spec : Spec := ..."
   IO.println ""
-  IO.println "Intermediate representations are written to an artifacts/ directory"
-  IO.println "next to the output file."
+  IO.println "Examples:"
+  IO.println "  def spec := ntt .babybear 1024"
+  IO.println "  def spec := poseidon2Sbox .goldilocks 12"
+  IO.println "  def spec := compose (kron (dft 2) (Spec.identity 2)) (kron (Spec.identity 2) (dft 2))"
 
-/-- Remove `import` lines from user code (the runner provides its own imports). -/
 def stripImports (source : String) : String :=
   let lines := source.splitOn "\n"
   let filtered := lines.filter fun line =>
     !(line.trimLeft.startsWith "import ")
   String.intercalate "\n" filtered
 
-/-- Construct the runner source that wraps user code with imports and codegen. -/
 def buildRunner (userCode : String) (target : String) (funcName : String)
-    (outputPath : String) (artifactsDir : String) (baseName : String) : String :=
-  let (codegenImport, codegenOpen, codegenFn) := match target with
-    | "rust" =>
-      ("import AmoLean.Backends.Rust",
-       "open AmoLean.Backends.Rust (matExprToRust)",
-       "matExprToRust")
-    | _ =>
-      ("import AmoLean.Sigma.CodeGen",
-       "open AmoLean.Sigma.CodeGen (matExprToC)",
-       "matExprToC")
-  s!"{codegenImport}
-import AmoLean.Matrix.Basic
+    (outputPath : String) (hardware : String) (artifactsDir : String)
+    (baseName : String) : String :=
+  let hwEnum := match hardware with
+    | "neon" => ".neon"
+    | "avx2" => ".avx2"
+    | _      => ".scalar"
+  s!"import AmoLean.CompileSpec
+import AmoLean.Spec
 
-open AmoLean.Matrix (MatExpr)
-{codegenOpen}
+open AmoLean.Spec
+open AmoLean.CompileSpec (compileSpec)
 
 {userCode}
 
 def main : IO Unit := do
   IO.FS.createDirAll \"{artifactsDir}\"
-  let sigma := AmoLean.Sigma.lowerFresh _ _ spec
-  IO.FS.writeFile \"{artifactsDir}/{baseName}.sigma\" (toString sigma)
-  let expanded := AmoLean.Sigma.expandSigmaExpr sigma
-  IO.FS.writeFile \"{artifactsDir}/{baseName}.expanded\" (toString expanded)
-  let code := {codegenFn} \"{funcName}\" _ _ spec
-  IO.FS.writeFile \"{outputPath}\" code
+  IO.FS.writeFile \"{artifactsDir}/{baseName}.spec\" (toString (repr spec))
+  match compileSpec spec \"{target}\" {hwEnum} \"{funcName}\" with
+  | .ok code =>
+    IO.FS.writeFile \"{outputPath}\" code
+  | .error msg =>
+    (← IO.getStderr).putStrLn s!\"Error: \{msg}\"
+    IO.Process.exit 1
 "
 
-/-- Extract the directory part of a file path (everything before the last /). -/
 def dirOf (path : String) : String :=
   match path.splitOn "/" |>.dropLast with
   | [] => "."
   | parts => String.intercalate "/" parts
 
-/-- Extract the filename without extension from a path. -/
 def stemOf (path : String) : String :=
   let filename := match path.splitOn "/" with
     | [] => path
@@ -108,7 +107,10 @@ def main (args : List String) : IO UInt32 := do
     IO.eprintln s!"Error: unknown target '{cfg.target}'. Use 'c' or 'rust'."
     return 1
 
-  -- Derive output path: use --output if given, otherwise replace .lean extension with .c/.rs
+  if cfg.hardware != "scalar" && cfg.hardware != "neon" && cfg.hardware != "avx2" then
+    IO.eprintln s!"Error: unknown hardware '{cfg.hardware}'. Use 'scalar', 'neon', or 'avx2'."
+    return 1
+
   let outputPath := match cfg.output with
     | some p => p
     | none =>
@@ -118,32 +120,27 @@ def main (args : List String) : IO UInt32 := do
         else specFile
       base ++ ext
 
-  -- Compute artifacts directory and base name
   let outputDir := dirOf outputPath
   let artifactsDir := s!"{outputDir}/artifacts"
   let baseName := stemOf outputPath
 
-  -- Read spec file
   unless (← System.FilePath.pathExists ⟨specFile⟩) do
     IO.eprintln s!"Error: file '{specFile}' not found."
     return 1
   let userCode ← IO.FS.readFile ⟨specFile⟩
-
-  -- Build runner
   let cleanCode := stripImports userCode
-  let runner := buildRunner cleanCode cfg.target cfg.funcName outputPath artifactsDir baseName
 
-  -- Write temp runner file
+  let runner := buildRunner cleanCode cfg.target cfg.funcName outputPath
+    cfg.hardware artifactsDir baseName
+
   let tmpPath := "/tmp/trzk_runner.lean"
   IO.FS.writeFile ⟨tmpPath⟩ runner
 
-  -- Run lean on the runner
   let result ← IO.Process.output {
     cmd := "lake"
     args := #["env", "lean", "--run", tmpPath]
   }
 
-  -- Clean up temp file
   try IO.FS.removeFile ⟨tmpPath⟩ catch _ => pure ()
 
   if result.exitCode != 0 then
@@ -152,5 +149,5 @@ def main (args : List String) : IO UInt32 := do
     return 1
 
   IO.println s!"Generated: {outputPath}"
-  IO.println s!"IR:        {artifactsDir}/{baseName}.sigma, {artifactsDir}/{baseName}.expanded"
+  IO.println s!"Artifacts: {artifactsDir}/"
   return 0

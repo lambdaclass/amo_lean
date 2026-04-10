@@ -8,7 +8,7 @@ on:
 
 jobs:
   integration-tests:
-    name: DFT_4 Integration Tests
+    name: Spec Integration Tests
     runs-on: ubuntu-latest
 
     steps:
@@ -33,17 +33,13 @@ jobs:
     - name: Fetch Mathlib cache
       run: lake exe cache get
 
-    - name: Build trzk compiler driver
-      run: lake build trzk
+    - name: Build trzk compiler driver and CompileSpec module
+      run: |
+        lake build AmoLean.CompileSpec
+        lake build trzk
 
     - name: Install clang
       run: sudo apt-get update && sudo apt-get install -y clang
 
-    - name: Generate C from DFT_4 spec via trzk
-      run: .lake/build/bin/trzk integration_tests/dft4_spec.lean --target c --name dft4 --output integration_tests/dft4_spec.c
-
-    - name: Compile generated C with test harness
-      run: clang -O2 -o integration_tests/dft4 integration_tests/dft4_spec.c integration_tests/harness_4.c
-
-    - name: Verify C binary against test vectors
-      run: python3 integration_tests/verify_dft4.py --binary integration_tests/dft4 integration_tests/test_vectors.txt
+    - name: Run all integration tests
+      run: ./integration_tests/run_all.sh
