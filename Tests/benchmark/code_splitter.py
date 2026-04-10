@@ -82,7 +82,7 @@ def build_validation_c(kernel: str, field: FieldDef, log_n: int, func_name: str)
         init_cast = "(uint64_t)"
         r_lit = f"((__uint128_t)1 << 64)"
         p_lit = f"{p}ULL"
-        print_fmt = '    printf("%llu\\n", (unsigned long long)(((unsigned __int128)d[i]) % ((unsigned __int128){p_lit})));'
+        print_fmt = f'    printf("%llu\\n", (unsigned long long)(((unsigned __int128)d[i]) % ((unsigned __int128){p_lit})));'
     else:
         init_cast = f"({wide})"
         r_lit = "4294967296ULL"
@@ -126,13 +126,22 @@ int main(void) {{
             for (size_t pp = 0; pp < h; pp++)
                 tw[st*(n/2) + gg*h + pp] = ({elem})val_mod_pow(omega_n, pp*(1ULL<<st), p_val);
     }}
-    /* Montgomery twiddles for AMO ultra: tw_mont = tw * R mod p */
-    for (size_t i = 0; i < tw_sz; i++)
-        tw_mont[i] = ({elem})((({wide})tw[i] * {r_lit}) % {init_cast}{p_lit});
-    /* Precomputed mu_tw for sqdmulh REDC: mu_tw[i] = tw_mont[i] * mu mod 2^32 */
+    /* Twiddle preparation: Montgomery form for 32-bit fields, plain for Goldilocks */
     {elem} *mu_tw = ({elem}*)malloc(tw_sz * sizeof({elem}));
-    for (size_t i = 0; i < tw_sz; i++)
-        mu_tw[i] = ({elem})((({wide})tw_mont[i] * ({wide}){field.mu}U) & 0xFFFFFFFFULL);
+    if ({field.k} > 32) {{
+        /* Goldilocks: plain twiddles (Solinas fold, no REDC — no R factor to cancel) */
+        for (size_t i = 0; i < tw_sz; i++) {{
+            tw_mont[i] = tw[i];
+            mu_tw[i] = 0;
+        }}
+    }} else {{
+        /* Montgomery twiddles for AMO ultra: tw_mont = tw * R mod p */
+        for (size_t i = 0; i < tw_sz; i++)
+            tw_mont[i] = ({elem})((({wide})tw[i] * {r_lit}) % {init_cast}{p_lit});
+        /* Precomputed mu_tw for sqdmulh REDC: mu_tw[i] = tw_mont[i] * mu mod 2^32 */
+        for (size_t i = 0; i < tw_sz; i++)
+            mu_tw[i] = ({elem})((({wide})tw_mont[i] * ({wide}){field.mu}U) & 0xFFFFFFFFULL);
+    }}
     /* Run NTT */
     {_ntt_call(kernel, func_name)};
     /* Print output mod p */
@@ -287,7 +296,7 @@ def build_debug_validation_c(kernel: str, field: FieldDef, log_n: int,
         init_cast = "(uint64_t)"
         r_lit = f"((__uint128_t)1 << 64)"
         p_lit = f"{p}ULL"
-        print_fmt = '    printf("%llu\\n", (unsigned long long)(((unsigned __int128)d[i]) % ((unsigned __int128){p_lit})));'
+        print_fmt = f'    printf("%llu\\n", (unsigned long long)(((unsigned __int128)d[i]) % ((unsigned __int128){p_lit})));'
     else:
         init_cast = f"({wide})"
         r_lit = "4294967296ULL"
@@ -402,8 +411,8 @@ fn main() {{
             }}
         }}
     }}
-    /* Montgomery twiddles: tw_mont = tw * R mod p */
-    let tw_mont: Vec<{et}> = tw.iter().map(|&t| ((t as {wt} * {r_val}) % p) as {et}).collect();
+    /* Twiddle preparation: Montgomery for 32-bit fields, plain for Goldilocks */
+    let tw_mont: Vec<{et}> = {"tw.clone()" if field.k > 32 else f"tw.iter().map(|&t| ((t as {wt} * {r_val}) % p) as {et}).collect()"};
     {"let mu: " + wt + " = " + str(field.mu) + "; let mu_tw: Vec<" + et + "> = tw_mont.iter().map(|&t| ((t as " + wt + " * mu) & 0xFFFFFFFF) as " + et + ").collect(); unsafe { " + func_name + "(d.as_mut_ptr() as *mut i32, tw_mont.as_ptr() as *const i32, mu_tw.as_ptr() as *const i32) }" if rust_simd else func_name + "(&mut d, &tw_mont)"};
     for i in 0..n {{
         let v = (d[i] as {wt}).rem_euclid(p);

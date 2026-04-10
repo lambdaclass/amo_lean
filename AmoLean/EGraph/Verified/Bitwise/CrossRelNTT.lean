@@ -117,6 +117,26 @@ def redcProfile_vmull : InstructionProfile :=
 def redcProfile_sqdmulh : InstructionProfile :=
   { v0OnlyInstructions := 3, dualIssueInstructions := 4 }
 
+-- ══════════════════════════════════════════════════════════════════
+-- Goldilocks profiles (v3.9.0 B39-4: bench_goldi_isolated.c)
+-- ══════════════════════════════════════════════════════════════════
+
+/-- Goldilocks fold_halves profile (measured: 5.89 ns/call on Apple Silicon).
+    V0-only: 0 instructions (compiler rewrites hl*0xFFFFFFFF as (hl<<32)-hl).
+    This is the variant used by lowerGoldilocksProductReduce. -/
+def goldilocksProfile_halves : InstructionProfile :=
+  { v0OnlyInstructions := 0, dualIssueInstructions := 11 }
+
+/-- Goldilocks fold_mul profile (measured: 6.43 ns/call on Apple Silicon).
+    V0-only: umulh×1 = 1 instruction. Compiler optimizes fold_shiftsub to identical asm. -/
+def goldilocksProfile_mul : InstructionProfile :=
+  { v0OnlyInstructions := 1, dualIssueInstructions := 9 }
+
+/-- Goldilocks NEON Karatsuba profile (measured: 3.60 ns/call on Apple Silicon, 2 lanes).
+    V0-only: umull×3 = 3 instructions. Processes 2 elements per call. -/
+def goldilocksProfile_karatsuba : InstructionProfile :=
+  { v0OnlyInstructions := 3, dualIssueInstructions := 12 }
+
 /-- Butterfly REDC cost (product reduction, always Montgomery subtraction variant).
     Used by Plan.totalCost to include the REDC in butterfly cost (previously omitted). -/
 def butterflyREDCCost (hw : HardwareCost) : Nat :=

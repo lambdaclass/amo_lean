@@ -61,7 +61,7 @@ def validate(
     src_path.write_text(val_source)
 
     if program.lang == "c":
-        cr = compile_c(src_path, bin_path, program.hardware)
+        cr = compile_c(src_path, bin_path, program.hardware, field_k=field.k)
     else:
         cr = compile_rust(src_path, bin_path)
 

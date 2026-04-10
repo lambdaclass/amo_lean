@@ -62,6 +62,14 @@ inductive NeonIntrinsic where
   | get_high_s32   -- vget_high_s32: extract upper int32x2_t from int32x4_t
   -- Struct decomposition (void — calls project helper from N37.2)
   | deinterleaveLoad -- neon_deinterleave_load: vld2q + decompose
+  -- 64-bit ops for Goldilocks butterfly (v3.9.0 N39.9)
+  | add_u64          -- vaddq_u64: 2-lane add uint64x2_t
+  | sub_u64          -- vsubq_u64: 2-lane subtract uint64x2_t
+  | load2_u64        -- vld1q_u64: load 2 × uint64 (uint64x2_t)
+  | store2_u64       -- vst1q_u64: store 2 × uint64 (void)
+  | widening_mul32   -- vmull_u32: 2×32→2×64 widening multiply
+  | narrow_high32    -- vshrn_n_u64: narrow high 32 bits (shift right + narrow)
+  | narrow_low32     -- vmovn_u64: narrow low 32 bits (truncate)
   deriving BEq, Repr, Inhabited
 
 /-- Map ADT to C intrinsic name. SINGLE SOURCE OF TRUTH for naming.
@@ -88,10 +96,18 @@ def NeonIntrinsic.toCName : NeonIntrinsic → String
   | .get_low_s32      => "vget_low_s32"
   | .get_high_s32     => "vget_high_s32"
   | .deinterleaveLoad => "neon_deinterleave_load"
+  -- 64-bit Goldilocks (v3.9.0)
+  | .add_u64          => "vaddq_u64"
+  | .sub_u64          => "vsubq_u64"
+  | .load2_u64        => "vld1q_u64"
+  | .store2_u64       => "vst1q_u64"
+  | .widening_mul32   => "vmull_u32"
+  | .narrow_high32    => "vshrn_n_u64"
+  | .narrow_low32     => "vmovn_u64"
 
 /-- Is this a void-return intrinsic (stores, struct decomposition)? -/
 def NeonIntrinsic.isVoid : NeonIntrinsic → Bool
-  | .store4_s32 | .store4x2_s32 | .store2_s32 | .deinterleaveLoad => true
+  | .store4_s32 | .store4x2_s32 | .store2_s32 | .store2_u64 | .deinterleaveLoad => true
   | _ => false
 
 -- ══════════════════════════════════════════════════════════════════
@@ -139,6 +155,14 @@ def NeonIntrinsic.fromCName : String → Option NeonIntrinsic
   | "vget_low_s32"            => some .get_low_s32
   | "vget_high_s32"           => some .get_high_s32
   | "neon_deinterleave_load"  => some .deinterleaveLoad
+  -- 64-bit Goldilocks (v3.9.0)
+  | "vaddq_u64"               => some .add_u64
+  | "vsubq_u64"               => some .sub_u64
+  | "vld1q_u64"               => some .load2_u64
+  | "vst1q_u64"               => some .store2_u64
+  | "vmull_u32"                => some .widening_mul32
+  | "vshrn_n_u64"              => some .narrow_high32
+  | "vmovn_u64"                => some .narrow_low32
   | _                         => none
 
 /-- Emit a Stmt to C with NEON intrinsic handling.

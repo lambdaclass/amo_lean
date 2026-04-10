@@ -113,6 +113,11 @@ structure UltraConfig where
   useVerifiedSIMD : Bool := true
   -- v3.8.0: Rust SIMD codegen (simdStmtToRust — core::arch::aarch64 intrinsics)
   rustSIMD : Bool := false
+  -- v3.9.0: Dynamic cost channel (e-graph → plan costing, opt-in)
+  -- When true, uses reductionCostForHW_dynamic (e-graph extraction cost) instead
+  -- of static reductionCostForHW for plan selection. Default false for safety.
+  -- Known fields (BabyBear/KoalaBear/Mersenne31) have fallback when diff > 5 cycles.
+  useDynamicCost : Bool := false
   deriving Repr
 
 def UltraConfig.scalar : UltraConfig := { hw := arm_cortex_a76, targetColor := 1 }
@@ -179,12 +184,16 @@ def ultraPipeline (g : MixedEGraph)
   let plan := if planLevels == logN then plan else schedulePlan
 
   -- ── Gap 4: Verified codegen via TrustLean.Stmt ──
+  -- For k > 32 (Goldilocks): always use scalar verified path. The SIMD emitter uses
+  -- 32-bit NEON intrinsics (int32x4_t) which don't work for 64-bit field elements.
+  -- goldilocksButterfly4Stmt (v3.9.0 N39.9) provides 64-bit NEON infrastructure
+  -- but full integration requires neonTempDecls64 + fold wiring (future work).
   let simdTarget := if cfg.hw.simdLanes == 8 then SIMDTarget.avx2 else SIMDTarget.neon
-  let code := if cfg.hw.isSimd then
+  let code := if cfg.hw.isSimd && cfg.k ≤ 32 then
     emitSIMDNTTC plan simdTarget cfg.k cfg.c cfg.mu funcName cfg.useSqdmulh cfg.useVerifiedSIMD cfg.profiled
   else
     emitCFromPlanVerified plan cfg.k cfg.c cfg.mu funcName
-  let rustCode := if cfg.rustSIMD && cfg.hw.isSimd then
+  let rustCode := if cfg.rustSIMD && cfg.hw.isSimd && cfg.k ≤ 32 then
     emitSIMDNTTRust plan simdTarget cfg.k cfg.c cfg.mu (funcName ++ "_rs") cfg.useSqdmulh
   else
     emitRustFromPlanVerified plan cfg.k cfg.c cfg.mu (funcName ++ "_rs")

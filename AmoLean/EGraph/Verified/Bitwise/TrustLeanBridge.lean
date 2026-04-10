@@ -370,6 +370,8 @@ def harveyReduceSpec (x : Int) (p : Nat) : Int :=
 /-- Lower Harvey conditional subtraction to Trust-Lean Stmt.
     if x < 2p then (if x < p then result := x else result := x - p)
     else result := x - 2p
+    if x < 2p then (if x < p then result := x else result := x - p)
+    else result := x - 2p
     Mirrors the structure of `lowerSolinasFold` for consistency. -/
 def lowerHarveyReduce (xExpr : LowLevelExpr) (p : Nat) (cgs : CodeGenState) :
     StmtResult × CodeGenState :=

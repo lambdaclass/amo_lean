@@ -27,6 +27,7 @@ import AmoLean.EGraph.Verified.Bitwise.VerifiedPlanCodeGen
 import AmoLean.EGraph.Verified.Bitwise.VerifiedSIMDCodeGen
 import AmoLean.Bridge.VerifiedPipeline
 import AmoLean.EGraph.Verified.Bitwise.UltraPipeline
+import AmoLean.EGraph.Verified.Bitwise.Discovery.OracleAdapter
 
 set_option autoImplicit false
 
@@ -57,7 +58,10 @@ open MixedRunner
 open AmoLean.EGraph.Verified.Bitwise.PlanSelection (selectBestPlan CacheConfig)
 -- NTTPlanCodeGen/UnifiedCodeGen removed: replaced by VerifiedPlanCodeGen (Plan D Phase 2)
 open AmoLean.EGraph.Verified.Bitwise.ReductionAlternativeRules (reductionAlternativeRules)
-open AmoLean.EGraph.Verified.Bitwise.CrossRelNTT (nttStageBoundAnalysis NTTBoundConfig lazyReductionSavings)
+open AmoLean.EGraph.Verified.Bitwise.CrossRelNTT (nttStageBoundAnalysis NTTBoundConfig lazyReductionSavings
+  reductionCostForHW)
+open AmoLean.EGraph.Verified.Bitwise.BoundProp (ReductionChoice)
+open AmoLean.EGraph.Verified.Bitwise.Discovery (exprCostHW)
 open AmoLean.EGraph.Verified.Bitwise.BoundIntegration (mkFullNTTSeedGraph)
 -- ReductionChoice now used internally by VerifiedPlanCodeGen
 open AmoLean.EGraph.Verified.Bitwise.VerifiedPlanCodeGen (emitCFromPlanVerified emitRustFromPlanVerified)
@@ -168,6 +172,41 @@ def optimizeReduction (fc : FieldConfig) (hw : HardwareCost)
   | none =>
     { seedExpr := seed, optimizedExpr := seed, improved := false,
       strategyName := "Fallback (extraction failed)" }
+
+-- ══════════════════════════════════════════════════════════════════
+-- Section 2b: Dynamic Cost Channel (v3.9.0 N39.8)
+-- ══════════════════════════════════════════════════════════════════
+
+/-- Compare static vs dynamic reduction costs for a field.
+    Runs optimizeReduction (3-phase saturation + extraction) to get the
+    dynamic cost from the e-graph, then compares with the static cost
+    from reductionCostForHW. This is a DIAGNOSTIC — does not change the pipeline.
+    Prerequisite: shift-subtract + Karatsuba rules must be in the e-graph (B3a/B3b). -/
+def compareStaticDynamic (fc : FieldConfig) (hw : HardwareCost) : String :=
+  let staticCost := reductionCostForHW hw .solinasFold
+  let result := optimizeReduction fc hw
+  let dynCost := exprCostHW
+    hw result.optimizedExpr
+  let diff := (Int.ofNat dynCost) - (Int.ofNat staticCost)
+  s!"{fc.name}: Static={staticCost} Dynamic={dynCost} Diff={diff} Strategy={result.strategyName}"
+
+/-- Dynamic reduction cost from e-graph optimization.
+    Runs optimizeReduction for the field, extracts the cost of the optimized expression.
+    Opt-in alternative to the static reductionCostForHW.
+    With FALLBACK: for known fields (BabyBear, KoalaBear, Mersenne31),
+    falls back to static when the difference exceeds 5 cycles (P99 threshold).
+    Goldilocks and future fields trust the dynamic cost without fallback. -/
+def reductionCostForHW_dynamic (hw : HardwareCost) (fc : FieldConfig)
+    (red : ReductionChoice) : Nat :=
+  let staticCost := reductionCostForHW hw red
+  let result := optimizeReduction fc hw
+  let dynCost := exprCostHW
+    hw result.optimizedExpr
+  -- Fallback for known 32-bit fields: trust static when diff > 5
+  let knownField := fc.name == "BabyBear" || fc.name == "KoalaBear" || fc.name == "Mersenne31"
+  let diff := if dynCost > staticCost then dynCost - staticCost else staticCost - dynCost
+  if knownField && diff > 5 then staticCost  -- fallback: too much divergence
+  else dynCost
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 3: Code Emission (Steps 2-6)
@@ -420,14 +459,16 @@ def genOptimizedBenchC (fc : FieldConfig) (logN iters : Nat)
 
 open AmoLean.EGraph.Verified.Bitwise.UltraPipeline (ultraPipeline UltraConfig)
 
-/-- Build UltraConfig from FieldConfig + HardwareCost. -/
+/-- Build UltraConfig from FieldConfig + HardwareCost.
+    For k > 32 (Goldilocks): disable SIMD features (sqdmulh, verifiedSIMD) since
+    the NEON butterfly uses 32-bit intrinsics. Falls back to scalar verified path. -/
 private def fieldConfigToUltraConfig (fc : FieldConfig) (hw : HardwareCost) : UltraConfig :=
   { hw := hw
     k := fc.k
     c := fc.cNat
     mu := fc.muNat
-    targetColor := if hw.isSimd then 2 else 1
-    useSqdmulh := hw.isSimd }
+    targetColor := if hw.isSimd && fc.k ≤ 32 then 2 else 1
+    useSqdmulh := hw.isSimd && fc.k ≤ 32 }
 
 /-- Generate NTT C code using the Ultra pipeline (all phases + verified codegen).
     Uses the full Ultra pipeline: Ruler discovery → bound-aware saturation

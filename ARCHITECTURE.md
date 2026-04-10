@@ -1,6 +1,142 @@
 # TRZK: Architecture
 
-## Next Version: 3.8.0
+## Next Version: 3.9.0
+
+### Goldilocks NTT v3.9.0 — Scalar Verificado + Calibración + E-Graph Discovery + SIMD
+
+**Contents**: Enable Goldilocks (p = 2^64 - 2^32 + 1) in the verified pipeline.
+Fix 32-bit hardcoded assumptions in Montgomery REDC and temp declarations.
+Empirical calibration of cost model. E-graph rules for shift-subtract + Karatsuba.
+Dynamic cost channel (opt-in) connecting e-graph extraction to plan costing.
+NeonIntrinsic 64-bit constructors for SIMD butterfly.
+
+**Design**: The verified path (TrustLean.Stmt) has hardcoded 32-bit assumptions:
+`lowerMontyReduceSub:50` uses `2^32-1` mask, `cTempDecls` emits `int64_t`,
+Rust `wideType := "i64"`. The hand-written path works but is not verified.
+Fix via: (1) `lowerGoldilocksProductReduce` using shift-subtract with halves
+(mirrors OptimizedNTTPipeline.lean:254-263), (2) parametric `wideType` by k.
+
+**Key insight** (from idea document analysis): Codegen (NeonIntrinsic → Stmt.call)
+and optimization (MixedNodeOp → e-graph) are INDEPENDENT. NeonIntrinsic has
+pattern matches in only 2 functions (toCName, fromCName) in 1 file. Adding 7
+constructors = 14 new lines. MixedNodeOp (315 branches, 15+ files) is UNTOUCHED.
+
+**Lessons applied**: L-731 (Goldilocks exceeds Int64Range — unbounded evaluator),
+L-732/L-733 (overflow/butterfly bugs invisible to lake build), L-201 (native_decide
+only for p<2^32), L-712 (WellFormedPat for Pattern.eval). Expert: Nat.mul_sub_left_distrib
+closes shift-subtract proof directly.
+
+**Files**:
+- `AmoLean/Bridge/TrustLeanBridge.lean` (MODIFY — add lowerGoldilocksProductReduce)
+- `AmoLean/EGraph/Verified/Bitwise/VerifiedPlanCodeGen.lean` (MODIFY — k>32 branch + wideType)
+- `AmoLean/EGraph/Verified/Bitwise/CrossRelNTT.lean` (MODIFY — InstructionProfile)
+- `AmoLean/EGraph/Verified/Bitwise/BitwiseVocabulary.lean` (MODIFY — shift-subtract rule)
+- `AmoLean/EGraph/Verified/Bitwise/MixedEMatch.lean` (MODIFY — ModularRewriteRule)
+- `AmoLean/EGraph/Verified/Bitwise/MixedSaturation.lean` (MODIFY — modular rule application)
+- `AmoLean/EGraph/Verified/Bitwise/ReductionAlternativeRules.lean` (MODIFY — fused-cost)
+- `AmoLean/EGraph/Verified/Bitwise/OptimizedNTTPipeline.lean` (MODIFY — dynamic cost)
+- `AmoLean/EGraph/Verified/Bitwise/UltraPipeline.lean` (MODIFY — useDynamicCost flag)
+- `AmoLean/EGraph/Verified/Bitwise/Discovery/OracleAdapter.lean` (MODIFY — cache)
+- `AmoLean/Bridge/SIMDStmtToC.lean` (MODIFY — 7 NeonIntrinsic constructors)
+- `AmoLean/EGraph/Verified/Bitwise/VerifiedSIMDButterfly.lean` (MODIFY — goldilocksButterfly4Stmt)
+- `AmoLean/EGraph/Verified/Bitwise/SIMDEmitter.lean` (MODIFY — k=64 dispatch)
+- `Tests/benchmark/bench_goldi_isolated.c` (NEW — calibration micro-benchmark)
+- `Tests/benchmark/bench_goldi_calibration.md` (NEW — calibration report)
+
+**Constraints**:
+- 0 new constructors in MixedNodeOp (315 pattern branches)
+- 0 sorry in existing theorems
+- BabyBear benchmarks ±3% vs v3.7.0 after every block
+- computeCostsF signature UNTOUCHED (breaks extractF_correct)
+- reductionCostForHW static PRESERVED (dynamic is opt-in)
+- lazy_eq_solinas_cost (NTTPlan.lean:302-303, rfl) MUST NOT break
+- Dynamic cost fallback for known fields (BabyBear, KoalaBear, Mersenne31)
+
+#### DAG (3.9.0)
+
+| Nodo | Tipo | Deps | Status |
+|------|------|------|--------|
+| N39.1 lowerGoldilocksProductReduce + k>32 branch | FUND | — | pending |
+| N39.2 Parametrize C/Rust temp decls by k | FUND | — | pending |
+| N39.3 Goldilocks scalar validation (C + Rust) | GATE | N39.1, N39.2 | pending |
+| N39.4 bench_goldi_isolated + InstructionProfile + calibration | FUND | N39.3 | pending |
+| N39.5 goldilocksShiftSubRule (MixedSoundRule) | PAR | N39.3 | pending |
+| N39.6 ModularRewriteRule + goldilocksKaratsuba | CRIT | N39.3 | pending |
+| N39.7 patWidenMulOptimize fused-cost pattern rule | PAR | N39.3 | pending |
+| N39.8 reductionCostForHW_dynamic + fallback + A/B benchmark | CRIT | N39.4, N39.5, N39.6, N39.7 | pending |
+| N39.9 NeonIntrinsic 64-bit + goldilocksButterfly4Stmt | PAR | N39.3 | pending |
+| N39.10 Pipeline dispatch k=64 + full benchmark | HOJA | N39.8, N39.9 | pending |
+
+#### Formal Properties (3.9.0)
+
+| Nodo | Propiedad | Tipo | Prioridad |
+|------|-----------|------|-----------|
+| N39.1 | lowerGoldilocksProductReduce_correct: output < p for inputs < p² | SOUNDNESS | P0 |
+| N39.1 | k≤32 path unchanged (code gen time dispatch, NOT runtime branch) | PRESERVATION | P0 |
+| N39.2 | Goldilocks uses __int128/i128, BabyBear uses int64_t/i64 | INVARIANT | P0 |
+| N39.3 | Goldilocks NTT output matches Python reference element-by-element | SOUNDNESS | P0 |
+| N39.4 | exprCostHW ratio matches measured ratio: mean rel error < 5% | OPTIMIZATION | P0 |
+| N39.5 | hi*(2^32-1) = hi*2^32 - hi via Nat.mul_sub_left_distrib | EQUIVALENCE | P0 |
+| N39.6 | Karatsuba mod p correct (φ=2^32, 2^64 ≡ 2^32-1 mod p) | SOUNDNESS | P0 |
+| N39.6 | E-graph saturation: e-classes < 100k, iterations < 10/expr | INVARIANT | P1 |
+| N39.7 | Fused widening-mul pattern lower cost than decomposed | OPTIMIZATION | P1 |
+| N39.8 | Dynamic fallback to static for known fields when P99 error > 5 cycles | PRESERVATION | P0 |
+| N39.8 | lazy_eq_solinas_cost rfl SAFE: dynamic is separate function | INVARIANT | P0 |
+| N39.8 | useDynamicCost=false → bit-identical results vs v3.7.0 | PRESERVATION | P0 |
+| N39.9 | All 7 NeonIntrinsics: toCName/fromCName roundtrip (rfl examples) | INVARIANT | P0 |
+| N39.9 | goldilocksButterfly4Stmt: allCallsKnown = true | INVARIANT | P0 |
+| N39.10 | Full pipeline: goldilocks arm-neon validation PASS | SOUNDNESS | P0 |
+| N39.10 | BabyBear ±3% vs v3.7.0 (golden vector suite) | PRESERVATION | P0 |
+
+> **Trust boundary**: Same as v3.7.0. `evalStmt(.call) = none`. NEON 64-bit intrinsics
+> are trusted external calls. Structural proofs verify algorithm; intrinsic semantics are TRUSTED.
+> New: `lowerGoldilocksProductReduce_correct` theorem required for soundness (QA mandate).
+
+> **QA disposition** (Gemini 2-round adversarial):
+> - "runtime branch in hot loop" → DISMISSED: `if k>32` evaluated at Lean code gen time
+> - "rfl invariant risk" → DISMISSED: dynamic is separate function, rfl unfolds static only
+> - "non-determinism" → DISMISSED: A/B benchmark is validation, not compiler behavior
+> - ACCEPTED: theorem-first for N39.1, e-graph bounds for N39.6, statistical thresholds for N39.8
+
+#### Dependency Graph
+
+```
+B0 (FUND) Fix bloqueantes ─→ B1 (GATE) Validar scalar
+                                   │
+                 ┌─────────────────┬┴────────────────┬──────────────┐
+                 ▼                 ▼                  ▼              ▼
+           B2 (FUND)         B3a (PAR)          B3b (CRIT)     B5 (PAR)
+           Calibración       Shift-sub +        Karatsuba      NeonIntrinsic
+           empírica          Fused-cost         ModularRule    64-bit
+                 │                 │                 │              │
+                 └────────┬────────┘                 │              │
+                          ▼                          │              │
+                    B4 (CRIT) ◄──────────────────────┘              │
+                    Canal dinámico                                   │
+                          │                                         │
+                          └──────────────┬──────────────────────────┘
+                                         ▼
+                                   B6 (HOJA)
+                                   Pipeline + benchmark
+```
+
+Critical path: B0(2-3d) → B1(1d) → B2(2-3d) → B4(2-3d) → B6(1-2d) = ~9-12 days
+Parallel branches: B3a, B3b, B5 run alongside B2 after B1
+
+#### Bloques
+
+- [ ] **Bloque 0 — Fix 32-bit bloqueantes (N39.1 + N39.2)**: FUND, sequential. N39.1: `lowerGoldilocksProductReduce` in TrustLeanBridge.lean (shift-subtract with halves, ~15 LOC) + `if k > 32` branch at VerifiedPlanCodeGen.lean:110-111. Theorem-first: `lowerGoldilocksProductReduce_correct` BEFORE merge. N39.2: parametrize temp decls at VerifiedPlanCodeGen.lean:366,373-374,392,398-400,409-411. Gate: `lake build` + `benchmark.py --validation-only --fields babybear,koalabear,mersenne31 --sizes 14` (no-regression).
+- [ ] **Bloque 1 — Validar scalar Goldilocks (N39.3)**: GATE. Gate: `benchmark.py --validation-only --fields goldilocks --hardware arm-scalar --sizes 14` (C + Rust). PBT: near-overflow inputs, products requiring full 128-bit intermediate.
+- [ ] **Bloque 2 — Calibración empírica (N39.4)**: FUND, sequential. `bench_goldi_isolated.c` with 4 variants (fold_mul, fold_shiftsub, fold_halves, NEON Karatsuba 2-lane). Run 1000+ iterations, report std-dev. Build InstructionProfile. Validate exprCostHW ratios: mean relative error < 5%. Gate: calibration report in `bench_goldi_calibration.md`.
+- [ ] **Bloque 3a — E-graph rules ligeras (N39.5 + N39.7)**: PAR, agent team. N39.5: goldilocksShiftSubRule via Nat.mul_sub_left_distrib (~15 LOC). N39.7: patWidenMulOptimize via ReductionAlternativeRules (~10 LOC). Gate: `optimizeReduction babybearConfig arm_cortex_a76` produces same strategyName as v3.7.0.
+- [ ] **Bloque 3b — Karatsuba ModularRewriteRule (N39.6)**: CRIT, sequential. ModularRewriteRule (~10 LOC in MixedEMatch.lean) + goldilocksKaratsuba. Math: φ=2^32, 2^64 ≡ 2^32-1 (mod p), standard Goldilocks identity (NOT extension field). E-graph bounds: maxNodes:=100000, maxIterations:=10. Gate: `lake build` + BabyBear unchanged + saturation terminates.
+- [ ] **Bloque 5 — NeonIntrinsic 64-bit (N39.9)**: PAR, sequential. 7 constructors: add_u64, sub_u64, load2_u64, store2_u64, widening_mul32, narrow_high32, narrow_low32. 14 new lines (toCName + fromCName). `goldilocksButterfly4Stmt` following sqdmulhButterflyStmt pattern. Gate: `lake build` + fromCName roundtrip examples + allCallsKnown.
+- [ ] **Bloque 4 — Canal dinámico (N39.8)**: CRIT, sequential. 5-step protocol: (1) compareCosts diagnostic for all (field, hw), (2) `reductionCostForHW_dynamic` with fallback for known fields (P99 error > 5 cycles → static), (3) A/B benchmark BabyBear ≥ A-3%, (4) cache 14→1 saturations, (5) graduation. `useDynamicCost := false` default. lazy_eq_solinas_cost SAFE: dynamic is separate function, rfl unfolds static only. Gate: comparison table + A/B benchmark + useDynamicCost=false identical to v3.7.0.
+- [ ] **Bloque 6 — Pipeline + benchmark final (N39.10)**: HOJA. Dispatch emitStageC/Rust for k=64 → goldilocksButterfly4Stmt. neonTempDecls64 for uint64x2_t, uint32x2_t. Golden vector suite for all fields. Gate: `benchmark.py --validation-only --fields goldilocks --hardware arm-neon --sizes 14` PASS + BabyBear ±3% vs v3.7.0.
+
+---
+
+## Version: 3.8.0
 
 ### Verified Rust SIMD NTT v3.8.0
 
