@@ -154,10 +154,10 @@ if [ -f "$SBOX_SPEC" ]; then
             sed 's/^static inline //' "$BUILD_DIR/spec_sbox.c"
             echo ''
             echo 'int main(int argc, char* argv[]) {'
-            echo '    if (argc != 2) { fprintf(stderr, "Usage: %s <x>\\n", argv[0]); return 1; }'
+            echo '    if (argc != 2) { fprintf(stderr, "Usage: %s <x>\n", argv[0]); return 1; }'
             echo '    uint64_t x = strtoull(argv[1], NULL, 10);'
             echo '    uint64_t result = sbox5(x);'
-            echo '    printf("%llu\\n", (unsigned long long)result);'
+            echo '    printf("%llu\n", (unsigned long long)result);'
             echo '    return 0;'
             echo '}'
         } > "$BUILD_DIR/test_sbox.c"

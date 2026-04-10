@@ -193,14 +193,7 @@ def genSboxFunction (config : CodeGenConfig) : String :=
     s!"\n    {proofAnchor s!"POST: out = x^{exp} mod p"}"
   else ""
 
-  match ft with
-  | .Goldilocks =>
-    s!"{header}
-{signature} {lbrace}{proofPre}
-{mulCode}{proofPost}
-{rbrace}"
-  | _ =>
-    s!"{header}
+  s!"{header}
 {signature} {lbrace}{proofPre}
 {tempDecls}
 
