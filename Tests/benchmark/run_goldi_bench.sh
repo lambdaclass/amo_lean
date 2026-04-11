@@ -129,4 +129,128 @@ echo "[3/4] Running benchmark..."
 DYLD_LIBRARY_PATH=${P3_LIB} $TMP/bench
 
 echo "[4/4] Done."
+
+# === v3.10.1 AC-2: 3-column comparison (TRZK | P3 scalar | P3 vectorized) ===
+echo ""
+echo "=== 3-Column Comparison: TRZK verified C | Plonky3 scalar | Plonky3 vectorized ==="
+
+# Build a 3-way benchmark
+cat > $TMP/bench3.c << BENCH3EOF
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <string.h>
+#include <time.h>
+#include <dlfcn.h>
+
+#define GOLDI_P 18446744069414584321ULL
+
+/* FFI declarations */
+typedef int (*ntt_fn)(uint64_t*, size_t);
+
+/* Include TRZK NTT */
+$(awk '/^int main/{exit} {print}' $TMP/trzk_ntt.c)
+
+static uint64_t mod_pow_u64(uint64_t base, uint64_t exp, uint64_t m) {
+    unsigned __int128 result = 1, b = base;
+    b %= m;
+    while (exp > 0) {
+        if (exp & 1) result = (result * b) % m;
+        b = (b * b) % m;
+        exp >>= 1;
+    }
+    return (uint64_t)result;
+}
+
+static double elapsed_us(struct timespec *t0, struct timespec *t1) {
+    return ((t1->tv_sec - t0->tv_sec) * 1e6 + (t1->tv_nsec - t0->tv_nsec) / 1e3);
+}
+
+int main(void) {
+    const size_t n = ${N};
+    const size_t logn = ${LOGN};
+    const int iters = ${ITERS};
+
+    /* Load Plonky3 shim */
+    void *lib = dlopen("${P3_LIB}/libplonky3_shim.dylib", RTLD_NOW);
+    if (!lib) { fprintf(stderr, "dlopen: %s\n", dlerror()); return 1; }
+    ntt_fn p3_vec = (ntt_fn)dlsym(lib, "plonky3_ntt_forward");
+    ntt_fn p3_scalar = (ntt_fn)dlsym(lib, "plonky3_ntt_forward_scalar");
+    if (!p3_vec || !p3_scalar) { fprintf(stderr, "dlsym failed\n"); return 1; }
+
+    uint64_t *data = malloc(n * sizeof(uint64_t));
+    uint64_t *orig = malloc(n * sizeof(uint64_t));
+    uint64_t *tw = malloc(n * logn * sizeof(uint64_t));
+
+    /* Init */
+    for (size_t i = 0; i < n; i++)
+        orig[i] = (uint64_t)(((unsigned __int128)i * 1000000007) % GOLDI_P);
+
+    /* Twiddles (plain) */
+    uint64_t omega = mod_pow_u64(7, (GOLDI_P - 1) / n, GOLDI_P);
+    for (size_t st = 0; st < logn; st++) {
+        size_t h = 1u << (logn - 1 - st);
+        for (size_t g = 0; g < (1u << st); g++)
+            for (size_t p = 0; p < h; p++)
+                tw[st*(n/2) + g*h + p] = mod_pow_u64(omega, p*(1ULL<<st), GOLDI_P);
+    }
+
+    struct timespec t0, t1;
+    double trzk_us = 0, p3s_us = 0, p3v_us = 0;
+
+    /* Warmup all 3 */
+    memcpy(data, orig, n*8); ${NTT_FUNC}(data, tw);
+    memcpy(data, orig, n*8); p3_scalar(data, n);
+    memcpy(data, orig, n*8); p3_vec(data, n);
+
+    /* Benchmark TRZK */
+    for (int i = 0; i < iters; i++) {
+        memcpy(data, orig, n*8);
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        ${NTT_FUNC}(data, tw);
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        trzk_us += elapsed_us(&t0, &t1);
+    }
+    trzk_us /= iters;
+
+    /* Benchmark Plonky3 scalar */
+    for (int i = 0; i < iters; i++) {
+        memcpy(data, orig, n*8);
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        p3_scalar(data, n);
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        p3s_us += elapsed_us(&t0, &t1);
+    }
+    p3s_us /= iters;
+
+    /* Benchmark Plonky3 vectorized */
+    for (int i = 0; i < iters; i++) {
+        memcpy(data, orig, n*8);
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        p3_vec(data, n);
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        p3v_us += elapsed_us(&t0, &t1);
+    }
+    p3v_us /= iters;
+
+    double ns_trzk = trzk_us * 1000.0 / n;
+    double ns_p3s = p3s_us * 1000.0 / n;
+    double ns_p3v = p3v_us * 1000.0 / n;
+
+    printf("| N=2^%-2zu | %7.1f ns/elem | %7.1f ns/elem | %7.1f ns/elem | %.2fx | %.2fx |\n",
+        logn, ns_trzk, ns_p3s, ns_p3v, trzk_us/p3s_us, trzk_us/p3v_us);
+
+    free(data); free(orig); free(tw);
+    dlclose(lib);
+    return 0;
+}
+BENCH3EOF
+
+cc -O2 -Wno-implicitly-unsigned-literal $TMP/bench3.c -o $TMP/bench3 2>/dev/null
+if [ $? -eq 0 ]; then
+    echo "| N      | TRZK verified  | P3 scalar      | P3 vectorized  | vs scalar | vs vec |"
+    echo "|--------|----------------|----------------|----------------|-----------|--------|"
+    DYLD_LIBRARY_PATH=${P3_LIB} $TMP/bench3
+fi
+
 rm -rf $TMP

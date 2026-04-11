@@ -20,9 +20,10 @@ use std::panic::catch_unwind;
 use std::slice;
 
 use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
-use p3_field::{PrimeField32, PrimeField64, TwoAdicField};
+use p3_field::{Field, PrimeField32, PrimeField64, TwoAdicField};
 use p3_goldilocks::Goldilocks;
 use p3_baby_bear::BabyBear;
+use p3_koala_bear::KoalaBear;
 use p3_matrix::dense::RowMajorMatrix;
 
 /// Goldilocks prime: p = 2^64 - 2^32 + 1
@@ -116,6 +117,77 @@ pub unsafe extern "C" fn plonky3_ntt_inverse(data: *mut u64, len: usize) -> i32 
         let result = dft.idft_batch(mat);
 
         for (i, v) in result.values.iter().enumerate() {
+            slice[i] = v.as_canonical_u64();
+        }
+    });
+
+    match result {
+        Ok(_) => 0,
+        Err(_) => -1,
+    }
+}
+
+// ============================================================================
+// Scalar-only NTT (v3.10.1 AC-2: fair baseline comparison)
+// ============================================================================
+
+/// Compute forward NTT using SCALAR Goldilocks field ops only.
+/// No PackedGoldilocksNeon, no inline asm, no 2-lane parallelism.
+/// Uses Goldilocks::mul/add/sub directly in a standard DIT butterfly.
+/// This measures: Rust-compiled scalar vs our C-generated scalar (same algorithm).
+///
+/// # Safety
+/// Same requirements as `plonky3_ntt_forward`
+#[no_mangle]
+pub unsafe extern "C" fn plonky3_ntt_forward_scalar(data: *mut u64, len: usize) -> i32 {
+    if data.is_null() { return -1; }
+    if len == 0 || (len & (len - 1)) != 0 { return -1; }
+
+    let result = catch_unwind(|| {
+        let slice = slice::from_raw_parts_mut(data, len);
+        let log_n = len.trailing_zeros() as usize;
+
+        // Convert to Goldilocks
+        let mut d: Vec<Goldilocks> = slice.iter().map(|&x| Goldilocks::new(x)).collect();
+
+        // Precompute twiddles (same CT standard convention as our reference_ntt.py)
+        let omega_n = Goldilocks::two_adic_generator(log_n);
+        let tw_sz = len * log_n;
+        let mut tw: Vec<Goldilocks> = vec![Goldilocks::new(0); tw_sz];
+        for stage in 0..log_n {
+            let half = len >> (stage + 1);
+            // omega_stage = omega_n^(2^stage) via repeated squaring
+            let mut omega_stage = omega_n;
+            for _ in 0..stage { omega_stage = omega_stage * omega_stage; }
+            // tw[stage*(len/2) + pair] = omega_stage^pair
+            let mut w = Goldilocks::new(1);
+            for pair in 0..half {
+                tw[stage * (len / 2) + pair] = w;
+                w = w * omega_stage;
+            }
+        }
+
+        // DIT NTT with scalar field ops (same structure as our lowerStageVerified)
+        for stage in 0..log_n {
+            let half = len >> (stage + 1);
+            let num_groups = 1usize << stage;
+            for group in 0..num_groups {
+                for pair in 0..half {
+                    let i = group * 2 * half + pair;
+                    let j = i + half;
+                    let w = tw[stage * (len / 2) + pair];
+                    // Butterfly: sum = a + w*b, diff = a - w*b
+                    let a = d[i];
+                    let b = d[j];
+                    let wb = w * b;
+                    d[i] = a + wb;
+                    d[j] = a - wb;
+                }
+            }
+        }
+
+        // Copy back
+        for (i, v) in d.iter().enumerate() {
             slice[i] = v.as_canonical_u64();
         }
     });
@@ -226,6 +298,52 @@ pub unsafe extern "C" fn plonky3_babybear_ntt_forward(data: *mut u32, len: usize
 #[no_mangle]
 pub extern "C" fn plonky3_babybear_prime() -> u32 {
     BABYBEAR_PRIME
+}
+
+// ============================================================================
+// KoalaBear NTT Functions (31-bit prime, MontyField31 internally)
+// ============================================================================
+
+/// KoalaBear prime: p = 2^31 - 2^24 + 1 = 2130706433
+const KOALABEAR_PRIME: u32 = 2130706433;
+
+/// Compute forward NTT on KoalaBear field elements in place.
+///
+/// Uses Plonky3's Radix2Dit with MontyField31<KoalaBearParameters>.
+/// On ARM, Plonky3 uses NEON intrinsics automatically.
+///
+/// # Safety
+/// * `data` must point to a valid array of at least `len` u32 values
+#[no_mangle]
+pub unsafe extern "C" fn plonky3_koalabear_ntt_forward(data: *mut u32, len: usize) -> i32 {
+    if data.is_null() || len == 0 || (len & (len - 1)) != 0 {
+        return -1;
+    }
+
+    let result = catch_unwind(|| {
+        let slice = slice::from_raw_parts_mut(data, len);
+        let values: Vec<KoalaBear> = slice
+            .iter()
+            .map(|&x| KoalaBear::new(x))
+            .collect();
+        let mat = RowMajorMatrix::new(values, 1);
+        let dft: Radix2Dit<KoalaBear> = Radix2Dit::default();
+        let result = dft.dft_batch(mat);
+        for (i, v) in result.values.iter().enumerate() {
+            slice[i] = PrimeField32::as_canonical_u32(v);
+        }
+    });
+
+    match result {
+        Ok(_) => 0,
+        Err(_) => -1,
+    }
+}
+
+/// Get the KoalaBear prime modulus.
+#[no_mangle]
+pub extern "C" fn plonky3_koalabear_prime() -> u32 {
+    KOALABEAR_PRIME
 }
 
 /// Get the two-adic generator for BabyBear at a given size.

@@ -1,6 +1,37 @@
 # TRZK: Architecture
 
-## Next Version: 3.10.0
+## Next Version: 3.10.1
+
+### Goldilocks NTT v3.10.1 — Correcciones post-retrospectiva
+
+**Contents**: Activate built infrastructure, measure fair baseline, investigate high-impact paths.
+
+**Motivation**: v3.10.0 built and connected infrastructure (canal dinámico, ILP2, stage
+specialization) but the gap vs Plonky3 persists at 1.88x. Root cause analysis revealed:
+(1) comparison was unfair (1-lane C vs 2-lane inline asm), (2) useDynamicCost was never
+activated, (3) NTT trick (early stage optimization) was deprioritized for ILP2 (which was
+performance-neutral because R4 dominates).
+
+**Key principle**: MEASURE FIRST. AC-2 separates verification cost from parallelism cost.
+
+#### DAG (3.10.1)
+
+| Nodo | Tipo | Deps | Status |
+|------|------|------|--------|
+| N3101.1 AC-2: Plonky3 scalar-only benchmark | FUND | — | pending |
+| N3101.2 AC-1: Activate useDynamicCost for Goldilocks | PAR | — | pending |
+| N3101.3 AC-3: NTT trick viability study (READ ONLY) | GATE | N3101.1 | pending |
+| N3101.4 AC-4: Inline asm evaluation (CONDITIONAL) | HOJA | N3101.1 | pending |
+
+#### Bloques
+
+- [ ] **B1 — Scalar baseline measurement (AC-2)**: Create Plonky3 scalar NTT benchmark (no PackedGoldilocksNeon, no inline asm). Produce 3-column table: TRZK verified C | Plonky3 scalar Rust | Plonky3 vectorized. Gate: table published for N=2^14,16,18,20.
+- [ ] **B2 — Activate dynamic cost (AC-1)**: Set `useDynamicCost := fc.k > 32` in fieldConfigToUltraConfig. BabyBear stays false. Gate: BabyBear identical + Goldilocks PASS + report if plan changed.
+- [ ] **B3 — Investigation (AC-3 + AC-4)**: READ ONLY. AC-3: NTT trick viability (NTT_64 × NTT_{N/64}). AC-4: inline asm evaluation (only if AC-2 gap > 1.3x). Gate: 2 viability documents.
+
+---
+
+## Version: 3.10.0
 
 ### Goldilocks NTT v3.10.0 — Stage Specialization + Canal Dinámico + ILP
 

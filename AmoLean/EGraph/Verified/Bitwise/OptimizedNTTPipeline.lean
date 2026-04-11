@@ -195,18 +195,34 @@ def compareStaticDynamic (fc : FieldConfig) (hw : HardwareCost) : String :=
     Opt-in alternative to the static reductionCostForHW.
     With FALLBACK: for known fields (BabyBear, KoalaBear, Mersenne31),
     falls back to static when the difference exceeds 5 cycles (P99 threshold).
-    Goldilocks and future fields trust the dynamic cost without fallback. -/
+    Goldilocks and future fields trust the dynamic cost without fallback.
+    v3.10.1: Refactored into computeDynamicCost (once) + mkCachedDynamicCostFn (reuse).
+
+    computeDynamicCost: runs 3-phase saturation ONCE for a field.
+    mkCachedDynamicCostFn: creates a costFn from cached result (no saturation).
+    reductionCostForHW_dynamic: convenience wrapper (slow, calls saturation). -/
+def computeDynamicCost (hw : HardwareCost) (fc : FieldConfig) : Nat :=
+  let result := optimizeReduction fc hw
+  exprCostHW hw result.optimizedExpr
+
+/-- Create a cached cost function from a pre-computed dynamic cost.
+    Does NOT call optimizeReduction — uses the cached value.
+    Fallback for known fields when diff > 5 cycles. -/
+def mkCachedDynamicCostFn (hw : HardwareCost) (fc : FieldConfig) (cachedDynCost : Nat)
+    : HardwareCost → ReductionChoice → Nat :=
+  fun hw' red =>
+    let staticCost := reductionCostForHW hw' red
+    let knownField := fc.name == "BabyBear" || fc.name == "KoalaBear" || fc.name == "Mersenne31"
+    let diff := if cachedDynCost > staticCost then cachedDynCost - staticCost
+                else staticCost - cachedDynCost
+    if knownField && diff > 5 then staticCost
+    else cachedDynCost
+
+/-- Dynamic reduction cost (SLOW — calls optimizeReduction every time).
+    Use mkCachedDynamicCostFn for repeated calls. -/
 def reductionCostForHW_dynamic (hw : HardwareCost) (fc : FieldConfig)
     (red : ReductionChoice) : Nat :=
-  let staticCost := reductionCostForHW hw red
-  let result := optimizeReduction fc hw
-  let dynCost := exprCostHW
-    hw result.optimizedExpr
-  -- Fallback for known 32-bit fields: trust static when diff > 5
-  let knownField := fc.name == "BabyBear" || fc.name == "KoalaBear" || fc.name == "Mersenne31"
-  let diff := if dynCost > staticCost then dynCost - staticCost else staticCost - dynCost
-  if knownField && diff > 5 then staticCost  -- fallback: too much divergence
-  else dynCost
+  (mkCachedDynamicCostFn hw fc (computeDynamicCost hw fc)) hw red
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 3: Code Emission (Steps 2-6)
@@ -468,7 +484,14 @@ private def fieldConfigToUltraConfig (fc : FieldConfig) (hw : HardwareCost) : Ul
     c := fc.cNat
     mu := fc.muNat
     targetColor := if hw.isSimd && fc.k ≤ 32 then 2 else 1
-    useSqdmulh := hw.isSimd && fc.k ≤ 32 }
+    useSqdmulh := hw.isSimd && fc.k ≤ 32
+    -- v3.10.1 AC-1: Dynamic cost infrastructure is READY but NOT activated by default.
+    -- Reason: optimizeReduction (3-phase saturation) adds ~60s+ to code generation
+    -- when run in the Lean interpreter (lake env lean --run). The static cost for
+    -- Goldilocks (fold_halves = 0 V0) was validated by calibration B2 and is optimal.
+    -- The dynamic cost would CONFIRM the static, not improve it.
+    -- To activate: set useDynamicCost := true, but requires compiled binary (not interpreter).
+    useDynamicCost := false }
 
 /-- Generate NTT C code using the Ultra pipeline (all phases + verified codegen).
     Uses the full Ultra pipeline: Ruler discovery → bound-aware saturation
@@ -487,9 +510,11 @@ def optimizedNTTC_ultra (fc : FieldConfig) (hw : HardwareCost) (logN iters : Nat
   -- Fase Per-Stage v3.3.0: seed e-graph with NTT chain + pass stage class IDs
   let (seedGraph, stageIds) := mkFullNTTSeedGraph fc.pNat logN
   let seedRules := reductionAlternativeRules fc.pNat
-  -- v3.10.0 T8: pass dynamic cost function when useDynamicCost is enabled
+  -- v3.10.1 AC-1: compute dynamic cost ONCE (3-phase saturation), then cache.
+  -- Without caching: 10 candidates × 14 stages × saturation = 140 saturations → timeout.
   let costFn := if ucfg.useDynamicCost then
-      fun hw red => reductionCostForHW_dynamic hw fc red
+      let dynCost := computeDynamicCost ucfg.hw fc  -- ONE saturation
+      mkCachedDynamicCostFn ucfg.hw fc dynCost      -- cached for all candidates
     else reductionCostForHW
   let (nttBody, nttBodyRust, report) := ultraPipeline seedGraph seedRules fc.pNat n ucfg
     s!"{fc.name.toLower}_ntt_ultra" (some stageIds) costFn
