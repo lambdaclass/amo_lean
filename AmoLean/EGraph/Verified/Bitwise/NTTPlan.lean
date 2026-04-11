@@ -237,26 +237,29 @@ theorem stageSimdEligible_scalar (n : Nat) (radix : RadixChoice) (level : Nat)
     effective cost is divided by (simdLanes - 1) — conservative estimate.
     ILP discount: when ilpFactor > 1 on SIMD, V1 absorbs add/sub of butterfly A
     while V0 does REDC of butterfly B → ~25% discount (calibrated in B35-4).
-    Level tracking mirrors normalizePlan: R2 consumes 1 level, R4 consumes 2. -/
-def Plan.totalCost (plan : Plan) (hw : HardwareCost) : Nat :=
+    Level tracking mirrors normalizePlan: R2 consumes 1 level, R4 consumes 2.
+    v3.10.0 T7: Refactored into totalCostWith (parametric costFn) + totalCost (static wrapper).
+    lazy_eq_solinas_cost uses reductionCostForHW DIRECTLY — NOT affected by this refactoring. -/
+def Plan.totalCostWith (plan : Plan) (hw : HardwareCost)
+    (costFn : HardwareCost → ReductionChoice → Nat) : Nat :=
   let (cost, _) := plan.stages.foldl (fun (acc : Nat × Nat) stage =>
     let (total, level) := acc
     let bfs := match stage.radix with | .r2 => plan.size / 2 | .r4 => plan.size / 4
     let bfCost := butterflyCost stage.radix hw
-    let redCost := reductionCostForHW hw stage.reduction
+    let redCost := costFn hw stage.reduction
     let rawStageCost := bfs * (bfCost + 2 * redCost)
     let eligible := stageSimdEligibleAtLevel plan.size stage.radix level hw
     let simdDivisor := if eligible then Nat.max 2 (hw.simdLanes - 1) else 1
     let afterSimd := rawStageCost / simdDivisor
-    -- ILP discount: calibrated in B35-4 to ~0%.
-    -- The compiler (clang -O2) already does software pipelining: loads of iteration N+1
-    -- overlap with stores of iteration N. ilpFactor=2 provides no additional gain.
-    -- Keep the field for future targets where compiler doesn't auto-interleave.
-    let withIlp := afterSimd  -- no discount (compiler handles scheduling)
+    let withIlp := afterSimd
     let levelsConsumed := match stage.radix with | .r2 => 1 | .r4 => 2
     (total + withIlp, level + levelsConsumed)
   ) (0, 0)
   cost
+
+/-- Backward-compatible wrapper: uses static reductionCostForHW. -/
+def Plan.totalCost (plan : Plan) (hw : HardwareCost) : Nat :=
+  Plan.totalCostWith plan hw reductionCostForHW
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 4: Plan Validation

@@ -1,6 +1,104 @@
 # TRZK: Architecture
 
-## Next Version: 3.9.0
+## Next Version: 3.10.0
+
+### Goldilocks NTT v3.10.0 — Stage Specialization + Canal Dinámico + ILP
+
+**Contents**: Close the 1.5-1.8x gap vs Plonky3 for Goldilocks NTT. Three complementary
+optimizations: (1) stage specialization for power-of-2 twiddles (~40% of butterflies skip
+multiply), (2) connect e-graph dynamic cost to plan selection, (3) ILP explicit interleaving
+for the 60% of butterflies that still need full multiply.
+
+**Design**: Twiddle table is already CT standard (`omega^(pair * 2^stage)`, verified 0
+mismatches). 39.71% of butterflies have trivial twiddles (14.28% tw=1, 15.61% pow2,
+9.81% neg_pow2). Optimization is CODEGEN pure — twiddles are runtime loads, not e-graph
+constGate nodes. Plonky3 uses scalar mul+umulh (zero NEON vmull), so NEON Karatsuba
+strategy from v3.9.0 is demoted to conditional (Cortex-A76 only).
+
+**Key findings from 4-round adversarial debate (Claude × Gemini × reviewer):**
+- Plonky3 PackedGoldilocksNeon: 26 scalar instructions, zero vmull (packing.rs:311-382)
+- Apple Silicon: mul/umulh throughput 0.5 cycles (2/cycle, units X3+X4)
+- ord_p(2) = 192 = 2^6×3: power-of-2 primitive roots exist for N ≤ 64
+- -O2 does NOT auto-interleave scalar butterfly multiplications (verified via asm)
+- Our twiddle table IS CT standard (reference_ntt.py:42, 0 mismatches)
+- lazy_eq_solinas_cost uses reductionCostForHW directly (NOT Plan.totalCost) — safe
+
+**Lessons applied**: L-733 (DIT/DIF consistency), L-740-745 (64-bit emission bugs),
+L-513 (pipeline decomposition soundness), L-201 (native_decide for large primes).
+
+**Files**:
+- `AmoLean/EGraph/Verified/Bitwise/VerifiedPlanCodeGen.lean` (MODIFY — TA stage specialization + TD ILP2)
+- `AmoLean/EGraph/Verified/Bitwise/BoundIntegration.lean` (MODIFY — T12 semanticMatchStep bypass)
+- `AmoLean/EGraph/Verified/Bitwise/NTTPlan.lean` (MODIFY — T7 totalCostWith)
+- `AmoLean/EGraph/Verified/Bitwise/NTTPlanSelection.lean` (MODIFY — T7 planTotalCostWith)
+- `AmoLean/EGraph/Verified/Bitwise/UltraPipeline.lean` (MODIFY — T8 wire useDynamicCost)
+- `AmoLean/EGraph/Verified/Bitwise/NTTFactorizationRules.lean` (MODIFY — TB if viable)
+- `Tests/benchmark/reference_ntt.py` (MODIFY — TB twiddle gen if viable)
+
+**Constraints**:
+- 0 new constructors in MixedNodeOp (TB adds to NTTStrategy, NOT MixedNodeOp)
+- 0 sorry in existing theorems
+- BabyBear benchmarks ±3% vs v3.7.0
+- computeCostsF signature UNTOUCHED
+- reductionCostForHW static PRESERVED (dynamic opt-in via useDynamicCost)
+- lazy_eq_solinas_cost rfl SAFE (uses reductionCostForHW directly, not Plan.totalCost)
+
+#### DAG (3.10.0)
+
+| Nodo | Tipo | Deps | Status |
+|------|------|------|--------|
+| N310.1 TA: isPow2Twiddle stage specialization in codegen | FUND | — | pending |
+| N310.2 T12: Fix semanticMatchStep dead code | PAR | — | pending |
+| N310.3 TB-1: NTT trick viability study (READ ONLY) | GATE | N310.1 | pending |
+| N310.4 TB-2: NTT trick implementation | CRIT | N310.3 | pending |
+| N310.5 TB-3: NTT trick validation | HOJA | N310.4 | pending |
+| N310.6 T7: Plan.totalCostWith parametrization | FUND | N310.1 | pending |
+| N310.7 T8: Wire useDynamicCost | PAR | N310.6 | pending |
+| N310.8 TC: Benchmark vs Plonky3 | HOJA | N310.7 | pending |
+| N310.9 TD: lowerStageVerified_ILP2 + ilpFactor dispatch | CRIT | N310.8 | pending |
+
+#### Formal Properties (3.10.0)
+
+| Nodo | Propiedad | Tipo | Prioridad |
+|------|-----------|------|-----------|
+| N310.1 | isPow2Twiddle correctly identifies pow2 twiddles for all stages | SOUNDNESS | P0 |
+| N310.1 | Shift butterfly produces same output as multiply butterfly | EQUIVALENCE | P0 |
+| N310.1 | BabyBear NTT unchanged (no pow2 twiddles affect BabyBear) | PRESERVATION | P0 |
+| N310.6 | Plan.totalCostWith(reductionCostForHW) = Plan.totalCost | EQUIVALENCE | P0 |
+| N310.6 | lazy_eq_solinas_cost rfl proof compiles | INVARIANT | P0 |
+| N310.7 | useDynamicCost=false → identical plan selection to v3.9.0 | PRESERVATION | P0 |
+| N310.9 | ILP2 output = ILP1 output for all N and inputs | EQUIVALENCE | P0 |
+| N310.9 | ILP2 performance >= ILP1 for all sizes | OPTIMIZATION | P0 |
+
+> **QA disposition** (Gemini 1-round):
+> - "TB needs MixedNodeOp constructor" → DISMISSED: TB adds to NTTStrategy (5 ctors), not MixedNodeOp (315)
+> - "lazy_eq_solinas_cost fragility" → ACCEPTED: documented decoupling in T7 comments
+> - "BabyBear pow2 impact" → DISMISSED: TA only fires for Goldilocks omega
+> - "ILP platform dependency" → ACCEPTED: handled via HardwareCost + ilpFactor per-plan
+
+#### Dependency Graph
+
+```
+BA (TA+T12) → ┬─ BB (TB-1→[go?]→TB-2→TB-3)   ← investigation
+              └─ BC (T7→T8→TC)                 ← canal dinámico
+                        │
+                        ▼
+                   BD (TD, probable)            ← ILP explícito
+```
+
+Critical path: BA(2d) → BC(2d) → BD(2-3d) = ~6-7 days
+BB runs parallel with BC. Total with BB: ~11 days.
+
+#### Bloques
+
+- [ ] **Bloque A — Twiddle optimization + cleanup (N310.1 + N310.2)**: FUND+PAR, sequential. N310.1: isPow2Twiddle in lowerStageVerified (~25 LOC). Pre-compute at Lean codegen time: match isPow2Twiddle → emit shift/identity instead of multiply. 39.71% of butterflies benefit. N310.2: bypass semanticMatchStep (2 LOC). Gate: `benchmark.py --validation-only --fields goldilocks,babybear --sizes 14` + performance pre/post comparison.
+- [ ] **Bloque B — NTT Trick (N310.3 → N310.4 → N310.5)**: Investigation. TB-1 (READ ONLY): viability of NTT_64 × NTT_{N/64} decomposition. Gate: 1-page go/no-go document. If go → TB-2 (implementation, CRIT) → TB-3 (validation, 100% match zero tolerance).
+- [ ] **Bloque C — Canal dinámico (N310.6 + N310.7 + N310.8)**: FUND→PAR→HOJA, sequential. T7: Plan.totalCostWith (~12 LOC across NTTPlan + NTTPlanSelection, risk LOW). T8: wire useDynamicCost (currently dead code). TC: benchmark vs Plonky3 (confirm gap, gate for D).
+- [ ] **Bloque D — ILP explícito (N310.9)**: CRIT, PROBABLE. lowerStageVerified_ILP2 (~40 LOC) + ilpFactor dispatch (~5 LOC) + candidate generation (~3 LOC). Gate: ILP2 = ILP1 numerically + ILP2 >= ILP1 performance + gap table vs Plonky3.
+
+---
+
+## Current Version: 3.9.0
 
 ### Goldilocks NTT v3.9.0 — Scalar Verificado + Calibración + E-Graph Discovery + SIMD
 

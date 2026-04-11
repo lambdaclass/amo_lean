@@ -487,8 +487,12 @@ def optimizedNTTC_ultra (fc : FieldConfig) (hw : HardwareCost) (logN iters : Nat
   -- Fase Per-Stage v3.3.0: seed e-graph with NTT chain + pass stage class IDs
   let (seedGraph, stageIds) := mkFullNTTSeedGraph fc.pNat logN
   let seedRules := reductionAlternativeRules fc.pNat
+  -- v3.10.0 T8: pass dynamic cost function when useDynamicCost is enabled
+  let costFn := if ucfg.useDynamicCost then
+      fun hw red => reductionCostForHW_dynamic hw fc red
+    else reductionCostForHW
   let (nttBody, nttBodyRust, report) := ultraPipeline seedGraph seedRules fc.pNat n ucfg
-    s!"{fc.name.toLower}_ntt_ultra" (some stageIds)
+    s!"{fc.name.toLower}_ntt_ultra" (some stageIds) costFn
   -- Generate P3 reference for comparison
   let p3Bf := genP3ButterflyC fc
   let p3Loop := genNTTLoopC "p3_bf" logN

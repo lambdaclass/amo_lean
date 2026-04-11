@@ -28,6 +28,7 @@ open AmoLean.EGraph.Verified.Bitwise.NTTPlan (Plan NTTStage RadixChoice StageDir
 open AmoLean.EGraph.Verified.Bitwise.BoundProp (ReductionChoice)
 open AmoLean.EGraph.Verified.Bitwise.Butterfly4 (radix4TotalMuls radix2TotalMuls)
 open AmoLean.EGraph.Verified.Bitwise (HardwareCost arm_cortex_a76 arm_neon_simd)
+open AmoLean.EGraph.Verified.Bitwise.CrossRelNTT (reductionCostForHW)
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 1: Cache Model
@@ -105,32 +106,48 @@ def generateCandidates (p n : Nat) (hw : HardwareCost)
      mkMixedRadixPlan p n (some hw) arrayIsLarge
   ]
   -- 10. R2 Harvey + ilpFactor=2 (dual-butterfly interleaving for NEON)
+  -- v3.10.0 TD: also add ILP2 for Goldilocks scalar (k > 32)
+  -- where mul latency = 3 cycles and -O2 doesn't auto-interleave
+  let withILP := baseCandidates.push
+    ((mkBoundAwarePlan p n (some hw) arrayIsLarge).withILP 2)
   if hw.isSimd then
-    baseCandidates.push ((mkUniformPlan p n .r2 .harvey).withILP 2)
-  else baseCandidates
+    withILP.push ((mkUniformPlan p n .r2 .harvey).withILP 2)
+  else withILP
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 3: Plan Selection
 -- ══════════════════════════════════════════════════════════════════
 
+/-- v3.10.0 T7: Parametrized total cost — accepts costFn for dynamic channel. -/
+def planTotalCostWith (plan : Plan) (hw : HardwareCost)
+    (cache : CacheConfig := .default)
+    (costFn : HardwareCost → ReductionChoice → Nat := reductionCostForHW) : Nat :=
+  Plan.totalCostWith plan hw costFn + bowersAdjustment plan cache
+
 /-- Total cost of a plan: arithmetic + reduction + cache.
     Uses hardware-aware cost model (SINGLE SOURCE OF TRUTH). -/
 def planTotalCost (plan : Plan) (hw : HardwareCost)
     (cache : CacheConfig := .default) : Nat :=
-  plan.totalCost hw + bowersAdjustment plan cache
+  planTotalCostWith plan hw cache reductionCostForHW
+
+/-- v3.10.0 T7: Select cheapest plan with parametric cost function. -/
+def selectPlanWith (candidates : Array Plan) (hw : HardwareCost)
+    (cache : CacheConfig := .default)
+    (costFn : HardwareCost → ReductionChoice → Nat := reductionCostForHW) : Option Plan :=
+  if h : candidates.size == 0 then none
+  else
+    let first := candidates[0]!
+    some (candidates.foldl (fun best plan =>
+      let bestCost := planTotalCostWith best hw cache costFn
+      let planCost := planTotalCostWith plan hw cache costFn
+      if planCost < bestCost then plan else best
+    ) first)
 
 /-- Select the cheapest plan from a list of candidates.
     Returns the plan with lowest total cost using hardware-aware model. -/
 def selectPlan (candidates : Array Plan) (hw : HardwareCost)
     (cache : CacheConfig := .default) : Option Plan :=
-  if h : candidates.size == 0 then none
-  else
-    let first := candidates[0]!
-    some (candidates.foldl (fun best plan =>
-      let bestCost := planTotalCost best hw cache
-      let planCost := planTotalCost plan hw cache
-      if planCost < bestCost then plan else best
-    ) first)
+  selectPlanWith candidates hw cache reductionCostForHW
 
 /-- Top-level: select the best NTT plan for a field + hardware.
     Computes arrayIsLarge from n vs cacheThreshold automatically. -/
@@ -146,9 +163,9 @@ def selectBestPlan (p n : Nat) (hw : HardwareCost)
 -- Section 4: Theorems
 -- ══════════════════════════════════════════════════════════════════
 
-/-- generateCandidates produces 9 candidates for scalar, 10 for SIMD (+ILP variant). -/
-example : (generateCandidates 2013265921 1024 arm_cortex_a76).size = 9 := by native_decide
-example : (generateCandidates 2013265921 1024 arm_neon_simd).size = 10 := by native_decide
+/-- generateCandidates: 10 for scalar (+ILP2), 11 for SIMD (+ILP2 + NEON ILP). -/
+example : (generateCandidates 2013265921 1024 arm_cortex_a76).size = 10 := by native_decide
+example : (generateCandidates 2013265921 1024 arm_neon_simd).size = 11 := by native_decide
 
 /-- selectBestPlan returns a well-formed plan for BabyBear N=1024. -/
 example : (selectBestPlan 2013265921 1024 arm_cortex_a76).wellFormed = true := by native_decide
@@ -169,7 +186,7 @@ example : stageCacheMisses 1024 0 .default = 0 := by native_decide
 section SmokeTests
 
 /-- 8 candidates for BabyBear N=1024. -/
-example : (generateCandidates 2013265921 1024 arm_cortex_a76).size = 9 := rfl
+example : (generateCandidates 2013265921 1024 arm_cortex_a76).size = 10 := rfl
 
 /-- selectBestPlan returns a plan (doesn't crash). -/
 example : (selectBestPlan 2013265921 1024 arm_cortex_a76).numStages > 0 := by native_decide

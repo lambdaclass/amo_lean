@@ -48,7 +48,7 @@ open AmoLean.EGraph.Verified.Bitwise.NTTPlan (Plan NTTStage RadixChoice StageDir
 open AmoLean.EGraph.Verified.Bitwise.Butterfly4 (butterfly4 butterfly4WithReduction
   Butterfly4Config radix4TotalMuls radix2TotalMuls)
 open AmoLean.EGraph.Verified.Bitwise.PlanSelection (CacheConfig
-  generateCandidates planCacheCost selectPlan planTotalCost)
+  generateCandidates planCacheCost selectPlan selectPlanWith planTotalCost planTotalCostWith)
 
 -- Phase 23 verified codegen (Gap 4: TrustLean.Stmt path)
 open AmoLean.EGraph.Verified.Bitwise.VerifiedPlanCodeGen (emitCFromPlanVerified
@@ -62,6 +62,8 @@ open AmoLean.EGraph.Verified.Matrix (TransformId FactorizationTree BreakdownRule
 open AmoLean.EGraph.Verified.Matrix.CrossEGraph (queryArithmeticCost ArithmeticCostQuery
   factorizationTotalCost)
 open AmoLean.EGraph.Verified.Bitwise (arm_cortex_a76 arm_neon_simd x86_avx2_simd)
+open AmoLean.EGraph.Verified.Bitwise.CrossRelNTT (reductionCostForHW)
+open AmoLean.EGraph.Verified.Bitwise.BoundProp (ReductionChoice)
 -- Phase 24 Discovery: bidirectional Mixed↔Matrix joint optimization (Fase Per-Stage v3.3.0)
 open AmoLean.EGraph.Verified.Bitwise.Discovery (JointResult DiscoveryResult
   ReduceSpec discoveryReductionCostPerStage)
@@ -138,7 +140,10 @@ def ultraPipeline (g : MixedEGraph)
     (eqRules : List (MixedEMatch.RewriteRule MixedNodeOp))
     (p n : Nat) (cfg : UltraConfig := {})
     (funcName : String := "ntt_ultra")
-    (stageClassIds : Option (Array EClassId) := none) : String × String × String :=
+    (stageClassIds : Option (Array EClassId) := none)
+    -- v3.10.0 T8: optional dynamic cost function (default = static)
+    (costFn : HardwareCost → ReductionChoice → Nat := reductionCostForHW)
+    : String × String × String :=
   let logN := log2 n
 
   -- ── Gap 1: Ruler discovery → RewriteRules ──
@@ -174,7 +179,8 @@ def ultraPipeline (g : MixedEGraph)
   -- Compete: schedule-derived plan vs 8 candidates (radix-2/4, Solinas/Monty/etc.)
   let candidates := generateCandidates p n cfg.hw arrayIsLarge
   let allCandidates := candidates.push schedulePlan
-  let plan := match selectPlan allCandidates cfg.hw cfg.cacheConfig with
+  -- v3.10.0 T8: use costFn (static by default, dynamic when useDynamicCost=true)
+  let plan := match selectPlanWith allCandidates cfg.hw cfg.cacheConfig costFn with
     | some best => best
     | none => schedulePlan
   -- Validate total NTT coverage (safety net — normalizePlan in lowerNTTFromPlanVerified
@@ -182,6 +188,15 @@ def ultraPipeline (g : MixedEGraph)
   let planLevels := plan.stages.foldl (fun acc s =>
     acc + match s.radix with | .r2 => 1 | .r4 => 2) 0
   let plan := if planLevels == logN then plan else schedulePlan
+  -- v3.10.0 TD: ILP2 for Goldilocks — let plan competition decide.
+  -- The ILP2 candidate was added to generateCandidates (NTTPlanSelection).
+  -- The R4 mixed plan often wins because fewer stages = lower cost.
+  -- ILP2 benefits R2 stages only; R4 stages already process 4 at once.
+  -- If the winner is R2-based, apply ILP2. Otherwise keep R4 winner.
+  let plan := if cfg.k > 32 && !cfg.hw.isSimd then
+      let hasR2 := plan.stages.toList.any fun s => s.radix == .r2
+      if hasR2 then plan.withILP 2 else plan
+    else plan
 
   -- ── Gap 4: Verified codegen via TrustLean.Stmt ──
   -- For k > 32 (Goldilocks): always use scalar verified path. The SIMD emitter uses
