@@ -58,6 +58,7 @@ inductive MixedExpr where
   | montyReduceE  (a : MixedExpr) (p : Nat) (mu : Nat)
   | barrettReduceE (a : MixedExpr) (p : Nat) (m : Nat)
   | harveyReduceE (a : MixedExpr) (p : Nat)
+  | conditionalSubE (a : MixedExpr) (p : Nat)
 
 /-! ## Extractable Instance -/
 
@@ -86,6 +87,7 @@ inductive MixedExpr where
   | .montyReduce _ p mu, [a] => some (.montyReduceE a p mu)
   | .barrettReduce _ p m, [a] => some (.barrettReduceE a p m)
   | .harveyReduce _ p, [a] => some (.harveyReduceE a p)
+  | .conditionalSub _ p, [a] => some (.conditionalSubE a p)
   | _, _                   => none
 
 instance : Extractable MixedNodeOp MixedExpr where
@@ -117,6 +119,8 @@ instance : Extractable MixedNodeOp MixedExpr where
   | .montyReduceE a p _mu => a.eval env % p
   | .barrettReduceE a p _m => a.eval env % p
   | .harveyReduceE a p => a.eval env % p
+  | .conditionalSubE a p =>
+    let va := a.eval env; if va ≥ p then va - p else va
 
 instance : EvalExpr MixedExpr MixedEnv Nat where
   evalExpr e env := e.eval env
@@ -308,6 +312,15 @@ theorem mixed_extractable_sound :
       hchildren 0 (by omega) (by simp [NodeOps.children, mixedChildren])
     rw [h0]
   | harveyReduce a p =>
+    simp [NodeOps.children, mixedChildren] at hlen
+    obtain ⟨x, rfl⟩ := list_length_one hlen
+    simp [Extractable.reconstruct, mixedReconstruct] at hrec
+    subst hrec
+    simp only [EvalExpr.evalExpr, MixedExpr.eval, NodeSemantics.evalOp, evalMixedOp]
+    have h0 : x.eval env = v a :=
+      hchildren 0 (by omega) (by simp [NodeOps.children, mixedChildren])
+    rw [h0]
+  | conditionalSub a p =>
     simp [NodeOps.children, mixedChildren] at hlen
     obtain ⟨x, rfl⟩ := list_length_one hlen
     simp [Extractable.reconstruct, mixedReconstruct] at hrec

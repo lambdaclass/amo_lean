@@ -57,7 +57,7 @@ open MixedRunner
    mkSolinasFoldSeed mkCanonicalInput)
 open AmoLean.EGraph.Verified.Bitwise.PlanSelection (selectBestPlan CacheConfig)
 -- NTTPlanCodeGen/UnifiedCodeGen removed: replaced by VerifiedPlanCodeGen (Plan D Phase 2)
-open AmoLean.EGraph.Verified.Bitwise.ReductionAlternativeRules (reductionAlternativeRules)
+open AmoLean.EGraph.Verified.Bitwise.ReductionAlternativeRules (reductionAlternativeRules boundAwareReductionRules)
 open AmoLean.EGraph.Verified.Bitwise.CrossRelNTT (nttStageBoundAnalysis NTTBoundConfig lazyReductionSavings
   reductionCostForHW)
 open AmoLean.EGraph.Verified.Bitwise.BoundProp (ReductionChoice)
@@ -123,6 +123,17 @@ def goldilocksConfig : FieldConfig :=
     k := 64, b := 32, genLit := "7",
     elemType := "uint64_t", wideType := "__uint128_t",
     muNat := 0, solinas := some goldilocks_solinas }
+
+/-- v3.11.0 F3: Stark252 field config. p = 2^251 + 17*2^192 + 1.
+    NO field-specific rules. NO hardcoded optimizations. The e-graph with
+    bound-aware discovery (conditionalSub via F2+F3) should find the optimal
+    reduction AUTOMATICALLY for any field where boundK ≤ 2. -/
+def stark252Config : FieldConfig :=
+  { name := "Stark252", pNat := 2^251 + 17 * 2^192 + 1,
+    pLit := "0", cNat := 0, cLit := "0", muLit := "0",
+    k := 252, b := 0, genLit := "3",
+    elemType := "uint256_t", wideType := "uint512_t",
+    muNat := 0, solinas := none }
 
 /-- All supported fields. -/
 def allFields : List FieldConfig :=
@@ -1026,8 +1037,11 @@ def scheduleComparison (fc : FieldConfig) (logN : Nat) (hw : HardwareCost) :
   let (seedGraph, stageIds) := mkFullNTTSeedGraph fc.pNat logN
   let state := mkNTTState seedGraph
   let factory := mkFieldFactory fc.pNat
+  -- v3.11.0 F3: pass bound-aware rules so conditionalSub can be discovered
+  let boundRules := boundAwareReductionRules fc.pNat
   let state' := AmoLean.EGraph.Verified.Bitwise.MultiRel.saturate [] []
-    factory AmoLean.EGraph.Verified.Bitwise.MultiRel.Config.default state
+    factory AmoLean.EGraph.Verified.Bitwise.MultiRel.Config.default
+    (boundRules := boundRules) state
   let dynamicSched := extractScheduleFromState state' logN fc.pNat hw.isSimd
     isLarge (some hw) (some stageIds)
   let diffs := staticSched.zip dynamicSched |>.filter fun ((_, sr, _), (_, dr, _)) => sr != dr
@@ -1174,5 +1188,28 @@ def runPipelineReport : IO Unit := do
   IO.println "══════════════════════════════════════════════════════════"
   IO.println ""
   IO.println (emitPlanBasedNTTC babybearConfig 10 arm_cortex_a76)
+
+-- ══════════════════════════════════════════════════════════════════
+-- v3.11.0 F3: Vision test — bound-aware rule + conditionalSub
+-- ══════════════════════════════════════════════════════════════════
+
+/-- F3 smoke: patReduceToConditionalSub creates a valid rewrite rule.
+    The rule's sideCondCheck defaults to false (blocked by design). -/
+example : (ReductionAlternativeRules.patReduceToConditionalSub 7).name =
+    "pat_reduce_to_condSub_7" := rfl
+
+/-- F3 smoke: boundAwareReductionRules produces exactly 1 rule per field. -/
+example : (ReductionAlternativeRules.boundAwareReductionRules 7).length = 1 := rfl
+
+/-- F3 smoke: Stark252 config is well-formed (no field-specific rules needed). -/
+example : stark252Config.name = "Stark252" := rfl
+example : stark252Config.k = 252 := rfl
+
+/-- F3 smoke: conditionalSub evaluates correctly (the constructor F2 added). -/
+example : evalMixedOp (.conditionalSub 0 7) ⟨id, id, id⟩ (fun | 0 => 10 | _ => 0) = 3 := rfl
+example : evalMixedOp (.conditionalSub 0 7) ⟨id, id, id⟩ (fun | 0 => 5 | _ => 0) = 5 := rfl
+
+/-- F3 smoke: conditionalSub cost model uses hw.condSub. -/
+example : CostModelDef.mixedOpCost CostModelDef.arm_cortex_a76 (.conditionalSub 0 7) = 1 := rfl
 
 end AmoLean.EGraph.Verified.Bitwise.OptimizedNTTPipeline

@@ -125,6 +125,20 @@ private def lowerConditionalSub (xExpr : LowLevelExpr) (p : Nat)
   let resultStmt := Stmt.assign resultVar (.binOp .sub xExpr (.varRef subPVar))
   (Stmt.seq subPStmt resultStmt, resultVar, cgs2)
 
+/-- v3.11.0 F5b: Goldilocks add/sub via Stmt.call for bounded butterfly sum/diff.
+    Both inputs a, wb_red are < p (post product reduction). goldi_add handles
+    carry (a+b may exceed 2^64), goldi_sub handles borrow (a-b may underflow).
+    Same TYPE BOUNDARY pattern as F5 goldi_reduce128: function body uses uint64_t,
+    args are __uint128_t temps (C truncates implicitly, safe since values < p < 2^64).
+    Eliminates __uint128_t intermediates for sum/diff and the (a+p)-wb_red pattern. -/
+private def lowerGoldilocksAddSub (aExpr bExpr : LowLevelExpr) (p : Nat)
+    (cgs : CodeGenState) : (Stmt × VarName × VarName × CodeGenState) :=
+  let (sumVar, cgs1) := cgs.freshVar
+  let sumStmt := Stmt.call sumVar "goldi_add" [aExpr, bExpr]
+  let (diffVar, cgs2) := cgs1.freshVar
+  let diffStmt := Stmt.call diffVar "goldi_sub" [aExpr, bExpr]
+  (Stmt.seq sumStmt diffStmt, sumVar, diffVar, cgs2)
+
 -- ══════════════════════════════════════════════════════════════════
 -- Block 2.2: Butterfly parametrized by ReductionChoice
 -- ══════════════════════════════════════════════════════════════════
@@ -151,30 +165,38 @@ def lowerDIFButterflyByReduction (aVar bVar wVar : VarName)
     else
       -- BabyBear/KoalaBear/Mersenne31: Montgomery REDC subtraction variant
       lowerMontyReduceSub (.varRef wbVar) p mu cgs1
-  -- Step 2: sum = a + wb_red, diff = (a + p) - wb_red
-  let (sumVar, cgs3) := cgs2.freshVar
-  let sumExpr := LowLevelExpr.binOp .add (.varRef aVar) (.varRef redWbVar)
-  let sumStmt := Stmt.assign sumVar sumExpr
-  let (diffVar, cgs4) := cgs3.freshVar
-  let diffExpr := LowLevelExpr.binOp .sub
-    (LowLevelExpr.binOp .add (.varRef aVar) (.litInt ↑p))
-    (.varRef redWbVar)
-  let diffStmt := Stmt.assign diffVar diffExpr
-  -- Step 3: reduction on sum and diff (inputs < 2p)
+  -- Step 2+3: sum/diff with reduction
   -- v3.11.0 F1: Bound-aware dispatch. When boundK ≤ 2 (input bounded < 2p),
-  -- use conditional subtract (2 ops) instead of Solinas fold (4 ops).
-  -- This generalizes AC-6 for ANY field, not just Goldilocks (k > 32).
-  -- boundK = 0 means unknown → fall back to parametric reduction (backward compat).
+  -- use fast reduction. For Goldilocks (k > 32), use Stmt.call to goldi_add/goldi_sub
+  -- (F5b: uint64_t locals, ~3 ARM instr each). For k ≤ 32, use lowerConditionalSub
+  -- (Stmt.ite pattern, 2 ops). boundK = 0 → full parametric reduction (backward compat).
   let useFastReduce := boundK > 0 && boundK ≤ 2
-  let (redSumStmt, redSumVar, cgs5) :=
-    if useFastReduce then lowerConditionalSub (.varRef sumVar) p cgs4
-    else lowerReductionChoice red (.varRef sumVar) p k c mu cgs4
-  let (redDiffStmt, redDiffVar, cgs6) :=
-    if useFastReduce then lowerConditionalSub (.varRef diffVar) p cgs5
-    else lowerReductionChoice red (.varRef diffVar) p k c mu cgs5
-  let fullStmt := Stmt.seq wbStmt (Stmt.seq redWbStmt (Stmt.seq sumStmt
-    (Stmt.seq diffStmt (Stmt.seq redSumStmt redDiffStmt))))
-  (fullStmt, redSumVar, redDiffVar, cgs6)
+  if k > 32 && useFastReduce then
+    -- v3.11.0 F5b: Goldilocks + bounded → goldi_add/goldi_sub via Stmt.call
+    -- Eliminates __uint128_t for sum/diff, eliminates (a+p)-wb_red underflow pattern
+    let (addSubStmt, sumVar, diffVar, cgs3) :=
+      lowerGoldilocksAddSub (.varRef aVar) (.varRef redWbVar) p cgs2
+    let fullStmt := Stmt.seq wbStmt (Stmt.seq redWbStmt addSubStmt)
+    (fullStmt, sumVar, diffVar, cgs3)
+  else
+    -- BabyBear/KoalaBear path or unbounded Goldilocks
+    let (sumVar, cgs3) := cgs2.freshVar
+    let sumExpr := LowLevelExpr.binOp .add (.varRef aVar) (.varRef redWbVar)
+    let sumStmt := Stmt.assign sumVar sumExpr
+    let (diffVar, cgs4) := cgs3.freshVar
+    let diffExpr := LowLevelExpr.binOp .sub
+      (LowLevelExpr.binOp .add (.varRef aVar) (.litInt ↑p))
+      (.varRef redWbVar)
+    let diffStmt := Stmt.assign diffVar diffExpr
+    let (redSumStmt, redSumVar, cgs5) :=
+      if useFastReduce then lowerConditionalSub (.varRef sumVar) p cgs4
+      else lowerReductionChoice red (.varRef sumVar) p k c mu cgs4
+    let (redDiffStmt, redDiffVar, cgs6) :=
+      if useFastReduce then lowerConditionalSub (.varRef diffVar) p cgs5
+      else lowerReductionChoice red (.varRef diffVar) p k c mu cgs5
+    let fullStmt := Stmt.seq wbStmt (Stmt.seq redWbStmt (Stmt.seq sumStmt
+      (Stmt.seq diffStmt (Stmt.seq redSumStmt redDiffStmt))))
+    (fullStmt, redSumVar, redDiffVar, cgs6)
 
 -- ══════════════════════════════════════════════════════════════════
 -- Block 2.3: Radix-4 butterfly parametrized by ReductionChoice
@@ -601,6 +623,19 @@ def emitCFromPlanVerified (plan : Plan) (k c mu : Nat)
     s!"  uint64_t t1=hl*0xFFFFFFFFULL;\n" ++
     s!"  uint64_t r; int carry=__builtin_add_overflow(t0,t1,&r);\n" ++
     s!"  if(carry||r>={pStr}ULL) r-={pStr}ULL;\n" ++
+    s!"  return r;\n}\n\n" ++
+    -- v3.11.0 F5b: goldi_add — modular add with carry detection (~3 ARM instr)
+    -- Precondition: a < p, b < p. carry possible since a+b up to 2p-2 > 2^64.
+    s!"static inline uint64_t goldi_add(uint64_t a, uint64_t b) \{\n" ++
+    s!"  uint64_t r; int carry=__builtin_add_overflow(a,b,&r);\n" ++
+    s!"  if(carry||r>={pStr}ULL) r-={pStr}ULL;\n" ++
+    s!"  return r;\n}\n\n" ++
+    -- v3.11.0 F5b: goldi_sub — modular sub with borrow detection (~3 ARM instr)
+    -- Precondition: a < p, b < p. borrow possible when a < b.
+    -- r+P may overflow uint64_t: DEFINED BEHAVIOR for unsigned (wraps mod 2^64).
+    s!"static inline uint64_t goldi_sub(uint64_t a, uint64_t b) \{\n" ++
+    s!"  uint64_t r; int borrow=__builtin_sub_overflow(a,b,&r);\n" ++
+    s!"  if(borrow) r+={pStr}ULL;\n" ++
     s!"  return r;\n}\n\n"
   else ""
   goldiPreamble ++
@@ -677,6 +712,19 @@ def emitRustFromPlanVerified (plan : Plan) (k c mu : Nat)
     s!"  let t1 = hl.wrapping_mul(0xFFFFFFFF_u64);\n" ++
     s!"  let (mut r, carry) = t0.overflowing_add(t1);\n" ++
     s!"  if carry || r >= {pStr}_u64 \{ r = r.wrapping_sub({pStr}_u64); }\n" ++
+    s!"  r\n}\n\n" ++
+    -- v3.11.0 F5b: goldi_add — modular add with carry detection
+    s!"#[inline(always)]\n" ++
+    s!"fn goldi_add(a: u64, b: u64) -> u64 \{\n" ++
+    s!"  let (mut r, carry) = a.overflowing_add(b);\n" ++
+    s!"  if carry || r >= {pStr}_u64 \{ r = r.wrapping_sub({pStr}_u64); }\n" ++
+    s!"  r\n}\n\n" ++
+    -- v3.11.0 F5b: goldi_sub — modular sub with borrow detection
+    -- wrapping_add handles r+P overflow (same as C unsigned wrap)
+    s!"#[inline(always)]\n" ++
+    s!"fn goldi_sub(a: u64, b: u64) -> u64 \{\n" ++
+    s!"  let (mut r, borrow) = a.overflowing_sub(b);\n" ++
+    s!"  if borrow \{ r = r.wrapping_add({pStr}_u64); }\n" ++
     s!"  r\n}\n\n"
   else ""
   goldiPreambleRust ++

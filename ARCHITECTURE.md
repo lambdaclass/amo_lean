@@ -12,9 +12,10 @@ e-graph saturation, extend NTTStrategy with twoStepGoldilocks.
 bounded inputs) AUTOMATICALLY for any field, without per-field `if k > 32` hardcoding.
 Test: add Stark252 field with ZERO field-specific rules → e-graph discovers optimal reduction.
 
-**4 Phases**:
-- F1 (1d): Bound-aware codegen — pass stage.outputBoundK to butterfly, dispatch by bounds
-- F4 (0.5d, parallel): twoStepGoldilocks in NTTStrategy (~15 LOC, very low risk)
+**5 Phases**:
+- F5 (1d): Emisión reduce128 — uint64_t temps post-split instead of __uint128_t (~20 LOC, ~15% speedup)
+- F1 (1d): Bound-aware codegen — pass stage.outputBoundK to butterfly, dispatch by bounds (DONE)
+- F4 (0.5d, parallel): twoStepGoldilocks in NTTStrategy (~15 LOC, very low risk) (DONE)
 - F2 (3-4d): conditionalSub in MixedNodeOp (~300 LOC mechanical, 23rd constructor)
 - F3 (1d): Bound-aware sideCondCheck — boundAwareEqStep in tieredStep (~40 LOC)
 
@@ -28,8 +29,9 @@ Test: add Stark252 field with ZERO field-specific rules → e-graph discovers op
 
 | Nodo | Tipo | Deps | Status |
 |------|------|------|--------|
-| N311.1 F1: Bound-aware codegen (boundK parameter) | FUND | — | pending |
-| N311.2 F4: twoStepGoldilocks NTTStrategy | PAR | — | pending |
+| N311.6 F5: Emisión reduce128 (uint64_t post-split temps) | FUND | — | pending |
+| N311.1 F1: Bound-aware codegen (boundK parameter) | FUND | — | done |
+| N311.2 F4: twoStepGoldilocks NTTStrategy | PAR | — | done |
 | N311.3 F2: conditionalSub in MixedNodeOp (~300 LOC) | CRIT | N311.1 | pending |
 | N311.4 F3: boundAwareEqStep + reduceToConditionalSub | CRIT | N311.3 | pending |
 | N311.5 Test: Stark252 automatic discovery (no hardcode) | HOJA | N311.4 | pending |

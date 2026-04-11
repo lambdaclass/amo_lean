@@ -82,6 +82,16 @@ def patReduceToHarvey (p : Nat) : RewriteRule MixedNodeOp where
   rhs := .node (.harveyReduce 0 p) [.patVar 0]
   sideCondCheck := none
 
+/-- Pattern rule: reduceGate(x, p) → conditionalSub(x, p).
+    Gated by sideCondCheck: only fires when bound-aware layer provides boundK ≤ 2.
+    conditionalSub is cheaper than Harvey (1 op vs 3 ops) but requires input < 2p.
+    The sideCondCheck is overridden by boundAwareEqStep to check actual bounds. -/
+def patReduceToConditionalSub (p : Nat) : RewriteRule MixedNodeOp where
+  name := s!"pat_reduce_to_condSub_{p}"
+  lhs := .node (.reduceGate 0 p) [.patVar 0]
+  rhs := .node (.conditionalSub 0 p) [.patVar 0]
+  sideCondCheck := some fun _g _subst => false  -- default: blocked. boundAwareEqStep overrides.
+
 -- ══════════════════════════════════════════════════════════════════
 -- Section 2b: Context-aware rules (reduce-of-add → Harvey)
 -- ══════════════════════════════════════════════════════════════════
@@ -218,6 +228,13 @@ def reductionAlternativeRules (p : Nat) : List (RewriteRule MixedNodeOp) :=
   else if p == 2147483647 then mersenne31ReductionRules  -- Mersenne31
   else if p == goldilocks_p then goldilocksReductionRules -- Goldilocks
   else [patReduceToHarvey p]  -- Harvey works for any prime
+
+/-- v3.11.0 F3: Bound-aware reduction rules for ANY field.
+    These rules are gated by sideCondCheck (default: blocked) and activated
+    by boundAwareEqStep when the bound lookup shows boundK ≤ 2.
+    Field-independent: works for BabyBear, Goldilocks, Stark252, BN254, etc. -/
+def boundAwareReductionRules (p : Nat) : List (RewriteRule MixedNodeOp) :=
+  [ patReduceToConditionalSub p ]
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 4: Master soundness

@@ -84,6 +84,12 @@ inductive MixedNodeOp where
       Output in [0, 2p) for input in [0, 4p).
       Verified: harveyReduce_mod, harveyReduce_bound in LazyReductionSpike_aux.lean -/
   | harveyReduce : EClassId → Nat → MixedNodeOp
+  /-- Conditional subtraction: conditionalSub(x, p).
+      If x >= p: x - p. Else: x. Output in [0, p) for input in [0, 2p).
+      Simpler than harveyReduce (1 branch vs 3), selected by bound-aware
+      discovery (F3) when boundK ≤ 2 guarantees input < 2p.
+      Semantics: if v a >= p then v a - p else v a -/
+  | conditionalSub : EClassId → Nat → MixedNodeOp
   deriving Repr, DecidableEq
 
 instance : BEq MixedNodeOp := instBEqOfDecidableEq
@@ -115,6 +121,7 @@ instance : Inhabited MixedNodeOp := ⟨.constGate 0⟩
   | .montyReduce a _ _ => [a]
   | .barrettReduce a _ _ => [a]
   | .harveyReduce a _  => [a]
+  | .conditionalSub a _ => [a]
 
 /-- Apply a function to all e-class children. -/
 @[simp] def mixedMapChildren (f : EClassId → EClassId) : MixedNodeOp → MixedNodeOp
@@ -139,6 +146,7 @@ instance : Inhabited MixedNodeOp := ⟨.constGate 0⟩
   | .montyReduce a p mu => .montyReduce (f a) p mu
   | .barrettReduce a p m => .barrettReduce (f a) p m
   | .harveyReduce a p  => .harveyReduce (f a) p
+  | .conditionalSub a p => .conditionalSub (f a) p
 
 /-- Positionally replace children with new e-class IDs. -/
 @[simp] def mixedReplaceChildren (op : MixedNodeOp) (ids : List EClassId) : MixedNodeOp :=
@@ -160,6 +168,7 @@ instance : Inhabited MixedNodeOp := ⟨.constGate 0⟩
   | .montyReduce _ p mu, a :: _    => .montyReduce a p mu
   | .barrettReduce _ p m, a :: _   => .barrettReduce a p m
   | .harveyReduce _ p, a :: _      => .harveyReduce a p
+  | .conditionalSub _ p, a :: _   => .conditionalSub a p
   | op, _                           => op
 
 /-- Cost model: mul = 1, all others = 0. Extensible for hardware-specific models. -/
@@ -187,9 +196,10 @@ def mixedSimplicity : MixedNodeOp → Nat
   | .kronPack _ _ _   => 15
   | .smulGate _ _     => 16
   | .mulGate _ _      => 17
-  | .harveyReduce _ _ => 18
-  | .montyReduce _ _ _ => 19
-  | .barrettReduce _ _ _ => 20
+  | .conditionalSub _ _ => 18
+  | .harveyReduce _ _ => 19
+  | .montyReduce _ _ _ => 20
+  | .barrettReduce _ _ _ => 21
 
 /-! ## List length helpers -/
 
@@ -235,6 +245,7 @@ instance : NodeOps MixedNodeOp where
     | montyReduce a p mu => simp at hlen; obtain ⟨x, rfl⟩ := list_length_one hlen; rfl
     | barrettReduce a p m => simp at hlen; obtain ⟨x, rfl⟩ := list_length_one hlen; rfl
     | harveyReduce a p => simp at hlen; obtain ⟨x, rfl⟩ := list_length_one hlen; rfl
+    | conditionalSub a p => simp at hlen; obtain ⟨x, rfl⟩ := list_length_one hlen; rfl
   replaceChildren_sameShape op ids hlen := by
     cases op with
     | constGate _ => simp at hlen; subst hlen; rfl
@@ -258,6 +269,7 @@ instance : NodeOps MixedNodeOp where
     | montyReduce a p mu => simp at hlen; obtain ⟨x, rfl⟩ := list_length_one hlen; rfl
     | barrettReduce a p m => simp at hlen; obtain ⟨x, rfl⟩ := list_length_one hlen; rfl
     | harveyReduce a p => simp at hlen; obtain ⟨x, rfl⟩ := list_length_one hlen; rfl
+    | conditionalSub a p => simp at hlen; obtain ⟨x, rfl⟩ := list_length_one hlen; rfl
 
 /-! ## Semantics: Evaluation on Nat -/
 
@@ -312,6 +324,10 @@ abbrev MixedEnv := CircuitEnv Nat
     -- Harvey conditional subtraction: semantically equivalent to x % p
     -- Output is in [0, 2p) for input in [0, 4p), but denotationally = x % p.
     v a % p
+  | .conditionalSub a p =>
+    -- Conditional subtract: if x >= p then x - p else x.
+    -- For input in [0, 2p), equivalent to x % p. Simpler than Harvey (1 branch).
+    if v a ≥ p then v a - p else v a
 
 /-! ## NodeSemantics Instance -/
 
@@ -395,6 +411,10 @@ instance : NodeSemantics MixedNodeOp MixedEnv Nat where
       simp only [evalMixedOp]
       congr 1
       exact h a (by simp [NodeOps.children, mixedChildren])
+    | conditionalSub a p =>
+      simp only [evalMixedOp]
+      have h0 := h a (by simp [NodeOps.children, mixedChildren])
+      rw [h0]
 
 /-! ## Embedding: CircuitNodeOp → MixedNodeOp -/
 
@@ -473,6 +493,7 @@ def isAlgebraic : MixedNodeOp → Bool
   | .montyReduce _ _ _ => true
   | .barrettReduce _ _ _ => true
   | .harveyReduce _ _ => true
+  | .conditionalSub _ _ => true
   | _                 => false
 
 /-- Returns true if the operation requires u32→u64 widening in SIMD context.
@@ -484,6 +505,7 @@ def needsWidening : MixedNodeOp → Bool
   | .barrettReduce _ _ _ => true  -- Barrett: mul64 + shift needs u64
   | .montyReduce _ _ _   => false -- Montgomery: all ops in u32 lanes (vqdmulhq_s32)
   | .harveyReduce _ _    => false -- Harvey: conditional subs, u32 only
+  | .conditionalSub _ _  => false -- Conditional sub: compare + sub, no widening
   | .mulGate _ _         => true  -- u32 × u32 = u64 (before reduction)
   | _                    => false
 
