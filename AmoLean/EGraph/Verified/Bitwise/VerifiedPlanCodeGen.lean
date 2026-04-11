@@ -89,27 +89,34 @@ private def lowerGoldilocksProductReduce (xExpr : LowLevelExpr) (p : Nat)
   -- hl = hi & 0xFFFFFFFF
   let (hlVar, cgs4) := cgs3.freshVar
   let s4 := Stmt.assign hlVar (.binOp .band (.varRef hiVar) cLit)
-  -- t0: borrow-aware subtraction lo - hh
-  -- if lo < hh: t0 = (lo + p) - hh ≡ lo - hh (mod p), result in [p-2^32, p)
-  -- if lo ≥ hh: t0 = lo - hh, result in [0, 2^64)
-  let (t0Var, cgs5) := cgs4.freshVar
-  let t0Stmt := Stmt.ite (.binOp .ltOp (.varRef loVar) (.varRef hhVar))
-    (.assign t0Var (.binOp .sub (.binOp .add (.varRef loVar) pLit) (.varRef hhVar)))
-    (.assign t0Var (.binOp .sub (.varRef loVar) (.varRef hhVar)))
+  -- v3.10.1 AC-5: Branchless product reduction.
+  -- t0 = lo + adj - hh, where adj = (lo < hh) ? p : 0
+  -- This avoids unsigned wraparound issues with __uint128_t temps.
+  -- The Stmt.ite compiles to CSEL on ARM (branchless conditional select).
+  let (adjVar, cgs5) := cgs4.freshVar
+  let adjStmt := Stmt.ite (.binOp .ltOp (.varRef loVar) (.varRef hhVar))
+    (.assign adjVar pLit)
+    (.assign adjVar (.litInt 0))
+  let (t0Var, cgs6) := cgs5.freshVar
+  let s5_t0 := Stmt.assign t0Var
+    (.binOp .sub (.binOp .add (.varRef loVar) (.varRef adjVar)) (.varRef hhVar))
   -- t1 = hl * (2^32 - 1); hl < 2^32 so t1 < 2^64 (no overflow)
-  let (t1Var, cgs6) := cgs5.freshVar
-  let s5 := Stmt.assign t1Var (.binOp .mul (.varRef hlVar) cLit)
+  let (t1Var, cgs7) := cgs6.freshVar
+  let s6 := Stmt.assign t1Var (.binOp .mul (.varRef hlVar) cLit)
   -- rRaw = t0 + t1; rRaw < 2p (both cases)
-  let (rRawVar, cgs7) := cgs6.freshVar
-  let s6 := Stmt.assign rRawVar (.binOp .add (.varRef t0Var) (.varRef t1Var))
-  -- result: single conditional subtraction (rRaw < 2p → one sub suffices)
-  let (resultVar, cgs8) := cgs7.freshVar
-  let resultStmt := Stmt.ite (.binOp .ltOp (.varRef rRawVar) pLit)
-    (.assign resultVar (.varRef rRawVar))
-    (.assign resultVar (.binOp .sub (.varRef rRawVar) pLit))
+  let (rRawVar, cgs8) := cgs7.freshVar
+  let s7 := Stmt.assign rRawVar (.binOp .add (.varRef t0Var) (.varRef t1Var))
+  -- Branchless final normalization: result = rRaw - (rRaw >= p ? p : 0)
+  let (subPVar, cgs9) := cgs8.freshVar
+  let subPStmt := Stmt.ite (.binOp .ltOp (.varRef rRawVar) pLit)
+    (.assign subPVar (.litInt 0))
+    (.assign subPVar pLit)
+  let (resultVar, cgs10) := cgs9.freshVar
+  let resultStmt := Stmt.assign resultVar (.binOp .sub (.varRef rRawVar) (.varRef subPVar))
   let fullStmt := Stmt.seq s1 (Stmt.seq s2 (Stmt.seq s3 (Stmt.seq s4
-    (Stmt.seq t0Stmt (Stmt.seq s5 (Stmt.seq s6 resultStmt))))))
-  (fullStmt, resultVar, cgs8)
+    (Stmt.seq adjStmt (Stmt.seq s5_t0
+      (Stmt.seq s6 (Stmt.seq s7 (Stmt.seq subPStmt resultStmt))))))))
+  (fullStmt, resultVar, cgs10)
 
 /-- Lower a ReductionChoice to TrustLean.Stmt for **sum/diff reduction**.
     Montgomery REDC is NOT valid here — it produces x*R⁻¹ mod p instead of x mod p.
@@ -132,6 +139,26 @@ def lowerReductionChoice (red : ReductionChoice) (xExpr : LowLevelExpr)
     -- Lazy stages use Solinas fold (cheapest reduction that fits i32/u32).
     let (sr, cgs') := lowerSolinasFold xExpr k c cgs
     (sr.stmt, extractVar sr.resultVar, cgs')
+
+-- ══════════════════════════════════════════════════════════════════
+-- Block 2.1b: Conditional subtract for values < 2p (v3.10.1 AC-6)
+-- ══════════════════════════════════════════════════════════════════
+
+/-- v3.10.1 AC-6: Conditional subtract for Goldilocks sum/diff reduction.
+    For inputs < 2p: if x >= p then x - p else x. Only 2 ops (compare + sub)
+    vs Solinas fold's 4 ops (shift + mul + mask + add). Correct because
+    wb_red < p and a < p → sum = a + wb_red < 2p. One subtraction suffices.
+    The Stmt.ite compiles to compare + CSEL + sub (branchless on ARM). -/
+private def lowerConditionalSub (xExpr : LowLevelExpr) (p : Nat)
+    (cgs : CodeGenState) : (Stmt × VarName × CodeGenState) :=
+  let pLit := LowLevelExpr.litInt ↑p
+  let (subPVar, cgs1) := cgs.freshVar
+  let subPStmt := Stmt.ite (.binOp .ltOp xExpr pLit)
+    (.assign subPVar (.litInt 0))
+    (.assign subPVar pLit)
+  let (resultVar, cgs2) := cgs1.freshVar
+  let resultStmt := Stmt.assign resultVar (.binOp .sub xExpr (.varRef subPVar))
+  (Stmt.seq subPStmt resultStmt, resultVar, cgs2)
 
 -- ══════════════════════════════════════════════════════════════════
 -- Block 2.2: Butterfly parametrized by ReductionChoice
@@ -166,11 +193,16 @@ def lowerDIFButterflyByReduction (aVar bVar wVar : VarName)
     (LowLevelExpr.binOp .add (.varRef aVar) (.litInt ↑p))
     (.varRef redWbVar)
   let diffStmt := Stmt.assign diffVar diffExpr
-  -- Step 3: parametric reduction on sum and diff (inputs < 2p, fold fits i32)
+  -- Step 3: reduction on sum and diff (inputs < 2p)
+  -- v3.10.1 AC-6: For Goldilocks (k > 32), use conditional subtract (2 ops)
+  -- instead of Solinas fold (4 ops). Both a and wb_red are < p, so sum < 2p.
+  -- One conditional subtraction suffices. BabyBear (k ≤ 32) uses parametric reduction.
   let (redSumStmt, redSumVar, cgs5) :=
-    lowerReductionChoice red (.varRef sumVar) p k c mu cgs4
+    if k > 32 then lowerConditionalSub (.varRef sumVar) p cgs4
+    else lowerReductionChoice red (.varRef sumVar) p k c mu cgs4
   let (redDiffStmt, redDiffVar, cgs6) :=
-    lowerReductionChoice red (.varRef diffVar) p k c mu cgs5
+    if k > 32 then lowerConditionalSub (.varRef diffVar) p cgs5
+    else lowerReductionChoice red (.varRef diffVar) p k c mu cgs5
   let fullStmt := Stmt.seq wbStmt (Stmt.seq redWbStmt (Stmt.seq sumStmt
     (Stmt.seq diffStmt (Stmt.seq redSumStmt redDiffStmt))))
   (fullStmt, redSumVar, redDiffVar, cgs6)
