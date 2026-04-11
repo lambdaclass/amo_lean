@@ -89,10 +89,9 @@ private def lowerGoldilocksProductReduce (xExpr : LowLevelExpr) (p : Nat)
   -- hl = hi & 0xFFFFFFFF
   let (hlVar, cgs4) := cgs3.freshVar
   let s4 := Stmt.assign hlVar (.binOp .band (.varRef hiVar) cLit)
-  -- v3.10.1 AC-5: Branchless product reduction.
+  -- Additive borrow handling (works with __uint128_t temps).
   -- t0 = lo + adj - hh, where adj = (lo < hh) ? p : 0
-  -- This avoids unsigned wraparound issues with __uint128_t temps.
-  -- The Stmt.ite compiles to CSEL on ARM (branchless conditional select).
+  -- In __uint128_t: lo + p never overflows (< 2^65 << 2^128).
   let (adjVar, cgs5) := cgs4.freshVar
   let adjStmt := Stmt.ite (.binOp .ltOp (.varRef loVar) (.varRef hhVar))
     (.assign adjVar pLit)
@@ -591,6 +590,10 @@ def emitCFromPlanVerified (plan : Plan) (k c mu : Nat)
     s!"\n  {wideType} pair2, a_val2, b_val2, w_val2;" ++
     s!"\n  {elemType} a_val2_ld, b_val2_ld, w_val2_ld;"
   else ""
+  -- NOTE: F5 attempted to narrow loop vars to uint64_t but caused off-by-one
+  -- errors due to type interaction between uint64_t a_val and __uint128_t temps.
+  -- F5 requires a deeper approach (Approach B from §10.5b: new lowerReduce128
+  -- function that generates uint64_t-native code). Deferred to future work.
   let tempDecls := if numTemps == 0 then "" else
     s!"  {wideType} " ++ String.intercalate ", " (List.range numTemps |>.map (s!"t{·}")) ++ ";\n" ++
     s!"  {wideType} group, pair, a_val, b_val, w_val;" ++ r4Decls ++ ilp2Decls ++
@@ -642,6 +645,7 @@ def emitRustFromPlanVerified (plan : Plan) (k c mu : Nat)
   -- exceeds i128 max), i64 for 32-bit fields (signed for arithmetic shift in REDC).
   let wideType := if k == 64 then "u128" else "i64"
   let numTemps := maxTempsInPlan plan k c mu
+  -- v3.11.0 F5: Numbered temps stay wideType (reduction intermediates can exceed 2^64)
   let tempDecls := String.join (List.range numTemps |>.map fun i =>
     s!"  let mut t{i}: {wideType};\n")
   let hasR4 := plan.stages.toList.any fun s => s.radix == .r4
