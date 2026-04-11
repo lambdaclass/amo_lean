@@ -72,50 +72,16 @@ private def lowerMontyReduceSub (xExpr : LowLevelExpr) (p mu : Nat)
     Borrow handling: if lo < hh, add p first (stays < p, since lo < hh < 2^32).
     Result < 2p after fold; single conditional subtraction → result < p.
     Mirrors hand-written code from OptimizedNTTPipeline.lean:254-263.
-    Only called when k > 32 (compile-time dispatch, NOT a runtime branch). -/
+    Only called when k > 32 (compile-time dispatch, NOT a runtime branch).
+    v3.11.0 F5: Replaced inline Stmt expansion with Stmt.call to goldi_reduce128.
+    The called function uses uint64_t locals (~9 ARM instr vs ~18 with __uint128_t).
+    Stmt.call acts as TYPE BOUNDARY: function body is uint64_t, result promotes to
+    __uint128_t temp. Preamble emitted in emitCFromPlanVerified/Rust. -/
 private def lowerGoldilocksProductReduce (xExpr : LowLevelExpr) (p : Nat)
     (cgs : CodeGenState) : (Stmt × VarName × CodeGenState) :=
-  let pLit := LowLevelExpr.litInt ↑p
-  let cLit := LowLevelExpr.litInt ↑(2^32 - 1 : Nat)
-  -- hi = x >> 64
-  let (hiVar, cgs1) := cgs.freshVar
-  let s1 := Stmt.assign hiVar (.binOp .bshr xExpr (.litInt 64))
-  -- lo = x & (2^64 - 1)
-  let (loVar, cgs2) := cgs1.freshVar
-  let s2 := Stmt.assign loVar (.binOp .band xExpr (.litInt ↑(2^64 - 1 : Nat)))
-  -- hh = hi >> 32
-  let (hhVar, cgs3) := cgs2.freshVar
-  let s3 := Stmt.assign hhVar (.binOp .bshr (.varRef hiVar) (.litInt 32))
-  -- hl = hi & 0xFFFFFFFF
-  let (hlVar, cgs4) := cgs3.freshVar
-  let s4 := Stmt.assign hlVar (.binOp .band (.varRef hiVar) cLit)
-  -- Additive borrow handling (works with __uint128_t temps).
-  -- t0 = lo + adj - hh, where adj = (lo < hh) ? p : 0
-  -- In __uint128_t: lo + p never overflows (< 2^65 << 2^128).
-  let (adjVar, cgs5) := cgs4.freshVar
-  let adjStmt := Stmt.ite (.binOp .ltOp (.varRef loVar) (.varRef hhVar))
-    (.assign adjVar pLit)
-    (.assign adjVar (.litInt 0))
-  let (t0Var, cgs6) := cgs5.freshVar
-  let s5_t0 := Stmt.assign t0Var
-    (.binOp .sub (.binOp .add (.varRef loVar) (.varRef adjVar)) (.varRef hhVar))
-  -- t1 = hl * (2^32 - 1); hl < 2^32 so t1 < 2^64 (no overflow)
-  let (t1Var, cgs7) := cgs6.freshVar
-  let s6 := Stmt.assign t1Var (.binOp .mul (.varRef hlVar) cLit)
-  -- rRaw = t0 + t1; rRaw < 2p (both cases)
-  let (rRawVar, cgs8) := cgs7.freshVar
-  let s7 := Stmt.assign rRawVar (.binOp .add (.varRef t0Var) (.varRef t1Var))
-  -- Branchless final normalization: result = rRaw - (rRaw >= p ? p : 0)
-  let (subPVar, cgs9) := cgs8.freshVar
-  let subPStmt := Stmt.ite (.binOp .ltOp (.varRef rRawVar) pLit)
-    (.assign subPVar (.litInt 0))
-    (.assign subPVar pLit)
-  let (resultVar, cgs10) := cgs9.freshVar
-  let resultStmt := Stmt.assign resultVar (.binOp .sub (.varRef rRawVar) (.varRef subPVar))
-  let fullStmt := Stmt.seq s1 (Stmt.seq s2 (Stmt.seq s3 (Stmt.seq s4
-    (Stmt.seq adjStmt (Stmt.seq s5_t0
-      (Stmt.seq s6 (Stmt.seq s7 (Stmt.seq subPStmt resultStmt))))))))
-  (fullStmt, resultVar, cgs10)
+  let (resultVar, cgs1) := cgs.freshVar
+  let stmt := Stmt.call resultVar "goldi_reduce128" [xExpr]
+  (stmt, resultVar, cgs1)
 
 /-- Lower a ReductionChoice to TrustLean.Stmt for **sum/diff reduction**.
     Montgomery REDC is NOT valid here — it produces x*R⁻¹ mod p instead of x mod p.
@@ -624,6 +590,20 @@ def emitCFromPlanVerified (plan : Plan) (k c mu : Nat)
     let bodyC := bodyC.replace "((int32_t)" "((uint64_t)"
     bodyC
   else bodyC
+  -- v3.11.0 F5: Preamble with goldi_reduce128 (uint64_t internals, ~9 ARM instructions)
+  let goldiPreamble := if k == 64 then
+    let pStr := toString plan.field
+    s!"static inline uint64_t goldi_reduce128(__uint128_t x) \{\n" ++
+    s!"  uint64_t lo=(uint64_t)x, hi=(uint64_t)(x>>64);\n" ++
+    s!"  uint64_t hh=hi>>32, hl=hi&0xFFFFFFFFULL;\n" ++
+    s!"  uint64_t t0; int borrow=__builtin_sub_overflow(lo,hh,&t0);\n" ++
+    s!"  if(borrow) t0-=0xFFFFFFFFULL;\n" ++
+    s!"  uint64_t t1=hl*0xFFFFFFFFULL;\n" ++
+    s!"  uint64_t r; int carry=__builtin_add_overflow(t0,t1,&r);\n" ++
+    s!"  if(carry||r>={pStr}ULL) r-={pStr}ULL;\n" ++
+    s!"  return r;\n}\n\n"
+  else ""
+  goldiPreamble ++
   s!"void {funcName}({elemType}* data, const {elemType}* twiddles) \{\n{tempDecls}{bodyC}\n}"
 
 /-- Emit verified Rust function from Plan.
@@ -683,6 +663,23 @@ def emitRustFromPlanVerified (plan : Plan) (k c mu : Nat)
     let bodyRust := bodyRust.replace twoPStr s!"({pStr}_u128 + {pStr}_u128)"
     bodyRust
   else bodyRust
+  -- v3.11.0 F5: Rust preamble with goldi_reduce128
+  let goldiPreambleRust := if k == 64 then
+    let pStr := toString plan.field
+    s!"#[inline(always)]\n" ++
+    s!"fn goldi_reduce128(x: u128) -> u64 \{\n" ++
+    s!"  let lo = x as u64;\n" ++
+    s!"  let hi = (x >> 64) as u64;\n" ++
+    s!"  let hh = hi >> 32;\n" ++
+    s!"  let hl = hi & 0xFFFFFFFF_u64;\n" ++
+    s!"  let (mut t0, borrow) = lo.overflowing_sub(hh);\n" ++
+    s!"  if borrow \{ t0 = t0.wrapping_sub(0xFFFFFFFF_u64); }\n" ++
+    s!"  let t1 = hl.wrapping_mul(0xFFFFFFFF_u64);\n" ++
+    s!"  let (mut r, carry) = t0.overflowing_add(t1);\n" ++
+    s!"  if carry || r >= {pStr}_u64 \{ r = r.wrapping_sub({pStr}_u64); }\n" ++
+    s!"  r\n}\n\n"
+  else ""
+  goldiPreambleRust ++
   s!"fn {funcName}(data: &mut [{uElemType}], twiddles: &[{uElemType}]) \{\n{tempDecls}{loopDecls}{loadDecls}{r4LoadDecls}{transmute}{bodyRust}\n}"
 
 -- ══════════════════════════════════════════════════════════════════
