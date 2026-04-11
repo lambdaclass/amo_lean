@@ -1,33 +1,38 @@
 # TRZK: Architecture
 
-## Next Version: 3.10.1
+## Current Version: 3.10.1 (COMPLETE)
 
 ### Goldilocks NTT v3.10.1 — Correcciones post-retrospectiva
 
-**Contents**: Activate built infrastructure, measure fair baseline, investigate high-impact paths.
+**Contents**: Fair baseline measurement, branchless reduction, conditional subtract,
+dynamic cost caching. Separated verification cost from parallelism cost.
 
-**Motivation**: v3.10.0 built and connected infrastructure (canal dinámico, ILP2, stage
-specialization) but the gap vs Plonky3 persists at 1.88x. Root cause analysis revealed:
-(1) comparison was unfair (1-lane C vs 2-lane inline asm), (2) useDynamicCost was never
-activated, (3) NTT trick (early stage optimization) was deprioritized for ILP2 (which was
-performance-neutral because R4 dominates).
+**Key results**:
+- AC-2: 3-column table → gap vs Plonky3 scalar is **1.52x** (code quality, not parallelism)
+- AC-5+AC-6: Branchless reduction + conditional subtract → **10.4% speedup** (N=2^20)
+- AC-1: Dynamic cost cached (`computeDynamicCost` + `mkCachedDynamicCostFn`), not activated (interpreter too slow, static cost already optimal per calibration)
 
-**Key principle**: MEASURE FIRST. AC-2 separates verification cost from parallelism cost.
+**Gap analysis** (N=2^20):
+- TRZK verified C: 121.3 ns/elem
+- Plonky3 scalar Rust: 79.7 ns/elem (1.52x faster)
+- Plonky3 vectorized: 70.2 ns/elem (1.73x faster)
+- Gap is CODE QUALITY (stmtToC output vs Rust idioms), not algorithm
+
+**Pending items SUPERSEDED by next phase analysis**:
+- AC-3 (NTT trick viability): superseded by NTTStrategy approach in v3.11 planning
+- AC-4 (inline asm evaluation): superseded by bound-aware codegen approach (~20 LOC vs ~300 LOC)
+- useDynamicCost activation: superseded by bound-aware codegen (bounds flow to codegen directly, no e-graph saturation needed at emit time)
 
 #### DAG (3.10.1)
 
 | Nodo | Tipo | Deps | Status |
 |------|------|------|--------|
-| N3101.1 AC-2: Plonky3 scalar-only benchmark | FUND | — | pending |
-| N3101.2 AC-1: Activate useDynamicCost for Goldilocks | PAR | — | pending |
-| N3101.3 AC-3: NTT trick viability study (READ ONLY) | GATE | N3101.1 | pending |
-| N3101.4 AC-4: Inline asm evaluation (CONDITIONAL) | HOJA | N3101.1 | pending |
-
-#### Bloques
-
-- [ ] **B1 — Scalar baseline measurement (AC-2)**: Create Plonky3 scalar NTT benchmark (no PackedGoldilocksNeon, no inline asm). Produce 3-column table: TRZK verified C | Plonky3 scalar Rust | Plonky3 vectorized. Gate: table published for N=2^14,16,18,20.
-- [ ] **B2 — Activate dynamic cost (AC-1)**: Set `useDynamicCost := fc.k > 32` in fieldConfigToUltraConfig. BabyBear stays false. Gate: BabyBear identical + Goldilocks PASS + report if plan changed.
-- [ ] **B3 — Investigation (AC-3 + AC-4)**: READ ONLY. AC-3: NTT trick viability (NTT_64 × NTT_{N/64}). AC-4: inline asm evaluation (only if AC-2 gap > 1.3x). Gate: 2 viability documents.
+| N3101.1 AC-2: Plonky3 scalar-only benchmark | FUND | — | done |
+| N3101.2 AC-1: Dynamic cost caching (not activated) | PAR | — | done |
+| N3101.5 AC-5: Branchless product reduction | PAR | — | done |
+| N3101.6 AC-6: Conditional subtract for sum/diff | PAR | N3101.5 | done |
+| N3101.3 AC-3: NTT trick viability | GATE | N3101.1 | superseded |
+| N3101.4 AC-4: Inline asm evaluation | HOJA | N3101.1 | superseded |
 
 ---
 
