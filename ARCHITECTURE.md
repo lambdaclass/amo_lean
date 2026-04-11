@@ -1,5 +1,58 @@
 # TRZK: Architecture
 
+## Next Version: 3.11.0
+
+### Bound-aware Discovery Engine v3.11.0
+
+**Contents**: Transform TRZK from hardcoded optimizations to automatic discovery platform.
+Add `conditionalSub` constructor to MixedNodeOp, connect bounds to sideCondCheck in
+e-graph saturation, extend NTTStrategy with twoStepGoldilocks.
+
+**Vision**: The e-graph discovers optimizations like AC-6 (conditional subtract for
+bounded inputs) AUTOMATICALLY for any field, without per-field `if k > 32` hardcoding.
+Test: add Stark252 field with ZERO field-specific rules → e-graph discovers optimal reduction.
+
+**4 Phases**:
+- F1 (1d): Bound-aware codegen — pass stage.outputBoundK to butterfly, dispatch by bounds
+- F4 (0.5d, parallel): twoStepGoldilocks in NTTStrategy (~15 LOC, very low risk)
+- F2 (3-4d): conditionalSub in MixedNodeOp (~300 LOC mechanical, 23rd constructor)
+- F3 (1d): Bound-aware sideCondCheck — boundAwareEqStep in tieredStep (~40 LOC)
+
+**Key infrastructure verified by 3 audit agents**:
+- sideCondCheck IS wired in saturation (MixedSaturation.lean:32-35), NOT dead code
+- soundness proofs already handle sideCondCheck (MixedEMatchSoundness.lean:1713)
+- buildBoundLookup exists (BoundPropagation.lean:72) for reading bounds from DAG
+- tieredStep runs relStep BEFORE new layer (bounds are fresh)
+
+#### DAG (3.11.0)
+
+| Nodo | Tipo | Deps | Status |
+|------|------|------|--------|
+| N311.1 F1: Bound-aware codegen (boundK parameter) | FUND | — | pending |
+| N311.2 F4: twoStepGoldilocks NTTStrategy | PAR | — | pending |
+| N311.3 F2: conditionalSub in MixedNodeOp (~300 LOC) | CRIT | N311.1 | pending |
+| N311.4 F3: boundAwareEqStep + reduceToConditionalSub | CRIT | N311.3 | pending |
+| N311.5 Test: Stark252 automatic discovery (no hardcode) | HOJA | N311.4 | pending |
+
+#### Formal Properties (3.11.0)
+
+| Nodo | Propiedad | Tipo | Prioridad |
+|------|-----------|------|-----------|
+| N311.1 | boundK=0 produces identical codegen to v3.10.1 | PRESERVATION | P0 |
+| N311.1 | boundK≤2 activates conditionalSub for ANY field | SOUNDNESS | P0 |
+| N311.3 | evalMixedOp(.conditionalSub a p) = if v a >= p then v a - p else v a | SOUNDNESS | P0 |
+| N311.3 | mixed_extractable_sound handles conditionalSub arm | SOUNDNESS | P0 |
+| N311.4 | boundAwareEqStep discovers conditionalSub when boundK ≤ 2 | SOUNDNESS | P0 |
+| N311.5 | Stark252 discovered automatically without field-specific rules | SOUNDNESS | P0 |
+
+#### Bloques
+
+- [ ] **BF1+BF4 — Codegen bounds + NTTStrategy (F1 + F4, parallel)**: F1: Add boundK param to lowerDIFButterflyByReduction, dispatch by bounds. F4: Add .twoStepGoldilocks to NTTStrategy. Gate: validation PASS + conditionalSub activates for bounded inputs.
+- [ ] **BF2 — conditionalSub constructor (F2)**: CRIT. Add 23rd MixedNodeOp constructor. ~300 LOC mechanical across 9+ files. Gate: lake build 0 errors, 0 new sorry, benchmark validation PASS.
+- [ ] **BF3 — Bound-aware discovery (F3 + Stark252 test)**: CRIT. boundAwareEqStep in tieredStep + reduceToConditionalSub rule + Stark252 automatic discovery test. Gate: e-graph discovers conditionalSub for bounded inputs.
+
+---
+
 ## Current Version: 3.10.1 (COMPLETE)
 
 ### Goldilocks NTT v3.10.1 — Correcciones post-retrospectiva

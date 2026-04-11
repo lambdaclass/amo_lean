@@ -172,7 +172,9 @@ private def lowerConditionalSub (xExpr : LowLevelExpr) (p : Nat)
     NOT a runtime branch in the emitted C/Rust). Sum/diff reduction via lowerReductionChoice. -/
 def lowerDIFButterflyByReduction (aVar bVar wVar : VarName)
     (red : ReductionChoice) (p k c mu : Nat)
-    (cgs : CodeGenState) : (Stmt × VarName × VarName × CodeGenState) :=
+    (cgs : CodeGenState)
+    (boundK : Nat := 0)  -- v3.11.0 F1: bound factor from NTTStage (0 = unknown)
+    : (Stmt × VarName × VarName × CodeGenState) :=
   -- Step 1: product w*b with field-appropriate reduction
   let (wbVar, cgs1) := cgs.freshVar
   let wbExpr := LowLevelExpr.binOp .mul (.varRef wVar) (.varRef bVar)
@@ -194,14 +196,16 @@ def lowerDIFButterflyByReduction (aVar bVar wVar : VarName)
     (.varRef redWbVar)
   let diffStmt := Stmt.assign diffVar diffExpr
   -- Step 3: reduction on sum and diff (inputs < 2p)
-  -- v3.10.1 AC-6: For Goldilocks (k > 32), use conditional subtract (2 ops)
-  -- instead of Solinas fold (4 ops). Both a and wb_red are < p, so sum < 2p.
-  -- One conditional subtraction suffices. BabyBear (k ≤ 32) uses parametric reduction.
+  -- v3.11.0 F1: Bound-aware dispatch. When boundK ≤ 2 (input bounded < 2p),
+  -- use conditional subtract (2 ops) instead of Solinas fold (4 ops).
+  -- This generalizes AC-6 for ANY field, not just Goldilocks (k > 32).
+  -- boundK = 0 means unknown → fall back to parametric reduction (backward compat).
+  let useFastReduce := boundK > 0 && boundK ≤ 2
   let (redSumStmt, redSumVar, cgs5) :=
-    if k > 32 then lowerConditionalSub (.varRef sumVar) p cgs4
+    if useFastReduce then lowerConditionalSub (.varRef sumVar) p cgs4
     else lowerReductionChoice red (.varRef sumVar) p k c mu cgs4
   let (redDiffStmt, redDiffVar, cgs6) :=
-    if k > 32 then lowerConditionalSub (.varRef diffVar) p cgs5
+    if useFastReduce then lowerConditionalSub (.varRef diffVar) p cgs5
     else lowerReductionChoice red (.varRef diffVar) p k c mu cgs5
   let fullStmt := Stmt.seq wbStmt (Stmt.seq redWbStmt (Stmt.seq sumStmt
     (Stmt.seq diffStmt (Stmt.seq redSumStmt redDiffStmt))))
@@ -221,17 +225,19 @@ def lowerDIFButterflyByReduction (aVar bVar wVar : VarName)
 def lowerRadix4ButterflyByReduction
     (aVar bVar cVar dVar w1Var w1pVar w2Var w3Var : VarName)
     (red : ReductionChoice) (p k c_val mu : Nat)
-    (cgs : CodeGenState) : (Stmt × VarName × VarName × VarName × VarName × CodeGenState) :=
+    (cgs : CodeGenState)
+    (boundK : Nat := 0)  -- v3.11.0 F1
+    : (Stmt × VarName × VarName × VarName × VarName × CodeGenState) :=
   -- Inner level L: bf2 on even-indexed (a,c) and odd-indexed (b,d)
   let (s1, r0, r2, cgs1) :=
-    lowerDIFButterflyByReduction aVar cVar w2Var red p k c_val mu cgs
+    lowerDIFButterflyByReduction aVar cVar w2Var red p k c_val mu cgs (boundK := boundK)
   let (s2, r1, r3, cgs2) :=
-    lowerDIFButterflyByReduction bVar dVar w3Var red p k c_val mu cgs1
+    lowerDIFButterflyByReduction bVar dVar w3Var red p k c_val mu cgs1 (boundK := boundK)
   -- Outer level L+1: cross-butterflies use DIFFERENT twiddles (groups 2g and 2g+1)
   let (s3, out0, out2, cgs3) :=
-    lowerDIFButterflyByReduction r0 r1 w1Var red p k c_val mu cgs2
+    lowerDIFButterflyByReduction r0 r1 w1Var red p k c_val mu cgs2 (boundK := boundK)
   let (s4, out1, out3, cgs4) :=
-    lowerDIFButterflyByReduction r2 r3 w1pVar red p k c_val mu cgs3
+    lowerDIFButterflyByReduction r2 r3 w1pVar red p k c_val mu cgs3 (boundK := boundK)
   -- DIT data-position order: sum@i0, diff@i1, sum@i2, diff@i3
   (Stmt.seq s1 (Stmt.seq s2 (Stmt.seq s3 s4)), out0, out2, out1, out3, cgs4)
 
@@ -315,7 +321,7 @@ private def lowerStageR4 (stage : NTTStage) (n p k c mu : Nat) : Stmt :=
     -- R4 butterfly returns (pos0, pos1, pos2, pos3) in data-position order
     let (bf, pos0, pos1, pos2, pos3, _) :=
       lowerRadix4ButterflyByReduction aVar bVar cVar dVar
-        w1Var w1pVar w2Var w3Var stage.reduction p k c mu cgs
+        w1Var w1pVar w2Var w3Var stage.reduction p k c mu cgs (boundK := stage.outputBoundK)
     -- Load 4 data + 4 twiddles (with widening) → butterfly → store 4 (with truncation)
     let dRef := LowLevelExpr.varRef dataVar
     let tRef := LowLevelExpr.varRef twVar
@@ -364,6 +370,7 @@ def lowerStageVerified (stage : NTTStage) (n p k c mu : Nat) : Stmt :=
     let twExpr := nttTwiddleIndex stage.stageIdx groupVar pairVar halfSize n
     let (bf, sumVar, diffVar, _) :=
       lowerDIFButterflyByReduction aVar bVar wVar stage.reduction p k c mu cgs
+        (boundK := stage.outputBoundK)  -- v3.11.0 F1: pass bounds
     -- Load (with widening) → butterfly → store (with truncation)
     let dRef := LowLevelExpr.varRef (VarName.user "data")
     let tRef := LowLevelExpr.varRef (VarName.user "twiddles")
@@ -539,16 +546,20 @@ private def maxTempsInPlan (plan : Plan) (k c mu : Nat) : Nat :=
       let w3Var := VarName.user "w3_val"
       let (_, _, _, _, _, cgs') :=
         lowerRadix4ButterflyByReduction aVar bVar cVar dVar wVar w1pVar w2Var w3Var
-          stage.reduction plan.field k c mu cgs
+          stage.reduction plan.field k c mu cgs (boundK := stage.outputBoundK)
       cgs'.nextVar
     | _ =>
+      -- v3.11.0 F1: dry-run with ACTUAL boundK to count temps correctly
+      let bk := stage.outputBoundK
       let (_, _, _, cgs') :=
         lowerDIFButterflyByReduction aVar bVar wVar stage.reduction plan.field k c mu cgs
+          (boundK := bk)
       -- v3.10.0 TD: ILP2 processes 2 butterflies → double the temp usage
       if stage.ilpFactor ≥ 2 then
         let cgs1 : CodeGenState := { nextVar := cgs'.nextVar }
         let (_, _, _, cgs1') :=
           lowerDIFButterflyByReduction aVar bVar wVar stage.reduction plan.field k c mu cgs1
+            (boundK := bk)
         cgs1'.nextVar
       else cgs'.nextVar
   counts.foldl Nat.max 0
