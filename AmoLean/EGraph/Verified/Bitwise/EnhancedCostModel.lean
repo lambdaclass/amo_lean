@@ -85,6 +85,7 @@ def tempCount : MixedExpr → Nat
   | .montyReduceE a _ _ => tempCount a
   | .barrettReduceE a _ _ => tempCount a
   | .harveyReduceE a _ => tempCount a
+  | .conditionalSubE a _ => tempCount a
 
 /-! ## Expression-level operation cost (recursive) -/
 
@@ -112,6 +113,7 @@ def exprOpCost (hw : HardwareCost) : MixedExpr → Nat
   | .montyReduceE a _ _ => montgomeryCost hw + exprOpCost hw a
   | .barrettReduceE a _ _ => barrettCost hw + exprOpCost hw a
   | .harveyReduceE a _ => harveyCost hw + exprOpCost hw a
+  | .conditionalSubE a _ => hw.condSub + exprOpCost hw a
 
 /-! ## Spill penalty and enhanced cost -/
 

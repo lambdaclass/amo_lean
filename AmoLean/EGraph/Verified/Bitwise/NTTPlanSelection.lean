@@ -36,11 +36,11 @@ open AmoLean.EGraph.Verified.Bitwise.CrossRelNTT (reductionCostForHW)
 
 /-- Hardware cache configuration. -/
 structure CacheConfig where
-  l1DataSize : Nat := 32768    -- 32KB L1 data cache (typical ARM/x86)
+  l1DataSize : Nat := 131072   -- 128KB L1 data cache (Apple M1/M2/M3 per-core)
   lineSize : Nat := 64         -- 64-byte cache line
-  elementSize : Nat := 4       -- 4 bytes per u32 element
+  elementSize : Nat := 4       -- 4 bytes per u32 element (override to 8 for uint64_t fields)
   l1MissCycles : Nat := 4      -- L1 miss penalty (cycles)
-  l2MissCycles : Nat := 12     -- L2 miss penalty
+  l2MissCycles : Nat := 16     -- L2 miss penalty (Apple M1: 16 cycles, not 12)
   deriving Repr, Inhabited
 
 def CacheConfig.default : CacheConfig := {}
@@ -63,12 +63,23 @@ def stageCacheMisses (n : Nat) (stageIdx : Nat) (cache : CacheConfig) : Nat :=
     let missRate := (strideBytes - cache.l1DataSize) / cache.l1DataSize
     butterfliesPerStage * missRate
 
-/-- Total cache cost for an NTT plan (sum of per-stage miss penalties). -/
+/-- Total cache cost for an NTT plan (level-aware with data-reuse).
+    R4 stages cover 2 NTT levels in 1 pass: the butterfly loads 4 elements
+    (a,b,c,d) and processes both levels before storing. The second level
+    reuses data already in L1/registers from the first level's load.
+    R2 stages cover 1 level each, with a full array sweep between levels
+    that evicts L1 for large N (data >> L1). -/
 def planCacheCost (plan : Plan) (cache : CacheConfig := .default) : Nat :=
-  plan.stages.foldl (fun acc stage =>
-    let misses := stageCacheMisses plan.size stage.stageIdx cache
-    acc + misses * cache.l1MissCycles
-  ) 0
+  let (cost, _) := plan.stages.foldl (fun (acc, level) stage =>
+    let levelsConsumed := match stage.radix with | .r2 => 1 | .r4 => 2
+    -- First level of the stage always pays full cache misses
+    let firstLevelMisses := stageCacheMisses plan.size level cache
+    -- For R4: second level reuses data loaded by first level (same butterfly call)
+    -- For R2: only 1 level, no second level
+    let totalMisses := firstLevelMisses  -- second level of R4 is free (data reuse)
+    (acc + totalMisses * cache.l1MissCycles, level + levelsConsumed)
+  ) (0, 0)
+  cost
 
 /-- Bowers ordering reduces cache misses by processing data linearly.
     Approximate savings: 30-50% fewer misses for large N. -/

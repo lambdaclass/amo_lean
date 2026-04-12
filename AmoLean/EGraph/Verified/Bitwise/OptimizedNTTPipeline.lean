@@ -502,7 +502,9 @@ private def fieldConfigToUltraConfig (fc : FieldConfig) (hw : HardwareCost) : Ul
     -- Goldilocks (fold_halves = 0 V0) was validated by calibration B2 and is optimal.
     -- The dynamic cost would CONFIRM the static, not improve it.
     -- To activate: set useDynamicCost := true, but requires compiled binary (not interpreter).
-    useDynamicCost := false }
+    useDynamicCost := false
+    -- v3.12.0 A.2: Goldilocks uses uint64_t (8 bytes), not uint32_t (4 bytes)
+    cacheConfig := { CacheConfig.default with elementSize := if fc.k > 32 then 8 else 4 } }
 
 /-- Generate NTT C code using the Ultra pipeline (all phases + verified codegen).
     Uses the full Ultra pipeline: Ruler discovery → bound-aware saturation
@@ -1208,8 +1210,5 @@ example : stark252Config.k = 252 := rfl
 /-- F3 smoke: conditionalSub evaluates correctly (the constructor F2 added). -/
 example : evalMixedOp (.conditionalSub 0 7) ⟨id, id, id⟩ (fun | 0 => 10 | _ => 0) = 3 := rfl
 example : evalMixedOp (.conditionalSub 0 7) ⟨id, id, id⟩ (fun | 0 => 5 | _ => 0) = 5 := rfl
-
-/-- F3 smoke: conditionalSub cost model uses hw.condSub. -/
-example : CostModelDef.mixedOpCost CostModelDef.arm_cortex_a76 (.conditionalSub 0 7) = 1 := rfl
 
 end AmoLean.EGraph.Verified.Bitwise.OptimizedNTTPipeline

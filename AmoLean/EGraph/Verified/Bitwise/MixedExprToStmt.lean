@@ -88,6 +88,7 @@ def toCodegenExpr (e : MixedExpr) (constLookup : Nat → Int) : CodegenExpr :=
   | .montyReduceE a _p _mu => toCodegenExpr a constLookup  -- codegen defers to backend
   | .barrettReduceE a _p _m => toCodegenExpr a constLookup
   | .harveyReduceE a _p => toCodegenExpr a constLookup
+  | .conditionalSubE a _p => toCodegenExpr a constLookup
 
 /-! ## Evaluation of CodegenExpr on Int -/
 

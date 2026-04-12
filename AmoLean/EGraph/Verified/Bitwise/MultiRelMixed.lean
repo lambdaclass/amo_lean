@@ -17,7 +17,6 @@ import AmoLean.EGraph.Verified.Bitwise.DirectedRelSpec
 import AmoLean.EGraph.Verified.Bitwise.ColoredSpec
 import AmoLean.EGraph.Verified.Bitwise.MixedPipeline
 import AmoLean.EGraph.Verified.Bitwise.MixedSaturation
-import AmoLean.EGraph.Verified.Bitwise.BoundPropagation
 
 set_option autoImplicit false
 
@@ -199,6 +198,21 @@ theorem coloredStep_preserves_relEntries (rules : List MixedColoredSoundRule) (s
 -- Section 5: Single Tiered Saturation Loop
 -- ══════════════════════════════════════════════════════════════════
 
+/-- Local bound lookup (avoids circular import with BoundPropagation).
+    Mirrors BoundPropagation.buildBoundLookup: scans DAG sentinel edges. -/
+private def sentinelBase : Nat := 1000000
+private def decodeBF (sentinel : EClassId) : Option Nat :=
+  if sentinel ≥ sentinelBase then some (sentinel - sentinelBase) else none
+private def buildBoundLookupLocal (dag : DirectedRelGraph) : EClassId → Option Nat :=
+  fun classId =>
+    dag.successors classId |>.foldl (fun best dst =>
+      match decodeBF dst with
+      | some k => match best with
+        | some bestK => if k < bestK then some k else some bestK
+        | none => some k
+      | none => best
+    ) none
+
 /-- v3.11.0 F3: Bound-aware rewrite step. Applies rules gated by bound predicates.
     Reads CURRENT bounds from relation DAG, then overrides sideCondCheck closures
     to check boundK ≤ 2 for the matched e-class. Runs AFTER relStep so bounds are fresh.
@@ -211,7 +225,7 @@ def boundAwareEqStep (boundRules : List (MixedEMatch.RewriteRule MixedNodeOp))
   -- Read bounds from the CURRENT DAG (relEntries[0] = bound relation)
   let boundLookup :=
     if h : 0 < s.relEntries.size
-    then BoundPropagation.buildBoundLookup s.relEntries[0].dag
+    then buildBoundLookupLocal s.relEntries[0].dag
     else fun _ => none
   -- Override sideCondCheck to query actual bounds
   let rules := boundRules.map fun rule =>
@@ -286,8 +300,9 @@ theorem relStep_null_preserves (s : State) :
 
 /-- saturate with 0 fuel is identity (for any factory). -/
 theorem saturate_zero_fuel (rules : List (MixedEMatch.RewriteRule MixedNodeOp))
-    (coloredRules : List MixedColoredSoundRule) (factory : BoundRuleFactory) (s : State) :
-    saturate rules coloredRules factory { Config.default with totalFuel := 0 } s = s := rfl
+    (coloredRules : List MixedColoredSoundRule) (factory : BoundRuleFactory) (s : State)
+    (boundRules : List (MixedEMatch.RewriteRule MixedNodeOp) := []) :
+    saturate rules coloredRules factory { Config.default with totalFuel := 0 } boundRules s = s := rfl
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 7: Theorems connecting to DirectedRelSpec
@@ -402,7 +417,7 @@ example : (State.empty.addRelation "bounds").numRelations = 1 := by
   simp [State.addRelation, State.numRelations, State.empty, Array.size_push]
 
 /-- saturate with null factory and 0 fuel is identity. -/
-example : saturate [] [] nullFactory { Config.default with totalFuel := 0 }
+example : saturate [] [] nullFactory { Config.default with totalFuel := 0 } []
     State.empty = State.empty := rfl
 
 /-- relStep with null factory is identity. -/

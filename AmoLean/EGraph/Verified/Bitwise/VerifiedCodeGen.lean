@@ -77,6 +77,7 @@ def lowerMixedExprToLLE (e : MixedExpr) : LowLevelExpr :=
   | .montyReduceE a _p _mu => lowerMixedExprToLLE a   -- identity (use lowerMixedExprFull)
   | .barrettReduceE a _p _m => lowerMixedExprToLLE a  -- identity (use lowerMixedExprFull)
   | .harveyReduceE a _p => lowerMixedExprToLLE a      -- identity (use lowerMixedExprFull)
+  | .conditionalSubE a _p => lowerMixedExprToLLE a   -- identity (use lowerMixedExprFull)
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 2: MixedExpr → Trust-Lean Stmt (with temporaries)
@@ -119,6 +120,17 @@ def lowerMixedExprFull (e : MixedExpr) (cgs : CodeGenState) :
     -- Barrett uses k=62 default for 31-bit primes
     let (brResult, cgs2) := lowerBarrettReduce (.varRef childVar) p m 62 cgs1
     (.seq childStmt brResult.stmt, extractVarName brResult.resultVar, cgs2)
+  | .conditionalSubE child p =>
+    let (childStmt, childVar, cgs1) := lowerMixedExprFull child cgs
+    -- conditionalSub: if x >= p then x - p else x (same as lowerConditionalSub pattern)
+    let pLit := LowLevelExpr.litInt ↑p
+    let (subPVar, cgs2) := cgs1.freshVar
+    let subPStmt := Stmt.ite (.binOp .ltOp (.varRef childVar) pLit)
+      (.assign subPVar (.litInt 0))
+      (.assign subPVar pLit)
+    let (resultVar, cgs3) := cgs2.freshVar
+    let resultStmt := Stmt.assign resultVar (.binOp .sub (.varRef childVar) (.varRef subPVar))
+    (.seq childStmt (.seq subPStmt resultStmt), resultVar, cgs3)
   | other =>
     -- All primitive nodes: lower to LLE, assign to temp
     let lle := lowerMixedExprToLLE other
@@ -374,6 +386,8 @@ theorem lowerMixedExprToLLE_evaluates (e : MixedExpr) (llEnv : LowLevelEnv)
   | barrettReduceE a _p _m iha =>
     obtain ⟨va, ha⟩ := iha; exact ⟨va, ha⟩
   | harveyReduceE a _p iha =>
+    obtain ⟨va, ha⟩ := iha; exact ⟨va, ha⟩
+  | conditionalSubE a _p iha =>
     obtain ⟨va, ha⟩ := iha; exact ⟨va, ha⟩
 
 -- ══════════════════════════════════════════════════════════════════
@@ -663,6 +677,57 @@ theorem lowerMixedExprFull_evaluates (e : MixedExpr) (llEnv : LowLevelEnv)
       exact ⟨_, _, rfl, LowLevelEnv.update_same ..⟩
     · simp only [hr, decide_false]
       exact ⟨_, _, rfl, LowLevelEnv.update_same ..⟩
+  -- === Conditional subtract case (v3.11.0 F2, simpler than Harvey: 1 branch) ===
+  | conditionalSubE child p ih =>
+    obtain ⟨vchild, env_child, hih⟩ := ih
+    -- Destructure the child's lowering result
+    set childResult := lowerMixedExprFull child cgs with hcr
+    obtain ⟨childStmt, childVar, cgs1⟩ := childResult
+    simp only [hcr] at hih
+    obtain ⟨heval_child, hval_child⟩ := hih
+    -- Rewrite goal to use childStmt, childVar, cgs1
+    simp only [lowerMixedExprFull, ← hcr]
+    simp only [CodeGenState.freshVar]
+    -- subPVar = temp cgs1.nextVar, resultVar = temp (cgs1.nextVar + 1)
+    set subPVar := VarName.temp cgs1.nextVar
+    set resultVar := VarName.temp (cgs1.nextVar + 1)
+    -- Evaluate the seq: childStmt → ite → assign
+    have hseq : evalStmt 1 llEnv (childStmt.seq
+        ((Stmt.ite (.binOp .ltOp (.varRef childVar) (.litInt ↑p))
+          (.assign subPVar (.litInt 0))
+          (.assign subPVar (.litInt ↑p))).seq
+        (.assign resultVar (.binOp .sub (.varRef childVar) (.varRef subPVar))))) =
+      evalStmt 1 env_child
+        ((Stmt.ite (.binOp .ltOp (.varRef childVar) (.litInt ↑p))
+          (.assign subPVar (.litInt 0))
+          (.assign subPVar (.litInt ↑p))).seq
+        (.assign resultVar (.binOp .sub (.varRef childVar) (.varRef subPVar)))) := by
+      simp only [evalStmt, heval_child]
+    rw [hseq]
+    -- Evaluate ite in env_child: condition childVar < p
+    simp only [evalStmt, evalExpr, hval_child, evalBinOp]
+    by_cases h : vchild < ↑p
+    · -- Case x < p: subPVar = 0, result = childVar - 0
+      simp only [h, decide_true]
+      -- After assigning subPVar = 0, look up childVar in updated env
+      have hcv : ∃ iv, (env_child.update subPVar (.int 0)) childVar = .int iv := by
+        simp only [LowLevelEnv.update]
+        split
+        · exact ⟨0, rfl⟩  -- aliasing: subPVar = childVar → get .int 0
+        · exact ⟨vchild, hval_child⟩
+      obtain ⟨iv, hiv⟩ := hcv
+      simp only [evalExpr, hiv, LowLevelEnv.update_same, evalBinOp]
+      exact ⟨iv - 0, _, rfl, LowLevelEnv.update_same ..⟩
+    · -- Case x ≥ p: subPVar = p, result = childVar - p
+      simp only [h, decide_false]
+      have hcv : ∃ iv, (env_child.update subPVar (.int ↑p)) childVar = .int iv := by
+        simp only [LowLevelEnv.update]
+        split
+        · exact ⟨↑p, rfl⟩
+        · exact ⟨vchild, hval_child⟩
+      obtain ⟨iv, hiv⟩ := hcv
+      simp only [evalExpr, hiv, LowLevelEnv.update_same, evalBinOp]
+      exact ⟨iv - ↑p, _, rfl, LowLevelEnv.update_same ..⟩
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 8: C code emission (connecting to Trust-Lean CBackend)

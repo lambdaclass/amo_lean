@@ -71,7 +71,7 @@ structure NTTStage where
   inputBoundK : Nat           -- bound factor of inputs to this stage
   outputBoundK : Nat          -- bound factor of outputs (after reduction)
   ilpFactor : Nat := 1        -- v3.5.0: independent butterflies per loop iteration (1 or 2)
-  deriving Repr, Inhabited
+  deriving Repr, BEq, Inhabited
 
 /-- Memory access ordering for the NTT. -/
 inductive NTTOrdering where
@@ -86,7 +86,7 @@ structure Plan where
   field : Nat                 -- prime p
   size : Nat                  -- N (power of 2)
   ordering : NTTOrdering := .standard
-  deriving Repr, Inhabited
+  deriving Repr, BEq, Inhabited
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 2: Plan Construction

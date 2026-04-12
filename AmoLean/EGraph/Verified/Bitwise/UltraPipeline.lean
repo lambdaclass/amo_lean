@@ -21,6 +21,7 @@ import AmoLean.EGraph.Verified.Bitwise.VerifiedPlanCodeGen
 import AmoLean.EGraph.Verified.Bitwise.SIMDEmitter
 import AmoLean.EGraph.Verified.Matrix.CrossEGraphBridge
 import AmoLean.EGraph.Verified.Bitwise.Discovery.JointOptimization
+import AmoLean.EGraph.Verified.Bitwise.Discovery.MatPlanExtraction
 
 set_option autoImplicit false
 
@@ -68,6 +69,8 @@ open AmoLean.EGraph.Verified.Bitwise.BoundProp (ReductionChoice)
 open AmoLean.EGraph.Verified.Bitwise.Discovery (JointResult DiscoveryResult
   ReduceSpec discoveryReductionCostPerStage)
 open AmoLean.EGraph.Verified.Bitwise.Discovery.MatEGraphStep (CostOracle)
+-- v3.12.0 Phase B: Discovery wiring
+open AmoLean.EGraph.Verified.Bitwise.Discovery.MatPlanExtraction (selectBestPlanExplored)
 
 -- Phase 25 imports
 open AmoLean.EGraph.Verified.Bitwise.Colors (ColorHierarchy ColoredRule ColorId
@@ -100,7 +103,7 @@ structure UltraConfig where
   cacheConfig : CacheConfig := CacheConfig.default
   -- Phase 24: joint optimization
   exploreFuel : Nat := 10
-  jointThreshold : Nat := 256  -- max N for Discovery.jointOptimize (heavy: 3-phase saturation)
+  jointThreshold : Nat := 16384  -- v3.12.0 B: raised for Discovery plan competition at N=2^14
   -- Phase 25: colors
   targetColor : ColorId := 0  -- root = universal
   -- Field parameters (for verified codegen and parametric discovery)
@@ -157,7 +160,7 @@ def ultraPipeline (g : MixedEGraph)
   let factory := mkFieldFactory p
   let activeColoredRules := allMixedColoredRules
   let state' := saturate (eqRules ++ discoveredRewriteRules) activeColoredRules
-    factory cfg.satConfig state
+    factory cfg.satConfig (s := state)
 
   -- ── Gap 2: Extract per-stage schedule from saturated state ──
   -- stageClassIds maps stage index → e-class ID for DAG bound lookup (Fase Per-Stage v3.3.0)
@@ -176,10 +179,20 @@ def ultraPipeline (g : MixedEGraph)
       let (idx, red, outK) := entry
       (stgs ++ [mkStg idx red inK outK], outK)) ([], 1)
   let schedulePlan : Plan := { stages := schedStages.toArray, field := p, size := n }
-  -- Compete: schedule-derived plan vs 8 candidates (radix-2/4, Solinas/Monty/etc.)
+  -- Compete: schedule-derived plan vs generated candidates + Discovery explored plan
   let candidates := generateCandidates p n cfg.hw arrayIsLarge
-  let allCandidates := candidates.push schedulePlan
+  -- v3.12.0 Phase B: Discovery explores 500 radix assignments via matSaturateAndExtract
+  let exploredPlan := if n ≤ cfg.jointThreshold then
+      some (selectBestPlanExplored p n cfg.hw arrayIsLarge)
+    else none
+  let allCandidates := match exploredPlan with
+    | some ep => candidates.push schedulePlan |>.push ep
+    | none => candidates.push schedulePlan
   -- v3.10.0 T8: use costFn (static by default, dynamic when useDynamicCost=true)
+  let discoveryWon := exploredPlan.map fun ep =>
+    match selectPlanWith allCandidates cfg.hw cfg.cacheConfig costFn with
+    | some best => best.stages == ep.stages
+    | none => false
   let plan := match selectPlanWith allCandidates cfg.hw cfg.cacheConfig costFn with
     | some best => best
     | none => schedulePlan
@@ -271,6 +284,10 @@ def ultraPipeline (g : MixedEGraph)
     s!"Color preference: {repr colorPref}\n" ++
     s!"Active colored rules: {activeColoredRules.length}\n" ++
     s!"Colored extract: {if coloredExpr.isSome then "found" else "no root"}\n" ++
+    s!"--- Phase B: Discovery Plan Competition ---\n" ++
+    s!"Explored plan: {if exploredPlan.isSome then "participated" else s!"skipped (N>{cfg.jointThreshold})"}\n" ++
+    s!"Discovery won: {discoveryWon.getD false}\n" ++
+    s!"Total candidates: {allCandidates.size}\n" ++
     s!"--- Gap 4: Verified Codegen ---\n" ++
     s!"C code: {code.length} chars (TrustLean.Stmt path)\n" ++
     s!"Rust code: {rustCode.length} chars (TrustLean.Stmt path)\n" ++

@@ -1,23 +1,23 @@
 {
-  "version": "3.8.0",
+  "version": "3.12.0",
   "project": "TRZK",
   "phases": [
     {
-      "id": "fase-verified-simd",
-      "name": "Verified SIMD Codegen v3.7.0 (Option D: Stmt.call + simdStmtToC)",
+      "id": "emission-cache",
+      "name": "Phase A: Emission optimization + cache fixes",
       "status": "pending",
       "nodes": [
         {
-          "id": "C1",
-          "name": "Fix FRIFoldPlan Montgomery bug",
-          "type": "PARALELO",
+          "id": "N312.1",
+          "name": "A.2: CacheConfig fix (l1DataSize, elementSize, l2MissCycles)",
+          "type": "HOJA",
           "status": "pending",
           "files": [
-            "AmoLean/EGraph/Verified/Bitwise/FRIFoldPlan.lean"
+            "AmoLean/EGraph/Verified/Bitwise/NTTPlanSelection.lean"
           ],
           "deps": [],
           "blocks": [
-            "B37-0"
+            "BA"
           ],
           "metrics": {
             "loc": 0,
@@ -28,73 +28,6 @@
           },
           "properties": {
             "total": 1,
-            "passing": 0,
-            "failing": 0,
-            "not_runnable": 0
-          },
-          "study": {
-            "papers": [],
-            "lessons": [],
-            "libraries": [],
-            "notes": "selectFRIReduction returns .montgomery for SIMD sums (unsound). Fix: use costAwareReductionForBound or change selectReductionForBound SIMD branch."
-          }
-        },
-        {
-          "id": "C2",
-          "name": "Migrate reductionCost callers to reductionCostForHW",
-          "type": "PARALELO",
-          "status": "pending",
-          "files": [
-            "AmoLean/EGraph/Verified/Bitwise/CrossRelNTT.lean",
-            "AmoLean/EGraph/Verified/Bitwise/FRIFoldPlan.lean",
-            "AmoLean/EGraph/Verified/Bitwise/PrimitivesIntegration.lean",
-            "AmoLean/EGraph/Verified/Bitwise/CrossEGraphProtocol.lean"
-          ],
-          "deps": [],
-          "blocks": [
-            "B37-0"
-          ],
-          "metrics": {
-            "loc": 0,
-            "theorems": 0,
-            "lemmas": 0,
-            "defs": 0,
-            "sorry": 0
-          },
-          "properties": {
-            "total": 0,
-            "passing": 0,
-            "failing": 0,
-            "not_runnable": 0
-          },
-          "study": {
-            "papers": [],
-            "lessons": [],
-            "libraries": [],
-            "notes": "Do NOT delete reductionCost (Phase23Integration olean-only). Migrate 4 active callers. Change hwIsSimd:Bool to hw:HardwareCost."
-          }
-        },
-        {
-          "id": "N37.1",
-          "name": "NeonIntrinsic ADT + simdStmtToC wrapper",
-          "type": "FUNDACIONAL",
-          "status": "pending",
-          "files": [
-            "AmoLean/Bridge/SIMDStmtToC.lean"
-          ],
-          "deps": [],
-          "blocks": [
-            "B37-1"
-          ],
-          "metrics": {
-            "loc": 0,
-            "theorems": 0,
-            "lemmas": 0,
-            "defs": 0,
-            "sorry": 0
-          },
-          "properties": {
-            "total": 0,
             "passing": 0,
             "failing": 0,
             "not_runnable": 0
@@ -102,91 +35,26 @@
           "study": {
             "papers": [],
             "lessons": [
-              "L-308"
+              "L-740",
+              "L-743"
             ],
             "libraries": [],
-            "notes": "New file. NeonIntrinsic inductive with toCName. simdStmtToC delegates to stmtToC for non-call, handles void/struct for calls."
+            "notes": "NTTPlanSelection.lean:39 l1DataSize:=32768→131072, :41 elementSize:=4→8 for Goldilocks, :43 l2MissCycles:=12→16. Apple M-series: 128KB L1D, 16cy L2. Affects plan accuracy for N≥2^14."
           }
         },
         {
-          "id": "N37.2",
-          "name": "Deinterleave helper function",
-          "type": "FUNDACIONAL",
+          "id": "N312.2",
+          "name": "A.4: Cache model level-aware with data-reuse",
+          "type": "PAR",
           "status": "pending",
           "files": [
-            "AmoLean/EGraph/Verified/Bitwise/SIMDEmitter.lean"
-          ],
-          "deps": [],
-          "blocks": [
-            "B37-1"
-          ],
-          "metrics": {
-            "loc": 0,
-            "theorems": 0,
-            "lemmas": 0,
-            "defs": 0,
-            "sorry": 0
-          },
-          "properties": {
-            "total": 0,
-            "passing": 0,
-            "failing": 0,
-            "not_runnable": 0
-          },
-          "study": {
-            "papers": [],
-            "lessons": [],
-            "libraries": [],
-            "notes": "static inline neon_deinterleave_load for vld2q_s32 struct decomposition. Emitted in NTT header."
-          }
-        },
-        {
-          "id": "N37.3",
-          "name": "NEON temp variable declarations",
-          "type": "FUNDACIONAL",
-          "status": "pending",
-          "files": [
-            "AmoLean/EGraph/Verified/Bitwise/SIMDEmitter.lean"
-          ],
-          "deps": [],
-          "blocks": [
-            "B37-1"
-          ],
-          "metrics": {
-            "loc": 0,
-            "theorems": 0,
-            "lemmas": 0,
-            "defs": 0,
-            "sorry": 0
-          },
-          "properties": {
-            "total": 0,
-            "passing": 0,
-            "failing": 0,
-            "not_runnable": 0
-          },
-          "study": {
-            "papers": [],
-            "lessons": [],
-            "libraries": [],
-            "notes": "neonTempDecls emits int32x4_t nv0..nv29, uint32x4_t nu0..nu9 at function top."
-          }
-        },
-        {
-          "id": "N37.4",
-          "name": "Rewrite NEON butterflies as Stmt.call sequences",
-          "type": "CRITICO",
-          "status": "pending",
-          "files": [
-            "AmoLean/EGraph/Verified/Bitwise/VerifiedSIMDButterfly.lean"
+            "AmoLean/EGraph/Verified/Bitwise/NTTPlanSelection.lean"
           ],
           "deps": [
-            "N37.1",
-            "N37.2",
-            "N37.3"
+            "N312.1"
           ],
           "blocks": [
-            "B37-2"
+            "BA"
           ],
           "metrics": {
             "loc": 0,
@@ -205,22 +73,20 @@
             "papers": [],
             "lessons": [],
             "libraries": [],
-            "notes": "Rewrite sqdmulh + Harvey + hs2 + hs1 as Stmt.call using NeonIntrinsic ADT. Reference: SIMDEmitter.lean string emission."
+            "notes": "planCacheCost (NTTPlanSelection:67-71): change stageIdx-based to level-aware. R4 stage covers 2 levels in 1 pass → second level data-reuse (free). Verified: R4 saves 31.6% cache vs R2 at N=2^20. Changes bowersAdjustment automatically (L75-78). Smoke tests N=1024 unaffected (cache=0)."
           }
         },
         {
-          "id": "N37.5",
-          "name": "Connect verified SIMD path to emitStageC",
-          "type": "CRITICO",
+          "id": "N312.3",
+          "name": "A.1: F5c butterfly Stmt.call + loop uint64_t",
+          "type": "CRIT",
           "status": "pending",
           "files": [
-            "AmoLean/EGraph/Verified/Bitwise/SIMDEmitter.lean"
+            "AmoLean/EGraph/Verified/Bitwise/VerifiedPlanCodeGen.lean"
           ],
-          "deps": [
-            "N37.4"
-          ],
+          "deps": [],
           "blocks": [
-            "B37-3"
+            "BA"
           ],
           "metrics": {
             "loc": 0,
@@ -230,65 +96,34 @@
             "sorry": 0
           },
           "properties": {
-            "total": 0,
+            "total": 2,
             "passing": 0,
             "failing": 0,
             "not_runnable": 0
           },
           "study": {
             "papers": [],
-            "lessons": [],
+            "lessons": [
+              "L-740",
+              "L-741",
+              "L-743",
+              "L-745"
+            ],
             "libraries": [],
-            "notes": "Add useVerifiedSIMD dispatch. Stmt butterfly → simdStmtToC → C string. Same loop nest as existing SIMD path."
+            "notes": "goldi_butterfly preamble C+Rust (~30 LOC). lowerStageVerified_GoldiCall (~40 LOC): if k>32 && boundK>0 && boundK≤2 → Stmt.call void 'goldi_butterfly' with addrOf for data/twiddles + uint64_t indices. Loop counters group/pair change to uint64_t (the F5 attempt 3 bug disappears because butterfly body is 1 Stmt.call, no __uint128_t mixing). Precedent: neonCallVoid SIMDStmtToC:104-127."
           }
         },
         {
-          "id": "N37.6",
-          "name": "Structural verification theorems",
-          "type": "CRITICO",
-          "status": "pending",
-          "files": [
-            "AmoLean/EGraph/Verified/Bitwise/VerifiedSIMDButterflyProofs.lean"
-          ],
-          "deps": [
-            "N37.5"
-          ],
-          "blocks": [
-            "B37-4"
-          ],
-          "metrics": {
-            "loc": 0,
-            "theorems": 0,
-            "lemmas": 0,
-            "defs": 0,
-            "sorry": 0
-          },
-          "properties": {
-            "total": 1,
-            "passing": 0,
-            "failing": 0,
-            "not_runnable": 0
-          },
-          "study": {
-            "papers": [],
-            "lessons": [],
-            "libraries": [],
-            "notes": "operation count, intrinsic names check, data flow pattern. Trust boundary documentation."
-          }
-        },
-        {
-          "id": "N37.7",
-          "name": "Benchmark regression check",
+          "id": "N312.4",
+          "name": "A.5: Benchmark Rust vs Plonky3 Rust",
           "type": "HOJA",
           "status": "pending",
-          "files": [
-            "Tests/benchmark/"
-          ],
+          "files": [],
           "deps": [
-            "N37.5"
+            "N312.3"
           ],
           "blocks": [
-            "B37-4"
+            "BA"
           ],
           "metrics": {
             "loc": 0,
@@ -307,56 +142,19 @@
             "papers": [],
             "lessons": [],
             "libraries": [],
-            "notes": "±3% vs v3.6.0. If regression >5%, investigate simdStmtToC emission quality."
+            "notes": "Rust preamble already exists for goldi_reduce128/add/sub (VerifiedPlanCodeGen:716-728). Run benchmark.py --fields goldilocks --hardware arm-scalar --langs rust --sizes 14,20. Fair comparison: same compiler (rustc→LLVM), same patterns (overflowing_sub/add). Expected gap <1.10x."
           }
         }
       ],
       "blocks": [
         {
-          "id": "B37-0",
-          "name": "Cleanup (C1 + C2)",
+          "id": "BA",
+          "name": "Emission + Cache",
           "nodes": [
-            "C1",
-            "C2"
-          ],
-          "status": "pending",
-          "closed_at": null
-        },
-        {
-          "id": "B37-1",
-          "name": "Foundation (ADT + helpers + decls)",
-          "nodes": [
-            "N37.1",
-            "N37.2",
-            "N37.3"
-          ],
-          "status": "pending",
-          "closed_at": null
-        },
-        {
-          "id": "B37-2",
-          "name": "Butterflies as Stmt",
-          "nodes": [
-            "N37.4"
-          ],
-          "status": "pending",
-          "closed_at": null
-        },
-        {
-          "id": "B37-3",
-          "name": "Pipeline Integration",
-          "nodes": [
-            "N37.5"
-          ],
-          "status": "pending",
-          "closed_at": null
-        },
-        {
-          "id": "B37-4",
-          "name": "Verification + Benchmark",
-          "nodes": [
-            "N37.6",
-            "N37.7"
+            "N312.1",
+            "N312.2",
+            "N312.3",
+            "N312.4"
           ],
           "status": "pending",
           "closed_at": null
@@ -364,98 +162,308 @@
       ]
     },
     {
-      "id": "fase-rust-simd",
-      "name": "Verified Rust SIMD NTT v3.8.0",
+      "id": "discovery-wiring",
+      "name": "Phase B: Discovery wiring via selectBestPlanExplored",
       "status": "pending",
       "nodes": [
         {
-          "id": "N38.1",
-          "name": "toRustCall + simdStmtToRust emitter",
-          "type": "FUNDACIONAL",
+          "id": "N312.5",
+          "name": "B.1: selectBestPlanExplored as plan candidate",
+          "type": "PAR",
           "status": "pending",
-          "deps": [],
-          "files": ["AmoLean/Bridge/SIMDStmtToC.lean"],
-          "study": {
-            "papers": [],
-            "lessons": ["L-730", "L-309"],
-            "libraries": [],
-            "notes": "Same intrinsic names in C/Rust. Wrap toCName in unsafe. Clone simdStmtToC pattern."
-          }
-        },
-        {
-          "id": "N38.2",
-          "name": "Rust SIMD helpers + temp declarations",
-          "type": "FUNDACIONAL",
-          "status": "pending",
-          "deps": [],
-          "files": ["AmoLean/EGraph/Verified/Bitwise/SIMDEmitter.lean"],
-          "study": {
-            "papers": [],
-            "lessons": ["L-309"],
-            "libraries": [],
-            "notes": "Rust tuples .0/.1 not .val[0]. MaybeUninit for NEON vars. let mut syntax."
-          }
-        },
-        {
-          "id": "N38.3",
-          "name": "emitSIMDNTTRust — full Rust SIMD NTT generator",
-          "type": "CRITICO",
-          "status": "pending",
-          "deps": ["N38.1", "N38.2"],
-          "files": ["AmoLean/EGraph/Verified/Bitwise/SIMDEmitter.lean"],
-          "study": {
-            "papers": [],
-            "lessons": ["L-730", "L-728"],
-            "libraries": [],
-            "notes": "Clone emitSIMDNTTC structure. Rust pointers: as_mut_ptr().add(). for-range loops."
-          }
-        },
-        {
-          "id": "N38.4",
-          "name": "Pipeline integration (rustSIMD flag + wiring)",
-          "type": "CRITICO",
-          "status": "pending",
-          "deps": ["N38.3"],
           "files": [
-            "AmoLean/EGraph/Verified/Bitwise/UltraPipeline.lean",
-            "AmoLean/EGraph/Verified/Bitwise/OptimizedNTTPipeline.lean",
-            "Tests/benchmark/emit_code.lean",
-            "Tests/benchmark/lean_driver.py",
-            "Tests/benchmark/benchmark.py"
+            "AmoLean/EGraph/Verified/Bitwise/UltraPipeline.lean"
           ],
+          "deps": [
+            "N312.2"
+          ],
+          "blocks": [
+            "BB"
+          ],
+          "metrics": {
+            "loc": 0,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 1,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 0
+          },
           "study": {
             "papers": [],
-            "lessons": ["L-730"],
-            "libraries": [],
-            "notes": "Same pattern as useVerifiedSIMD wiring in v3.7.0. Audit all paths."
-          }
-        },
-        {
-          "id": "N38.5",
-          "name": "Validation + benchmark vs Plonky3",
-          "type": "HOJA",
-          "status": "pending",
-          "deps": ["N38.4"],
-          "files": ["Tests/benchmark/"],
-          "study": {
-            "papers": ["plonky3-security-audit"],
             "lessons": [],
             "libraries": [],
-            "notes": "rustc +nightly required for core::arch::aarch64. Compare vs C SIMD + P3 real."
+            "notes": "Import MatPlanExtraction + open selectBestPlanExplored. Call if n≤jointThreshold, push to allCandidates before selectPlanWith. Raise jointThreshold to 16384. Gate double exploration: if exploredPlan active, jointOptimize still runs for report only. Add report line if Discovery won. ~14 LOC. NO reordering needed (Approach 1)."
           }
         }
       ],
       "blocks": [
-        {"id": "B38.0", "name": "Rust Emitter", "nodes": ["N38.1", "N38.2"]},
-        {"id": "B38.1", "name": "Rust NTT Generator", "nodes": ["N38.3"]},
-        {"id": "B38.2", "name": "Pipeline + Benchmark", "nodes": ["N38.4", "N38.5"]}
+        {
+          "id": "BB",
+          "name": "Discovery wiring",
+          "nodes": [
+            "N312.5"
+          ],
+          "status": "pending",
+          "closed_at": null
+        }
+      ]
+    },
+    {
+      "id": "ntt-trick",
+      "name": "Phase C: NTT trick runtime branch",
+      "status": "pending",
+      "nodes": [
+        {
+          "id": "N312.6",
+          "name": "C.1: NTT trick runtime popcnt branch",
+          "type": "PAR",
+          "status": "pending",
+          "files": [
+            "AmoLean/EGraph/Verified/Bitwise/VerifiedPlanCodeGen.lean"
+          ],
+          "deps": [
+            "N312.3"
+          ],
+          "blocks": [
+            "BC"
+          ],
+          "metrics": {
+            "loc": 0,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 0,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 0
+          },
+          "study": {
+            "papers": [
+              "Ingonyama goldilocks_ntt_trick.pdf"
+            ],
+            "lessons": [],
+            "libraries": [],
+            "notes": "In goldi_butterfly preamble: if(__builtin_popcountll(w)==1) → wb = goldi_reduce128((__uint128_t)b << __builtin_ctzll(w)) instead of w*b. Verified: omega_64=8, stages 0-4 are 100% power-of-2 twiddles, stage 5 is 69% pow2 + 31% not-pow2. Branch predictor handles well (consistent per-stage). ~30 LOC in C+Rust preamble. Impact: ~5% with CT standard, ~12-20% with NTT trick decomposition (v3.13.0)."
+          }
+        }
+      ],
+      "blocks": [
+        {
+          "id": "BC",
+          "name": "NTT trick",
+          "nodes": [
+            "N312.6"
+          ],
+          "status": "pending",
+          "closed_at": null
+        }
+      ]
+    },
+    {
+      "id": "lazy-prefetch",
+      "name": "Phase D: Lazy reduction REAL + prefetch",
+      "status": "pending",
+      "nodes": [
+        {
+          "id": "N312.7",
+          "name": "D.1: lazyReductionSafe parametrize wordBits",
+          "type": "FUND",
+          "status": "pending",
+          "files": [
+            "AmoLean/EGraph/Verified/Bitwise/BoundPropagation.lean"
+          ],
+          "deps": [],
+          "blocks": [
+            "BD"
+          ],
+          "metrics": {
+            "loc": 0,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 1,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 0
+          },
+          "study": {
+            "papers": [],
+            "lessons": [],
+            "libraries": [],
+            "notes": "BoundPropagation.lean:160-161: def lazyReductionSafe (currentK p : Nat) (wordBits : Nat := 64). For Goldilocks (wideType=__uint128_t): pass wordBits:=128. For BabyBear: default 64 (no change). 14 callers across 8 files — most use default, only Goldilocks paths need explicit 128."
+          }
+        },
+        {
+          "id": "N312.8",
+          "name": "D.2+D.3: Cost model lazy=0 + codegen skip reduction",
+          "type": "CRIT",
+          "status": "pending",
+          "files": [
+            "AmoLean/EGraph/Verified/Bitwise/CrossRelNTT.lean",
+            "AmoLean/EGraph/Verified/Bitwise/VerifiedPlanCodeGen.lean"
+          ],
+          "deps": [
+            "N312.7"
+          ],
+          "blocks": [
+            "BD"
+          ],
+          "metrics": {
+            "loc": 0,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 2,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 0
+          },
+          "study": {
+            "papers": [],
+            "lessons": [],
+            "libraries": [],
+            "notes": "3 changes TOGETHER (never partial): 1) CrossRelNTT:94 reductionCostForHW .lazy→0 (not Solinas cost). 2) CrossRelNTT:60-79 costAwareReductionForBound: add .lazy to candidates when lazyReductionSafe. 3) VerifiedPlanCodeGen:103-106 lowerReductionChoice .lazy→passthrough (Stmt.assign passVar xExpr, no Solinas fold). BREAKS lazy_eq_solinas_cost:=rfl (NTTPlan:305) — delete it (0 callers, smoke test only)."
+          }
+        },
+        {
+          "id": "N312.9",
+          "name": "D.4: wordBits propagation to callers",
+          "type": "PAR",
+          "status": "pending",
+          "files": [
+            "AmoLean/EGraph/Verified/Bitwise/NTTPlan.lean",
+            "AmoLean/EGraph/Verified/Bitwise/BoundIntegration.lean",
+            "AmoLean/EGraph/Verified/Bitwise/Discovery/MatPlanExtraction.lean"
+          ],
+          "deps": [
+            "N312.7"
+          ],
+          "blocks": [
+            "BD"
+          ],
+          "metrics": {
+            "loc": 0,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 0,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 0
+          },
+          "study": {
+            "papers": [],
+            "lessons": [],
+            "libraries": [],
+            "notes": "buildBoundAwareStages (NTTPlan:133) + buildStagesFromAssignment (MatPlanExtraction:49) + optimizeNTTWithBounds (BoundIntegration:223): add wordBits param, pass 128 when p > 2^32. mkBoundAwarePlan passes wordBits:= if p > 2^32 then 128 else 64. ~10 LOC across 3 files."
+          }
+        },
+        {
+          "id": "N312.10",
+          "name": "D.5: Proofs for lazy passthrough",
+          "type": "HOJA",
+          "status": "pending",
+          "files": [
+            "AmoLean/EGraph/Verified/Bitwise/VerifiedPlanCodeGen.lean",
+            "AmoLean/EGraph/Verified/Bitwise/NTTPlan.lean"
+          ],
+          "deps": [
+            "N312.8"
+          ],
+          "blocks": [
+            "BD"
+          ],
+          "metrics": {
+            "loc": 0,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 0,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 0
+          },
+          "study": {
+            "papers": [],
+            "lessons": [],
+            "libraries": [],
+            "notes": "lowerReductionChoice_sound needs new .lazy case: assign passVar xExpr preserves value (trivial: x=x). Delete lazy_eq_solinas_cost (NTTPlan:305, 0 callers). computeStageBounds smoke tests (BoundPropagation:394) may need update. ~20 LOC."
+          }
+        },
+        {
+          "id": "N312.11",
+          "name": "D.6: Software prefetch for early stages",
+          "type": "HOJA",
+          "status": "pending",
+          "files": [
+            "AmoLean/EGraph/Verified/Bitwise/VerifiedPlanCodeGen.lean"
+          ],
+          "deps": [],
+          "blocks": [
+            "BD"
+          ],
+          "metrics": {
+            "loc": 0,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 0,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 0
+          },
+          "study": {
+            "papers": [],
+            "lessons": [],
+            "libraries": [],
+            "notes": "String emission in emitCFromPlanVerified: __builtin_prefetch(&data[i+dist],0,3) for stages where stride*elemSize > l1DataSize. ~15 LOC. Flag prefetch:Bool in NTTStage (default false, set true for early stages by plan generation). Rust: core::arch::aarch64::_prefetch. Impact: ~3-8% for N≥2^16."
+          }
+        }
+      ],
+      "blocks": [
+        {
+          "id": "BD",
+          "name": "Lazy + Prefetch",
+          "nodes": [
+            "N312.7",
+            "N312.8",
+            "N312.9",
+            "N312.10",
+            "N312.11"
+          ],
+          "status": "pending",
+          "closed_at": null
+        }
       ]
     }
   ],
   "meta": {
     "created": "2026-04-07T15:52:54Z",
-    "updated": "2026-04-09T09:00:00Z",
-    "total_nodes": 14,
-    "completed_nodes": 9
+    "updated": "2026-04-12T15:42:57Z",
+    "total_nodes": 11,
+    "completed_nodes": 0
   }
 }

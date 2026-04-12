@@ -74,7 +74,7 @@ def optimizeNTTWithBounds
   let s := mkNTTState g
   -- Step 2: saturate with DYNAMIC factory (reads current DAG each iteration)
   let factory := mkFieldFactory p 0
-  let s' := saturate rules [] factory cfg s
+  let s' := saturate rules [] factory cfg (s := s)
   -- Step 3: analyze bounds for per-stage reduction schedule
   let analysis := nttStageBoundAnalysis {
     numStages, prime := p, hwIsSimd, arrayIsLarge }
@@ -110,7 +110,7 @@ theorem stage_bound_correct (inputK : Nat) (red : ReductionChoice) :
 /-- Backward compat: with nullFactory, saturate does equality-only. -/
 theorem nullFactory_is_eqOnly (rules : List (MixedEMatch.RewriteRule MixedNodeOp))
     (s : State) :
-    saturate rules [] nullFactory { Config.default with totalFuel := 0 } s = s := rfl
+    saturate rules [] nullFactory { Config.default with totalFuel := 0 } [] s = s := rfl
 
 /-- mkNTTState creates exactly 1 relation DAG. -/
 theorem mkNTTState_has_bound_dag (g : MixedEGraph) :
@@ -353,7 +353,7 @@ def optimizeNTTFull
   --   coloredStep merges reduction alternatives under hardware colors
   --   relStep propagates bounds, crossStep promotes antisymmetries
   let factory := mkFieldFactory p 0
-  let s' := saturate eqRules coloredRules factory cfg s
+  let s' := saturate eqRules coloredRules factory cfg (s := s)
   -- Step 3: v3.10.0 T12: semanticMatchStep bypassed (dead code + unsound getVal := fun id => id)
   -- The function maps e-class IDs to themselves as "semantic values", which is nonsensical.
   -- In practice it's dead code (IDs never coincide with semantic values), but it's a soundness
@@ -385,7 +385,7 @@ def optimizeNTTFull
   -- Saturate with bound propagation
   let s := mkNTTState g
   let factory := mkFieldFactory p 0
-  let s' := saturate [] [] factory { Config.default with totalFuel := 20 } s
+  let s' := saturate [] [] factory { Config.default with totalFuel := 20 } (s := s)
   IO.println s!"Saturated: {s'.numNodes} nodes, {s'.totalRelEdges} bound edges"
   -- Check bounds per stage
   let lookup :=
