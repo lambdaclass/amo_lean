@@ -312,8 +312,12 @@ private def lowerStageR4 (stage : NTTStage) (n p k c mu : Nat) : Stmt :=
     -- F5c: 1 Stmt.call per R4 butterfly. goldi_butterfly4 handles
     -- load + 4×reduce + 4×add/sub + store internally, all uint64_t.
     let (resultVar, _) := cgs.freshVar
-    -- v3.13.0: dispatch useShift → goldi_butterfly4_shift (goldi_mul_tw)
-    let funcName := if stage.useShift then "goldi_butterfly4_shift" else "goldi_butterfly4"
+    -- v3.13.0+v3.14.0: dispatch useShift × direction → butterfly variant
+    let funcName := match stage.direction, stage.useShift with
+      | .DIF, true  => "goldi_butterfly4_dif_shift"
+      | .DIF, false => "goldi_butterfly4"  -- DIF without shift: use DIT for now (future: DIF non-shift)
+      | .DIT, true  => "goldi_butterfly4_shift"
+      | .DIT, false => "goldi_butterfly4"
     Stmt.call resultVar funcName
       [LowLevelExpr.varRef (VarName.user "data"),
        LowLevelExpr.varRef (VarName.user "twiddles"),
@@ -380,8 +384,12 @@ def lowerStageVerified (stage : NTTStage) (n p k c mu : Nat) : Stmt :=
     let jExpr := LowLevelExpr.binOp .add iExpr (.litInt ↑halfSize)
     let twExpr := nttTwiddleIndex stage.stageIdx groupVar pairVar halfSize n
     let (resultVar, _) := cgs.freshVar
-    -- v3.13.0: dispatch useShift → goldi_butterfly_shift (goldi_mul_tw)
-    let funcName := if stage.useShift then "goldi_butterfly_shift" else "goldi_butterfly"
+    -- v3.13.0+v3.14.0: dispatch useShift × direction → R2 butterfly variant
+    let funcName := match stage.direction, stage.useShift with
+      | .DIF, true  => "goldi_butterfly_dif_shift"
+      | .DIF, false => "goldi_butterfly"  -- DIF without shift: fallback to DIT
+      | .DIT, true  => "goldi_butterfly_shift"
+      | .DIT, false => "goldi_butterfly"
     Stmt.call resultVar funcName
       [LowLevelExpr.varRef (VarName.user "data"),
        LowLevelExpr.varRef (VarName.user "twiddles"),
@@ -464,8 +472,12 @@ private def lowerStageVerified_ILP2 (stage : NTTStage) (n p k c mu : Nat) : Stmt
     let j0 := LowLevelExpr.binOp .add i0 (.litInt ↑halfSize)
     let tw0 := nttTwiddleIndex stage.stageIdx groupVar pairVar halfSize n
     let (res0, cgs1) := cgs0.freshVar
-    -- v3.13.0: dispatch useShift for ILP2 F5c
-    let bfName := if stage.useShift then "goldi_butterfly_shift" else "goldi_butterfly"
+    -- v3.13.0+v3.14.0: dispatch useShift × direction for ILP2 F5c
+    let bfName := match stage.direction, stage.useShift with
+      | .DIF, true  => "goldi_butterfly_dif_shift"
+      | .DIF, false => "goldi_butterfly"
+      | .DIT, true  => "goldi_butterfly_shift"
+      | .DIT, false => "goldi_butterfly"
     let call0 := Stmt.call res0 bfName [dRef, tRef, i0, j0, tw0]
     -- Butterfly 1: pair+1
     let i1 := nttDataIndex groupVar pair2Var halfSize
@@ -616,6 +628,89 @@ private def maxTempsInPlan (plan : Plan) (k c mu : Nat) : Nat :=
         cgs1'.nextVar
       else cgs'.nextVar
   counts.foldl Nat.max 0
+
+/-- v3.14.0 B6: Generate four-step NTT C function body.
+    Pipeline: col_DIF(strided) → col_bitrev → twiddle(ω^(r·c)) → row_DIF(blocks) → row_bitrev.
+    Uses DIF shift butterflies for inner NTT (omega_m = pow2 → shifts).
+    Output is DFT in stride-permuted order (consumer applies unstride). -/
+def emitFourStepC (n m : Nat) (p : Nat) (funcName : String)
+    (innerTwOffset outerTwOffset twMatrixOffset : Nat) : String :=
+  let logM := Nat.log2 m
+  let logOuter := Nat.log2 (n / m)
+  let rows := n / m
+  let pStr := toString p
+  -- Phase 1: Col DIF (strided) — outer NTT stages
+  let colDif := String.intercalate "\n" <| (List.range logOuter).map fun stage =>
+    let half := rows / (2 ^ (stage + 1))
+    let numGroups := 2 ^ stage
+    s!"    for (uint64_t g=0; g<{numGroups}; g++) \{\n" ++
+    s!"      for (uint64_t pr=0; pr<{half}; pr++) \{\n" ++
+    s!"        uint64_t i=col+(g*{2*half}+pr)*{m}, j=i+{half*m};\n" ++
+    s!"        uint64_t tw_idx={outerTwOffset}+{stage}*{rows/2}+g*{half}+pr;\n" ++
+    s!"        t0=goldi_butterfly_dif_shift(data,twiddles,i,j,tw_idx);\n" ++
+    s!"      }\n    }"
+  let phase1 := s!"  /* Phase 1: Col DIF (strided, {logOuter} stages) */\n" ++
+    s!"  for (uint64_t col=0; col<{m}; col++) \{\n" ++
+    colDif ++ "\n  }\n"
+  -- Phase 2: Col bitrev
+  let phase2 := s!"  /* Phase 2: Col bit-reversal */\n" ++
+    s!"  for (uint64_t col=0; col<{m}; col++) \{\n" ++
+    s!"    for (uint64_t row=0; row<{rows}; row++) \{\n" ++
+    s!"      uint64_t br=0, tmp_r=row;\n" ++
+    s!"      for (int b=0; b<{logOuter}; b++) \{ br=(br<<1)|(tmp_r&1); tmp_r>>=1; }\n" ++
+    s!"      if (br > row) \{\n" ++
+    s!"        uint64_t tmp=data[row*{m}+col];\n" ++
+    s!"        data[row*{m}+col]=data[br*{m}+col];\n" ++
+    s!"        data[br*{m}+col]=tmp;\n" ++
+    s!"      }\n    }\n  }\n"
+  -- Phase 3: Twiddle matrix
+  let phase3 := s!"  /* Phase 3: Twiddle matrix omega_N^(row*col) */\n" ++
+    s!"  for (uint64_t i=0; i<{n}; i++) \{\n" ++
+    s!"    data[i]=goldi_reduce128((__uint128_t)data[i]*(__uint128_t)twiddles[{twMatrixOffset}+i]);\n" ++
+    s!"  }\n"
+  -- Phase 4: Row DIF (blocks) — inner NTT with shifts!
+  let rowDif := String.intercalate "\n" <| (List.range logM).map fun stage =>
+    let half := m / (2 ^ (stage + 1))
+    let numGroups := 2 ^ stage
+    s!"      for (uint64_t g=0; g<{numGroups}; g++) \{\n" ++
+    s!"        for (uint64_t pr=0; pr<{half}; pr++) \{\n" ++
+    s!"          uint64_t i=blk*{m}+g*{2*half}+pr, j=i+{half};\n" ++
+    s!"          uint64_t tw_idx={innerTwOffset}+{stage}*{m/2}+g*{half}+pr;\n" ++
+    s!"          t0=goldi_butterfly_dif_shift(data,twiddles,i,j,tw_idx);\n" ++
+    s!"        }\n      }"
+  let phase4 := s!"  /* Phase 4: Row DIF (blocks, {logM} stages, omega_{m}=shift) */\n" ++
+    s!"  for (uint64_t blk=0; blk<{rows}; blk++) \{\n" ++
+    rowDif ++ "\n  }\n"
+  -- Phase 5: Row bitrev
+  let phase5 := s!"  /* Phase 5: Row bit-reversal */\n" ++
+    s!"  for (uint64_t blk=0; blk<{rows}; blk++) \{\n" ++
+    s!"    for (uint64_t col=0; col<{m}; col++) \{\n" ++
+    s!"      uint64_t br=0, tmp_c=col;\n" ++
+    s!"      for (int b=0; b<{logM}; b++) \{ br=(br<<1)|(tmp_c&1); tmp_c>>=1; }\n" ++
+    s!"      if (br > col) \{\n" ++
+    s!"        uint64_t tmp=data[blk*{m}+col];\n" ++
+    s!"        data[blk*{m}+col]=data[blk*{m}+br];\n" ++
+    s!"        data[blk*{m}+br]=tmp;\n" ++
+    s!"      }\n    }\n  }\n"
+  -- Phase 6: unstride — reorder stride-permuted DFT to match flat DIT output order.
+  -- The four-step produces output where element at position i corresponds to
+  -- DFT index (i % m) * rows + (i / m). This transpose (m×rows → rows×m)
+  -- restores the standard ordering that ref_dit produces.
+  -- Uses a temporary buffer (N elements). Cost: 2N load/stores, negligible vs NTT.
+  let phase6 := s!"  /* Phase 6: unstride (transpose {m}x{rows} -> {rows}x{m}) */\n" ++
+    s!"  uint64_t tmp_unstride[{n}];\n" ++
+    s!"  for (uint64_t i = 0; i < {n}; i++) \{\n" ++
+    s!"    uint64_t row = i / {m}, col = i % {m};\n" ++
+    s!"    tmp_unstride[col * {rows} + row] = data[i];\n" ++
+    s!"  }\n" ++
+    s!"  for (uint64_t i = 0; i < {n}; i++) data[i] = tmp_unstride[i];\n"
+  s!"/* Four-step NTT: col_DIF→bitrev→twiddle→row_DIF→bitrev→unstride\n" ++
+  s!" * N={n}, m={m}, p={p}\n" ++
+  s!" * Output: DFT in standard order (matches ref_dit) */\n" ++
+  s!"void {funcName}(uint64_t *data, const uint64_t *twiddles) \{\n" ++
+  s!"  uint64_t t0;\n" ++
+  phase1 ++ phase2 ++ phase3 ++ phase4 ++ phase5 ++ phase6 ++
+  s!"}\n"
 
 /-- Emit verified C function from Plan.
     Replaces NTTPlanCodeGen.emitCFromPlan (which used cScalarEmitter). -/
@@ -768,6 +863,33 @@ def emitCFromPlanVerified (plan : Plan) (k c mu : Nat)
     s!"  data[i0]=goldi_add(r0,w1r1); data[i1]=goldi_sub(r0,w1r1);\n" ++
     s!"  uint64_t w1pr3=goldi_mul_tw(r3,w1p);\n" ++
     s!"  data[i2]=goldi_add(r2,w1pr3); data[i3]=goldi_sub(r2,w1pr3);\n" ++
+    s!"  return 0;\n}\n\n" ++
+    -- v3.14.0: DIF butterflies for four-step inner NTT
+    -- DIF: sum = a + b, diff = (a - b) * w (opposite of DIT: wb = w*b, sum = a+wb)
+    -- R2 DIF with goldi_mul_tw (shift when twiddle is pow2)
+    s!"static inline uint64_t goldi_butterfly_dif_shift(\n" ++
+    s!"    uint64_t *data, const uint64_t *twiddles,\n" ++
+    s!"    uint64_t i, uint64_t j, uint64_t tw_idx) \{\n" ++
+    s!"  uint64_t a=data[i], b=data[j], w=twiddles[tw_idx];\n" ++
+    s!"  data[i]=goldi_add(a,b);\n" ++
+    s!"  uint64_t diff=goldi_sub(a,b);\n" ++
+    s!"  data[j]=goldi_mul_tw(diff,w);\n" ++
+    s!"  return 0;\n}\n\n" ++
+    -- R4 DIF with goldi_mul_tw
+    -- DIF R4: 2 levels. Outer: sum/diff on pairs (a,c) and (b,d). Inner: sum/diff on results.
+    -- Level 1 (outer): s0=a+c, d0=(a-c)*w2, s1=b+d, d1=(b-d)*w3
+    -- Level 2 (inner): out0=s0+s1, out1=(s0-s1)*w1, out2=d0+d1, out3=(d0-d1)*w1p
+    s!"static inline uint64_t goldi_butterfly4_dif_shift(\n" ++
+    s!"    uint64_t *data, const uint64_t *twiddles,\n" ++
+    s!"    uint64_t i0, uint64_t i1, uint64_t i2, uint64_t i3,\n" ++
+    s!"    uint64_t tw2i, uint64_t tw3i, uint64_t tw1i, uint64_t tw1pi) \{\n" ++
+    s!"  uint64_t a=data[i0],b=data[i1],c=data[i2],d=data[i3];\n" ++
+    s!"  uint64_t w2=twiddles[tw2i],w3=twiddles[tw3i];\n" ++
+    s!"  uint64_t w1=twiddles[tw1i],w1p=twiddles[tw1pi];\n" ++
+    s!"  uint64_t s0=goldi_add(a,c), d0=goldi_mul_tw(goldi_sub(a,c),w2);\n" ++
+    s!"  uint64_t s1=goldi_add(b,d), d1=goldi_mul_tw(goldi_sub(b,d),w3);\n" ++
+    s!"  data[i0]=goldi_add(s0,s1); data[i1]=goldi_mul_tw(goldi_sub(s0,s1),w1);\n" ++
+    s!"  data[i2]=goldi_add(d0,d1); data[i3]=goldi_mul_tw(goldi_sub(d0,d1),w1p);\n" ++
     s!"  return 0;\n}\n\n"
   else ""
   goldiPreamble ++
@@ -917,6 +1039,28 @@ def emitRustFromPlanVerified (plan : Plan) (k c mu : Nat)
     s!"  data[i0] = goldi_add(r0,w1r1); data[i1] = goldi_sub(r0,w1r1);\n" ++
     s!"  let w1pr3 = goldi_mul_tw(r3, w1p);\n" ++
     s!"  data[i2] = goldi_add(r2,w1pr3); data[i3] = goldi_sub(r2,w1pr3);\n" ++
+    s!"  0\n}\n\n" ++
+    -- v3.14.0: DIF butterflies for four-step inner NTT (Rust)
+    -- R2 DIF: sum = a+b, diff = (a-b)*w
+    s!"#[inline(always)]\n" ++
+    s!"fn goldi_butterfly_dif_shift(data: &mut [u64], twiddles: &[u64], i: usize, j: usize, tw_idx: usize) -> u64 \{\n" ++
+    s!"  let a = data[i]; let b = data[j]; let w = twiddles[tw_idx];\n" ++
+    s!"  data[i] = goldi_add(a, b);\n" ++
+    s!"  let diff = goldi_sub(a, b);\n" ++
+    s!"  data[j] = goldi_mul_tw(diff, w);\n" ++
+    s!"  0\n}\n\n" ++
+    -- R4 DIF: outer sum/diff on (a,c)(b,d), inner sum/diff on results
+    s!"#[inline(always)]\n" ++
+    s!"fn goldi_butterfly4_dif_shift(data: &mut [u64], twiddles: &[u64],\n" ++
+    s!"    i0: usize, i1: usize, i2: usize, i3: usize,\n" ++
+    s!"    tw2i: usize, tw3i: usize, tw1i: usize, tw1pi: usize) -> u64 \{\n" ++
+    s!"  let (a,b,c,d) = (data[i0],data[i1],data[i2],data[i3]);\n" ++
+    s!"  let (w2,w3) = (twiddles[tw2i],twiddles[tw3i]);\n" ++
+    s!"  let (w1,w1p) = (twiddles[tw1i],twiddles[tw1pi]);\n" ++
+    s!"  let (s0, d0) = (goldi_add(a,c), goldi_mul_tw(goldi_sub(a,c), w2));\n" ++
+    s!"  let (s1, d1) = (goldi_add(b,d), goldi_mul_tw(goldi_sub(b,d), w3));\n" ++
+    s!"  data[i0] = goldi_add(s0,s1); data[i1] = goldi_mul_tw(goldi_sub(s0,s1), w1);\n" ++
+    s!"  data[i2] = goldi_add(d0,d1); data[i3] = goldi_mul_tw(goldi_sub(d0,d1), w1p);\n" ++
     s!"  0\n}\n\n"
   else ""
   goldiPreambleRust ++

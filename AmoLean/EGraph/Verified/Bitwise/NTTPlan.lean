@@ -71,7 +71,9 @@ structure NTTStage where
   inputBoundK : Nat           -- bound factor of inputs to this stage
   outputBoundK : Nat          -- bound factor of outputs (after reduction)
   ilpFactor : Nat := 1        -- v3.5.0: independent butterflies per loop iteration (1 or 2)
-  useShift : Bool := false    -- v3.13.0 H.1: true for inner NTT(64) stages in two-step (shift instead of multiply)
+  useShift : Bool := false    -- v3.13.0 H.1: true for stages where goldi_mul_tw is used
+  staticShift : Bool := false -- v3.14.0 M.3: true = compile-time guaranteed pow2 (four-step inner, no runtime check)
+  pow2Fraction : Nat := 0     -- v3.14.0 M.2: 0-100, % twiddles that are pow2 (metadata for feedback loop)
   deriving Repr, BEq, Inhabited
 
 /-- Memory access ordering for the NTT. -/
@@ -220,14 +222,30 @@ def Plan.totalReductionCost (plan : Plan) (hw : HardwareCost) : Nat :=
     R2: 1 twiddle mul (→REDC) + add + sub = mul + 2*add + REDC
     R4: 3 twiddle muls (→3 REDC) + 8 add/subs + 1 extra REDC = 3*mul + 8*add + 4*REDC -/
 def butterflyCost (radix : RadixChoice) (hw : HardwareCost)
-    (useShift : Bool := false) : Nat :=
+    (useShift : Bool := false) (staticShift : Bool := false) : Nat :=
   if useShift then
-    -- v3.13.0 H.3: Two-step inner NTT(64) — twiddle multiply is shift (free on ARM).
-    -- Only add/sub cost remains. REDC still needed after shift.
     let redc := butterflyREDCCost hw
-    match radix with
-    | .r2 => 2 * hw.add + redc           -- shift free, 1 add + 1 sub + reduce
-    | .r4 => 8 * hw.add + 4 * redc       -- 4 shifts free, 8 add/sub + 4 reduces
+    if staticShift then
+      -- v3.14.0 M.3: Four-step inner — compile-time guaranteed pow2, NO runtime check.
+      -- goldi_butterfly4_static_shift: shift is free, only add/sub + reduce.
+      match radix with
+      | .r2 => 2 * hw.add + redc
+      | .r4 => 8 * hw.add + 4 * redc
+    else
+      -- v3.14.0 M.1+M.2: Stage-split — runtime popcnt + branch per twiddle multiply.
+      -- goldi_mul_tw: if(popcnt==1) shift else multiply. Cost = weighted avg + branch.
+      -- pow2Fraction: 0 = assume all multiply, 100 = assume all shift.
+      let branchCheck := hw.branchPenalty + 1  -- popcnt (~1 cycle) + branch
+      let mulCostPer := hw.mul32               -- full multiply (non-pow2 path)
+      let shiftCostPer := hw.shift             -- shift (pow2 path)
+      -- NOTA: pow2Fraction is per STAGE, passed via the calling context.
+      -- Here we use the WORST CASE (all multiply) because pow2Fraction is metadata,
+      -- not threaded into butterflyCost signature. The stage-split path is penalized
+      -- uniformly — the precision refinement is for the feedback loop (M.5), not for
+      -- selectBestPlan (which already discards stage-split via branchCheck penalty).
+      match radix with
+      | .r2 => mulCostPer + 2 * hw.add + redc + branchCheck
+      | .r4 => 3 * mulCostPer + 8 * hw.add + 4 * redc + 4 * branchCheck
   else
     let redc := butterflyREDCCost hw
     match radix with
@@ -262,7 +280,7 @@ def Plan.totalCostWith (plan : Plan) (hw : HardwareCost)
   let (cost, _) := plan.stages.foldl (fun (acc : Nat × Nat) stage =>
     let (total, level) := acc
     let bfs := match stage.radix with | .r2 => plan.size / 2 | .r4 => plan.size / 4
-    let bfCost := butterflyCost stage.radix hw stage.useShift
+    let bfCost := butterflyCost stage.radix hw stage.useShift stage.staticShift
     let redCost := costFn hw stage.reduction
     let rawStageCost := bfs * (bfCost + 2 * redCost)
     let eligible := stageSimdEligibleAtLevel plan.size stage.radix level hw

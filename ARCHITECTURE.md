@@ -130,6 +130,71 @@ Neto código:          -530 LOC (más limpio, menos legacy)
 
 ---
 
+## Planned: v3.14.0 — Cost Model Feedback + Four-Step NTT + MatOp E-Graph
+
+**3 Ejes, ~516 LOC, 8-11 días.** Detalle completo en TRZK_spiral_idea.md §3.8.
+
+**State post-v3.13.0**: Infraestructura two-step lista. Stage-split shift +13% slower
+(popcnt branch overhead). selectBestPlan correctly picks R4 over two-step R2.
+Four-step decomposition needed for real gain (~100% pow2 inner, no runtime check).
+
+#### DAG (3.14.0)
+
+| Nodo | Tipo | Deps | LOC | Status |
+|------|------|------|-----|--------|
+| N314.1 M.1+M.3: branchCheck + staticShift in butterflyCost | FUND | — | ~15 | done |
+| N314.2 M.2: pow2Fraction per stage | PAR | N314.1 | ~15 | done |
+| N314.3 M.3: staticShift for four-step | PAR | N314.1 | ~5 | done (combined with M.1) |
+| N314.4 M.4: Calibration script | HOJA | — | ~20 | done |
+| N314.5 M.5: feedback_loop.py (3-layer) + cost predictions in report | CRIT | N314.1,2 | ~60 | done |
+| N314.6 Eje 2a: Python four-step verification | FUND | — | ~70 | done |
+| N314.7 DIF butterfly preambles C+Rust | PAR | N314.6 | ~46 | done |
+| N314.8 lowerStageDIF dispatch | PAR | N314.7 | ~15 | done |
+| N314.9 emitFourStepC (col_DIF + bitrev + twiddle + row_DIF + bitrev) | CRIT | N314.8,6 | ~85 | done |
+| N314.10 mkFourStepPlan + twiddle tables | PAR | N314.3,6 | ~50 | pending |
+| N314.11 Four-step validation + benchmark | HOJA | N314.9,10 | ~30 | pending |
+| N314.12 Eje 3a: NodeOps MatOp instance + laws | FUND | — | ~45 | pending |
+| N314.13 Eje 3b: MatExprFlat + Extractable + bridge | PAR | N314.12 | ~30 | pending |
+| N314.14 Eje 3c: applyBreakdownInEGraph | CRIT | N314.13 | ~40 | pending |
+| N314.15 Eje 3d: UltraPipeline wiring | HOJA | N314.14,9 | ~35 | pending |
+
+#### Bloques
+
+- [x] **B1 — Cost Model Foundation (N314.1+M.3)**: FUND. branchCheck + staticShift. Runtime shift now costs MORE than standard (14 vs 12 R2), matching v3.13.0 measurement. Static shift costs LESS (9, for future four-step). **DONE 2025-04-13.**
+- [x] **B2 — Cost Model Extensions (N314.2, N314.3, N314.4)**: M.2: pow2Fraction field + empirical assignment in mkTwoStepPlan. M.3: done in B1. M.4: calibrate_hw.py — measured mul=1.4c shift=1.6c add=1.4c branch=2.5c (latency vs throughput delta explainable). **DONE 2025-04-13.**
+- [x] **B3 — Feedback Loop (N314.5)**: CRIT. Cost predictions added to UltraPipeline report. feedback_loop.py extracts + ranks all candidates. Goldilocks 11 candidates, R4 wins (65280), two-step penalized (96256). BabyBear 10 candidates (no two-step). **DONE 2025-04-13.**
+- [x] **B4 — Four-step Python verification (N314.6)**: FUND. Both variants verified 6/6 PASS for Goldilocks. (1) Naive four-step: col_DFTs→tw→row_DFTs→unstride=DFT. (2) **DIF+bitrev pipeline (Opción B corrected)**: col_DIF→col_bitrev→tw(ω^(r·c))→row_DIF→row_bitrev→unstride=DFT. Row DIF uses ω_m=ω_64=8 → 100% pow2 → shifts! Overhead: 2 bitrev passes O(N) + 1 twiddle + 1 unstride. Bug was: rows-first order is WRONG (twiddle depends on original col index lost after row DFT); correct order is cols-first. **DONE 2025-04-13.**
+- [x] **B5 — DIF preambles + dispatch (N314.7, N314.8)**: R2+R4 DIF shift preambles (C+Rust, ~46 LOC). 3-point dispatch (direction × useShift) in lowerStageR4, lowerStageVerified, lowerStageVerified_ILP2. **DONE 2025-04-13.**
+- [x] **B6 — Four-step codegen (N314.9)**: CRIT. `emitFourStepC`: 6-phase C generator (col_DIF + col_bitrev + twiddle + row_DIF + row_bitrev + unstride). N=1024: 1024/1024 match naive DFT. **KEY FINDING**: ref_dit ≠ DFT (different transform, not permutation). Four-step computes DFT, pipeline uses ref_dit → incompatible. Integration deferred to v3.15.0 (pipeline migration to DFT standard). **DONE 2025-04-13.**
+- [ ] **B7 — Four-step plan + validation (N314.10, N314.11)**: HOJA. mkFourStepPlan + benchmark gap < 0.85x.
+- [ ] **B8 — NodeOps MatOp (N314.12)**: FUND. 7 ctors, 4 laws. Verify no import cycle.
+- [ ] **B9 — MatExprFlat + Extractable (N314.13)**: PAR. MatExprFlat ~10 LOC + reconstruct ~10 LOC + bridge ~10 LOC.
+- [ ] **B10 — applyBreakdownInEGraph (N314.14)**: CRIT. Inject BreakdownRule into EGraph MatOp.
+- [ ] **B11 — UltraPipeline wiring (N314.15)**: HOJA. E-graph plan competes in selectPlanWith.
+
+#### Orden Topológico
+
+```
+{B1, B4, B8} (parallel — independent foundations)
+  → {B2, B3} + {B5, B9}
+  → B6 + B10
+  → {B7, B11}
+```
+
+#### Expectations
+
+```
+                      Goldilocks (0.96x)
+Cost model (Eje 1):  sin cambio perf (mejor predicción)
+Feedback (Eje 1b):   sin cambio perf (detecta divergencias)
+Four-step (Eje 2):   ~0.85x (12% savings, conservador)
+MatOp e-graph (3):   sin cambio perf (infra, descubre factorizaciones)
+─────────────────     ──────────────
+Post-v3.14.0:         ~0.75-0.85x vs Plonky3 scalar
+```
+
+---
+
 ## Completed: v3.12.0 — F5c Butterfly + Discovery Wiring (Phase A+B)
 
 F5c butterfly Stmt.call resolved Goldilocks emission bottleneck (gap 1.28x→0.96x).

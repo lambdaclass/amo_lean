@@ -107,7 +107,14 @@ def mkTwoStepPlan (p n : Nat) (hw : HardwareCost) : Plan :=
   let threshold := logN - shiftCount
   let (shifted, _) := basePlan.stages.foldl (fun (acc : Array NTTStage × Nat) s =>
     let (arr, idx) := acc
-    let s' := if idx ≥ threshold then { s with useShift := true } else s
+    let s' := if idx ≥ threshold then
+      -- v3.14.0 M.2: Assign pow2Fraction per stage (empirical from test_two_step.py)
+      -- Last 2 stages: 100% pow2. Ante-penúltimo: 50%. Before that: 37%.
+      let pow2 := if idx ≥ logN - 2 then 100
+                  else if idx == logN - 3 then 50
+                  else 37
+      { s with useShift := true, pow2Fraction := pow2 }
+    else s
     (arr.push s', idx + 1)) (#[], 0)
   { basePlan with stages := shifted }
 

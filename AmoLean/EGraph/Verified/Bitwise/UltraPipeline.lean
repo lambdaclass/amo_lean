@@ -286,6 +286,14 @@ def ultraPipeline (g : MixedEGraph)
     s!"Explored plan: {if exploredPlan.isSome then "participated" else s!"skipped (N>{cfg.jointThreshold})"}\n" ++
     s!"Discovery won: {discoveryWon.getD false}\n" ++
     s!"Total candidates: {allCandidates.size}\n" ++
+    -- v3.14.0 M.5: Cost model predictions for feedback loop
+    let candidateCosts := allCandidates.toList.map fun c =>
+      (planTotalCostWith c cfg.hw cfg.cacheConfig costFn, c.stages.size,
+       c.stages.toList.any (·.useShift))
+    let winnerCost := planTotalCostWith plan cfg.hw cfg.cacheConfig costFn
+    s!"--- v3.14.0: Cost Model Predictions ---\n" ++
+    s!"Winner cost: {winnerCost} ({plan.stages.size} stages)\n" ++
+    s!"Candidates ({candidateCosts.length}): {candidateCosts.map (·.1)}\n" ++
     s!"--- Gap 4: Verified Codegen ---\n" ++
     s!"C code: {code.length} chars (TrustLean.Stmt path)\n" ++
     s!"Rust code: {rustCode.length} chars (TrustLean.Stmt path)\n" ++
