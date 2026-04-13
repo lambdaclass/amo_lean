@@ -20,6 +20,17 @@ Tests/poseidon_c/build/
 Tests/poseidon_fuzz/target/
 Cargo.lock
 
+# Design & discussion documents (local only, not for remote)
+TRZK_filosofico.md
+TRZK_filosofico2.md
+TRZK_rust_fix.md
+TRZK_rust_fix_v2.md
+TRZK_rust_insights.md
+TRZK_goldi_idea.md
+TRZK_goldigraphs_idea.md
+TRZK_spiral_idea.md
+insights_v3.9.0.md
+
 # Editor files
 *.swp
 *.swo

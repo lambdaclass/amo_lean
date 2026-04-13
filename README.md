@@ -13,26 +13,7 @@
 
 The core value proposition: **write your mathematical specification once in Lean 4, and get optimized C or Rust code that is correct by construction** — every optimization step is a formally proven theorem. This eliminates the traditional tradeoff between performance and correctness in cryptographic implementations.
 
-TRZK covers the key building blocks of modern proof systems: NTT (Number Theoretic Transform), FRI (Fast Reed-Solomon IOP), field arithmetic (Goldilocks, BabyBear, KoalaBear, Mersenne31), Poseidon2 hashing, and a verified e-graph optimization engine with automatic bound-aware discovery. The generated code is Plonky3-compatible: for BabyBear NTT, TRZK's verified C is **62.8% faster** than Plonky3's Rust; for Goldilocks, TRZK matches Plonky3 scalar performance (0.96x) despite full formal verification.
-
-## Ecosystem & Comparisons
-
-TRZK occupies a unique position: it combines **equality saturation optimization** with **formal verification** in a single tool. Most existing projects do one or the other.
-
-| Project | Approach | Proof Assistant | Verification Scope | Codegen Target |
-|---------|----------|-----------------|---------------------|----------------|
-| **TRZK** | E-graph optimization + Sigma-SPL IR | Lean 4 | Full pipeline (spec → IR → code) | C, Rust |
-| [fiat-crypto](https://github.com/mit-plv/fiat-crypto) | Synthesis from field specs | Coq | Field arithmetic | C, Rust, Go, Java |
-| [Jasmin](https://github.com/jasmin-lang/jasmin) | Verified assembly compiler | Coq (EasyCrypt) | Compiler correctness | x86 assembly |
-| [CryptoLine](https://github.com/fmlab-iis/cryptoline) | Algebraic program verification | External (SMT) | Post-hoc verification | N/A (verifier only) |
-| [hacspec](https://github.com/hacspec/hacspec-v2) | Executable specification language | F\*/Coq | Spec extraction | Rust |
-| [SPIRAL](https://www.spiral.net/) | Autotuning + formal rewrite rules | Custom (GAP) | Transform correctness | C, CUDA, FPGA |
-
-**What makes TRZK different:**
-- **Equality saturation** (e-graphs) explores the full space of equivalent rewrites simultaneously, extracting the globally optimal form — not just a locally optimal greedy result
-- **Sigma-SPL IR** enables algebraic reasoning about loop nest generation from Kronecker product decompositions
-- **Trust-Lean verified backend** provides a formally verified C code generator with sanitized identifiers and structural correctness proofs
-- **Single tool**: optimization, verification, and code generation in one pipeline, rather than separate tools stitched together
+TRZK covers the key building blocks of modern proof systems: NTT (Number Theoretic Transform), FRI (Fast Reed-Solomon IOP), field arithmetic (Goldilocks, BabyBear, KoalaBear, Mersenne31), Poseidon2 hashing, and a verified e-graph optimization engine with automatic bound-aware discovery.
 
 ## How It Works
 
@@ -73,7 +54,7 @@ This architecture is **portable and modular**: adding a new primitive means writ
 
 ```bash
 # Clone and build
-git clone https://github.com/manuelpuebla/truth-research-zk.git
+git clone https://github.com/lambdaclass/truth-research-zk.git
 cd truth-research-zk
 lake build
 ```
@@ -242,6 +223,25 @@ v3.9.0  (Apr 10)   Goldilocks scalar end-to-end, Verified Rust SIMD NTT
 | **Compiled TRZK binary** | High — 100x faster planning | Low | `lake build` target needed |
 | ~~**Goldilocks gap**~~ | ~~Critical~~ | ~~High~~ | **RESOLVED** (v3.12.0 F5c, gap 0.96x) |
 | ~~**Bound-aware discovery**~~ | ~~High~~ | ~~Medium~~ | **RESOLVED** (v3.11.0, conditionalSub + boundAwareEqStep) |
+
+## Ecosystem & Comparisons
+
+TRZK occupies a unique position: it combines **equality saturation optimization** with **formal verification** in a single tool. Most existing projects do one or the other.
+
+| Project | Approach | Proof Assistant | Verification Scope | Codegen Target |
+|---------|----------|-----------------|---------------------|----------------|
+| **TRZK** | E-graph optimization + Sigma-SPL IR | Lean 4 | Full pipeline (spec → IR → code) | C, Rust |
+| [fiat-crypto](https://github.com/mit-plv/fiat-crypto) | Synthesis from field specs | Coq | Field arithmetic | C, Rust, Go, Java |
+| [Jasmin](https://github.com/jasmin-lang/jasmin) | Verified assembly compiler | Coq (EasyCrypt) | Compiler correctness | x86 assembly |
+| [CryptoLine](https://github.com/fmlab-iis/cryptoline) | Algebraic program verification | External (SMT) | Post-hoc verification | N/A (verifier only) |
+| [hacspec](https://github.com/hacspec/hacspec-v2) | Executable specification language | F\*/Coq | Spec extraction | Rust |
+| [SPIRAL](https://www.spiral.net/) | Autotuning + formal rewrite rules | Custom (GAP) | Transform correctness | C, CUDA, FPGA |
+
+**What makes TRZK different:**
+- **Equality saturation** (e-graphs) explores the full space of equivalent rewrites simultaneously, extracting the globally optimal form — not just a locally optimal greedy result
+- **Sigma-SPL IR** enables algebraic reasoning about loop nest generation from Kronecker product decompositions
+- **Trust-Lean verified backend** provides a formally verified C code generator with sanitized identifiers and structural correctness proofs
+- **Single tool**: optimization, verification, and code generation in one pipeline, rather than separate tools stitched together
 
 ## References
 
