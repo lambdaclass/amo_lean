@@ -40,6 +40,10 @@ lean_exe «bench» where
 lean_exe «trzk» where
   root := `Compile
 
+-- v3.13.0 E.2: Native binary for Discovery/Ultra pipeline at compiled speed
+lean_exe «trzk-gen» where
+  root := `TRZKGen
+
 -- Phase 0 test script: run all tests
 script «phase0-test» do
   IO.println "╔══════════════════════════════════════════════════════════════╗"

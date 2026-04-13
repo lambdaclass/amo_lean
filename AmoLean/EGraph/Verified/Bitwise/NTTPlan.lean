@@ -71,6 +71,7 @@ structure NTTStage where
   inputBoundK : Nat           -- bound factor of inputs to this stage
   outputBoundK : Nat          -- bound factor of outputs (after reduction)
   ilpFactor : Nat := 1        -- v3.5.0: independent butterflies per loop iteration (1 or 2)
+  useShift : Bool := false    -- v3.13.0 H.1: true for inner NTT(64) stages in two-step (shift instead of multiply)
   deriving Repr, BEq, Inhabited
 
 /-- Memory access ordering for the NTT. -/
@@ -218,11 +219,20 @@ def Plan.totalReductionCost (plan : Plan) (hw : HardwareCost) : Nat :=
 /-- Butterfly arithmetic cost per stage INCLUDING product REDC.
     R2: 1 twiddle mul (→REDC) + add + sub = mul + 2*add + REDC
     R4: 3 twiddle muls (→3 REDC) + 8 add/subs + 1 extra REDC = 3*mul + 8*add + 4*REDC -/
-def butterflyCost (radix : RadixChoice) (hw : HardwareCost) : Nat :=
-  let redc := butterflyREDCCost hw
-  match radix with
-  | .r2 => hw.mul32 + 2 * hw.add + redc
-  | .r4 => 3 * hw.mul32 + 8 * hw.add + 4 * redc
+def butterflyCost (radix : RadixChoice) (hw : HardwareCost)
+    (useShift : Bool := false) : Nat :=
+  if useShift then
+    -- v3.13.0 H.3: Two-step inner NTT(64) — twiddle multiply is shift (free on ARM).
+    -- Only add/sub cost remains. REDC still needed after shift.
+    let redc := butterflyREDCCost hw
+    match radix with
+    | .r2 => 2 * hw.add + redc           -- shift free, 1 add + 1 sub + reduce
+    | .r4 => 8 * hw.add + 4 * redc       -- 4 shifts free, 8 add/sub + 4 reduces
+  else
+    let redc := butterflyREDCCost hw
+    match radix with
+    | .r2 => hw.mul32 + 2 * hw.add + redc
+    | .r4 => 3 * hw.mul32 + 8 * hw.add + 4 * redc
 
 /-- Whether a stage at NTT level `level` would be SIMD-vectorized.
     Mirrors SIMDEmitter.emitStageC eligibility (after normalizePlan):
@@ -252,7 +262,7 @@ def Plan.totalCostWith (plan : Plan) (hw : HardwareCost)
   let (cost, _) := plan.stages.foldl (fun (acc : Nat × Nat) stage =>
     let (total, level) := acc
     let bfs := match stage.radix with | .r2 => plan.size / 2 | .r4 => plan.size / 4
-    let bfCost := butterflyCost stage.radix hw
+    let bfCost := butterflyCost stage.radix hw stage.useShift
     let redCost := costFn hw stage.reduction
     let rawStageCost := bfs * (bfCost + 2 * redCost)
     let eligible := stageSimdEligibleAtLevel plan.size stage.radix level hw

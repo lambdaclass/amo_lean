@@ -12,7 +12,8 @@
 
   Consumed by: N24.3 (BreakdownRules), N24.4 (CrossEGraphProtocol), Phase23Integration
 -/
-import AmoLean.EGraph.Verified.Bitwise.NTTPlanCodeGen
+-- v3.13.0 F.5: NTTPlanCodeGen import removed; add direct NTTPlan import for log2
+import AmoLean.EGraph.Verified.Bitwise.NTTPlan
 
 set_option autoImplicit false
 
@@ -53,7 +54,7 @@ inductive MatOp where
   | stridePerm (m n : Nat)
   | kron (a b : Nat) (m₁ n₁ m₂ n₂ : Nat)
   | compose (a b : Nat) (m k n : Nat)
-  deriving Repr, BEq, Inhabited
+  deriving Repr, BEq, Inhabited, Hashable, DecidableEq  -- v3.13.0 H.6: for future MatOp e-graph (v3.14.0)
 
 def MatOp.children : MatOp → List Nat
   | .identity _ | .dft _ | .ntt _ _ | .twiddle _ _ | .stridePerm _ _ => []

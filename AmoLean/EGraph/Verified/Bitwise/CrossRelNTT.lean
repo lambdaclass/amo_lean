@@ -63,8 +63,8 @@ def costAwareReductionForBound (hw : HardwareCost) (boundK p : Nat)
   -- Montgomery EXCLUDED: REDC gives x*R⁻¹ mod p, only correct for products (tw*b),
   -- NOT for sums/diffs. All callers use this for per-stage sum/diff reduction.
   let candidates : List (Nat × ReductionChoice) :=
-    -- v3.12.0 D: lazy (0 cost) when safe — always wins if feasible
-    (if lazyReductionSafe boundK p wordBits then [(0, .lazy)] else []) ++
+    -- v3.13.0 E.1: .lazy removed — codegen emits Solinas fold anyway (VerifiedPlanCodeGen:103-110),
+    -- so .lazy has identical cost AND identical output. Keeping it was a fiction (see TRZK_spiral_idea.md §3.7).
     (if boundK ≤ 2 then [(mixedOpCost hw (.harveyReduce 0 p), .harvey)] else []) ++
     [(mixedOpCost hw (.reduceGate 0 p), .solinasFold)]
   -- Branch penalties only in serial context (FRI fold, dot product — NOT NTT)
@@ -86,14 +86,14 @@ def costAwareReductionForBound (hw : HardwareCost) (boundK p : Nat)
 
 /-- Hardware-aware reduction cost. SINGLE SOURCE OF TRUTH for plan costing.
     Maps ReductionChoice to cycle count using mixedOpCost from HardwareCost.
-    .lazy cost = Solinas fold cost (matching lowerReductionChoice codegen in
-    VerifiedPlanCodeGen.lean:82-85 which redirects .lazy to Solinas fold). -/
+    v3.13.0 E.1: .lazy cost = Solinas fold cost (codegen emits Solinas fold
+    for .lazy anyway — VerifiedPlanCodeGen.lean:103-110). Honest costing. -/
 def reductionCostForHW (hw : HardwareCost) (red : ReductionChoice) : Nat :=
   match red with
   | .solinasFold => mixedOpCost hw (.reduceGate 0 0)
   | .montgomery => mixedOpCost hw (.montyReduce 0 0 0)
   | .harvey => mixedOpCost hw (.harveyReduce 0 0)
-  | .lazy => 0  -- v3.12.0 D: NO reduction emitted → cost = 0
+  | .lazy => mixedOpCost hw (.reduceGate 0 0)  -- v3.13.0: honest cost (codegen = Solinas)
 
 /-- Instruction profile for modelling execution cost on dual-pipe ARM NEON.
     Calibrated empirically in B35-2 (bench_redc_isolated.c).
@@ -296,14 +296,14 @@ example : reductionCostForHW arm_neon_simd .solinasFold = 14 := by native_decide
 example : reductionCostForHW arm_neon_simd .montgomery = 7 := by native_decide
 /-- reductionCostForHW: ARM NEON Harvey costs 3 (cheapest for SIMD). -/
 example : reductionCostForHW arm_neon_simd .harvey = 3 := by native_decide
-/-- reductionCostForHW: lazy cost = 0 (no reduction emitted, v3.12.0 D). -/
-example : reductionCostForHW arm_neon_simd .lazy = 0 := by native_decide
+/-- v3.13.0 E.1: lazy cost = Solinas cost (honest — codegen emits Solinas fold anyway). -/
+example : reductionCostForHW arm_neon_simd .lazy = reductionCostForHW arm_neon_simd .solinasFold := by native_decide
 /-- reductionCostForHW: ARM scalar Solinas costs 6. -/
 example : reductionCostForHW arm_cortex_a76 .solinasFold = 6 := by native_decide
-/-- costAwareReductionForBound: v3.12.0 D — lazy wins when safe (0 cost). -/
-example : costAwareReductionForBound arm_neon_simd 2 2013265921 = .lazy := by native_decide
-/-- costAwareReductionForBound: lazy still wins with loose bounds for BabyBear (safe in u64). -/
-example : costAwareReductionForBound arm_neon_simd 5 2013265921 = .lazy := by native_decide
+/-- v3.13.0 E.1: costAwareReductionForBound selects Harvey (not lazy) when boundK ≤ 2. -/
+example : costAwareReductionForBound arm_neon_simd 2 2013265921 = .harvey := by native_decide
+/-- v3.13.0 E.1: costAwareReductionForBound selects Solinas fold when boundK > 2 (lazy removed). -/
+example : costAwareReductionForBound arm_neon_simd 5 2013265921 = .solinasFold := by native_decide
 
 end SmokeTests
 

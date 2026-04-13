@@ -235,10 +235,47 @@ jobs:
         chmod +x generated/verify_assembly.sh
         ./generated/verify_assembly.sh
 
+  benchmark-validation:
+    name: Benchmark Validation (v3.13.0 F.7)
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Install elan
+      run: |
+        curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh -s -- -y --default-toolchain none
+        echo "$HOME/.elan/bin" >> $GITHUB_PATH
+
+    - name: Cache Lake packages
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.elan
+          .lake
+        key: ${{ runner.os }}-lake-${{ hashFiles('lean-toolchain', 'lakefile.lean', 'lake-manifest.json') }}
+        restore-keys: |
+          ${{ runner.os }}-lake-
+
+    - name: Install dependencies
+      run: sudo apt-get update && sudo apt-get install -y clang python3
+
+    - name: Build bench executable
+      run: lake build bench
+
+    - name: Benchmark validation (correctness only)
+      run: |
+        echo "=== Benchmark Validation: BabyBear + Goldilocks ==="
+        python3 Tests/benchmark/benchmark.py \
+          --validation-only --fields babybear,goldilocks --sizes 14
+        echo "Benchmark validation PASS"
+
   summary:
     name: CI Summary
     runs-on: ubuntu-latest
-    needs: [build, phase0-tests, goldilocks-tests, sanitizers, avx2-tests, avx2-qa]
+    needs: [build, phase0-tests, goldilocks-tests, sanitizers, avx2-tests, avx2-qa, benchmark-validation]
     if: always()
 
     steps:
@@ -254,13 +291,15 @@ jobs:
         echo "Sanitizers:       ${{ needs.sanitizers.result }}"
         echo "AVX2 Tests:       ${{ needs.avx2-tests.result }}"
         echo "AVX2 QA Suite:    ${{ needs.avx2-qa.result }}"
+        echo "Bench Validation: ${{ needs.benchmark-validation.result }}"
         echo ""
         if [ "${{ needs.build.result }}" == "success" ] && \
            [ "${{ needs.phase0-tests.result }}" == "success" ] && \
            [ "${{ needs.goldilocks-tests.result }}" == "success" ] && \
            [ "${{ needs.sanitizers.result }}" == "success" ] && \
            [ "${{ needs.avx2-tests.result }}" == "success" ] && \
-           [ "${{ needs.avx2-qa.result }}" == "success" ]; then
+           [ "${{ needs.avx2-qa.result }}" == "success" ] && \
+           [ "${{ needs.benchmark-validation.result }}" == "success" ]; then
           echo "✅ All checks passed!"
           exit 0
         else

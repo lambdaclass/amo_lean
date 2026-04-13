@@ -92,6 +92,25 @@ def bowersAdjustment (plan : Plan) (cache : CacheConfig) : Nat :=
 -- Section 2: Plan Candidates
 -- ══════════════════════════════════════════════════════════════════
 
+/-- v3.13.0 H.10: Build a two-step plan with shift optimization.
+    Standard DIT NTT stages, but last 2 stages marked with useShift=true
+    (100% power-of-2 twiddles → goldi_butterfly4_shift uses goldi_mul_tw).
+    The remaining stages use goldi_mul_tw at runtime (~10-50% hit rate).
+    Four-step factorization (inner blocks + twiddle matrix + outer strided)
+    deferred to v3.14.0 due to DIT bit-reversal permutation complexity. -/
+def mkTwoStepPlan (p n : Nat) (hw : HardwareCost) : Plan :=
+  -- Build standard bound-aware plan (uses public mkBoundAwarePlan)
+  let basePlan := mkBoundAwarePlan p n (some hw) false .DIT
+  let logN := basePlan.stages.size
+  -- Mark last 4 stages with useShift=true (100% pow2 for last 2, 50%+ for next 2)
+  let shiftCount := Nat.min 4 logN
+  let threshold := logN - shiftCount
+  let (shifted, _) := basePlan.stages.foldl (fun (acc : Array NTTStage × Nat) s =>
+    let (arr, idx) := acc
+    let s' := if idx ≥ threshold then { s with useShift := true } else s
+    (arr.push s', idx + 1)) (#[], 0)
+  { basePlan with stages := shifted }
+
 /-- Generate all candidate plans for a given field, size, and hardware.
     When hw is provided, bound-aware plans use cost-aware reduction selection. -/
 def generateCandidates (p n : Nat) (hw : HardwareCost)
@@ -121,15 +140,22 @@ def generateCandidates (p n : Nat) (hw : HardwareCost)
   -- where mul latency = 3 cycles and -O2 doesn't auto-interleave
   let withILP := baseCandidates.push
     ((mkBoundAwarePlan p n (some hw) arrayIsLarge).withILP 2)
-  if hw.isSimd then
+  let withILP2 := if hw.isSimd then
     withILP.push ((mkUniformPlan p n .r2 .harvey).withILP 2)
   else withILP
+  -- v3.13.0 H.11: Two-step NTT candidate (Goldilocks only, N ≥ 128)
+  if p == 18446744069414584321 && n ≥ 128 then
+    withILP2.push (mkTwoStepPlan p n hw)
+  else withILP2
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 3: Plan Selection
 -- ══════════════════════════════════════════════════════════════════
 
-/-- v3.10.0 T7: Parametrized total cost — accepts costFn for dynamic channel. -/
+/-- v3.10.0 T7: Parametrized total cost — accepts costFn for dynamic channel.
+    v3.13.0: Stage-split approach — useShift stages have lower butterflyCost (via
+    Plan.totalCostWith) but NO extra twiddle matrix pass. The shift optimization
+    uses goldi_mul_tw within the standard NTT loop (same twiddle table). -/
 def planTotalCostWith (plan : Plan) (hw : HardwareCost)
     (cache : CacheConfig := .default)
     (costFn : HardwareCost → ReductionChoice → Nat := reductionCostForHW) : Nat :=
@@ -202,8 +228,8 @@ example : (generateCandidates 2013265921 1024 arm_cortex_a76).size = 10 := rfl
 /-- selectBestPlan returns a plan (doesn't crash). -/
 example : (selectBestPlan 2013265921 1024 arm_cortex_a76).numStages > 0 := by native_decide
 
-/-- v3.12.0 D: Bound-aware plan with hw now uses lazy (cost=0, safe for BabyBear u64). -/
-example : (mkBoundAwarePlan 2013265921 1024 (some arm_neon_simd)).lazyStages > 0 := by native_decide
+/-- v3.13.0 E.1: With hw, costAwareReductionForBound never returns .lazy (honest costing). -/
+example : (mkBoundAwarePlan 2013265921 1024 (some arm_neon_simd)).lazyStages = 0 := by native_decide
 
 /-- Cache cost for early stages is 0. -/
 example : stageCacheMisses 1024 0 .default = 0 := by native_decide

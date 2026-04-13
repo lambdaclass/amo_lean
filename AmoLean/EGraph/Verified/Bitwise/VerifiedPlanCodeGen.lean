@@ -101,11 +101,9 @@ def lowerReductionChoice (red : ReductionChoice) (xExpr : LowLevelExpr)
     let (sr, cgs') := lowerHarveyReduce xExpr p cgs
     (sr.stmt, extractVar sr.resultVar, cgs')
   | .lazy =>
-    -- v3.12.0 D: Lazy codegen still emits Solinas fold for correctness.
-    -- The cost model (reductionCostForHW .lazy = 0) gives lazy stages a cost advantage
-    -- in plan selection, but the codegen safety net prevents incorrect output.
-    -- True lazy passthrough requires separating butterfly internal reduction from
-    -- stage-level reduction — deferred to v3.13.0.
+    -- v3.13.0 E.1: Lazy codegen = Solinas fold (always was — now cost model is honest too).
+    -- reductionCostForHW .lazy = Solinas cost. costAwareReductionForBound won't select .lazy.
+    -- This branch kept for backward compat with non-hw plan paths (mkBoundAwarePlan hw=none).
     let (sr, cgs') := lowerSolinasFold xExpr k c cgs
     (sr.stmt, extractVar sr.resultVar, cgs')
 
@@ -236,17 +234,30 @@ def lowerRadix4ButterflyByReduction
 -- Block 2.4: Lower stage from Plan
 -- ══════════════════════════════════════════════════════════════════
 
-/-- Compute index for data access in NTT stage. -/
-private def nttDataIndex (groupVar pairVar : VarName) (halfSize : Nat) : LowLevelExpr :=
-  .binOp .add
+/-- Compute index for data access in NTT stage.
+    v3.13.0 H.2: offset/stride for two-step NTT.
+    Standard NTT: offset=0, stride=1 (backward compatible).
+    Inner NTT(64): offset=block*64, stride=1.
+    Outer NTT strided: offset=col, stride=64. -/
+private def nttDataIndex (groupVar pairVar : VarName) (halfSize : Nat)
+    (offset : Nat := 0) (stride : Nat := 1) : LowLevelExpr :=
+  let base := .binOp .add
     (.binOp .mul (.varRef groupVar) (.litInt ↑(2 * halfSize)))
     (.varRef pairVar)
+  let scaled := if stride == 1 then base
+    else .binOp .mul base (.litInt ↑stride)
+  if offset == 0 then scaled
+  else .binOp .add (.litInt ↑offset) scaled
 
-/-- Compute twiddle index for NTT stage. -/
+/-- Compute twiddle index for NTT stage.
+    v3.13.0 H.2: twiddleOffset for two-step NTT.
+    Standard NTT: twiddleOffset=0 (backward compatible).
+    Inner NTT(64): twiddleOffset=0 (inner twiddles at position 0).
+    Outer NTT: twiddleOffset=192+N (after inner+matrix twiddles). -/
 private def nttTwiddleIndex (stageIdx : Nat) (groupVar pairVar : VarName)
-    (halfSize n : Nat) : LowLevelExpr :=
+    (halfSize n : Nat) (twiddleOffset : Nat := 0) : LowLevelExpr :=
   .binOp .add
-    (.litInt ↑(stageIdx * (n / 2)))
+    (.litInt ↑(twiddleOffset + stageIdx * (n / 2)))
     (.binOp .add
       (.binOp .mul (.varRef groupVar) (.litInt ↑halfSize))
       (.varRef pairVar))
@@ -301,7 +312,9 @@ private def lowerStageR4 (stage : NTTStage) (n p k c mu : Nat) : Stmt :=
     -- F5c: 1 Stmt.call per R4 butterfly. goldi_butterfly4 handles
     -- load + 4×reduce + 4×add/sub + store internally, all uint64_t.
     let (resultVar, _) := cgs.freshVar
-    Stmt.call resultVar "goldi_butterfly4"
+    -- v3.13.0: dispatch useShift → goldi_butterfly4_shift (goldi_mul_tw)
+    let funcName := if stage.useShift then "goldi_butterfly4_shift" else "goldi_butterfly4"
+    Stmt.call resultVar funcName
       [LowLevelExpr.varRef (VarName.user "data"),
        LowLevelExpr.varRef (VarName.user "twiddles"),
        i0, i1, i2, i3, tw2, tw3, tw1, tw1p]
@@ -367,7 +380,9 @@ def lowerStageVerified (stage : NTTStage) (n p k c mu : Nat) : Stmt :=
     let jExpr := LowLevelExpr.binOp .add iExpr (.litInt ↑halfSize)
     let twExpr := nttTwiddleIndex stage.stageIdx groupVar pairVar halfSize n
     let (resultVar, _) := cgs.freshVar
-    Stmt.call resultVar "goldi_butterfly"
+    -- v3.13.0: dispatch useShift → goldi_butterfly_shift (goldi_mul_tw)
+    let funcName := if stage.useShift then "goldi_butterfly_shift" else "goldi_butterfly"
+    Stmt.call resultVar funcName
       [LowLevelExpr.varRef (VarName.user "data"),
        LowLevelExpr.varRef (VarName.user "twiddles"),
        iExpr, jExpr, twExpr]
@@ -434,6 +449,44 @@ private def lowerStageVerified_ILP2 (stage : NTTStage) (n p k c mu : Nat) : Stmt
   let numGroups := 2 ^ stage.stageIdx
   let groupVar := VarName.user "group"
   let pairVar := VarName.user "pair"
+  -- v3.13.0 G.1: F5c ILP2 — 2 Stmt.call "goldi_butterfly" per iteration.
+  -- Each call is independent (different data indices) → OoO interleaves mul+umulh.
+  -- Plonky3 does the same (packing.rs:311-382).
+  let useF5c := k > 32 && stage.outputBoundK > 0 && stage.outputBoundK ≤ 2
+  if useF5c then
+    let pair2Var := VarName.user "pair2"
+    let pair2Assign := Stmt.assign pair2Var (.binOp .add (.varRef pairVar) (.litInt 1))
+    let cgs0 : CodeGenState := {}
+    let dRef := LowLevelExpr.varRef (VarName.user "data")
+    let tRef := LowLevelExpr.varRef (VarName.user "twiddles")
+    -- Butterfly 0: pair
+    let i0 := nttDataIndex groupVar pairVar halfSize
+    let j0 := LowLevelExpr.binOp .add i0 (.litInt ↑halfSize)
+    let tw0 := nttTwiddleIndex stage.stageIdx groupVar pairVar halfSize n
+    let (res0, cgs1) := cgs0.freshVar
+    -- v3.13.0: dispatch useShift for ILP2 F5c
+    let bfName := if stage.useShift then "goldi_butterfly_shift" else "goldi_butterfly"
+    let call0 := Stmt.call res0 bfName [dRef, tRef, i0, j0, tw0]
+    -- Butterfly 1: pair+1
+    let i1 := nttDataIndex groupVar pair2Var halfSize
+    let j1 := LowLevelExpr.binOp .add i1 (.litInt ↑halfSize)
+    let tw1 := nttTwiddleIndex stage.stageIdx groupVar pair2Var halfSize n
+    let (res1, _) := cgs1.freshVar
+    let call1 := Stmt.call res1 bfName [dRef, tRef, i1, j1, tw1]
+    -- Body: assign pair2, then both calls (OoO interleaves)
+    let bfBody := Stmt.seq pair2Assign (Stmt.seq call0 call1)
+    let evenHalfSize := (halfSize / 2) * 2
+    let mainLoop := Stmt.for_
+      (.assign groupVar (.litInt 0)) (.binOp .ltOp (.varRef groupVar) (.litInt ↑numGroups))
+      (.assign groupVar (.binOp .add (.varRef groupVar) (.litInt 1)))
+      (Stmt.for_
+        (.assign pairVar (.litInt 0)) (.binOp .ltOp (.varRef pairVar) (.litInt ↑evenHalfSize))
+        (.assign pairVar (.binOp .add (.varRef pairVar) (.litInt 2)))
+        bfBody)
+    if halfSize % 2 == 0 then mainLoop
+    else lowerStageVerified stage n p k c mu  -- odd: fallback to standard
+  else
+  -- Original inline ILP2 path (BabyBear, or unbounded Goldilocks)
   -- Butterfly 0: uses standard variable names (a_val, b_val, w_val, t0..tN)
   let cgs0 : CodeGenState := {}
   let aVar0 := VarName.user "a_val"
@@ -667,6 +720,15 @@ def emitCFromPlanVerified (plan : Plan) (k c mu : Nat)
     s!"  data[i]=goldi_add(a,wb);\n" ++
     s!"  data[j]=goldi_sub(a,wb);\n" ++
     s!"  return 0;\n}\n\n" ++
+    -- v3.13.0: goldi_butterfly_shift — R2 butterfly with goldi_mul_tw (shift for pow2)
+    s!"static inline uint64_t goldi_butterfly_shift(\n" ++
+    s!"    uint64_t *data, const uint64_t *twiddles,\n" ++
+    s!"    uint64_t i, uint64_t j, uint64_t tw_idx) \{\n" ++
+    s!"  uint64_t a=data[i], b=data[j], w=twiddles[tw_idx];\n" ++
+    s!"  uint64_t wb=goldi_mul_tw(b,w);\n" ++
+    s!"  data[i]=goldi_add(a,wb);\n" ++
+    s!"  data[j]=goldi_sub(a,wb);\n" ++
+    s!"  return 0;\n}\n\n" ++
     -- v3.12.0 F5c: goldi_butterfly4 — radix-4 butterfly (2 levels in 1 function)
     -- 10 params: data*, twiddles*, 4 data indices, 4 twiddle indices.
     -- Inner: (a,c) w2 + (b,d) w3. Outer: (r0,r1) w1 + (r2,r3) w1p.
@@ -686,6 +748,25 @@ def emitCFromPlanVerified (plan : Plan) (k c mu : Nat)
     s!"  uint64_t w1r1=goldi_reduce128((__uint128_t)w1*(__uint128_t)r1);\n" ++
     s!"  data[i0]=goldi_add(r0,w1r1); data[i1]=goldi_sub(r0,w1r1);\n" ++
     s!"  uint64_t w1pr3=goldi_reduce128((__uint128_t)w1p*(__uint128_t)r3);\n" ++
+    s!"  data[i2]=goldi_add(r2,w1pr3); data[i3]=goldi_sub(r2,w1pr3);\n" ++
+    s!"  return 0;\n}\n\n" ++
+    -- v3.13.0 H.4: goldi_butterfly4_shift — R4 butterfly for inner NTT(64)
+    -- Uses goldi_mul_tw (shift when twiddle is power-of-2) instead of raw mul+reduce.
+    -- For inner NTT(64) with omega_64=8, 100% of twiddles take the shift path.
+    s!"static inline uint64_t goldi_butterfly4_shift(\n" ++
+    s!"    uint64_t *data, const uint64_t *twiddles,\n" ++
+    s!"    uint64_t i0, uint64_t i1, uint64_t i2, uint64_t i3,\n" ++
+    s!"    uint64_t tw2i, uint64_t tw3i, uint64_t tw1i, uint64_t tw1pi) \{\n" ++
+    s!"  uint64_t a=data[i0],b=data[i1],c=data[i2],d=data[i3];\n" ++
+    s!"  uint64_t w2=twiddles[tw2i],w3=twiddles[tw3i];\n" ++
+    s!"  uint64_t w1=twiddles[tw1i],w1p=twiddles[tw1pi];\n" ++
+    s!"  uint64_t w2c=goldi_mul_tw(c,w2);\n" ++
+    s!"  uint64_t r0=goldi_add(a,w2c), r2=goldi_sub(a,w2c);\n" ++
+    s!"  uint64_t w3d=goldi_mul_tw(d,w3);\n" ++
+    s!"  uint64_t r1=goldi_add(b,w3d), r3=goldi_sub(b,w3d);\n" ++
+    s!"  uint64_t w1r1=goldi_mul_tw(r1,w1);\n" ++
+    s!"  data[i0]=goldi_add(r0,w1r1); data[i1]=goldi_sub(r0,w1r1);\n" ++
+    s!"  uint64_t w1pr3=goldi_mul_tw(r3,w1p);\n" ++
     s!"  data[i2]=goldi_add(r2,w1pr3); data[i3]=goldi_sub(r2,w1pr3);\n" ++
     s!"  return 0;\n}\n\n"
   else ""
@@ -794,6 +875,14 @@ def emitRustFromPlanVerified (plan : Plan) (k c mu : Nat)
     s!"  data[i] = goldi_add(a, wb);\n" ++
     s!"  data[j] = goldi_sub(a, wb);\n" ++
     s!"  0\n}\n\n" ++
+    -- v3.13.0: goldi_butterfly_shift — R2 butterfly with goldi_mul_tw (Rust)
+    s!"#[inline(always)]\n" ++
+    s!"fn goldi_butterfly_shift(data: &mut [u64], twiddles: &[u64], i: usize, j: usize, tw_idx: usize) -> u64 \{\n" ++
+    s!"  let a = data[i]; let b = data[j]; let w = twiddles[tw_idx];\n" ++
+    s!"  let wb = goldi_mul_tw(b, w);\n" ++
+    s!"  data[i] = goldi_add(a, wb);\n" ++
+    s!"  data[j] = goldi_sub(a, wb);\n" ++
+    s!"  0\n}\n\n" ++
     -- v3.12.0 F5c: goldi_butterfly4 — R4 butterfly (Rust)
     s!"#[inline(always)]\n" ++
     s!"fn goldi_butterfly4(data: &mut [u64], twiddles: &[u64],\n" ++
@@ -809,6 +898,24 @@ def emitRustFromPlanVerified (plan : Plan) (k c mu : Nat)
     s!"  let w1r1 = goldi_reduce128((w1 as u128)*(r1 as u128));\n" ++
     s!"  data[i0] = goldi_add(r0,w1r1); data[i1] = goldi_sub(r0,w1r1);\n" ++
     s!"  let w1pr3 = goldi_reduce128((w1p as u128)*(r3 as u128));\n" ++
+    s!"  data[i2] = goldi_add(r2,w1pr3); data[i3] = goldi_sub(r2,w1pr3);\n" ++
+    s!"  0\n}\n\n" ++
+    -- v3.13.0 H.4: goldi_butterfly4_shift — R4 butterfly for inner NTT(64) (Rust)
+    -- Uses goldi_mul_tw (shift when twiddle is power-of-2) instead of raw mul+reduce.
+    s!"#[inline(always)]\n" ++
+    s!"fn goldi_butterfly4_shift(data: &mut [u64], twiddles: &[u64],\n" ++
+    s!"    i0: usize, i1: usize, i2: usize, i3: usize,\n" ++
+    s!"    tw2i: usize, tw3i: usize, tw1i: usize, tw1pi: usize) -> u64 \{\n" ++
+    s!"  let (a,b,c,d) = (data[i0],data[i1],data[i2],data[i3]);\n" ++
+    s!"  let (w2,w3) = (twiddles[tw2i],twiddles[tw3i]);\n" ++
+    s!"  let (w1,w1p) = (twiddles[tw1i],twiddles[tw1pi]);\n" ++
+    s!"  let w2c = goldi_mul_tw(c, w2);\n" ++
+    s!"  let (r0,r2) = (goldi_add(a,w2c), goldi_sub(a,w2c));\n" ++
+    s!"  let w3d = goldi_mul_tw(d, w3);\n" ++
+    s!"  let (r1,r3) = (goldi_add(b,w3d), goldi_sub(b,w3d));\n" ++
+    s!"  let w1r1 = goldi_mul_tw(r1, w1);\n" ++
+    s!"  data[i0] = goldi_add(r0,w1r1); data[i1] = goldi_sub(r0,w1r1);\n" ++
+    s!"  let w1pr3 = goldi_mul_tw(r3, w1p);\n" ++
     s!"  data[i2] = goldi_add(r2,w1pr3); data[i3] = goldi_sub(r2,w1pr3);\n" ++
     s!"  0\n}\n\n"
   else ""

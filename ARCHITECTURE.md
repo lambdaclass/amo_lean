@@ -1,57 +1,146 @@
 # TRZK: Architecture
 
-## Next Version: 3.11.0
+## Next Version: 3.13.0
 
-### Bound-aware Discovery Engine v3.11.0
+### SPIRAL + Compiler Driver + Path A Migration v3.13.0
 
-**Contents**: Transform TRZK from hardcoded optimizations to automatic discovery platform.
-Add `conditionalSub` constructor to MixedNodeOp, connect bounds to sideCondCheck in
-e-graph saturation, extend NTTStrategy with twoStepGoldilocks.
+**Contents**: Two-step NTT decomposition (SPIRAL-style), compiler driver rewired to Path A,
+migration of remaining primitives from string emission to verified codegen, ILP2 interleaving
+for Goldilocks. Cleanup of legacy code and dead ends from v3.12.0.
 
-**Vision**: The e-graph discovers optimizations like AC-6 (conditional subtract for
-bounded inputs) AUTOMATICALLY for any field, without per-field `if k > 32` hardcoding.
-Test: add Stark252 field with ZERO field-specific rules → e-graph discovers optimal reduction.
+**Vision**: Two-step decomposition is the factorization that Discovery (Fibonacci r2/r4
+enumeration) CANNOT find. It decomposes NTT_N = NTT_{N/64} × TwiddleMatrix × NTT_64,
+where NTT_64 uses omega_64=8 (power-of-2 root → all 6 inner stages use shifts instead
+of multiplies). Outer stages use standard Cooley-Tukey. MatOp e-graph deferred to v3.14.0.
 
-**5 Phases**:
-- F5 (1d): Emisión reduce128 — uint64_t temps post-split instead of __uint128_t (~20 LOC, ~15% speedup)
-- F1 (1d): Bound-aware codegen — pass stage.outputBoundK to butterfly, dispatch by bounds (DONE)
-- F4 (0.5d, parallel): twoStepGoldilocks in NTTStrategy (~15 LOC, very low risk) (DONE)
-- F2 (3-4d): conditionalSub in MixedNodeOp (~300 LOC mechanical, 23rd constructor)
-- F3 (1d): Bound-aware sideCondCheck — boundAwareEqStep in tieredStep (~40 LOC)
+**State post-v3.12.0**: Gap Goldilocks 0.96x (TRZK faster than Plonky3 scalar).
+F5c (Stmt.call) resolved emission bottleneck. Discovery wired but N≤1024 only
+(Lean interpreter slow). Team feedback (PR #11, #12): Path B codegen copy-paste,
+types don't match, verification status unclear. NTT trick reverted (hurts without
+two-step), lazy real confirmed dead end.
 
-**Key infrastructure verified by 3 audit agents**:
-- sideCondCheck IS wired in saturation (MixedSaturation.lean:32-35), NOT dead code
-- soundness proofs already handle sideCondCheck (MixedEMatchSoundness.lean:1713)
-- buildBoundLookup exists (BoundPropagation.lean:72) for reading bounds from DAG
-- tieredStep runs relStep BEFORE new layer (bounds are fresh)
+**Dead ends (DO NOT REPEAT)**:
+- Lazy real: storeTrunc corrupts values > p. Requires wideType arrays → 2x memory, kills F5c.
+- Prefetch N ≤ 2^14: cache=0 (data fits in L1). Only useful N ≥ 2^16.
+- NEON Karatsuba for Goldilocks: scalar mul+umulh = 2 instr vs Karatsuba 12+.
+- NTT trick standalone: reverted in v3.12.0 (0.96→1.18x). Only useful WITH two-step.
 
-#### DAG (3.11.0)
+**4 Phases**:
+- Phase E: Cleanup + infrastructure (1-2 days, ~-260 LOC net)
+- Phase F: Compiler driver + Path A migration (3-4 days, ~-611 LOC net)
+- Phase G: ILP2 for Goldilocks (2-3 days, ~50 LOC)
+- Phase H: Two-Step NTT (5-6 days, ~293 LOC)
+- Phase I: Optional (prefetch, four-step, Bowers)
 
-| Nodo | Tipo | Deps | Status |
-|------|------|------|--------|
-| N311.6 F5: Emisión reduce128 (uint64_t post-split temps) | FUND | — | pending |
-| N311.1 F1: Bound-aware codegen (boundK parameter) | FUND | — | done |
-| N311.2 F4: twoStepGoldilocks NTTStrategy | PAR | — | done |
-| N311.3 F2: conditionalSub in MixedNodeOp (~300 LOC) | CRIT | N311.1 | pending |
-| N311.4 F3: boundAwareEqStep + reduceToConditionalSub | CRIT | N311.3 | pending |
-| N311.5 Test: Stark252 automatic discovery (no hardcode) | HOJA | N311.4 | pending |
+**Key infrastructure VERIFIED against code (2025-04-13)**:
+- `nttDataIndex` (VerifiedPlanCodeGen:240) has NO offset/stride — H.2 adds them
+- `nttTwiddleIndex` (VerifiedPlanCodeGen:246) has NO twiddleOffset — H.2 adds it
+- `NTTStage` (NTTPlan:66-74) has NO useShift — H.1 adds it
+- `generateCandidates` (NTTPlanSelection:97-126) has 11 candidates — H.11 adds two-step
+- `goldi_mul_tw` (VerifiedPlanCodeGen:657), `goldi_butterfly4` (:675), `goldi_reduce128` (:630) EXIST
+- `friFoldExpr` (:37), `hornerExpr` (:116) return `MixedExpr` — ready for Path A
+- `UnifiedCodeGen` imported by PrimitiveOptimizer — F.2-F.4 removes dependency
+- `reductionCostForHW .lazy = 0` (CrossRelNTT:96) — E.1 reverts to Solinas cost
 
-#### Formal Properties (3.11.0)
+#### DAG (3.13.0)
+
+| Nodo | Tipo | Deps | Files | LOC | Status |
+|------|------|------|-------|-----|--------|
+| N313.1 E.1: Revert lazy cost model | FUND | — | CrossRelNTT.lean, NTTPlan.lean | ~10 | done |
+| N313.2 E.2: Compiled TRZK binary | PAR | N313.1 | lakefile.lean, TRZKGen.lean | ~30 | done |
+| N313.3 E.3: Eliminate dead code | PAR | N313.1 | CrossEGraphBridge.lean, BreakdownBridge.lean, UltraPipeline.lean | ~-300 | done |
+| N313.4 E.4: Benchmark Rust vs Plonky3 | HOJA | N313.1 | benchmark scripts | ~0 | pending-measurement |
+| N313.5 F.1: Compiler driver → UltraPipeline | CRIT | N313.1 | Compile.lean | ~50 | done |
+| N313.6 F.2: FRI fold Path A | PAR | N313.1 | PrimitiveOptimizer.lean | ~100 | done |
+| N313.7 F.3: Horner Path A | PAR | N313.1 | PrimitiveOptimizer.lean | ~100 | done |
+| N313.8 F.4: Dot product Path A | PAR | N313.1 | PrimitiveOptimizer.lean | ~80 | done |
+| N313.9 F.5: Remove stale imports (partial — Phase23Integration still uses NTTPlanCodeGen) | HOJA | N313.6, N313.7, N313.8 | Bench.lean, MatNodeOps.lean | ~-4 | done |
+| N313.10 F.6: Verification Status README | PAR | N313.5 | README.md | ~30 | done |
+| N313.11 F.7: CI benchmark validation | PAR | N313.5 | .github/workflows/ci.yml | ~50 | done |
+| N313.12 G.1: ILP2 interleaving Goldilocks F5c | PAR | N313.1 | VerifiedPlanCodeGen.lean | ~50 | done |
+| N313.13 H.1-H.6: Two-step infrastructure | FUND | N313.1 | NTTPlan.lean, VerifiedPlanCodeGen.lean, NTTPlanSelection.lean, MatNodeOps.lean | ~43 | done |
+| N313.14 H.7-H.9: Python reference + validation (stage-split, not four-step) | CRIT | N313.13 | Tests/benchmark/ | ~85 | done |
+| N313.15 H.10-H.12: mkTwoStepPlan (shift stages) + generateCandidates | PAR | N313.13 | NTTPlanSelection.lean | ~45 | done |
+| N313.16 H.13-H.17: useShift dispatch + preambles (scope reduced from four-step) | CRIT | N313.14, N313.15 | VerifiedPlanCodeGen.lean, NTTPlanSelection.lean, CrossEGraphProtocol.lean, MatNodeOps.lean | ~25 | done |
+| N313.17 H.18-H.19: Validation + benchmark | HOJA | N313.16 | Tests/benchmark/ | ~25 | done |
+
+#### Formal Properties (3.13.0)
 
 | Nodo | Propiedad | Tipo | Prioridad |
 |------|-----------|------|-----------|
-| N311.1 | boundK=0 produces identical codegen to v3.10.1 | PRESERVATION | P0 |
-| N311.1 | boundK≤2 activates conditionalSub for ANY field | SOUNDNESS | P0 |
-| N311.3 | evalMixedOp(.conditionalSub a p) = if v a >= p then v a - p else v a | SOUNDNESS | P0 |
-| N311.3 | mixed_extractable_sound handles conditionalSub arm | SOUNDNESS | P0 |
-| N311.4 | boundAwareEqStep discovers conditionalSub when boundK ≤ 2 | SOUNDNESS | P0 |
-| N311.5 | Stark252 discovered automatically without field-specific rules | SOUNDNESS | P0 |
+| N313.1 | reductionCostForHW .lazy ≠ 0 (matches Solinas cost) | PRESERVATION | P0 |
+| N313.1 | costAwareReductionForBound never returns .lazy | PRESERVATION | P0 |
+| N313.5 | trzk --target c produces verified C via Path A | SOUNDNESS | P0 |
+| N313.6 | FRI fold Path A output numerically identical to Path B | EQUIVALENCE | P0 |
+| N313.7 | Horner Path A output numerically identical to Path B | EQUIVALENCE | P0 |
+| N313.8 | Dot product Path A output numerically identical to Path B | EQUIVALENCE | P0 |
+| N313.9 | grep "import.*UnifiedCodeGen" returns 0 active importers | PRESERVATION | P0 |
+| N313.12 | ILP2 output numerically identical to non-ILP2 | EQUIVALENCE | P0 |
+| N313.13 | useShift=false produces identical behavior to v3.12 | PRESERVATION | P0 |
+| N313.13 | nttDataIndex(offset=0,stride=1) = v3.12 nttDataIndex | PRESERVATION | P0 |
+| N313.14 | two_step_ntt == reference_dit_ntt for ALL sizes × inputs | EQUIVALENCE | P0 |
+| N313.15 | mkTwoStepPlan.wellFormed = true | SOUNDNESS | P0 |
+| N313.15 | planTotalCostWith includes twiddle matrix cost for two-step | SOUNDNESS | P0 |
+| N313.16 | lowerTwoStepNTT produces valid C (compiles + runs) | SOUNDNESS | P0 |
+| N313.16 | Two-step output numerically identical to standard NTT | EQUIVALENCE | P0 |
+| N313.17 | benchmark validation PASS + gap < 0.85x Goldilocks | OPTIMIZATION | P0 |
+
+> **Nota**: Propiedades en lenguaje natural (intención de diseño).
+> Los stubs ejecutables están en BENCHMARKS.md § Formal Properties.
 
 #### Bloques
 
-- [ ] **BF1+BF4 — Codegen bounds + NTTStrategy (F1 + F4, parallel)**: F1: Add boundK param to lowerDIFButterflyByReduction, dispatch by bounds. F4: Add .twoStepGoldilocks to NTTStrategy. Gate: validation PASS + conditionalSub activates for bounded inputs.
-- [ ] **BF2 — conditionalSub constructor (F2)**: CRIT. Add 23rd MixedNodeOp constructor. ~300 LOC mechanical across 9+ files. Gate: lake build 0 errors, 0 new sorry, benchmark validation PASS.
-- [ ] **BF3 — Bound-aware discovery (F3 + Stark252 test)**: CRIT. boundAwareEqStep in tieredStep + reduceToConditionalSub rule + Stark252 automatic discovery test. Gate: e-graph discovers conditionalSub for bounded inputs.
+- [x] **B1 — E.1 Cleanup Foundation (N313.1)**: FUND, secuencial. Revert lazy cost model: `reductionCostForHW .lazy` = Solinas cost (CrossRelNTT.lean:96), remove `.lazy` from candidates in `costAwareReductionForBound` (L67), restore wellFormed tests. Gate: `lake build` + existing tests PASS. **DONE 2025-04-13.**
+
+- [x] **B2 — E Infrastructure (N313.2, N313.3, N313.4)**: 3 nodos paralelos. E.2: `lake build trzk-gen` nativo. E.3: eliminados CrossEGraphBridge(22 LOC) + BreakdownBridge(146 LOC). E.4: pending-measurement. Gate: `wiring_check.py` W1+W6 PASS, trzk-gen compiles. **DONE 2025-04-13.**
+
+- [x] **B3 — F+G Path A + ILP2 (N313.5, N313.6, N313.7, N313.8, N313.12)**: F.1: Compile.lean rewritten (keyword mode + UltraPipeline). F.2-F.4: PrimitiveOptimizer.lean rewritten (Path A via lowerSolinasFold + lowerHarveyReduce). G.1: F5c ILP2 added (2 Stmt.call per iteration). Gate: `lake build` PASS. **DONE 2025-04-13.**
+
+- [x] **B4 — F Close + Docs (N313.9, N313.10, N313.11)**: F.5: stale imports removed from Bench.lean+MatNodeOps.lean (full delete deferred: Phase23Integration still uses NTTPlanCodeGen). F.6: Verification Status table added to README. F.7: benchmark-validation CI job added. **DONE 2025-04-13.**
+
+- [x] **B5 — H-pre Infrastructure (N313.13)**: FUND, secuencial. H.1: useShift in NTTStage. H.2: offset/stride/twiddleOffset. H.3: butterflyCost useShift. H.4: goldi_butterfly4_shift preamble. H.5: twiddle matrix cost. H.6: Hashable+DecidableEq MatOp. ALL backward compatible. Gate: `lake build` 3136 jobs PASS. **DONE 2025-04-13.**
+
+- [x] **B6 — H De-risk + Plan (N313.14, N313.15)**: H.7-H.9: Python validation — shift NTT == standard NTT (40/40 PASS, Goldilocks+BabyBear). Pow2 analysis: last 2 stages 100%, stage-2-before 50%. H.10-H.12: mkTwoStepPlan with useShift=true for last 4 stages + push in generateCandidates. Four-step deferred to v3.14.0 (DIT bit-reversal permutation complexity). **DONE 2025-04-13.**
+
+- [x] **B7 — H Codegen (N313.16)**: Scope reduced (stage-split, not four-step). useShift dispatch in lowerStageR4 + lowerStageVerified + lowerStageVerified_ILP2. R2 preambles goldi_butterfly_shift (C+Rust). twiddle matrix cost removed (not needed for stage-split). Import fixes (MatNodeOps, CrossEGraphProtocol). Gate: generated C compiles + output matches Python reference 100%. **DONE 2025-04-13.**
+
+- [x] **B8 — H Wire + Benchmark (N313.17)**: Validation: 3/3 PASS (N=128,256,1024 vs Python ref). Performance: shift R2 plan is 13% SLOWER than standard (popcnt branch overhead > shift savings). selectBestPlan correctly picks R4 plan. **Stage-split shift not beneficial; four-step (v3.14.0) needed for real gain. DONE 2025-04-13.**
+
+#### Orden Topológico
+
+```
+B1 → B2 → B3 → {B4, B5} → B6 → B7 → B8
+```
+
+B4 y B5 son paralelos (B4: F close + docs, B5: H-pre infra). Sin conflictos de archivo.
+B3 y B5 NO son paralelos (G.1 y H-pre ambos tocan VerifiedPlanCodeGen.lean).
+
+#### Expectations
+
+```
+                      Goldilocks (0.96x)    BabyBear (+62.8%)
+Phase E (cleanup):    sin cambio            sin cambio
+Phase F (driver+CI):  sin cambio perf       mejor tooling + confianza
+Phase G (ILP2):       ~0.80-0.86x           N/A (k≤32)
+Phase H (two-step):   ~0.65-0.75x           N/A (solo Goldilocks)
+─────────────────     ──────────────        ─────────────────
+Acumulativo:          ~0.65-0.80x           +70-85% vs Plonky3
+Neto código:          -530 LOC (más limpio, menos legacy)
+```
+
+---
+
+## Completed: v3.12.0 — F5c Butterfly + Discovery Wiring (Phase A+B)
+
+F5c butterfly Stmt.call resolved Goldilocks emission bottleneck (gap 1.28x→0.96x).
+Discovery wired via selectBestPlanExplored. NTT trick reverted (hurts without two-step).
+Lazy reduction confirmed dead end (storeTrunc corrupts, kills F5c). Phase C+D abandoned.
+
+## Completed: v3.11.0 — Bound-aware Codegen + NTTStrategy (BF1+BF4)
+
+BF1: boundK param in lowerDIFButterflyByReduction, dispatch by bounds. DONE.
+BF4: twoStepGoldilocks added to NTTStrategy. DONE.
+BF2+BF3 (conditionalSub + Stark252): deferred to future version.
 
 ---
 

@@ -163,15 +163,26 @@ This generates C with verified loop structure from the Kronecker product decompo
 
 This pipeline does not include the NTT-specific optimizations (plan competition, Stmt.call butterflies, bound-aware reduction). It is suitable for exploring small custom transforms and verifying their structure.
 
+### Verification Status
+
+| Component | Verified | How |
+|---|---|---|
+| E-graph saturation + extraction | **Yes** | `full_pipeline_soundness`, 0 axioms |
+| Rewrite rules | **Yes** | Each rule is a proven theorem |
+| Plan → Stmt lowering | **Yes** | `lowerMixedExprFull_evaluates` |
+| Stmt → C emission | **Partial** | TrustLean `stmtToC` verified; `Stmt.call` trusted |
+| Preamble functions (goldi_*) | **No** | String emission, validated by benchmark |
+| FRI algebraic proofs | **Yes** | ~230 theorems, 0 sorry |
+| Primitive codegen (FRI, Horner, dot) | **Yes** | Path A: `lowerSolinasFold` + `lowerHarveyReduce` |
+
 ### In Development
 
 | Feature | Description | Status |
 |---------|-------------|--------|
 | **Custom fields** | User-defined primes without editing Lean (CLI-driven `FieldConfig`) | Designed |
-| **FRI codegen** | Verified C/Rust for FRI fold operations (algebraic proofs exist, codegen pending) | Partial |
+| **Two-step NTT** | SPIRAL-style decomposition for Goldilocks (v3.13.0 Phase H) | In progress |
 | **Poseidon2 codegen** | Verified hash function code generation | Partial |
 | **SIMD for 64-bit fields** | ARM NEON for Goldilocks (Karatsuba decomposition infrastructure exists) | Partial |
-| **Compiled TRZK binary** | Native binary for ~100x faster code generation (currently uses Lean interpreter) | Designed |
 
 ## What's New
 

@@ -18,7 +18,7 @@ import AmoLean.EGraph.Verified.Bitwise.CostModelDef
 import AmoLean.EGraph.Verified.Bitwise.VerifiedCodeGen
 import AmoLean.EGraph.Verified.Bitwise.OptimizedNTTPipeline
 import AmoLean.EGraph.Verified.Bitwise.CrossRelNTT
-import AmoLean.EGraph.Verified.Bitwise.NTTPlanCodeGen
+-- v3.13.0 F.5: NTTPlanCodeGen import removed (Bench uses OptimizedNTTPipeline, not legacy)
 
 open AmoLean.EGraph.Verified.Bitwise
 open AmoLean.EGraph.Verified.Bitwise.VerifiedCodeGen (emitC emitSolinasFoldC lowerMixedExprToLLE)

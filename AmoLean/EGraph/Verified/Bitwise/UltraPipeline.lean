@@ -19,7 +19,6 @@ import AmoLean.EGraph.Verified.Bitwise.RulerBridge
 import AmoLean.EGraph.Verified.Bitwise.ColoredExtraction
 import AmoLean.EGraph.Verified.Bitwise.VerifiedPlanCodeGen
 import AmoLean.EGraph.Verified.Bitwise.SIMDEmitter
-import AmoLean.EGraph.Verified.Matrix.CrossEGraphBridge
 import AmoLean.EGraph.Verified.Bitwise.Discovery.JointOptimization
 import AmoLean.EGraph.Verified.Bitwise.Discovery.MatPlanExtraction
 
@@ -240,9 +239,8 @@ def ultraPipeline (g : MixedEGraph)
       else (0, 0)
     else (0, 0)
   else (0, 0)
-  let verifiedResult := if n ≤ 256 then
-    AmoLean.EGraph.Verified.Matrix.CrossEGraphBridge.verifiedJointOptimize n p hw
-  else none
+  -- v3.13.0 E.3: verifiedJointOptimize was a stub (always none). CrossEGraphBridge deleted.
+  let verifiedResult := (none : Option (Nat × Nat))
 
   -- ── NE.4: Per-stage discovery costs (Fase Per-Stage v3.3.0) ──
   -- Guarded by jointThreshold (heavy: runs discoverAllStages → guidedOptimizeMixedF per stage)
@@ -279,7 +277,7 @@ def ultraPipeline (g : MixedEGraph)
     s!"--- Phase 24: Joint (Discovery bidirectional) ---\n" ++
     s!"Joint cost: {jointCost} cycles{if n > cfg.jointThreshold then s!" (skipped, N>{cfg.jointThreshold})" else ""}\n" ++
     s!"Joint plan: {jointPlanLen} stages{if n > cfg.jointThreshold then " (skipped)" else ""}\n" ++
-    s!"Verified path: {match verifiedResult with | some r => s!"{r.factorization.1}x{r.factorization.2.1} MatExpr, cost={r.totalCost}" | none => "unavailable"}\n" ++
+    s!"Verified path: {match verifiedResult with | some _ => "available" | none => "unavailable (stub removed v3.13.0)"}\n" ++
     s!"--- Gap 3: Colored Extraction ---\n" ++
     s!"Color preference: {repr colorPref}\n" ++
     s!"Active colored rules: {activeColoredRules.length}\n" ++
