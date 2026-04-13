@@ -103,7 +103,7 @@ structure UltraConfig where
   cacheConfig : CacheConfig := CacheConfig.default
   -- Phase 24: joint optimization
   exploreFuel : Nat := 10
-  jointThreshold : Nat := 16384  -- v3.12.0 B: raised for Discovery plan competition at N=2^14
+  jointThreshold : Nat := 1024  -- v3.12.0 B: Discovery plan competition (interpreter-safe up to N=1024)
   -- Phase 25: colors
   targetColor : ColorId := 0  -- root = universal
   -- Field parameters (for verified codegen and parametric discovery)

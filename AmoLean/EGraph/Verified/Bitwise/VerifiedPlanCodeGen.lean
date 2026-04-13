@@ -646,9 +646,15 @@ def emitCFromPlanVerified (plan : Plan) (k c mu : Nat)
     s!"  uint64_t r; int borrow=__builtin_sub_overflow(a,b,&r);\n" ++
     s!"  if(borrow) r+={pStr}ULL;\n" ++
     s!"  return r;\n}\n\n" ++
-    -- v3.12.0 F5c: goldi_butterfly — full butterfly encapsulated in function.
-    -- Returns uint64_t (dummy 0) so Stmt.call can assign to temp without void issue.
-    -- Compiler optimizes away unused return. Body is 100% uint64_t.
+    -- v3.12.0 Phase C: goldi_mul_tw — NTT trick (Ingonyama): shift when twiddle is power-of-2
+    -- omega_64 = 8 in Goldilocks → stages 0-4 have 100% power-of-2 twiddles.
+    -- __builtin_popcountll(w)==1 detects power-of-2 at runtime (~1 cycle on ARM).
+    -- MUST be defined BEFORE goldi_butterfly/goldi_butterfly4 (C forward decl requirement).
+    s!"static inline uint64_t goldi_mul_tw(uint64_t val, uint64_t tw) \{\n" ++
+    s!"  if (__builtin_popcountll(tw)==1)\n" ++
+    s!"    return goldi_reduce128((__uint128_t)val << __builtin_ctzll(tw));\n" ++
+    s!"  return goldi_reduce128((__uint128_t)tw*(__uint128_t)val);\n}\n\n" ++
+    -- v3.12.0 F5c: goldi_butterfly — R2 butterfly encapsulated.
     s!"static inline uint64_t goldi_butterfly(\n" ++
     s!"    uint64_t *data, const uint64_t *twiddles,\n" ++
     s!"    uint64_t i, uint64_t j, uint64_t tw_idx) \{\n" ++
@@ -767,8 +773,16 @@ def emitRustFromPlanVerified (plan : Plan) (k c mu : Nat)
     s!"  let (mut r, borrow) = a.overflowing_sub(b);\n" ++
     s!"  if borrow \{ r = r.wrapping_add({pStr}_u64); }\n" ++
     s!"  r\n}\n\n" ++
-    -- v3.12.0 F5c: goldi_butterfly — full butterfly (Rust)
-    -- Returns u64 (dummy 0) for Stmt.call compatibility. Body is 100% u64.
+    -- v3.12.0 Phase C: goldi_mul_tw — NTT trick (Rust)
+    -- Rust doesn't have __builtin_popcountll; use count_ones() + trailing_zeros()
+    s!"#[inline(always)]\n" ++
+    s!"fn goldi_mul_tw(val: u64, tw: u64) -> u64 \{\n" ++
+    s!"  if tw.count_ones() == 1 \{\n" ++
+    s!"    goldi_reduce128((val as u128) << tw.trailing_zeros())\n" ++
+    s!"  } else \{\n" ++
+    s!"    goldi_reduce128((tw as u128) * (val as u128))\n" ++
+    s!"  }\n}\n\n" ++
+    -- v3.12.0 F5c: goldi_butterfly — R2 butterfly (Rust)
     s!"#[inline(always)]\n" ++
     s!"fn goldi_butterfly(data: &mut [u64], twiddles: &[u64], i: usize, j: usize, tw_idx: usize) -> u64 \{\n" ++
     s!"  let a = data[i]; let b = data[j]; let w = twiddles[tw_idx];\n" ++
@@ -776,7 +790,7 @@ def emitRustFromPlanVerified (plan : Plan) (k c mu : Nat)
     s!"  data[i] = goldi_add(a, wb);\n" ++
     s!"  data[j] = goldi_sub(a, wb);\n" ++
     s!"  0\n}\n\n" ++
-    -- v3.12.0 F5c: goldi_butterfly4 — radix-4 butterfly (Rust)
+    -- v3.12.0 F5c: goldi_butterfly4 — R4 butterfly (Rust)
     s!"#[inline(always)]\n" ++
     s!"fn goldi_butterfly4(data: &mut [u64], twiddles: &[u64],\n" ++
     s!"    i0: usize, i1: usize, i2: usize, i3: usize,\n" ++
