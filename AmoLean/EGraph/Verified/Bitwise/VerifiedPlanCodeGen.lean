@@ -101,7 +101,11 @@ def lowerReductionChoice (red : ReductionChoice) (xExpr : LowLevelExpr)
     let (sr, cgs') := lowerHarveyReduce xExpr p cgs
     (sr.stmt, extractVar sr.resultVar, cgs')
   | .lazy =>
-    -- Lazy stages use Solinas fold (cheapest reduction that fits i32/u32).
+    -- v3.12.0 D: Lazy codegen still emits Solinas fold for correctness.
+    -- The cost model (reductionCostForHW .lazy = 0) gives lazy stages a cost advantage
+    -- in plan selection, but the codegen safety net prevents incorrect output.
+    -- True lazy passthrough requires separating butterfly internal reduction from
+    -- stage-level reduction — deferred to v3.13.0.
     let (sr, cgs') := lowerSolinasFold xExpr k c cgs
     (sr.stmt, extractVar sr.resultVar, cgs')
 

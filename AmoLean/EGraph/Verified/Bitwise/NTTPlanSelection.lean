@@ -202,8 +202,8 @@ example : (generateCandidates 2013265921 1024 arm_cortex_a76).size = 10 := rfl
 /-- selectBestPlan returns a plan (doesn't crash). -/
 example : (selectBestPlan 2013265921 1024 arm_cortex_a76).numStages > 0 := by native_decide
 
-/-- Bound-aware plan with hw uses Harvey (not lazy). -/
-example : (mkBoundAwarePlan 2013265921 1024 (some arm_neon_simd)).lazyStages = 0 := by native_decide
+/-- v3.12.0 D: Bound-aware plan with hw now uses lazy (cost=0, safe for BabyBear u64). -/
+example : (mkBoundAwarePlan 2013265921 1024 (some arm_neon_simd)).lazyStages > 0 := by native_decide
 
 /-- Cache cost for early stages is 0. -/
 example : stageCacheMisses 1024 0 .default = 0 := by native_decide

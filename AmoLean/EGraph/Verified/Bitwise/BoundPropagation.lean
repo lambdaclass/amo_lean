@@ -157,8 +157,8 @@ def stageBoundFactor (inputK : Nat) (reduction : ReductionChoice) : Nat :=
   | .lazy => inputK + 1
   | r => boundAfterReduction r
 
-def lazyReductionSafe (currentK : Nat) (p : Nat) : Bool :=
-  (currentK + 1) * p < 2 ^ 64
+def lazyReductionSafe (currentK : Nat) (p : Nat) (wordBits : Nat := 64) : Bool :=
+  (currentK + 1) * p < 2 ^ wordBits
 
 def computeStageBounds (stages : List ReductionChoice) (initialK : Nat) : List Nat :=
   stages.scanl stageBoundFactor initialK
