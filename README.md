@@ -67,159 +67,130 @@ TRZK uses **equality saturation** via e-graphs to find optimal formal equivalent
 
 This architecture is **portable and modular**: adding a new primitive means writing a Lean specification and lowering rules — the optimization engine and code generator are reusable across all primitives.
 
-### Two Operational Modes
+## Usage
 
-| Mode | Purpose | Status |
-|------|---------|--------|
-| **Verifier** | Certify external implementations (e.g., Plonky3) are mathematically correct via translation validation and FRI algebraic proofs | Production Ready |
-| **Generator** | Generate verified, optimized C/Rust NTT code from Lean field specifications with automatic bound-aware reduction selection via e-graph discovery | Production Ready |
-
-## Features
-
-- **Verified Pipeline Soundness** — End-to-end `full_pipeline_soundness` theorem: saturation + extraction preserves semantics, **0 custom axioms**
-- **Translation Validation** — Level 2 soundness via `cryptoEquivalent` relation with congruence closure
-- **NTT** (Number Theoretic Transform) — Verified, optimized, Plonky3-compatible
-- **Radix-4 NTT** — 4-point butterfly (8 axioms pending formal implementation, v2.5.0)
-- **Goldilocks Field** — Scalar + AVX2 arithmetic (p = 2^64 - 2^32 + 1), **0 axioms**
-- **BabyBear Field** — Scalar arithmetic (p = 2^31 - 2^27 + 1), **0 axioms**
-- **FRI Formal Verification** — 16 verified modules (~4,450 LOC, 189 theorems, 0 sorry): fold soundness, Merkle integrity, Fiat-Shamir transcript, per-round soundness (Garreta 2025), verifier composition, pipeline integration, operational-verified bridges
-- **Operational-Verified FRI Bridges** — 7 bridge modules connecting 357 operational defs to algebraic specs: domain, fold, transcript, Merkle, plus integration capstone `operational_verified_bridge_complete`
-- **Barycentric Interpolation** — First formalization in any proof assistant: `barycentric_eq_lagrange` generic over `[Field F]`
-- **FRI Pipeline Integration** — `fri_pipeline_soundness` composes e-graph optimization (Level 1+2) with FRI algebraic guarantees (Level 3)
-- **E-Graph Optimization** — Verified engine (121 theorems, 0 sorry) + 19/20 rewrite rules
-- **Extraction Completeness** — DAG acyclicity (`computeCostsF_acyclic`) + fuel sufficiency (`extractAuto_complete`), 6 theorems, 0 sorry, 0 axioms
-- **Perm Algebra** — Tensor, stride, compose, inverse with **0 axioms** (equation compiler fix)
-- **Algebraic Semantics** — C-Lite++ lowering with verified scatter/gather (19/19 cases)
-- **Poseidon2 Hash** — BN254 t=3 with HorizenLabs-compatible test vectors
-- **Trust-Lean Bridge** — Verified type conversion with roundtrip proofs + injectivity (26 theorems, 0 sorry)
-
-## Quick Start
+### Quick Start
 
 ```bash
 # Clone and build
 git clone https://github.com/manuelpuebla/truth-research-zk.git
 cd truth-research-zk
 lake build
-
-# Run NTT oracle tests (C, no dependencies)
-clang -DFIELD_NATIVE -O2 -o test_ntt_oracle generated/test_ntt_oracle.c && ./test_ntt_oracle
-
-# Run Plonky3 equivalence tests (requires Rust)
-cd verification/plonky3/plonky3_shim && cargo build --release && cd ..
-./oracle_test
 ```
 
-### Using TRZK (Header-Only C Library)
+### Generating Optimized NTT Code
+
+TRZK generates verified, optimized C or Rust NTT implementations from 4 parameters:
+
+```bash
+lake env lean --run Tests/benchmark/emit_code.lean <field> <logN> <lang> <hardware>
+```
+
+| Parameter | Options | Description |
+|-----------|---------|-------------|
+| `field` | `babybear`, `koalabear`, `mersenne31`, `goldilocks` | Prime field |
+| `logN` | `10`, `14`, `16`, `20`, `22` | NTT size (N = 2^logN elements) |
+| `lang` | `c`, `rust` | Output language |
+| `hardware` | `arm-scalar`, `arm-neon`, `x86-avx2` | Hardware target |
+
+**Example: Generate BabyBear NTT for ARM scalar, N=16384**
+
+```bash
+lake env lean --run Tests/benchmark/emit_code.lean babybear 14 c arm-scalar > babybear_ntt.c
+```
+
+This produces a complete C file with the NTT function and a benchmark harness. The NTT function itself is self-contained:
 
 ```c
-#include "trzk/trzk.h"
+static inline uint32_t solinas_fold(int64_t x) { /* verified reduction */ }
 
-// Goldilocks field arithmetic
-uint64_t a = goldilocks_mul(x, y);
-uint64_t b = goldilocks_add(a, z);
-
-// NTT with pre-computed context
-NttContext* ctx = ntt_context_create(10);  // N = 2^10 = 1024
-ntt_forward_ctx(ctx, data);
-ntt_inverse_ctx(ctx, data);
-ntt_context_destroy(ctx);
-```
-
-## Examples
-
-All examples are runnable via `lake env lean AmoLean/Demo.lean`. See [DEMO_WALKTHROUGH.md](docs/DEMO_WALKTHROUGH.md) for all 11 examples across 3 pipelines.
-
-### E-Graph: Multi-Rule Optimization (Pipeline 1)
-
-A realistic expression with multiple redundant patterns:
-
-**Input:**
-```
-((x + 0) * 1 + (y * 0)) * (z^1 + w * 1) + 0
-```
-
-The e-graph applies 6 verified rewrite rules (`add_zero`, `mul_one`, `mul_zero`, `pow_one`) in a single saturation pass:
-
-**Output:**
-```
-x * (z + w)
-```
-
-- Nodes: 18 → 5 (72% reduction)
-- Operations: 9 → 2 (78% reduction)
-
-**Generated C:**
-```c
-int64_t optimized_kernel(int64_t x, int64_t y, int64_t z, int64_t w) {
-  int64_t t0 = z;
-  int64_t t1 = (t0 + w);
-  int64_t t2 = (x * t1);
-  return t2;
+void babybear_ntt_ultra(uint32_t* data, const uint32_t* twiddles) {
+    /* mixed-radix R4/R2 plan, bound-aware Harvey/Solinas reduction */
+    /* generated by e-graph plan competition (10+ candidates evaluated) */
 }
 ```
 
-### Matrix Algebra: DFT-2 to C (Pipeline 2)
+**Example: Generate Goldilocks NTT in Rust**
 
-The 2-point DFT butterfly — the fundamental NTT building block — goes from Lean specification to C:
+```bash
+lake env lean --run Tests/benchmark/emit_code.lean goldilocks 14 rust arm-scalar > goldilocks_ntt.rs
+```
 
-**Specification:**
+The Rust output uses `overflowing_add`/`overflowing_sub` for carry/borrow detection, matching the C version's semantics exactly.
+
+### Validating Generated Code
+
+TRZK includes a validation harness that compiles the generated code and checks output against a Python reference NTT:
+
+```bash
+python3 Tests/benchmark/benchmark.py --validation-only --fields babybear,goldilocks --sizes 14
+```
+
+Output:
+```
+[VAL] babybear/2^14/c/arm-scalar ... PASS (16384 elements)
+[VAL] goldilocks/2^14/c/arm-scalar ... PASS (16384 elements)
+```
+
+### What Happens Inside
+
+When you run `emit_code.lean`, TRZK executes a multi-phase pipeline:
+
+```
+1. Field Configuration        FieldConfig (prime, Solinas constant, Montgomery mu, types)
+         |
+2. E-Graph Saturation         Bound propagation + reduction alternative rules
+         |                    (Harvey, Solinas, Montgomery, conditionalSub — 23 MixedNodeOp constructors)
+         |
+3. Plan Competition           10-11 candidate plans (R2/R4 × reductions) + Discovery explored plan
+         |                    Evaluated by hardware-aware cost model with cache penalty
+         |
+4. Verified Codegen           Selected plan → TrustLean.Stmt IR → stmtToC/stmtToRust
+         |                    F5c Stmt.call type boundary for Goldilocks (uint64_t internals)
+         |
+5. C / Rust Output            Complete benchmark-ready file with validated NTT function
+```
+
+Every optimization in steps 2-4 is either a formally proven rewrite rule or a cost-model-driven selection. The codegen in step 4 uses TrustLean's verified C/Rust backends.
+
+### Supported Fields
+
+| Field | Prime | Element Type | Wide Type | Status |
+|-------|-------|-------------|-----------|--------|
+| BabyBear | 2^31 - 2^27 + 1 | `uint32_t` | `int64_t` | Production |
+| KoalaBear | 2^31 - 2^24 + 1 | `uint32_t` | `int64_t` | Production |
+| Mersenne31 | 2^31 - 1 | `uint32_t` | `int64_t` | Production |
+| Goldilocks | 2^64 - 2^32 + 1 | `uint64_t` | `__uint128_t` | Production |
+
+### Custom Primitives via MatExpr (Experimental)
+
+TRZK includes an experimental pipeline for custom linear transforms expressed as matrix algebra. The user specifies a transform as a composition of Kronecker products, DFT matrices, and permutations:
+
 ```lean
-MatExpr.dft 2    -- The 2×2 DFT matrix [[1,1],[1,-1]]
+import AmoLean.Sigma.CodeGen
+
+-- Define a custom 4-point transform as DFT-2 butterflies
+def myTransform := MatExpr.compose
+  (MatExpr.kron (MatExpr.dft 2) (MatExpr.identity 2))   -- stage 2
+  (MatExpr.kron (MatExpr.identity 2) (MatExpr.dft 2))   -- stage 1
+
+-- Generate C code
+#eval matExprToC myTransform "my_transform"
 ```
 
-**Generated C:**
-```c
-void butterfly_2(double* restrict in, double* restrict out) {
-  out[0] = (in[0] + in[1]);
-  out[1] = (in[0] - in[1]);
-}
-```
+This generates C with verified loop structure from the Kronecker product decomposition. Available constructors: `identity`, `dft`, `ntt`, `twiddle`, `kron`, `compose`, `perm`, `transpose`.
 
-### Matrix Algebra: Parallel Butterflies (Pipeline 2)
+This pipeline does not include the NTT-specific optimizations (plan competition, Stmt.call butterflies, bound-aware reduction). It is suitable for exploring small custom transforms and verifying their structure.
 
-The Kronecker product `I_2 ⊗ DFT_2` means "apply DFT_2 independently to 2 blocks":
+### In Development
 
-**Specification:**
-```lean
-MatExpr.kron (MatExpr.identity 2) (MatExpr.dft 2)    -- I₂ ⊗ DFT₂
-```
-
-**Generated C:**
-```c
-void parallel_butterfly(double* restrict in, double* restrict out) {
-  for (int i0 = 0; i0 < 2; i0++) {
-    out[2 * i0 + 0] = (in[2 * i0 + 0] + in[2 * i0 + 1]);
-    out[2 * i0 + 1] = (in[2 * i0 + 0] - in[2 * i0 + 1]);
-  }
-}
-```
-
-The Kronecker product with the identity on the left produces a loop over blocks, applying the butterfly to consecutive pairs. The gather/scatter patterns compute the correct base addresses automatically.
-
-## Performance
-
-TRZK's verified NTT matches or beats Plonky3's unverified Rust implementation on scalar ARM:
-
-### NTT Benchmark: TRZK Verified C vs Plonky3 Rust (N=2^20, Apple M3 Pro)
-
-| Field | TRZK verified C | Plonky3 scalar Rust | Plonky3 vectorized | vs scalar | vs vectorized |
-|-------|-----------------|---------------------|--------------------|-----------|---------------|
-| **BabyBear** (p=2^31-2^27+1) | **4.8 ns/elem** | 7.8 ns/elem | 3.0 ns/elem | **+62.8% faster** | 1.60x |
-| **Goldilocks** (p=2^64-2^32+1) | **51.7 ns/elem** | 53.6 ns/elem | 48.8 ns/elem | **0.96x (faster)** | 1.06x |
-
-**Conditions:**
-- Hardware: Apple M3 Pro (ARM Cortex-A76 equivalent), 128KB L1D per core
-- Compiler: Apple Clang 16.0 with `-O2` for TRZK C; rustc 1.82.0 with `--release` for Plonky3
-- Plonky3 scalar: `plonky3_ntt_forward_scalar` (no SIMD, DIT radix-2)
-- Plonky3 vectorized: `plonky3_ntt_forward` (`PackedBabyBearNeon` / `PackedGoldilocksNeon` with inline assembly)
-- TRZK: Ultra pipeline with mixed-radix R4/R2 plan, F5c `Stmt.call` butterfly, bound-aware reduction
-- Both implementations use the same twiddle table convention (Cooley-Tukey standard)
-- Each measurement: 10 iterations, median of 3 runs
-- Validation: bit-exact match against Python reference NTT for all sizes
-
-**Key insight**: For 32-bit fields (BabyBear), TRZK's verified C with `-O2` significantly outperforms Plonky3's scalar Rust. For 64-bit fields (Goldilocks), TRZK's `Stmt.call` type boundary pattern (encapsulating 128-bit intermediate arithmetic in `uint64_t`-internal functions) closes the gap that previously existed due to `__uint128_t` overhead in loop counters.
-
-See [BENCHMARKS.md](BENCHMARKS.md) for verification criteria and per-version progression.
+| Feature | Description | Status |
+|---------|-------------|--------|
+| **Custom fields** | User-defined primes without editing Lean (CLI-driven `FieldConfig`) | Designed |
+| **FRI codegen** | Verified C/Rust for FRI fold operations (algebraic proofs exist, codegen pending) | Partial |
+| **Poseidon2 codegen** | Verified hash function code generation | Partial |
+| **SIMD for 64-bit fields** | ARM NEON for Goldilocks (Karatsuba decomposition infrastructure exists) | Partial |
+| **Compiled TRZK binary** | Native binary for ~100x faster code generation (currently uses Lean interpreter) | Designed |
 
 ## What's New
 
