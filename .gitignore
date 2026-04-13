@@ -32,6 +32,15 @@ TRZK_spiral_idea.md
 TRZK_poly.md
 insights_v3.9.0.md
 
+# Compiled benchmark binaries
+Tests/benchmark/bench_per_stage
+Tests/benchmark/bench_redc_isolated
+verification/plonky3/benchmark_babybear
+verification/plonky3/benchmark_koalabear
+
+# Archived DAGs (local planning artifacts)
+dag.3.*.json
+
 # Editor files
 *.swp
 *.swo

@@ -5,7 +5,7 @@
    "type": "git",
    "subDir": null,
    "scope": "",
-   "rev": "5d42baecee419850ba0624fdfe02e6008c81b3dd",
+   "rev": "be18f0837214163afbb7eafd8f1a9c29b2070b19",
    "name": "TrustLean",
    "manifestFile": "lake-manifest.json",
    "inputRev": "main",
