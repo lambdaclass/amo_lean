@@ -153,10 +153,10 @@ Four-step decomposition needed for real gain (~100% pow2 inner, no runtime check
 | N314.9 emitFourStepC (col_DIF + bitrev + twiddle + row_DIF + bitrev) | CRIT | N314.8,6 | ~85 | done |
 | N314.10 mkFourStepPlan + twiddle tables | PAR | N314.3,6 | ~50 | pending |
 | N314.11 Four-step validation + benchmark | HOJA | N314.9,10 | ~30 | pending |
-| N314.12 Eje 3a: NodeOps MatOp instance + laws | FUND | — | ~45 | pending |
-| N314.13 Eje 3b: MatExprFlat + Extractable + bridge | PAR | N314.12 | ~30 | pending |
-| N314.14 Eje 3c: applyBreakdownInEGraph | CRIT | N314.13 | ~40 | pending |
-| N314.15 Eje 3d: UltraPipeline wiring | HOJA | N314.14,9 | ~35 | pending |
+| N314.12 Eje 3a: NodeOps MatOp instance + laws | FUND | — | ~45 | done |
+| N314.13 Eje 3b: MatExprFlat + Extractable + bridge | PAR | N314.12 | ~30 | done |
+| N314.14 Eje 3c: applyBreakdownInEGraph | CRIT | N314.13 | ~40 | done |
+| N314.15 Eje 3d: UltraPipeline wiring | HOJA | N314.14,9 | ~35 | done |
 
 #### Bloques
 
@@ -167,10 +167,10 @@ Four-step decomposition needed for real gain (~100% pow2 inner, no runtime check
 - [x] **B5 — DIF preambles + dispatch (N314.7, N314.8)**: R2+R4 DIF shift preambles (C+Rust, ~46 LOC). 3-point dispatch (direction × useShift) in lowerStageR4, lowerStageVerified, lowerStageVerified_ILP2. **DONE 2025-04-13.**
 - [x] **B6 — Four-step codegen (N314.9)**: CRIT. `emitFourStepC`: 6-phase C generator (col_DIF + col_bitrev + twiddle + row_DIF + row_bitrev + unstride). N=1024: 1024/1024 match naive DFT. **KEY FINDING**: ref_dit ≠ DFT (different transform, not permutation). Four-step computes DFT, pipeline uses ref_dit → incompatible. Integration deferred to v3.15.0 (pipeline migration to DFT standard). **DONE 2025-04-13.**
 - [ ] **B7 — Four-step plan + validation (N314.10, N314.11)**: HOJA. mkFourStepPlan + benchmark gap < 0.85x.
-- [ ] **B8 — NodeOps MatOp (N314.12)**: FUND. 7 ctors, 4 laws. Verify no import cycle.
-- [ ] **B9 — MatExprFlat + Extractable (N314.13)**: PAR. MatExprFlat ~10 LOC + reconstruct ~10 LOC + bridge ~10 LOC.
-- [ ] **B10 — applyBreakdownInEGraph (N314.14)**: CRIT. Inject BreakdownRule into EGraph MatOp.
-- [ ] **B11 — UltraPipeline wiring (N314.15)**: HOJA. E-graph plan competes in selectPlanWith.
+- [x] **B8 — NodeOps MatOp (N314.12)**: FUND. mapChildren/replaceChildren/localCost + 4 laws (all by cases+simp). EGraph MatOp smoke test: 3 classes, children correct. No import cycle. **DONE 2025-04-13.**
+- [x] **B9 — MatExprFlat + Extractable (N314.13)**: MatExprFlat (7 ctors) + matReconstruct + Extractable instance + matExprFlatToTree bridge. Smoke: EGraph(5 classes) → extractAuto → MatExprFlat → FactorizationTree(5 nodes). **DONE 2025-04-13.**
+- [x] **B10 — applyBreakdownInEGraph (N314.14)**: CRIT. Injects BreakdownRule.decompose into EGraph MatOp: remaps indices → EClassIds, merges root with NTT class. DFT(8) + CT(2,4) + CT(4,2) → 19 classes. Extraction works (returns cheapest). **DONE 2025-04-13.**
+- [x] **B11 — UltraPipeline wiring (N314.15)**: HOJA. MatOp e-graph wired in ultraPipeline: NTT node → applyAllBreakdowns(standardRules) → computeCosts → extract → factorizationToPlan → push to allCandidates. R4 wins (expected — e-graph plan incompatible with ref_dit until v3.15.0). **DONE 2025-04-13.**
 
 #### Orden Topológico
 

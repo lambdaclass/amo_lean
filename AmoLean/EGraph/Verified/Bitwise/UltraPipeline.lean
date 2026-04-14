@@ -21,6 +21,9 @@ import AmoLean.EGraph.Verified.Bitwise.VerifiedPlanCodeGen
 import AmoLean.EGraph.Verified.Bitwise.SIMDEmitter
 import AmoLean.EGraph.Verified.Bitwise.Discovery.JointOptimization
 import AmoLean.EGraph.Verified.Bitwise.Discovery.MatPlanExtraction
+-- v3.14.0 B11: MatOp e-graph integration
+import AmoLean.EGraph.Verified.Matrix.MatNodeOps
+import AmoLean.EGraph.Verified.Matrix.CrossEGraphProtocol
 
 set_option autoImplicit false
 
@@ -184,9 +187,34 @@ def ultraPipeline (g : MixedEGraph)
   let exploredPlan := if n ≤ cfg.jointThreshold then
       some (selectBestPlanExplored p n cfg.hw arrayIsLarge)
     else none
+  -- v3.14.0 B11: MatOp e-graph explores factorizations (SPIRAL-style)
+  -- Adds CT decompositions as equivalent representations, extracts best via cost model.
+  -- The extracted plan competes with fixed candidates in selectPlanWith.
+  -- NOTE: Currently produces DFT-based plans which are incompatible with ref_dit
+  -- (v3.14.0 B6 finding). The plan will lose to ref_dit-based candidates until
+  -- the pipeline migrates to DFT standard (v3.15.0). Safe: selectPlanWith protects.
+  let matOpPlan := if n ≤ cfg.jointThreshold then
+    let mg : AmoLean.EGraph.VerifiedExtraction.EGraph AmoLean.EGraph.Verified.Matrix.MatOp :=
+      AmoLean.EGraph.VerifiedExtraction.EGraph.empty
+    let (nttId, mg1) := mg.add ⟨AmoLean.EGraph.Verified.Matrix.MatOp.ntt n p⟩
+    let rules := AmoLean.EGraph.Verified.Matrix.standardRules n
+    let mg2 := AmoLean.EGraph.Verified.Matrix.applyAllBreakdowns mg1 nttId rules n p
+    let mg3 := AmoLean.EGraph.VerifiedExtraction.EGraph.computeCostsF mg2 3
+    match @AmoLean.EGraph.VerifiedExtraction.Greedy.extractAuto
+        AmoLean.EGraph.Verified.Matrix.MatOp
+        AmoLean.EGraph.Verified.Matrix.MatExprFlat _ _ _ _ mg3 nttId with
+    | some expr =>
+      let tree := AmoLean.EGraph.Verified.Matrix.matExprFlatToTree expr
+      some (AmoLean.EGraph.Verified.Matrix.CrossEGraph.factorizationToPlan tree p cfg.hw n)
+    | none => none
+  else none
   let allCandidates := match exploredPlan with
     | some ep => candidates.push schedulePlan |>.push ep
     | none => candidates.push schedulePlan
+  -- Add MatOp e-graph plan if available
+  let allCandidates := match matOpPlan with
+    | some mp => allCandidates.push mp
+    | none => allCandidates
   -- v3.10.0 T8: use costFn (static by default, dynamic when useDynamicCost=true)
   let discoveryWon := exploredPlan.map fun ep =>
     match selectPlanWith allCandidates cfg.hw cfg.cacheConfig costFn with
@@ -278,6 +306,8 @@ def ultraPipeline (g : MixedEGraph)
     s!"Joint cost: {jointCost} cycles{if n > cfg.jointThreshold then s!" (skipped, N>{cfg.jointThreshold})" else ""}\n" ++
     s!"Joint plan: {jointPlanLen} stages{if n > cfg.jointThreshold then " (skipped)" else ""}\n" ++
     s!"Verified path: {match verifiedResult with | some _ => "available" | none => "unavailable (stub removed v3.13.0)"}\n" ++
+    s!"--- v3.14.0: MatOp E-Graph (SPIRAL) ---\n" ++
+    s!"MatOp plan: {match matOpPlan with | some mp => s!"{mp.stages.size} stages (from e-graph)" | none => "skipped"}\n" ++
     s!"--- Gap 3: Colored Extraction ---\n" ++
     s!"Color preference: {repr colorPref}\n" ++
     s!"Active colored rules: {activeColoredRules.length}\n" ++

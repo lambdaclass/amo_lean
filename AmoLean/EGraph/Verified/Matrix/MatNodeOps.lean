@@ -14,6 +14,10 @@
 -/
 -- v3.13.0 F.5: NTTPlanCodeGen import removed; add direct NTTPlan import for log2
 import AmoLean.EGraph.Verified.Bitwise.NTTPlan
+-- v3.14.0 B8: NodeOps typeclass for MatOp e-graph integration
+import AmoLean.EGraph.VerifiedExtraction.Core
+-- v3.14.0 B9: Extractable for MatOp extraction
+import AmoLean.EGraph.VerifiedExtraction.Greedy
 
 set_option autoImplicit false
 
@@ -258,5 +262,188 @@ example : (exploreFact 16 0).2.2 > 0 := by native_decide
 example : TransformId.dft 8 == TransformId.dft 8 := by native_decide
 
 end SmokeTests
+
+-- ══════════════════════════════════════════════════════════════════
+-- Section: NodeOps instance for MatOp (v3.14.0 B8)
+-- ══════════════════════════════════════════════════════════════════
+
+open AmoLean.EGraph.VerifiedExtraction (EClassId NodeOps)
+
+/-- Apply a function to all child e-class IDs. Only kron and compose have children. -/
+@[simp] def MatOp.mapChildren (f : EClassId → EClassId) : MatOp → MatOp
+  | .identity n       => .identity n
+  | .dft n            => .dft n
+  | .ntt n p          => .ntt n p
+  | .twiddle n k      => .twiddle n k
+  | .stridePerm m n   => .stridePerm m n
+  | .kron a b m₁ n₁ m₂ n₂ => .kron (f a) (f b) m₁ n₁ m₂ n₂
+  | .compose a b m k n    => .compose (f a) (f b) m k n
+
+/-- Positionally replace children with new e-class IDs. -/
+@[simp] def MatOp.replaceChildren (op : MatOp) (ids : List EClassId) : MatOp :=
+  match op, ids with
+  | .kron _ _ m₁ n₁ m₂ n₂, a :: b :: _ => .kron a b m₁ n₁ m₂ n₂
+  | .compose _ _ m k n, a :: b :: _      => .compose a b m k n
+  | op, _ => op
+
+/-- Local cost of a matrix operation. Twiddle costs n multiplies, others symbolic. -/
+def MatOp.localCost : MatOp → Nat
+  | .twiddle n _ => n
+  | _            => 0
+
+private theorem mat_list_length_two {l : List Nat} (h : l.length = 2) :
+    ∃ x y, l = [x, y] := by
+  match l, h with
+  | [x, y], _ => exact ⟨x, y, rfl⟩
+
+instance : NodeOps MatOp where
+  children := MatOp.children
+  mapChildren := MatOp.mapChildren
+  replaceChildren := MatOp.replaceChildren
+  localCost := MatOp.localCost
+  mapChildren_children f op := by cases op <;> simp [MatOp.children, MatOp.mapChildren]
+  mapChildren_id op := by cases op <;> simp [MatOp.mapChildren]
+  replaceChildren_children op ids hlen := by
+    cases op with
+    | identity _ | dft _ | ntt _ _ | twiddle _ _ | stridePerm _ _ =>
+      simp [MatOp.children] at hlen; subst hlen; rfl
+    | kron a b m₁ n₁ m₂ n₂ =>
+      simp [MatOp.children] at hlen
+      obtain ⟨x, y, rfl⟩ := mat_list_length_two hlen; rfl
+    | compose a b m k n =>
+      simp [MatOp.children] at hlen
+      obtain ⟨x, y, rfl⟩ := mat_list_length_two hlen; rfl
+  replaceChildren_sameShape op ids hlen := by
+    cases op with
+    | identity _ | dft _ | ntt _ _ | twiddle _ _ | stridePerm _ _ =>
+      simp [MatOp.children] at hlen; subst hlen; rfl
+    | kron a b m₁ n₁ m₂ n₂ =>
+      simp [MatOp.children] at hlen
+      obtain ⟨x, y, rfl⟩ := mat_list_length_two hlen; rfl
+    | compose a b m k n =>
+      simp [MatOp.children] at hlen
+      obtain ⟨x, y, rfl⟩ := mat_list_length_two hlen; rfl
+
+-- ══════════════════════════════════════════════════════════════════
+-- Section: MatExprFlat + Extractable (v3.14.0 B9)
+-- ══════════════════════════════════════════════════════════════════
+
+open AmoLean.EGraph.VerifiedExtraction.Greedy (Extractable)
+
+/-- Non-indexed recursive expression type for MatOp.
+    Mirrors MatOp but with recursive children instead of Nat indices.
+    Used by extractF to reconstruct expressions from the e-graph.
+    NOT the same as MatExpr (which is dependently-typed by dimensions). -/
+inductive MatExprFlat where
+  | identity (n : Nat)
+  | dft (n : Nat)
+  | ntt (n p : Nat)
+  | twiddle (n k : Nat)
+  | stridePerm (m n : Nat)
+  | kron (a b : MatExprFlat) (m₁ n₁ m₂ n₂ : Nat)
+  | compose (a b : MatExprFlat) (m k n : Nat)
+  deriving Repr, Inhabited
+
+/-- Reconstruct a MatExprFlat from a MatOp and its children's extracted expressions. -/
+def matReconstruct (op : MatOp) (children : List MatExprFlat) : Option MatExprFlat :=
+  match op, children with
+  | .identity n, []                        => some (.identity n)
+  | .dft n, []                             => some (.dft n)
+  | .ntt n p, []                           => some (.ntt n p)
+  | .twiddle n k, []                       => some (.twiddle n k)
+  | .stridePerm m n, []                    => some (.stridePerm m n)
+  | .kron _ _ m₁ n₁ m₂ n₂, [a, b]        => some (.kron a b m₁ n₁ m₂ n₂)
+  | .compose _ _ m k n, [a, b]            => some (.compose a b m k n)
+  | _, _                                   => none
+
+instance : Extractable MatOp MatExprFlat where
+  reconstruct := matReconstruct
+
+/-- Convert MatExprFlat to FactorizationTree (flat array representation).
+    Bridge to factorizationToPlan (CrossEGraphProtocol:123-150). -/
+def matExprFlatToTree (expr : MatExprFlat) : FactorizationTree :=
+  let (nodes, rootIdx) := go expr #[]
+  { nodes := nodes, root := rootIdx }
+where
+  go (e : MatExprFlat) (acc : Array MatOp) : Array MatOp × Nat :=
+    match e with
+    | .identity n     => (acc.push (.identity n), acc.size)
+    | .dft n          => (acc.push (.dft n), acc.size)
+    | .ntt n p        => (acc.push (.ntt n p), acc.size)
+    | .twiddle n k    => (acc.push (.twiddle n k), acc.size)
+    | .stridePerm m n => (acc.push (.stridePerm m n), acc.size)
+    | .kron a b m₁ n₁ m₂ n₂ =>
+      let (acc1, aIdx) := go a acc
+      let (acc2, bIdx) := go b acc1
+      (acc2.push (.kron aIdx bIdx m₁ n₁ m₂ n₂), acc2.size)
+    | .compose a b m k n =>
+      let (acc1, aIdx) := go a acc
+      let (acc2, bIdx) := go b acc1
+      (acc2.push (.compose aIdx bIdx m k n), acc2.size)
+
+-- ══════════════════════════════════════════════════════════════════
+-- Section: applyBreakdownInEGraph (v3.14.0 B10)
+-- ══════════════════════════════════════════════════════════════════
+
+/-- Apply a BreakdownRule to an NTT/DFT node in the e-graph.
+    Decomposes the transform via rule.decompose, adds all nodes of the
+    FactorizationTree to the e-graph, and merges the tree root with
+    the original nttClassId.
+    Returns the updated e-graph with the factorization as an equivalent
+    representation of the original NTT. -/
+def applyBreakdownInEGraph (g : AmoLean.EGraph.VerifiedExtraction.EGraph MatOp)
+    (nttClassId : EClassId) (rule : BreakdownRule) (n p : Nat)
+    : AmoLean.EGraph.VerifiedExtraction.EGraph MatOp :=
+  if !rule.isApplicable n then g
+  else
+    let tree := rule.decompose n p
+    -- Add each node of the FactorizationTree to the e-graph.
+    -- tree.nodes uses array indices as children; we remap to EClassIds.
+    let (g', idMap) := tree.nodes.foldl
+      (fun (acc : AmoLean.EGraph.VerifiedExtraction.EGraph MatOp × Array EClassId) node =>
+      let (g, ids) := acc
+      -- Remap children: tree uses array indices, e-graph uses EClassIds
+      let remappedOp := MatOp.mapChildren (fun childIdx =>
+        if h : childIdx < ids.size then ids[childIdx] else childIdx) node
+      let (newId, g') := g.add ⟨remappedOp⟩
+      (g', ids.push newId)
+    ) (g, #[])
+    -- Merge: the tree root is equivalent to the original NTT
+    if h : tree.root < idMap.size then
+      g'.merge nttClassId idMap[tree.root]
+    else g'
+
+/-- Apply all applicable breakdown rules from a list to an NTT node.
+    Each rule that applies adds its factorization as an equivalent class. -/
+def applyAllBreakdowns (g : AmoLean.EGraph.VerifiedExtraction.EGraph MatOp)
+    (nttClassId : EClassId) (rules : List BreakdownRule) (n p : Nat)
+    : AmoLean.EGraph.VerifiedExtraction.EGraph MatOp :=
+  rules.foldl (fun g rule => applyBreakdownInEGraph g nttClassId rule n p) g
+
+-- ══════════════════════════════════════════════════════════════════
+-- Smoke tests: NodeOps MatOp
+-- ══════════════════════════════════════════════════════════════════
+
+section NodeOpsTests
+
+/-- mapChildren distributes over children. -/
+example : NodeOps.children (NodeOps.mapChildren (· + 10) (MatOp.kron 1 2 3 3 3 3)) =
+    (NodeOps.children (MatOp.kron 1 2 3 3 3 3)).map (· + 10) := rfl
+
+/-- mapChildren with id is identity. -/
+example : NodeOps.mapChildren id (MatOp.compose 5 6 4 4 4) =
+    MatOp.compose 5 6 4 4 4 := rfl
+
+/-- replaceChildren yields given children. -/
+example : NodeOps.children (NodeOps.replaceChildren (MatOp.kron 1 2 3 3 3 3) [10, 20]) =
+    [10, 20] := rfl
+
+/-- Leaf nodes have 0 children. -/
+example : NodeOps.children (MatOp.ntt 64 18446744069414584321) = [] := rfl
+
+/-- localCost: twiddle costs n. -/
+example : NodeOps.localCost (MatOp.twiddle 64 8) = 64 := rfl
+
+end NodeOpsTests
 
 end AmoLean.EGraph.Verified.Matrix
