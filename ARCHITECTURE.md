@@ -130,7 +130,115 @@ Neto código:          -530 LOC (más limpio, menos legacy)
 
 ---
 
-## Planned: v3.14.0 — Cost Model Feedback + Four-Step NTT + MatOp E-Graph
+## Next Version: 3.15.0
+
+### DFT Standard Migration + Plonky3 Match v3.15.0
+
+**Contents**: Migrate from non-standard ref_dit transform (DIT large→small) to standard DFT
+(bitrev input + DIT small→large). Create parallel `emitCFromPlanStandard` pipeline.
+100% element-by-element match against Plonky3 real. Detalle completo en TRZK_spiral_idea.md §3.9.
+
+**Vision**: `.reverse` on stage ordering + bitrev preamble = DFT standard, with 0 changes to
+butterflies, twiddle tables, or lowerStageVerified. ~163 LOC across 4 axes.
+
+**State post-v3.14.0**: Cost model (branchCheck, staticShift, pow2Fraction), feedback loop
+functional, four-step NTT (1024/1024 PASS vs naive DFT), DIF preambles, MatOp e-graph wired.
+CRITICAL FINDING: ref_dit ≠ DFT (different transform, not permutation). ntt_skeleton.c matches
+Plonky3 (64/64 PASS). emitCFromPlanVerified does NOT match Plonky3.
+
+**Dead ends (DO NOT REPEAT)**:
+- R4 with `.reverse`: FAIL (4/4 numéricamente). R4 stages cover 2 levels, inverting order breaks.
+- DIF butterfly (Opción 3): requires rewriting entire reduction chain + SIMD + R4. ~200 LOC.
+- Stage-split shift: +13% overhead (v3.13.0). Runtime popcnt branch > shift savings.
+- Matching ref_dit with four-step: impossible (ref_dit ≠ DFT).
+
+**Verified numerical results (DO NOT re-investigate)**:
+1. bitrev(input) + DIT stages .reverse = DFT (7/7 PASS, Goldilocks+BabyBear)
+2. Existing twiddle table (_init_twiddles_real) works WITHOUT changes with .reverse (3/3 PASS)
+3. ntt_skeleton.c = bitrev + small→large DIT = DFT (64/64 match Plonky3)
+
+**Mandatory constraints**:
+- R2 only (no R4). Scalar only (no SIMD). useStandardDFT only on scalar path.
+- Legacy pipeline (emitCFromPlanVerified) NOT modified.
+- lowerStageVerified, nttTwiddleIndex, butterflies NOT modified.
+- Codegen validation gate per CLAUDE.md: benchmark.py --validation-only --use-standard.
+
+#### DAG (3.15.0)
+
+| Nodo | Tipo | Deps | Files | LOC | Status |
+|------|------|------|-------|-----|--------|
+| N315.1 B.1+B.2: Python reference_standard_ntt + naive DFT validation | FUND | — | reference_ntt.py | ~25 | done |
+| N315.2 A.1: Preamble bit_reverse_permute C+Rust | FUND | — | VerifiedPlanCodeGen.lean | ~25 | done |
+| N315.3 A.3: lowerNTTFromPlanStandard (.reverse) | CRIT | N315.2 | VerifiedPlanCodeGen.lean | ~15 | done |
+| N315.4 A.4: emitCFromPlanStandard + emitRustFromPlanStandard | PAR | N315.3 | VerifiedPlanCodeGen.lean | ~30 | done |
+| N315.5 A.5: useStandardDFT dispatch + emit_code flag | PAR | N315.4 | UltraPipeline, OptimizedNTTPipeline, emit_code | ~15 | done |
+| N315.6 B.3: Benchmark harness --use-standard | PAR | N315.1, N315.5 | benchmark.py, validator.py, lean_driver.py, Bench.lean | ~28 | done |
+| N315.7 B.4+B.5: Validation gate vs Python + Plonky3 oracle | GATE | N315.5, N315.6 | Tests/benchmark/ | ~0 | done |
+| N315.10 R4 inverted butterfly for standard DFT | CRIT | N315.3 | VerifiedPlanCodeGen.lean | ~20 | done |
+| N315.11 R4 inverted preambles C+Rust (goldi_butterfly4_inverted) | PAR | N315.10 | VerifiedPlanCodeGen.lean | ~30 | done |
+| N315.12 emitCFromPlanStandard R4 support (decls+preambles+guard) | PAR | N315.11 | VerifiedPlanCodeGen.lean | ~20 | done |
+| N315.13 emitRustFromPlanStandard R4 support (mirror) | PAR | N315.11 | VerifiedPlanCodeGen.lean | ~25 | done |
+| N315.14 ultraPipeline: use competition winner (R2∨R4 DIT, no lazy) | PAR | N315.12 | UltraPipeline.lean | ~10 | done |
+| N315.15 Python R4 standard validation (reference + naive DFT) | FUND | — | reference_ntt.py | ~30 | done |
+| N315.16 Validation gate R4 standard vs Python (BabyBear+Goldilocks) | GATE | N315.14, N315.15 | Tests/benchmark/ | ~0 | done |
+| N315.17 Fix P3 twiddle dispatch in optimizedNTTC_ultra | CRIT | N315.7 | OptimizedNTTPipeline.lean | ~15 | done |
+| N315.18 Flip useStandardDFT := true (cutover) | HOJA | N315.17, N315.16 | UltraPipeline.lean | ~1 | done |
+| N315.19 Verify legacy fallback (useStandardDFT=false) | GATE | N315.18 | Tests/benchmark/ | ~0 | done |
+| N315.8 D.1: Four-step wiring useStandardDFT=true | PAR | N315.5 | UltraPipeline, VerifiedPlanCodeGen | ~80 | **DEFERRED → v3.16.0** |
+
+#### Formal Properties (3.15.0)
+
+| Nodo | Propiedad | Tipo | Prioridad |
+|------|-----------|------|-----------|
+| N315.1 | reference_standard_ntt == naive_dft for all 8 sizes | EQUIVALENCE | P0 |
+| N315.3 | lowerNTTFromPlanStandard compiles and produces valid Stmt | SOUNDNESS | P0 |
+| N315.4 | emitCFromPlanStandard output C compiles with gcc/clang | SOUNDNESS | P0 |
+| N315.5 | useStandardDFT=false → output identical to v3.14.0 | PRESERVATION | P0 |
+| N315.7 | Generated C vs Python standard: 0 mismatches | EQUIVALENCE | P0 |
+| N315.7 | Generated C vs Plonky3 oracle: 0 mismatches | EQUIVALENCE | P0 |
+| N315.10 | R4 inverted butterfly matches 2×R2 reversed (numerical) | EQUIVALENCE | P0 |
+| N315.15 | Python R4 standard NTT == naive DFT for R4 plans | EQUIVALENCE | P0 |
+| N315.16 | Generated C (R4 plan) vs Python standard: 0 mismatches | EQUIVALENCE | P0 |
+| N315.14 | Competition winner with R4 → same perf as legacy R4 | PRESERVATION | P0 |
+| N315.17 | P3 twiddle fix: Goldilocks benchmark correctness check PASS | EQUIVALENCE | P0 |
+| N315.18 | Post-cutover: default useStandardDFT=true produces DFT | SOUNDNESS | P0 |
+| N315.19 | Legacy fallback: useStandardDFT=false → output identical to v3.14.0 | PRESERVATION | P0 |
+| N315.8 | Four-step with useStandardDFT=true inner NTT = DFT | SOUNDNESS | **DEFERRED → v3.16.0** |
+
+#### Bloques
+
+- [x] **B1 — Foundations (N315.1 + N315.2)**: 2 FUND parallel. Python reference_standard_ntt (bitrev+small→large) + validate vs naive DFT (16/16 PASS: BabyBear+Goldilocks, N=8..1024). Lean bit_reverse_permute preamble C+Rust (returns dummy 0 for Stmt.call compat). Gate: Python 16/16 PASS + lake build 3136 jobs PASS. **DONE 2026-04-14.**
+
+- [x] **B2 — Lean Pipeline + Dispatch (N315.3 + N315.4 + N315.5)**: 3 nodos secuenciales. lowerNTTFromPlanStandard = bitrev Stmt.call(.user "group") + .reverse. emitCFromPlanStandard/Rust with R2 DIT preambles + bitrev. useStandardDFT flag in UltraConfig + dispatch in ultraPipeline (R2-only mkUniformPlan + ILP2 for Goldilocks) + thread through OptimizedNTTPipeline + emit_code --use-standard. Gate: lake build 3136 jobs PASS. **DONE 2026-04-14.**
+
+- [x] **B3 — Harness + Validation Gate (N315.6 + N315.7)**: --use-standard in harness chain (benchmark.py, validator.py, lean_driver.py, Bench.lean, emit_standard.lean). CRITICAL FINDING: Goldilocks butterfly uses goldi_reduce128 (PZT mod p, NOT Montgomery REDC) → Montgomery twiddles add extra R factor → must pass STANDARD twiddles for Goldilocks. BabyBear uses REDC (R cancels). GATE: 14/14 PASS (BabyBear 7/7 + Goldilocks 7/7, N=8..1024). **DONE 2026-04-14.**
+
+- [x] **B3.5 — R4 Inverted Butterfly + Ultra Competition (N315.10-N315.16)**: CRIT. Habilita R4 y mixed-radix plans en el standard DFT path. Causa raíz del gap R4+.reverse: intra-block level order hardcodeado (inner=L, outer=L+1) pero standard DFT necesita (inner=L+1, outer=L). Fix: nuevo `lowerRadix4ButterflyByReduction_Inverted` que swapea inner/outer + preamble `goldi_butterfly4_inverted`. `emitCFromPlanStandard` + `emitRustFromPlanStandard` extendidos con R4 decls+preambles. `ultraPipeline` dispatch usa competition winner si es R2∨R4 DIT sin lazy (guard contra bounds chain). Python validation R4 PRIMERO (per workflow). Gate: R4 standard 14/14 PASS + performance ≥ legacy R4. ~141 LOC total, 0 cambios a legacy path.
+
+- [x] **B5 — Cutover (N315.17 + N315.18 + N315.19)**: Fix P3 twiddle dispatch en optimizedNTTC_ultra (nttCall pasa tw en vez de tw_mont para Goldilocks cuando useStandardDFT=true, ~5 LOC, pattern de emit_standard.lean L50-70). Mismo fix para Rust path. Flip useStandardDFT := true (1 LOC). Verify legacy fallback. Gate: Bench.lean --field goldilocks sin MISMATCH + benchmark.py --validation-only sin --use-standard (now default) PASS + legacy fallback PASS. ~20 LOC total.
+
+- **B4 — Four-step Wiring (N315.8)**: **DEFERRED → v3.16.0**. Complejidad real ~60-80 LOC (vs ~20 estimados en §3.9). Gaps: (1) twiddle table layout 3 regiones separadas vs flat ~30 LOC ALTO riesgo, (2) preamble DIF faltante ~10 LOC, (3) stack overflow Phase 6 `uint64_t tmp_unstride[N]` ~5 LOC, (4) Goldilocks only, (5) m selection. B3.5 ya cerró el gap de performance con R4 inverted — four-step es optimización adicional para N≥2^14.
+
+#### Orden Topológico
+
+```
+B1 → B2 → B3 → B3.5 → B5 → SHIP v3.15.0
+```
+
+#### Expectations
+
+```
+                      Goldilocks (0.96x)
+Eje A (migration):    ~0.96x (R4 inverted + competition winner)
+Eje B (validation):   output matches Plonky3 real (DFT standard)
+Eje D (four-step):    DEFERRED v3.16.0 (~0.85x target)
+─────────────────     ──────────────
+Post-v3.15.0:         ~0.85x vs Plonky3 scalar, outputs IDENTICAL
+```
+
+---
+
+## Completed: v3.14.0 — Cost Model Feedback + Four-Step NTT + MatOp E-Graph
 
 **3 Ejes, ~516 LOC, 8-11 días.** Detalle completo en TRZK_spiral_idea.md §3.8.
 

@@ -230,6 +230,30 @@ def lowerRadix4ButterflyByReduction
   -- DIT data-position order: sum@i0, diff@i1, sum@i2, diff@i3
   (Stmt.seq s1 (Stmt.seq s2 (Stmt.seq s3 s4)), out0, out2, out1, out3, cgs4)
 
+/-- v3.15.0 N315.10: Inverted R4 butterfly for standard DFT path.
+    Swaps inner/outer: inner=level L+1 (w1,w1p), outer=level L (w2,w3).
+    Same twiddle values, different consumption order. With .reverse, this gives
+    small→large execution (level L+1 before L within each R4, and R4 blocks reversed).
+    Store order is NATURAL (out0, out1, out2, out3) instead of DIT-swapped. -/
+def lowerRadix4ButterflyByReduction_Inverted
+    (aVar bVar cVar dVar w1Var w1pVar w2Var w3Var : VarName)
+    (red : ReductionChoice) (p k c_val mu : Nat)
+    (cgs : CodeGenState)
+    (boundK : Nat := 0)
+    : (Stmt × VarName × VarName × VarName × VarName × CodeGenState) :=
+  -- Inner level L+1: bf2 on (a,b) with w1, bf2 on (c,d) with w1p
+  let (s1, r0, r1, cgs1) :=
+    lowerDIFButterflyByReduction aVar bVar w1Var red p k c_val mu cgs (boundK := boundK)
+  let (s2, r2, r3, cgs2) :=
+    lowerDIFButterflyByReduction cVar dVar w1pVar red p k c_val mu cgs1 (boundK := boundK)
+  -- Outer level L: bf2 on (r0,r2) with w2, bf2 on (r1,r3) with w3
+  let (s3, out0, out2, cgs3) :=
+    lowerDIFButterflyByReduction r0 r2 w2Var red p k c_val mu cgs2 (boundK := boundK)
+  let (s4, out1, out3, cgs4) :=
+    lowerDIFButterflyByReduction r1 r3 w3Var red p k c_val mu cgs3 (boundK := boundK)
+  -- Natural store order: out0, out1, out2, out3 (no DIT position swap)
+  (Stmt.seq s1 (Stmt.seq s2 (Stmt.seq s3 s4)), out0, out1, out2, out3, cgs4)
+
 -- ══════════════════════════════════════════════════════════════════
 -- Block 2.4: Lower stage from Plan
 -- ══════════════════════════════════════════════════════════════════
@@ -337,6 +361,76 @@ private def lowerStageR4 (stage : NTTStage) (n p k c mu : Nat) : Stmt :=
         w1Var w1pVar w2Var w3Var stage.reduction p k c mu cgs (boundK := stage.outputBoundK)
     let dRef := LowLevelExpr.varRef (VarName.user "data")
     let tRef := LowLevelExpr.varRef (VarName.user "twiddles")
+    let st0 := storeTrunc dRef i0 (LowLevelExpr.varRef pos0)
+    let st1 := storeTrunc dRef i1 (LowLevelExpr.varRef pos1)
+    let st2 := storeTrunc dRef i2 (LowLevelExpr.varRef pos2)
+    let st3 := storeTrunc dRef i3 (LowLevelExpr.varRef pos3)
+    Stmt.seq (loadWiden aVar dRef i0)
+      (Stmt.seq (loadWiden bVar dRef i1)
+        (Stmt.seq (loadWiden cVar dRef i2)
+          (Stmt.seq (loadWiden dVar dRef i3)
+            (Stmt.seq (loadWiden w2Var tRef tw2)
+              (Stmt.seq (loadWiden w3Var tRef tw3)
+                (Stmt.seq (loadWiden w1Var tRef tw1)
+                  (Stmt.seq (loadWiden w1pVar tRef tw1p)
+                    (Stmt.seq bf
+                      (Stmt.seq st0 (Stmt.seq st1 (Stmt.seq st2 st3)))))))))))
+  Stmt.for_
+    (.assign groupVar (.litInt 0)) (.binOp .ltOp (.varRef groupVar) (.litInt ↑numGroups))
+    (.assign groupVar (.binOp .add (.varRef groupVar) (.litInt 1)))
+    (Stmt.for_
+      (.assign pairVar (.litInt 0)) (.binOp .ltOp (.varRef pairVar) (.litInt ↑quarterSize))
+      (.assign pairVar (.binOp .add (.varRef pairVar) (.litInt 1)))
+      bfBody)
+
+/-- v3.15.0 N315.10: Inverted R4 stage for standard DFT.
+    Same geometry as lowerStageR4 (same data indices, twiddle indices, loop bounds).
+    Only the butterfly is inverted (inner=L+1, outer=L) and store order is natural.
+    F5c dispatch uses "goldi_butterfly4_inverted" preamble. -/
+private def lowerStageR4_Inverted (stage : NTTStage) (n p k c mu : Nat) : Stmt :=
+  let L := stage.stageIdx
+  let quarterSize := n / (2 ^ (L + 2))
+  let halfSizeL := 2 * quarterSize
+  let numGroups := 2 ^ L
+  let groupVar := VarName.user "group"
+  let pairVar := VarName.user "pair"
+  let cgs : CodeGenState := {}
+  let baseExpr := nttDataIndex groupVar pairVar halfSizeL
+  let i0 := baseExpr
+  let i1 := LowLevelExpr.binOp .add baseExpr (.litInt ↑quarterSize)
+  let i2 := LowLevelExpr.binOp .add baseExpr (.litInt ↑(2 * quarterSize))
+  let i3 := LowLevelExpr.binOp .add baseExpr (.litInt ↑(3 * quarterSize))
+  let tw2 := nttTwiddleIndex L groupVar pairVar halfSizeL n
+  let tw3 := LowLevelExpr.binOp .add (nttTwiddleIndex L groupVar pairVar halfSizeL n) (.litInt ↑quarterSize)
+  let tw1 := nttTwiddleIndex (L + 1) groupVar pairVar halfSizeL n
+  let tw1p := LowLevelExpr.binOp .add (nttTwiddleIndex (L + 1) groupVar pairVar halfSizeL n)
+    (.litInt ↑quarterSize)
+  -- F5c dispatch: Goldilocks + bounded → Stmt.call to inverted preamble
+  let useFullR4 := k > 32 && stage.outputBoundK > 0 && stage.outputBoundK ≤ 2
+  let bfBody :=
+   if useFullR4 then
+    let (resultVar, _) := cgs.freshVar
+    -- Same 10 args (data, twiddles, i0-i3, tw2, tw3, tw1, tw1p) — preamble swaps inner/outer
+    Stmt.call resultVar "goldi_butterfly4_inverted"
+      [LowLevelExpr.varRef (VarName.user "data"),
+       LowLevelExpr.varRef (VarName.user "twiddles"),
+       i0, i1, i2, i3, tw2, tw3, tw1, tw1p]
+   else
+    -- Inline inverted R4 butterfly
+    let aVar := VarName.user "a_val"
+    let bVar := VarName.user "b_val"
+    let cVar := VarName.user "c_val"
+    let dVar := VarName.user "d_val"
+    let w1Var := VarName.user "w1_val"
+    let w1pVar := VarName.user "w1p_val"
+    let w2Var := VarName.user "w2_val"
+    let w3Var := VarName.user "w3_val"
+    let (bf, pos0, pos1, pos2, pos3, _) :=
+      lowerRadix4ButterflyByReduction_Inverted aVar bVar cVar dVar
+        w1Var w1pVar w2Var w3Var stage.reduction p k c mu cgs (boundK := stage.outputBoundK)
+    let dRef := LowLevelExpr.varRef (VarName.user "data")
+    let tRef := LowLevelExpr.varRef (VarName.user "twiddles")
+    -- Natural store order (unlike lowerStageR4 which uses DIT-swapped order)
     let st0 := storeTrunc dRef i0 (LowLevelExpr.varRef pos0)
     let st1 := storeTrunc dRef i1 (LowLevelExpr.varRef pos1)
     let st2 := storeTrunc dRef i2 (LowLevelExpr.varRef pos2)
@@ -589,6 +683,36 @@ def lowerNTTFromPlanVerified (plan : Plan) (k c mu : Nat) : Stmt :=
       lowerStageVerified stage plan.size plan.field k c mu
   stmts.foldl Stmt.seq Stmt.skip
 
+/-- v3.15.0 N315.3: Lower NTT to TrustLean.Stmt using standard DFT ordering.
+    bitrev input permutation + DIT stages in REVERSE order (small→large).
+
+    Key insight (verified 7/7 PASS): normalizePlan assigns stageIdx 0→halfSize=N/2 (large),
+    stageIdx logN-1→halfSize=1 (small). `.reverse` executes halfSize=1 FIRST → small→large.
+    Each stage keeps its stageIdx/halfSize/twiddle offsets. Only EXECUTION ORDER changes.
+
+    R4 support (v3.15.0 B3.5): R4 stages dispatched to lowerStageR4_Inverted which
+    swaps inner/outer (level L+1 before L within each R4 block). With .reverse on
+    inter-block order + inverted intra-block order → correct small→large DFT.
+    Stmt.call uses (.user "group") as result var — always declared in tempDecls. -/
+def lowerNTTFromPlanStandard (plan : Plan) (k c mu : Nat) : Stmt :=
+  let plan := normalizePlan plan
+  let logN := Nat.log2 plan.size
+  -- 1. Bitrev pass via Stmt.call (Path A). Result var = "group" (declared in tempDecls,
+  --    overwritten immediately by first stage loop). Preamble returns dummy 0.
+  let bitrevStmt := Stmt.call (.user "group") "bit_reverse_permute"
+    [.varRef (.user "data"), .litInt ↑plan.size, .litInt ↑logN]
+  -- 2. Stages in REVERSE order: small→large (last normalized stage executes first).
+  --    Each stage preserves its stageIdx → lowerStageVerified computes correct geometry.
+  -- v3.15.0 B3.5: dispatch R4→inverted, R2→normal (ILP2 when applicable)
+  let stmts := plan.stages.toList.reverse.map fun stage =>
+    if stage.radix == .r4 then
+      lowerStageR4_Inverted stage plan.size plan.field k c mu
+    else if stage.ilpFactor ≥ 2 && stage.radix == .r2 then
+      lowerStageVerified_ILP2 stage plan.size plan.field k c mu
+    else
+      lowerStageVerified stage plan.size plan.field k c mu
+  Stmt.seq bitrevStmt (stmts.foldl Stmt.seq Stmt.skip)
+
 -- ══════════════════════════════════════════════════════════════════
 -- Block 2.6: Emit C and Rust from verified Plan
 -- ══════════════════════════════════════════════════════════════════
@@ -596,7 +720,7 @@ def lowerNTTFromPlanVerified (plan : Plan) (k c mu : Nat) : Stmt :=
 /-- Count maximum temp variables used across all stages.
     Dispatches by radix: R4 dry-runs lowerRadix4ButterflyByReduction (~20 temps),
     R2 dry-runs lowerDIFButterflyByReduction (~5 temps). -/
-private def maxTempsInPlan (plan : Plan) (k c mu : Nat) : Nat :=
+def maxTempsInPlan (plan : Plan) (k c mu : Nat) : Nat :=
   let counts := plan.stages.toList.map fun stage =>
     let cgs : CodeGenState := {}
     let aVar := VarName.user "a_val"
@@ -628,6 +752,38 @@ private def maxTempsInPlan (plan : Plan) (k c mu : Nat) : Nat :=
         cgs1'.nextVar
       else cgs'.nextVar
   counts.foldl Nat.max 0
+
+-- ── v3.15.0: Standard DFT preambles ──────────────────────────────────────
+
+/-- C preamble for bit-reversal permutation. Pattern: ntt_skeleton.c:42-67.
+    Emitted as trusted string (same pattern as goldi_reduce128 et al.).
+    Returns dummy 0 for Stmt.call compatibility (same pattern as goldi_butterfly).
+    stmtToC always emits `result = fname(args);` — no void handling in scalar path. -/
+def bitRevPermutePreambleC (elemType : String) : String :=
+  s!"static inline {elemType} bit_reverse_permute({elemType} *data, size_t n, size_t logn) \{\n" ++
+  s!"  for (size_t i = 0; i < n; i++) \{\n" ++
+  s!"    size_t j = 0, tmp = i;\n" ++
+  s!"    for (size_t b = 0; b < logn; b++) \{ j = (j << 1) | (tmp & 1); tmp >>= 1; }\n" ++
+  s!"    if (i < j) \{ {elemType} t = data[i]; data[i] = data[j]; data[j] = t; }\n" ++
+  s!"  }\n  return 0;\n}\n\n"
+
+/-- Rust preamble for bit-reversal permutation.
+    Returns dummy 0 for Stmt.call compatibility (same pattern as goldi_butterfly).
+    Parameter n kept for C symmetry (Rust has data.len() but call site passes N explicitly). -/
+def bitRevPermutePreambleRust (elemType : String) : String :=
+  s!"#[inline(always)]\n" ++
+  s!"fn bit_reverse_permute(data: &mut [{elemType}], n: usize, logn: u32) -> {elemType} \{\n" ++
+  s!"  for i in 0..n \{\n" ++
+  s!"    let mut j: usize = 0;\n" ++
+  s!"    let mut tmp = i;\n" ++
+  s!"    for _ in 0..logn \{\n" ++
+  s!"      j = (j << 1) | (tmp & 1);\n" ++
+  s!"      tmp >>= 1;\n" ++
+  s!"    }\n" ++
+  s!"    if i < j \{ data.swap(i, j); }\n" ++
+  s!"  }\n  0\n}\n\n"
+
+-- ─────────────────────────────────────────────────────────────────────────
 
 /-- v3.14.0 B6: Generate four-step NTT C function body.
     Pipeline: col_DIF(strided) → col_bitrev → twiddle(ω^(r·c)) → row_DIF(blocks) → row_bitrev.
@@ -894,6 +1050,227 @@ def emitCFromPlanVerified (plan : Plan) (k c mu : Nat)
   else ""
   goldiPreamble ++
   s!"void {funcName}({elemType}* data, const {elemType}* twiddles) \{\n{tempDecls}{bodyC}\n}"
+
+/-- v3.15.0 N315.4: Emit C function for standard DFT (bitrev + DIT small→large).
+    Uses lowerNTTFromPlanStandard (bitrev Stmt.call + stages.reverse).
+    Constraint: R2 plans only (R4 preambles intentionally omitted as compile-time guard).
+    Legacy emitCFromPlanVerified is NOT modified. -/
+def emitCFromPlanStandard (plan : Plan) (k c mu : Nat)
+    (funcName : String) : String :=
+  let stmt := lowerNTTFromPlanStandard plan k c mu
+  let elemType := if k == 64 then "uint64_t" else "int32_t"
+  let wideType := if k == 64 then "__uint128_t" else "int64_t"
+  let numTemps := maxTempsInPlan plan k c mu
+  -- v3.15.0 B3.5: R4 support — add R4 variable declarations when plan has R4 stages
+  let hasR4 := plan.stages.toList.any fun s => s.radix == .r4
+  let r4Decls := if hasR4 then
+    s!"\n  {wideType} c_val, d_val, w1_val, w1p_val, w2_val, w3_val;"
+  else ""
+  let r4LoadDecls := if hasR4 then
+    s!"\n  {elemType} c_val_ld, d_val_ld, w1_val_ld, w1p_val_ld, w2_val_ld, w3_val_ld;"
+  else ""
+  let hasILP2 := plan.stages.toList.any fun s => s.ilpFactor ≥ 2 && s.radix == .r2
+  let ilp2Decls := if hasILP2 then
+    s!"\n  {wideType} pair2, a_val2, b_val2, w_val2;" ++
+    s!"\n  {elemType} a_val2_ld, b_val2_ld, w_val2_ld;"
+  else ""
+  let tempDecls := if numTemps == 0 then "" else
+    s!"  {wideType} " ++ String.intercalate ", " (List.range numTemps |>.map (s!"t{·}")) ++ ";\n" ++
+    s!"  {wideType} group, pair, a_val, b_val, w_val;" ++ r4Decls ++ ilp2Decls ++
+    s!"\n  {elemType} a_val_ld, b_val_ld, w_val_ld;" ++ r4LoadDecls ++ "\n"
+  let bodyC := _root_.TrustLean.stmtToC 1 stmt
+  -- Goldilocks literal fixups (identical to emitCFromPlanVerified)
+  let bodyC := if k == 64 then
+    let p := plan.field
+    let twoPStr := toString (2 * p)
+    let pStr := toString p
+    let mask64Str := toString (2^64 - 1 : Nat)
+    let bodyC := bodyC.replace twoPStr "___TWOP___"
+    let bodyC := bodyC.replace mask64Str s!"{mask64Str}ULL"
+    let bodyC := bodyC.replace pStr s!"{pStr}ULL"
+    let bodyC := bodyC.replace "___TWOP___" s!"((__uint128_t){pStr}ULL + {pStr}ULL)"
+    let bodyC := bodyC.replace "((int64_t)" "((__uint128_t)"
+    let bodyC := bodyC.replace "((int32_t)" "((uint64_t)"
+    bodyC
+  else bodyC
+  -- Preambles: R2 DIT core (Goldilocks) + bitrev.
+  -- R4/DIF preambles intentionally omitted — standard path is R2-only.
+  -- Missing R4 preamble → C compile error = compile-time guard against misuse.
+  let goldiPreamble := if k == 64 then
+    let pStr := toString plan.field
+    s!"static inline uint64_t goldi_reduce128(__uint128_t x) \{\n" ++
+    s!"  uint64_t lo=(uint64_t)x, hi=(uint64_t)(x>>64);\n" ++
+    s!"  uint64_t hh=hi>>32, hl=hi&0xFFFFFFFFULL;\n" ++
+    s!"  uint64_t t0; int borrow=__builtin_sub_overflow(lo,hh,&t0);\n" ++
+    s!"  if(borrow) t0-=0xFFFFFFFFULL;\n" ++
+    s!"  uint64_t t1=hl*0xFFFFFFFFULL;\n" ++
+    s!"  uint64_t r; int carry=__builtin_add_overflow(t0,t1,&r);\n" ++
+    s!"  if(carry||r>={pStr}ULL) r-={pStr}ULL;\n" ++
+    s!"  return r;\n}\n\n" ++
+    s!"static inline uint64_t goldi_add(uint64_t a, uint64_t b) \{\n" ++
+    s!"  uint64_t r; int carry=__builtin_add_overflow(a,b,&r);\n" ++
+    s!"  if(carry||r>={pStr}ULL) r-={pStr}ULL;\n" ++
+    s!"  return r;\n}\n\n" ++
+    s!"static inline uint64_t goldi_sub(uint64_t a, uint64_t b) \{\n" ++
+    s!"  uint64_t r; int borrow=__builtin_sub_overflow(a,b,&r);\n" ++
+    s!"  if(borrow) r+={pStr}ULL;\n" ++
+    s!"  return r;\n}\n\n" ++
+    s!"static inline uint64_t goldi_mul_tw(uint64_t val, uint64_t tw) \{\n" ++
+    s!"  if (__builtin_popcountll(tw)==1)\n" ++
+    s!"    return goldi_reduce128((__uint128_t)val << __builtin_ctzll(tw));\n" ++
+    s!"  return goldi_reduce128((__uint128_t)tw*(__uint128_t)val);\n}\n\n" ++
+    s!"static inline uint64_t goldi_butterfly(\n" ++
+    s!"    uint64_t *data, const uint64_t *twiddles,\n" ++
+    s!"    uint64_t i, uint64_t j, uint64_t tw_idx) \{\n" ++
+    s!"  uint64_t a=data[i], b=data[j], w=twiddles[tw_idx];\n" ++
+    s!"  uint64_t wb=goldi_reduce128((__uint128_t)w*(__uint128_t)b);\n" ++
+    s!"  data[i]=goldi_add(a,wb);\n" ++
+    s!"  data[j]=goldi_sub(a,wb);\n" ++
+    s!"  return 0;\n}\n\n" ++
+    s!"static inline uint64_t goldi_butterfly_shift(\n" ++
+    s!"    uint64_t *data, const uint64_t *twiddles,\n" ++
+    s!"    uint64_t i, uint64_t j, uint64_t tw_idx) \{\n" ++
+    s!"  uint64_t a=data[i], b=data[j], w=twiddles[tw_idx];\n" ++
+    s!"  uint64_t wb=goldi_mul_tw(b,w);\n" ++
+    s!"  data[i]=goldi_add(a,wb);\n" ++
+    s!"  data[j]=goldi_sub(a,wb);\n" ++
+    s!"  return 0;\n}\n\n" ++
+    -- v3.15.0 B3.5: R4 inverted butterfly for standard DFT
+    -- Same 10 params as goldi_butterfly4, but inner=L+1(w1,w1p) / outer=L(w2,w3)
+    -- and natural store order (out0,out1,out2,out3 instead of out0,out2,out1,out3)
+    s!"static inline uint64_t goldi_butterfly4_inverted(\n" ++
+    s!"    uint64_t *data, const uint64_t *twiddles,\n" ++
+    s!"    uint64_t i0, uint64_t i1, uint64_t i2, uint64_t i3,\n" ++
+    s!"    uint64_t tw2i, uint64_t tw3i, uint64_t tw1i, uint64_t tw1pi) \{\n" ++
+    s!"  uint64_t a=data[i0],b=data[i1],c=data[i2],d=data[i3];\n" ++
+    s!"  uint64_t w2=twiddles[tw2i],w3=twiddles[tw3i];\n" ++
+    s!"  uint64_t w1=twiddles[tw1i],w1p=twiddles[tw1pi];\n" ++
+    s!"  /* Inner level L+1: bf2(a,b,w1), bf2(c,d,w1p) */\n" ++
+    s!"  uint64_t w1b=goldi_reduce128((__uint128_t)w1*(__uint128_t)b);\n" ++
+    s!"  uint64_t r0=goldi_add(a,w1b), r1=goldi_sub(a,w1b);\n" ++
+    s!"  uint64_t w1pd=goldi_reduce128((__uint128_t)w1p*(__uint128_t)d);\n" ++
+    s!"  uint64_t r2=goldi_add(c,w1pd), r3=goldi_sub(c,w1pd);\n" ++
+    s!"  /* Outer level L: bf2(r0,r2,w2), bf2(r1,r3,w3) */\n" ++
+    s!"  uint64_t w2r2=goldi_reduce128((__uint128_t)w2*(__uint128_t)r2);\n" ++
+    s!"  data[i0]=goldi_add(r0,w2r2); data[i2]=goldi_sub(r0,w2r2);\n" ++
+    s!"  uint64_t w3r3=goldi_reduce128((__uint128_t)w3*(__uint128_t)r3);\n" ++
+    s!"  data[i1]=goldi_add(r1,w3r3); data[i3]=goldi_sub(r1,w3r3);\n" ++
+    s!"  return 0;\n}\n\n"
+  else ""
+  goldiPreamble ++ bitRevPermutePreambleC elemType ++
+  s!"void {funcName}({elemType}* data, const {elemType}* twiddles) \{\n{tempDecls}{bodyC}\n}"
+
+/-- v3.15.0 N315.4: Emit Rust function for standard DFT.
+    Mirror of emitCFromPlanStandard — same preamble set (R2 DIT + bitrev). -/
+def emitRustFromPlanStandard (plan : Plan) (k c mu : Nat)
+    (funcName : String) : String :=
+  let stmt := lowerNTTFromPlanStandard plan k c mu
+  let uElemType := if k == 64 then "u64" else "u32"
+  let elemType := if k == 64 then "u64" else "i32"
+  let wideType := if k == 64 then "u128" else "i64"
+  let numTemps := maxTempsInPlan plan k c mu
+  let tempDecls := String.join (List.range numTemps |>.map fun i =>
+    s!"  let mut t{i}: {wideType};\n")
+  -- v3.15.0 B3.5: R4 variable declarations
+  let hasR4 := plan.stages.toList.any fun s => s.radix == .r4
+  let r4Decls := if hasR4 then
+    s!"  let mut c_val: {wideType};\n  let mut d_val: {wideType};\n" ++
+    s!"  let mut w1_val: {wideType};\n  let mut w1p_val: {wideType};\n" ++
+    s!"  let mut w2_val: {wideType};\n  let mut w3_val: {wideType};\n"
+  else ""
+  let r4LoadDecls := if hasR4 then
+    s!"  let mut c_val_ld: {elemType};\n  let mut d_val_ld: {elemType};\n" ++
+    s!"  let mut w1_val_ld: {elemType};\n  let mut w1p_val_ld: {elemType};\n" ++
+    s!"  let mut w2_val_ld: {elemType};\n  let mut w3_val_ld: {elemType};\n"
+  else ""
+  let hasILP2 := plan.stages.toList.any fun s => s.ilpFactor ≥ 2 && s.radix == .r2
+  let ilp2Decls := if hasILP2 then
+    s!"  let mut pair2: {wideType};\n" ++
+    s!"  let mut a_val2: {wideType};\n  let mut b_val2: {wideType};\n  let mut w_val2: {wideType};\n" ++
+    s!"  let mut a_val2_ld: {elemType};\n  let mut b_val2_ld: {elemType};\n  let mut w_val2_ld: {elemType};\n"
+  else ""
+  let loadDecls := s!"  let mut a_val_ld: {elemType};\n  let mut b_val_ld: {elemType};\n  let mut w_val_ld: {elemType};\n"
+  let loopDecls := s!"  let mut group: {wideType};\n  let mut pair: {wideType};\n" ++
+    s!"  let mut a_val: {wideType};\n  let mut b_val: {wideType};\n  let mut w_val: {wideType};\n" ++
+    r4Decls
+  let transmute := if k == 64 then "" else
+    s!"  let data: &mut [{elemType}] = unsafe \{ &mut *(data as *mut [{uElemType}] as *mut [{elemType}]) };\n" ++
+    s!"  let twiddles: &[{elemType}] = unsafe \{ &*(twiddles as *const [{uElemType}] as *const [{elemType}]) };\n"
+  let bodyRust := _root_.TrustLean.stmtToRust 1 stmt
+  let bodyRust := if k == 64 then
+    let p := plan.field
+    let twoPStr := toString (2 * p)
+    let pStr := toString p
+    let bodyRust := bodyRust.replace " as i64)" " as u128)"
+    let bodyRust := bodyRust.replace " as i32)" " as u64)"
+    let bodyRust := bodyRust.replace twoPStr s!"({pStr}_u128 + {pStr}_u128)"
+    bodyRust
+  else bodyRust
+  let goldiPreambleRust := if k == 64 then
+    let pStr := toString plan.field
+    s!"#[inline(always)]\n" ++
+    s!"fn goldi_reduce128(x: u128) -> u64 \{\n" ++
+    s!"  let lo = x as u64;\n" ++
+    s!"  let hi = (x >> 64) as u64;\n" ++
+    s!"  let hh = hi >> 32;\n" ++
+    s!"  let hl = hi & 0xFFFFFFFF_u64;\n" ++
+    s!"  let (mut t0, borrow) = lo.overflowing_sub(hh);\n" ++
+    s!"  if borrow \{ t0 = t0.wrapping_sub(0xFFFFFFFF_u64); }\n" ++
+    s!"  let t1 = hl.wrapping_mul(0xFFFFFFFF_u64);\n" ++
+    s!"  let (mut r, carry) = t0.overflowing_add(t1);\n" ++
+    s!"  if carry || r >= {pStr}_u64 \{ r = r.wrapping_sub({pStr}_u64); }\n" ++
+    s!"  r\n}\n\n" ++
+    s!"#[inline(always)]\n" ++
+    s!"fn goldi_add(a: u64, b: u64) -> u64 \{\n" ++
+    s!"  let (mut r, carry) = a.overflowing_add(b);\n" ++
+    s!"  if carry || r >= {pStr}_u64 \{ r = r.wrapping_sub({pStr}_u64); }\n" ++
+    s!"  r\n}\n\n" ++
+    s!"#[inline(always)]\n" ++
+    s!"fn goldi_sub(a: u64, b: u64) -> u64 \{\n" ++
+    s!"  let (mut r, borrow) = a.overflowing_sub(b);\n" ++
+    s!"  if borrow \{ r = r.wrapping_add({pStr}_u64); }\n" ++
+    s!"  r\n}\n\n" ++
+    s!"#[inline(always)]\n" ++
+    s!"fn goldi_mul_tw(val: u64, tw: u64) -> u64 \{\n" ++
+    s!"  if tw.count_ones() == 1 \{\n" ++
+    s!"    goldi_reduce128((val as u128) << tw.trailing_zeros())\n" ++
+    s!"  } else \{\n" ++
+    s!"    goldi_reduce128((tw as u128) * (val as u128))\n" ++
+    s!"  }\n}\n\n" ++
+    s!"#[inline(always)]\n" ++
+    s!"fn goldi_butterfly(data: &mut [u64], twiddles: &[u64], i: usize, j: usize, tw_idx: usize) -> u64 \{\n" ++
+    s!"  let a = data[i]; let b = data[j]; let w = twiddles[tw_idx];\n" ++
+    s!"  let wb = goldi_reduce128((w as u128) * (b as u128));\n" ++
+    s!"  data[i] = goldi_add(a, wb);\n" ++
+    s!"  data[j] = goldi_sub(a, wb);\n" ++
+    s!"  0\n}\n\n" ++
+    s!"#[inline(always)]\n" ++
+    s!"fn goldi_butterfly_shift(data: &mut [u64], twiddles: &[u64], i: usize, j: usize, tw_idx: usize) -> u64 \{\n" ++
+    s!"  let a = data[i]; let b = data[j]; let w = twiddles[tw_idx];\n" ++
+    s!"  let wb = goldi_mul_tw(b, w);\n" ++
+    s!"  data[i] = goldi_add(a, wb);\n" ++
+    s!"  data[j] = goldi_sub(a, wb);\n" ++
+    s!"  0\n}\n\n" ++
+    -- v3.15.0 B3.5: R4 inverted butterfly (Rust)
+    s!"#[inline(always)]\n" ++
+    s!"fn goldi_butterfly4_inverted(data: &mut [u64], twiddles: &[u64],\n" ++
+    s!"    i0: usize, i1: usize, i2: usize, i3: usize,\n" ++
+    s!"    tw2i: usize, tw3i: usize, tw1i: usize, tw1pi: usize) -> u64 \{\n" ++
+    s!"  let (a,b,c,d) = (data[i0],data[i1],data[i2],data[i3]);\n" ++
+    s!"  let (w2,w3) = (twiddles[tw2i],twiddles[tw3i]);\n" ++
+    s!"  let (w1,w1p) = (twiddles[tw1i],twiddles[tw1pi]);\n" ++
+    s!"  let w1b = goldi_reduce128((w1 as u128)*(b as u128));\n" ++
+    s!"  let (r0,r1) = (goldi_add(a,w1b), goldi_sub(a,w1b));\n" ++
+    s!"  let w1pd = goldi_reduce128((w1p as u128)*(d as u128));\n" ++
+    s!"  let (r2,r3) = (goldi_add(c,w1pd), goldi_sub(c,w1pd));\n" ++
+    s!"  let w2r2 = goldi_reduce128((w2 as u128)*(r2 as u128));\n" ++
+    s!"  data[i0] = goldi_add(r0,w2r2); data[i2] = goldi_sub(r0,w2r2);\n" ++
+    s!"  let w3r3 = goldi_reduce128((w3 as u128)*(r3 as u128));\n" ++
+    s!"  data[i1] = goldi_add(r1,w3r3); data[i3] = goldi_sub(r1,w3r3);\n" ++
+    s!"  0\n}\n\n"
+  else ""
+  goldiPreambleRust ++ bitRevPermutePreambleRust uElemType ++
+  s!"fn {funcName}(data: &mut [{uElemType}], twiddles: &[{uElemType}]) \{\n{tempDecls}{loopDecls}{loadDecls}{r4LoadDecls}{ilp2Decls}{transmute}{bodyRust}\n}"
 
 /-- Emit verified Rust function from Plan.
     Uses SIGNED types (i32/i64) internally, matching C's int32_t/int64_t exactly.

@@ -55,7 +55,8 @@ open AmoLean.EGraph.Verified.Bitwise.PlanSelection (CacheConfig
 
 -- Phase 23 verified codegen (Gap 4: TrustLean.Stmt path)
 open AmoLean.EGraph.Verified.Bitwise.VerifiedPlanCodeGen (emitCFromPlanVerified
-  emitRustFromPlanVerified lowerNTTFromPlanVerified)
+  emitRustFromPlanVerified lowerNTTFromPlanVerified
+  emitCFromPlanStandard emitRustFromPlanStandard)
 -- SIMD emission (Fase SIMD v3.1.0)
 open AmoLean.EGraph.Verified.Bitwise.SIMDEmitter (emitSIMDNTTC emitSIMDNTTRust SIMDTarget)
 
@@ -125,6 +126,12 @@ structure UltraConfig where
   -- of static reductionCostForHW for plan selection. Default false for safety.
   -- Known fields (BabyBear/KoalaBear/Mersenne31) have fallback when diff > 5 cycles.
   useDynamicCost : Bool := false
+  -- v3.15.0: Standard DFT (bitrev + DIT small→large). Matches Plonky3.
+  -- Only applies to scalar path, NOT SIMD.
+  -- When true: uses competition winner (R2/R4 DIT) with emitCFromPlanStandard.
+  -- When false: legacy pipeline (emitCFromPlanVerified). Set false for rollback.
+  -- v3.15.0 B5: default true (cutover). Legacy accessible via false.
+  useStandardDFT : Bool := true
   deriving Repr
 
 def UltraConfig.scalar : UltraConfig := { hw := arm_cortex_a76, targetColor := 1 }
@@ -246,10 +253,35 @@ def ultraPipeline (g : MixedEGraph)
   let simdTarget := if cfg.hw.simdLanes == 8 then SIMDTarget.avx2 else SIMDTarget.neon
   let code := if cfg.hw.isSimd && cfg.k ≤ 32 then
     emitSIMDNTTC plan simdTarget cfg.k cfg.c cfg.mu funcName cfg.useSqdmulh cfg.useVerifiedSIMD cfg.profiled
+  else if cfg.useStandardDFT then
+    -- v3.15.0 B3.5: Use competition winner if compatible with standard DFT.
+    -- Compatible = all stages are (R2 or R4) DIT, no lazy reduction.
+    -- R4 stages use inverted butterfly (lowerStageR4_Inverted). R2 stages unchanged.
+    -- Fallback to uniform R2 Harvey if winner is incompatible (DIF, lazy).
+    let isCompatible := plan.stages.toList.all fun s =>
+      (s.radix == .r2 || s.radix == .r4) && s.direction == .DIT && s.reduction != .lazy
+    let stdPlan := if isCompatible then plan
+      else NTTPlan.mkUniformPlan plan.field plan.size .r2 .harvey
+    -- ILP2 for Goldilocks R2 stages (same as legacy path L240-243)
+    let stdPlan := if cfg.k > 32 && !cfg.hw.isSimd then
+        let hasR2 := stdPlan.stages.toList.any fun s => s.radix == .r2
+        if hasR2 then stdPlan.withILP 2 else stdPlan
+      else stdPlan
+    emitCFromPlanStandard stdPlan cfg.k cfg.c cfg.mu funcName
   else
     emitCFromPlanVerified plan cfg.k cfg.c cfg.mu funcName
   let rustCode := if cfg.rustSIMD && cfg.hw.isSimd && cfg.k ≤ 32 then
     emitSIMDNTTRust plan simdTarget cfg.k cfg.c cfg.mu (funcName ++ "_rs") cfg.useSqdmulh
+  else if cfg.useStandardDFT then
+    let isCompatible := plan.stages.toList.all fun s =>
+      (s.radix == .r2 || s.radix == .r4) && s.direction == .DIT && s.reduction != .lazy
+    let stdPlan := if isCompatible then plan
+      else NTTPlan.mkUniformPlan plan.field plan.size .r2 .harvey
+    let stdPlan := if cfg.k > 32 && !cfg.hw.isSimd then
+        let hasR2 := stdPlan.stages.toList.any fun s => s.radix == .r2
+        if hasR2 then stdPlan.withILP 2 else stdPlan
+      else stdPlan
+    emitRustFromPlanStandard stdPlan cfg.k cfg.c cfg.mu (funcName ++ "_rs")
   else
     emitRustFromPlanVerified plan cfg.k cfg.c cfg.mu (funcName ++ "_rs")
 

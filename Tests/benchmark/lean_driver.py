@@ -29,6 +29,7 @@ def generate_program(
     timeout: int = 300,
     verified_simd: bool = False,
     rust_simd: bool = False,
+    use_standard: bool = False,
 ) -> GeneratedProgram:
     """Invoke emit_code.lean to generate raw C/Rust source code."""
     cmd = [
@@ -40,6 +41,8 @@ def generate_program(
         cmd.append("--verified-simd")
     if rust_simd:
         cmd.append("--rust-simd")
+    if use_standard:
+        cmd.append("--use-standard")
     result = subprocess.run(
         cmd,
         capture_output=True,

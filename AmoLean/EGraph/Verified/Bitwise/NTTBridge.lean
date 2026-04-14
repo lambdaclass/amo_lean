@@ -108,26 +108,16 @@ def optimizeButterfly (p : Nat) (hw : HardwareCost)
   let diffC := emitCFunction s!"butterfly_diff_{p}" "a" optDiff identityConstLookup
   (sumC, diffC)
 
-/-- Demo: optimize NTT butterflies for all 3 Plonky3 fields on different hardware. -/
-def demoAllFields : IO Unit := do
-  -- Mersenne31 butterfly -> optimized C for ARM
-  let (mSum, mDiff) := optimizeButterfly mersenne31_prime arm_cortex_a76
-  IO.println "=== Mersenne31 (ARM Cortex-A76) ==="
-  IO.println mSum
-  IO.println mDiff
-  IO.println ""
-  -- BabyBear butterfly -> optimized C for RISC-V
-  let (bSum, bDiff) := optimizeButterfly babybear_prime riscv_sifive_u74
-  IO.println "=== BabyBear (RISC-V SiFive U74) ==="
-  IO.println bSum
-  IO.println bDiff
-  IO.println ""
-  -- Goldilocks butterfly -> optimized C for FPGA
-  let (gSum, gDiff) := optimizeButterfly goldilocks_prime fpga_dsp48e2
-      (.aggressive)
-  IO.println "=== Goldilocks (FPGA DSP48E2) ==="
-  IO.println gSum
-  IO.println gDiff
+-- v3.15.0: demoAllFields disabled — pure let bindings in IO def cause
+-- optimizeButterfly to evaluate during module init (e-graph saturation, ~infinite hang).
+-- Move to a separate test file if needed.
+-- def demoAllFields : IO Unit := do
+--   let (mSum, mDiff) := optimizeButterfly mersenne31_prime arm_cortex_a76
+--   IO.println mSum; IO.println mDiff
+--   let (bSum, bDiff) := optimizeButterfly babybear_prime riscv_sifive_u74
+--   IO.println bSum; IO.println bDiff
+--   let (gSum, gDiff) := optimizeButterfly goldilocks_prime fpga_dsp48e2 (.aggressive)
+--   IO.println gSum; IO.println gDiff
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 3: Bridge theorems

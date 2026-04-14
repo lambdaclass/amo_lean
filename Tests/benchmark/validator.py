@@ -6,7 +6,7 @@ from pathlib import Path
 from dataclasses import dataclass
 
 from field_defs import FieldDef, get_field
-from reference_ntt import compute_reference_ntt
+from reference_ntt import compute_reference_ntt, compute_reference_standard_ntt
 from lean_driver import GeneratedProgram
 from code_splitter import generate_validation_program
 from compiler import compile_c, compile_rust
@@ -33,6 +33,7 @@ def validate(
     timeout: int = 120,
     scalar_program: "GeneratedProgram | None" = None,
     rust_simd: bool = False,
+    use_standard: bool = False,
 ) -> ValidationResult:
     """Full validation pipeline:
     1. Build validation program (prints NTT output elements)
@@ -100,7 +101,11 @@ def validate(
                                 f"Expected {n} elements, got {len(compiled_output)}")
 
     # Step 5: Compute Python reference
-    python_output = compute_reference_ntt(field, program.log_n)
+    # v3.15.0: use standard DFT reference (bitrev + DIT small→large) when --use-standard
+    if use_standard:
+        python_output = compute_reference_standard_ntt(field, program.log_n)
+    else:
+        python_output = compute_reference_ntt(field, program.log_n)
 
     # Step 6: Compare mod p
     p = field.p

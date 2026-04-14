@@ -46,6 +46,8 @@ def main():
                         help="Use verified SIMD path (Stmt.call + simdStmtToC, v3.7.0)")
     parser.add_argument("--rust-simd", action="store_true",
                         help="Use Rust SIMD path (core::arch::aarch64, v3.8.0)")
+    parser.add_argument("--use-standard", action="store_true",
+                        help="v3.15.0: Standard DFT (bitrev + DIT small→large, matches Plonky3)")
     args = parser.parse_args()
 
     # Resolve paths
@@ -76,6 +78,8 @@ def main():
     print(f"  Langs:    {langs}")
     print(f"  Hardware: {hardware}")
     print(f"  Pipeline: {args.pipeline}")
+    if args.use_standard:
+        print(f"  DFT:      standard (v3.15.0, bitrev + DIT small→large)")
     print(f"  Project:  {project_root}")
     print()
 
@@ -100,6 +104,7 @@ def main():
                             hardware, args.pipeline,
                             verified_simd=args.verified_simd,
                             rust_simd=args.rust_simd,
+                            use_standard=args.use_standard,
                         )
                         print("OK")
                     except LeanGenerationError as e:
@@ -123,7 +128,8 @@ def main():
                             except Exception:
                                 pass  # Fall back to validating the SIMD code directly
                         vr = validate(program, field, work_dir, scalar_program=scalar_ref,
-                                      rust_simd=args.rust_simd)
+                                      rust_simd=args.rust_simd,
+                                      use_standard=args.use_standard)
                         validations.append(vr)
                         if vr.passed:
                             print(f"PASS ({vr.num_checked} elements)")

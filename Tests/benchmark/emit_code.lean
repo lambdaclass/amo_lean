@@ -31,7 +31,10 @@ def main (args : List String) : IO Unit := do
   -- Parse optional flags
   let verifiedSIMD := args.contains "--verified-simd"
   let rustSIMD := args.contains "--rust-simd"
-  let args' := args.filter fun a => a != "--verified-simd" && a != "--rust-simd"
+  -- v3.15.0 B5: default standard DFT. --use-legacy reverts to ref_dit.
+  let useStandard := !args.contains "--use-legacy"
+  let args' := args.filter fun a =>
+    a != "--verified-simd" && a != "--rust-simd" && a != "--use-standard" && a != "--use-legacy"
   match args' with
   | [field, logNStr, lang, hw] =>
     let some fc := getField field
@@ -41,15 +44,16 @@ def main (args : List String) : IO Unit := do
     let hwCost := getHW hw
     let iters := 10
     let code := if lang == "rust" then
-      genOptimizedBenchRust_ultra fc logN iters hwCost rustSIMD
+      genOptimizedBenchRust_ultra fc logN iters hwCost rustSIMD useStandard
     else
-      genOptimizedBenchC_ultra fc logN iters hwCost verifiedSIMD
+      genOptimizedBenchC_ultra fc logN iters hwCost verifiedSIMD rustSIMD useStandard
     IO.println code
   | _ =>
-    IO.eprintln "Usage: emit_code <field> <logN> <lang> <hardware> [--verified-simd] [--rust-simd]"
+    IO.eprintln "Usage: emit_code <field> <logN> <lang> <hardware> [flags]"
     IO.eprintln "  field:    babybear | koalabear | mersenne31 | goldilocks"
     IO.eprintln "  logN:     14 | 16 | 18 | 20 | 22"
     IO.eprintln "  lang:     c | rust"
     IO.eprintln "  hardware: arm-scalar | arm-neon | x86-avx2"
     IO.eprintln "  --verified-simd: C verified SIMD (v3.7.0)"
     IO.eprintln "  --rust-simd: Rust verified SIMD (v3.8.0)"
+    IO.eprintln "  --use-standard: v3.15.0 standard DFT (bitrev + DIT small→large)"

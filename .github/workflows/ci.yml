@@ -267,9 +267,9 @@ jobs:
 
     - name: Benchmark validation (correctness only)
       run: |
-        echo "=== Benchmark Validation: BabyBear + Goldilocks ==="
+        echo "=== Benchmark Validation: Standard DFT (v3.15.0) ==="
         python3 Tests/benchmark/benchmark.py \
-          --validation-only --fields babybear,goldilocks --sizes 14
+          --validation-only --use-standard --fields babybear,goldilocks --sizes 14
         echo "Benchmark validation PASS"
 
   summary:

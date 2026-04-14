@@ -52,6 +52,7 @@ structure BenchConfig where
   explain : Bool := true
   csvPath : Option String := none
   pipeline : String := "legacy"  -- "legacy" or "ultra"
+  useStandard : Bool := true     -- v3.15.0 B5: default true (standard DFT). --use-legacy to revert.
 
 -- ═══════════════════════════════════════════════════════════════════
 -- Section 2: Field data
@@ -661,6 +662,8 @@ def parseArgs (args : List String) : BenchConfig :=
     | "--no-explain" :: rest, cfg => go rest { cfg with explain := false }
     | "--csv" :: v :: rest, cfg => go rest { cfg with csvPath := some v }
     | "--pipeline" :: v :: rest, cfg => go rest { cfg with pipeline := v }
+    | "--use-standard" :: rest, cfg => go rest { cfg with useStandard := true }
+    | "--use-legacy" :: rest, cfg => go rest { cfg with useStandard := false }
     | "--help" :: _, _ => { explain := true }  -- handled in main
     | _ :: rest, cfg => go rest cfg
   go args {}
@@ -734,7 +737,7 @@ def main (args : List String) : IO Unit := do
             let fdConfig := fieldDataToConfig fd
             let code := match prim with
               | .ntt => if cfg.pipeline == "ultra"
-                then genOptimizedBenchC_ultra fdConfig logN iters hw
+                then genOptimizedBenchC_ultra fdConfig logN iters hw (useStandardDFT := cfg.useStandard)
                 else genOptimizedBenchC fdConfig logN iters hw
               | _ => genLinearBenchC fd prim logN iters
             IO.FS.writeFile ⟨"/tmp/amobench.c"⟩ code
@@ -758,7 +761,7 @@ def main (args : List String) : IO Unit := do
             let fdConfigRust := fieldDataToConfig fd
             let code := match prim with
               | .ntt => if cfg.pipeline == "ultra"
-                then genOptimizedBenchRust_ultra fdConfigRust logN iters hw
+                then genOptimizedBenchRust_ultra fdConfigRust logN iters hw (useStandardDFT := cfg.useStandard)
                 else genOptimizedBenchRust fdConfigRust logN iters hw
               | _ => genLinearBenchRust fd prim logN iters
             IO.FS.writeFile ⟨"/tmp/amobench.rs"⟩ code
