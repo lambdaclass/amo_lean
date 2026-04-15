@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AMO-Lean NTT Benchmark Harness.
+"""TRZK NTT Benchmark Harness.
 
 Validates correctness BEFORE measuring performance.
 Independent Python NTT reference for cross-validation.
@@ -24,7 +24,7 @@ from reporter import generate_report
 
 
 def main():
-    parser = argparse.ArgumentParser(description="AMO-Lean NTT Benchmark Harness")
+    parser = argparse.ArgumentParser(description="TRZK NTT Benchmark Harness")
     parser.add_argument("--fields", default="babybear,koalabear,mersenne31",
                         help="Comma-separated fields or 'all'")
     parser.add_argument("--sizes", default="14,16",
@@ -46,6 +46,8 @@ def main():
                         help="Use verified SIMD path (Stmt.call + simdStmtToC, v3.7.0)")
     parser.add_argument("--rust-simd", action="store_true",
                         help="Use Rust SIMD path (core::arch::aarch64, v3.8.0)")
+    parser.add_argument("--use-standard", action="store_true",
+                        help="v3.15.0: Standard DFT (bitrev + DIT small→large, matches Plonky3)")
     args = parser.parse_args()
 
     # Resolve paths
@@ -70,12 +72,14 @@ def main():
     langs = [l.strip() for l in args.langs.split(",")]
     hardware = args.hardware
 
-    print(f"AMO-Lean NTT Benchmark Harness")
+    print(f"TRZK NTT Benchmark Harness")
     print(f"  Fields:   {fields}")
     print(f"  Sizes:    {['2^'+str(s) for s in sizes]}")
     print(f"  Langs:    {langs}")
     print(f"  Hardware: {hardware}")
     print(f"  Pipeline: {args.pipeline}")
+    if args.use_standard:
+        print(f"  DFT:      standard (v3.15.0, bitrev + DIT small→large)")
     print(f"  Project:  {project_root}")
     print()
 
@@ -83,7 +87,7 @@ def main():
     benchmarks = []
     explanations = []
 
-    with tempfile.TemporaryDirectory(prefix="amobench_") as tmpdir:
+    with tempfile.TemporaryDirectory(prefix="trzk_bench_") as tmpdir:
         work_dir = Path(tmpdir)
 
         for field_name in fields:
@@ -100,6 +104,7 @@ def main():
                             hardware, args.pipeline,
                             verified_simd=args.verified_simd,
                             rust_simd=args.rust_simd,
+                            use_standard=args.use_standard,
                         )
                         print("OK")
                     except LeanGenerationError as e:
@@ -123,7 +128,8 @@ def main():
                             except Exception:
                                 pass  # Fall back to validating the SIMD code directly
                         vr = validate(program, field, work_dir, scalar_program=scalar_ref,
-                                      rust_simd=args.rust_simd)
+                                      rust_simd=args.rust_simd,
+                                      use_standard=args.use_standard)
                         validations.append(vr)
                         if vr.passed:
                             print(f"PASS ({vr.num_checked} elements)")

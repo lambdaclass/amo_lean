@@ -44,6 +44,11 @@ inductive NTTStrategy where
   | splitRadix
   /-- Kronecker-packed: two parallel NTTs in one word (BabyBear only) -/
   | kroneckerPacked
+  /-- v3.11.0 F4: Two-step NTT for Goldilocks. Decomposes NTT_N as
+      NTT_{N/64} × TwiddleMatrix × NTT_64, where NTT_64 uses omega_64 = 8
+      (power-of-2 root, all 6 inner stages use shifts instead of multiplies).
+      Outer stages use standard Cooley-Tukey with full multiplies. -/
+  | twoStepGoldilocks
   deriving Repr, BEq, Inhabited
 
 /-- Count the total operations for a factorization strategy. -/
@@ -63,6 +68,13 @@ def strategyOpCount (strategy : NTTStrategy) (n : Nat) (mulCost addCost : Nat) :
   | .kroneckerPacked =>
     -- Half the operations (2 NTTs in 1 word)
     log2n * (n / 2) * (mulCost + 2 * addCost) / 2
+  | .twoStepGoldilocks =>
+    -- v3.11.0 F4: Inner NTT_64 (6 stages, shifts only = 0 muls) + outer NTT_{N/64}
+    let innerStages := Nat.min 6 log2n  -- log₂(64) = 6, capped by total stages
+    let outerStages := log2n - innerStages
+    let innerCost := innerStages * (n / 2) * (2 * addCost)  -- shifts free, only add/sub
+    let outerCost := outerStages * (n / 2) * (mulCost + 2 * addCost)  -- full butterflies
+    innerCost + outerCost
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 2: Strategy selection per hardware
@@ -182,6 +194,13 @@ def selectBestStrategy (n p : Nat) (mulCost addCost reduceCost : Nat) : NTTStrat
                            strategyOpCount .kroneckerPacked n mulCost addCost +
                            Nat.log 2 n * (n / 4) * reduceCost  -- half the reductions
                          else n * n)  -- only for 31-bit fields
+    -- v3.11.0 F4: Two-step Goldilocks (NTT_64 × NTT_{N/64})
+    -- Inner 6 stages have 0 mul cost (shifts). Only for Goldilocks (p = 2^64-2^32+1) and N ≥ 128.
+    , (.twoStepGoldilocks,
+        if p == 18446744069414584321 && n ≥ 128 then
+          strategyOpCount .twoStepGoldilocks n mulCost addCost +
+          (Nat.log 2 n - 6) * (n / 2) * reduceCost  -- only outer stages need reduce
+        else n * n)  -- prohibitive for non-Goldilocks
     ]
   candidates.foldl (fun (bestStrat, bestCost) (strat, cost) =>
     if cost < bestCost then (strat, cost) else (bestStrat, bestCost)

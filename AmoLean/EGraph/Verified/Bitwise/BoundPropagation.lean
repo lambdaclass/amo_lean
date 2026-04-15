@@ -31,6 +31,7 @@ def reductionBoundFactor : MixedNodeOp → Nat
   | .montyReduce _ _ _ => 1
   | .barrettReduce _ _ _ => 1
   | .harveyReduce _ _ => 1  -- Harvey output < p (harveyReduceSpec postcondition)
+  | .conditionalSub _ _ => 1  -- conditionalSub output < p (if x≥p then x-p else x)
   | _ => 0
 
 theorem reduce_bound (x p : Nat) (hp : 0 < p) : x % p < 1 * p := by
@@ -84,7 +85,7 @@ def buildBoundLookup (dag : DirectedRelGraph) : EClassId → Option Nat :=
 -- ══════════════════════════════════════════════════════════════════
 
 def isReductionOp : MixedNodeOp → Bool
-  | .reduceGate _ _ | .montyReduce _ _ _ | .barrettReduce _ _ _ | .harveyReduce _ _ => true
+  | .reduceGate _ _ | .montyReduce _ _ _ | .barrettReduce _ _ _ | .harveyReduce _ _ | .conditionalSub _ _ => true
   | _ => false
 
 /-- Scan e-graph for reduction nodes, add sentinel edges encoding their bounds. -/
@@ -156,8 +157,8 @@ def stageBoundFactor (inputK : Nat) (reduction : ReductionChoice) : Nat :=
   | .lazy => inputK + 1
   | r => boundAfterReduction r
 
-def lazyReductionSafe (currentK : Nat) (p : Nat) : Bool :=
-  (currentK + 1) * p < 2 ^ 64
+def lazyReductionSafe (currentK : Nat) (p : Nat) (wordBits : Nat := 64) : Bool :=
+  (currentK + 1) * p < 2 ^ wordBits
 
 def computeStageBounds (stages : List ReductionChoice) (initialK : Nat) : List Nat :=
   stages.scanl stageBoundFactor initialK

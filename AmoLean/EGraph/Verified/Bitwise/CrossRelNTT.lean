@@ -58,11 +58,13 @@ def selectReductionForBound (boundK : Nat) (hwIsSimd : Bool) (arrayIsLarge : Boo
     `serialContext` adds branch penalties for serial patterns (FRI fold, dot product).
     For NTT butterflies (data-parallel), pass `serialContext := false` (default). -/
 def costAwareReductionForBound (hw : HardwareCost) (boundK p : Nat)
-    (serialContext : Bool := false) : ReductionChoice :=
+    (serialContext : Bool := false) (wordBits : Nat := 64) : ReductionChoice :=
   -- Feasibility: Harvey needs boundK ≤ 2.
   -- Montgomery EXCLUDED: REDC gives x*R⁻¹ mod p, only correct for products (tw*b),
   -- NOT for sums/diffs. All callers use this for per-stage sum/diff reduction.
   let candidates : List (Nat × ReductionChoice) :=
+    -- v3.13.0 E.1: .lazy removed — codegen emits Solinas fold anyway (VerifiedPlanCodeGen:103-110),
+    -- so .lazy has identical cost AND identical output. Keeping it was a fiction (see TRZK_spiral_idea.md §3.7).
     (if boundK ≤ 2 then [(mixedOpCost hw (.harveyReduce 0 p), .harvey)] else []) ++
     [(mixedOpCost hw (.reduceGate 0 p), .solinasFold)]
   -- Branch penalties only in serial context (FRI fold, dot product — NOT NTT)
@@ -84,14 +86,14 @@ def costAwareReductionForBound (hw : HardwareCost) (boundK p : Nat)
 
 /-- Hardware-aware reduction cost. SINGLE SOURCE OF TRUTH for plan costing.
     Maps ReductionChoice to cycle count using mixedOpCost from HardwareCost.
-    .lazy cost = Solinas fold cost (matching lowerReductionChoice codegen in
-    VerifiedPlanCodeGen.lean:82-85 which redirects .lazy to Solinas fold). -/
+    v3.13.0 E.1: .lazy cost = Solinas fold cost (codegen emits Solinas fold
+    for .lazy anyway — VerifiedPlanCodeGen.lean:103-110). Honest costing. -/
 def reductionCostForHW (hw : HardwareCost) (red : ReductionChoice) : Nat :=
   match red with
   | .solinasFold => mixedOpCost hw (.reduceGate 0 0)
   | .montgomery => mixedOpCost hw (.montyReduce 0 0 0)
   | .harvey => mixedOpCost hw (.harveyReduce 0 0)
-  | .lazy => mixedOpCost hw (.reduceGate 0 0)  -- codegen does Solinas fold
+  | .lazy => mixedOpCost hw (.reduceGate 0 0)  -- v3.13.0: honest cost (codegen = Solinas)
 
 /-- Instruction profile for modelling execution cost on dual-pipe ARM NEON.
     Calibrated empirically in B35-2 (bench_redc_isolated.c).
@@ -116,6 +118,26 @@ def redcProfile_vmull : InstructionProfile :=
     V0-only: sqdmulh×2 + mul×1 = 3 instructions. -/
 def redcProfile_sqdmulh : InstructionProfile :=
   { v0OnlyInstructions := 3, dualIssueInstructions := 4 }
+
+-- ══════════════════════════════════════════════════════════════════
+-- Goldilocks profiles (v3.9.0 B39-4: bench_goldi_isolated.c)
+-- ══════════════════════════════════════════════════════════════════
+
+/-- Goldilocks fold_halves profile (measured: 5.89 ns/call on Apple Silicon).
+    V0-only: 0 instructions (compiler rewrites hl*0xFFFFFFFF as (hl<<32)-hl).
+    This is the variant used by lowerGoldilocksProductReduce. -/
+def goldilocksProfile_halves : InstructionProfile :=
+  { v0OnlyInstructions := 0, dualIssueInstructions := 11 }
+
+/-- Goldilocks fold_mul profile (measured: 6.43 ns/call on Apple Silicon).
+    V0-only: umulh×1 = 1 instruction. Compiler optimizes fold_shiftsub to identical asm. -/
+def goldilocksProfile_mul : InstructionProfile :=
+  { v0OnlyInstructions := 1, dualIssueInstructions := 9 }
+
+/-- Goldilocks NEON Karatsuba profile (measured: 3.60 ns/call on Apple Silicon, 2 lanes).
+    V0-only: umull×3 = 3 instructions. Processes 2 elements per call. -/
+def goldilocksProfile_karatsuba : InstructionProfile :=
+  { v0OnlyInstructions := 3, dualIssueInstructions := 12 }
 
 /-- Butterfly REDC cost (product reduction, always Montgomery subtraction variant).
     Used by Plan.totalCost to include the REDC in butterfly cost (previously omitted). -/
@@ -274,13 +296,13 @@ example : reductionCostForHW arm_neon_simd .solinasFold = 14 := by native_decide
 example : reductionCostForHW arm_neon_simd .montgomery = 7 := by native_decide
 /-- reductionCostForHW: ARM NEON Harvey costs 3 (cheapest for SIMD). -/
 example : reductionCostForHW arm_neon_simd .harvey = 3 := by native_decide
-/-- reductionCostForHW: lazy cost = Solinas cost (matching codegen). -/
+/-- v3.13.0 E.1: lazy cost = Solinas cost (honest — codegen emits Solinas fold anyway). -/
 example : reductionCostForHW arm_neon_simd .lazy = reductionCostForHW arm_neon_simd .solinasFold := by native_decide
 /-- reductionCostForHW: ARM scalar Solinas costs 6. -/
 example : reductionCostForHW arm_cortex_a76 .solinasFold = 6 := by native_decide
-/-- costAwareReductionForBound: NEON with tight bounds picks Harvey (cheapest at 3 ops). -/
+/-- v3.13.0 E.1: costAwareReductionForBound selects Harvey (not lazy) when boundK ≤ 2. -/
 example : costAwareReductionForBound arm_neon_simd 2 2013265921 = .harvey := by native_decide
-/-- costAwareReductionForBound: NEON with loose bounds picks Solinas (Montgomery excluded — REDC only valid for products). -/
+/-- v3.13.0 E.1: costAwareReductionForBound selects Solinas fold when boundK > 2 (lazy removed). -/
 example : costAwareReductionForBound arm_neon_simd 5 2013265921 = .solinasFold := by native_decide
 
 end SmokeTests

@@ -50,6 +50,7 @@ def exprCostHW (hw : HardwareCost) : MixedExpr → Nat
   | .montyReduceE a p mu => mixedOpCost hw (.montyReduce 0 p mu) + exprCostHW hw a
   | .barrettReduceE a p m => mixedOpCost hw (.barrettReduce 0 p m) + exprCostHW hw a
   | .harveyReduceE a p  => mixedOpCost hw (.harveyReduce 0 p) + exprCostHW hw a
+  | .conditionalSubE a p => mixedOpCost hw (.conditionalSub 0 p) + exprCostHW hw a
 
 /-- Extract the reduction cost from a DiscoveryResult.
     If discovery succeeded, returns the hardware cost of the optimized expression.

@@ -12,6 +12,7 @@ crate-type = ["cdylib"]
 # Plonky3 crates from GitHub
 p3-goldilocks = { git = "https://github.com/Plonky3/Plonky3", branch = "main" }
 p3-baby-bear = { git = "https://github.com/Plonky3/Plonky3", branch = "main" }
+p3-koala-bear = { git = "https://github.com/Plonky3/Plonky3", branch = "main" }
 p3-dft = { git = "https://github.com/Plonky3/Plonky3", branch = "main" }
 p3-field = { git = "https://github.com/Plonky3/Plonky3", branch = "main" }
 p3-matrix = { git = "https://github.com/Plonky3/Plonky3", branch = "main" }

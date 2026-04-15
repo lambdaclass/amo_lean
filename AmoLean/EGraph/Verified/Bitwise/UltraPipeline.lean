@@ -19,8 +19,11 @@ import AmoLean.EGraph.Verified.Bitwise.RulerBridge
 import AmoLean.EGraph.Verified.Bitwise.ColoredExtraction
 import AmoLean.EGraph.Verified.Bitwise.VerifiedPlanCodeGen
 import AmoLean.EGraph.Verified.Bitwise.SIMDEmitter
-import AmoLean.EGraph.Verified.Matrix.CrossEGraphBridge
 import AmoLean.EGraph.Verified.Bitwise.Discovery.JointOptimization
+import AmoLean.EGraph.Verified.Bitwise.Discovery.MatPlanExtraction
+-- v3.14.0 B11: MatOp e-graph integration
+import AmoLean.EGraph.Verified.Matrix.MatNodeOps
+import AmoLean.EGraph.Verified.Matrix.CrossEGraphProtocol
 
 set_option autoImplicit false
 
@@ -48,11 +51,12 @@ open AmoLean.EGraph.Verified.Bitwise.NTTPlan (Plan NTTStage RadixChoice StageDir
 open AmoLean.EGraph.Verified.Bitwise.Butterfly4 (butterfly4 butterfly4WithReduction
   Butterfly4Config radix4TotalMuls radix2TotalMuls)
 open AmoLean.EGraph.Verified.Bitwise.PlanSelection (CacheConfig
-  generateCandidates planCacheCost selectPlan planTotalCost)
+  generateCandidates planCacheCost selectPlan selectPlanWith planTotalCost planTotalCostWith)
 
 -- Phase 23 verified codegen (Gap 4: TrustLean.Stmt path)
 open AmoLean.EGraph.Verified.Bitwise.VerifiedPlanCodeGen (emitCFromPlanVerified
-  emitRustFromPlanVerified lowerNTTFromPlanVerified)
+  emitRustFromPlanVerified lowerNTTFromPlanVerified
+  emitCFromPlanStandard emitRustFromPlanStandard)
 -- SIMD emission (Fase SIMD v3.1.0)
 open AmoLean.EGraph.Verified.Bitwise.SIMDEmitter (emitSIMDNTTC emitSIMDNTTRust SIMDTarget)
 
@@ -62,10 +66,14 @@ open AmoLean.EGraph.Verified.Matrix (TransformId FactorizationTree BreakdownRule
 open AmoLean.EGraph.Verified.Matrix.CrossEGraph (queryArithmeticCost ArithmeticCostQuery
   factorizationTotalCost)
 open AmoLean.EGraph.Verified.Bitwise (arm_cortex_a76 arm_neon_simd x86_avx2_simd)
+open AmoLean.EGraph.Verified.Bitwise.CrossRelNTT (reductionCostForHW)
+open AmoLean.EGraph.Verified.Bitwise.BoundProp (ReductionChoice)
 -- Phase 24 Discovery: bidirectional Mixed↔Matrix joint optimization (Fase Per-Stage v3.3.0)
 open AmoLean.EGraph.Verified.Bitwise.Discovery (JointResult DiscoveryResult
   ReduceSpec discoveryReductionCostPerStage)
 open AmoLean.EGraph.Verified.Bitwise.Discovery.MatEGraphStep (CostOracle)
+-- v3.12.0 Phase B: Discovery wiring
+open AmoLean.EGraph.Verified.Bitwise.Discovery.MatPlanExtraction (selectBestPlanExplored)
 
 -- Phase 25 imports
 open AmoLean.EGraph.Verified.Bitwise.Colors (ColorHierarchy ColoredRule ColorId
@@ -98,7 +106,7 @@ structure UltraConfig where
   cacheConfig : CacheConfig := CacheConfig.default
   -- Phase 24: joint optimization
   exploreFuel : Nat := 10
-  jointThreshold : Nat := 256  -- max N for Discovery.jointOptimize (heavy: 3-phase saturation)
+  jointThreshold : Nat := 1024  -- v3.12.0 B: Discovery plan competition (interpreter-safe up to N=1024)
   -- Phase 25: colors
   targetColor : ColorId := 0  -- root = universal
   -- Field parameters (for verified codegen and parametric discovery)
@@ -113,6 +121,17 @@ structure UltraConfig where
   useVerifiedSIMD : Bool := true
   -- v3.8.0: Rust SIMD codegen (simdStmtToRust — core::arch::aarch64 intrinsics)
   rustSIMD : Bool := false
+  -- v3.9.0: Dynamic cost channel (e-graph → plan costing, opt-in)
+  -- When true, uses reductionCostForHW_dynamic (e-graph extraction cost) instead
+  -- of static reductionCostForHW for plan selection. Default false for safety.
+  -- Known fields (BabyBear/KoalaBear/Mersenne31) have fallback when diff > 5 cycles.
+  useDynamicCost : Bool := false
+  -- v3.15.0: Standard DFT (bitrev + DIT small→large). Matches Plonky3.
+  -- Only applies to scalar path, NOT SIMD.
+  -- When true: uses competition winner (R2/R4 DIT) with emitCFromPlanStandard.
+  -- When false: legacy pipeline (emitCFromPlanVerified). Set false for rollback.
+  -- v3.15.0 B5: default true (cutover). Legacy accessible via false.
+  useStandardDFT : Bool := true
   deriving Repr
 
 def UltraConfig.scalar : UltraConfig := { hw := arm_cortex_a76, targetColor := 1 }
@@ -133,7 +152,10 @@ def ultraPipeline (g : MixedEGraph)
     (eqRules : List (MixedEMatch.RewriteRule MixedNodeOp))
     (p n : Nat) (cfg : UltraConfig := {})
     (funcName : String := "ntt_ultra")
-    (stageClassIds : Option (Array EClassId) := none) : String × String × String :=
+    (stageClassIds : Option (Array EClassId) := none)
+    -- v3.10.0 T8: optional dynamic cost function (default = static)
+    (costFn : HardwareCost → ReductionChoice → Nat := reductionCostForHW)
+    : String × String × String :=
   let logN := log2 n
 
   -- ── Gap 1: Ruler discovery → RewriteRules ──
@@ -147,7 +169,7 @@ def ultraPipeline (g : MixedEGraph)
   let factory := mkFieldFactory p
   let activeColoredRules := allMixedColoredRules
   let state' := saturate (eqRules ++ discoveredRewriteRules) activeColoredRules
-    factory cfg.satConfig state
+    factory cfg.satConfig (s := state)
 
   -- ── Gap 2: Extract per-stage schedule from saturated state ──
   -- stageClassIds maps stage index → e-class ID for DAG bound lookup (Fase Per-Stage v3.3.0)
@@ -166,10 +188,46 @@ def ultraPipeline (g : MixedEGraph)
       let (idx, red, outK) := entry
       (stgs ++ [mkStg idx red inK outK], outK)) ([], 1)
   let schedulePlan : Plan := { stages := schedStages.toArray, field := p, size := n }
-  -- Compete: schedule-derived plan vs 8 candidates (radix-2/4, Solinas/Monty/etc.)
+  -- Compete: schedule-derived plan vs generated candidates + Discovery explored plan
   let candidates := generateCandidates p n cfg.hw arrayIsLarge
-  let allCandidates := candidates.push schedulePlan
-  let plan := match selectPlan allCandidates cfg.hw cfg.cacheConfig with
+  -- v3.12.0 Phase B: Discovery explores 500 radix assignments via matSaturateAndExtract
+  let exploredPlan := if n ≤ cfg.jointThreshold then
+      some (selectBestPlanExplored p n cfg.hw arrayIsLarge)
+    else none
+  -- v3.14.0 B11: MatOp e-graph explores factorizations (SPIRAL-style)
+  -- Adds CT decompositions as equivalent representations, extracts best via cost model.
+  -- The extracted plan competes with fixed candidates in selectPlanWith.
+  -- NOTE: Currently produces DFT-based plans which are incompatible with ref_dit
+  -- (v3.14.0 B6 finding). The plan will lose to ref_dit-based candidates until
+  -- the pipeline migrates to DFT standard (v3.15.0). Safe: selectPlanWith protects.
+  let matOpPlan := if n ≤ cfg.jointThreshold then
+    let mg : AmoLean.EGraph.VerifiedExtraction.EGraph AmoLean.EGraph.Verified.Matrix.MatOp :=
+      AmoLean.EGraph.VerifiedExtraction.EGraph.empty
+    let (nttId, mg1) := mg.add ⟨AmoLean.EGraph.Verified.Matrix.MatOp.ntt n p⟩
+    let rules := AmoLean.EGraph.Verified.Matrix.standardRules n
+    let mg2 := AmoLean.EGraph.Verified.Matrix.applyAllBreakdowns mg1 nttId rules n p
+    let mg3 := AmoLean.EGraph.VerifiedExtraction.EGraph.computeCostsF mg2 3
+    match @AmoLean.EGraph.VerifiedExtraction.Greedy.extractAuto
+        AmoLean.EGraph.Verified.Matrix.MatOp
+        AmoLean.EGraph.Verified.Matrix.MatExprFlat _ _ _ _ mg3 nttId with
+    | some expr =>
+      let tree := AmoLean.EGraph.Verified.Matrix.matExprFlatToTree expr
+      some (AmoLean.EGraph.Verified.Matrix.CrossEGraph.factorizationToPlan tree p cfg.hw n)
+    | none => none
+  else none
+  let allCandidates := match exploredPlan with
+    | some ep => candidates.push schedulePlan |>.push ep
+    | none => candidates.push schedulePlan
+  -- Add MatOp e-graph plan if available
+  let allCandidates := match matOpPlan with
+    | some mp => allCandidates.push mp
+    | none => allCandidates
+  -- v3.10.0 T8: use costFn (static by default, dynamic when useDynamicCost=true)
+  let discoveryWon := exploredPlan.map fun ep =>
+    match selectPlanWith allCandidates cfg.hw cfg.cacheConfig costFn with
+    | some best => best.stages == ep.stages
+    | none => false
+  let plan := match selectPlanWith allCandidates cfg.hw cfg.cacheConfig costFn with
     | some best => best
     | none => schedulePlan
   -- Validate total NTT coverage (safety net — normalizePlan in lowerNTTFromPlanVerified
@@ -177,15 +235,60 @@ def ultraPipeline (g : MixedEGraph)
   let planLevels := plan.stages.foldl (fun acc s =>
     acc + match s.radix with | .r2 => 1 | .r4 => 2) 0
   let plan := if planLevels == logN then plan else schedulePlan
+  -- v3.10.0 TD: ILP2 for Goldilocks — let plan competition decide.
+  -- The ILP2 candidate was added to generateCandidates (NTTPlanSelection).
+  -- The R4 mixed plan often wins because fewer stages = lower cost.
+  -- ILP2 benefits R2 stages only; R4 stages already process 4 at once.
+  -- If the winner is R2-based, apply ILP2. Otherwise keep R4 winner.
+  let plan := if cfg.k > 32 && !cfg.hw.isSimd then
+      let hasR2 := plan.stages.toList.any fun s => s.radix == .r2
+      if hasR2 then plan.withILP 2 else plan
+    else plan
 
   -- ── Gap 4: Verified codegen via TrustLean.Stmt ──
+  -- For k > 32 (Goldilocks): always use scalar verified path. The SIMD emitter uses
+  -- 32-bit NEON intrinsics (int32x4_t) which don't work for 64-bit field elements.
+  -- goldilocksButterfly4Stmt (v3.9.0 N39.9) provides 64-bit NEON infrastructure
+  -- but full integration requires neonTempDecls64 + fold wiring (future work).
   let simdTarget := if cfg.hw.simdLanes == 8 then SIMDTarget.avx2 else SIMDTarget.neon
-  let code := if cfg.hw.isSimd then
+  let code := if cfg.hw.isSimd && cfg.k ≤ 32 then
     emitSIMDNTTC plan simdTarget cfg.k cfg.c cfg.mu funcName cfg.useSqdmulh cfg.useVerifiedSIMD cfg.profiled
+  else if cfg.useStandardDFT then
+    -- v3.15.0 B3.5: Use competition winner if compatible with standard DFT.
+    -- Compatible = all stages are (R2 or R4) DIT, no lazy reduction.
+    -- R4 stages use inverted butterfly (lowerStageR4_Inverted). R2 stages unchanged.
+    -- Fallback to uniform R2 Harvey if winner is incompatible (DIF, lazy).
+    let isCompatible := plan.stages.toList.all fun s =>
+      (s.radix == .r2 || s.radix == .r4) && s.direction == .DIT && s.reduction != .lazy
+    -- v3.16.0 B4: R4 only benefits at large N (cache effects dominate).
+    -- At N ≤ 2^14, R4 inverted overhead > 25% butterfly savings.
+    -- Force R2 for small N; allow R4 winner only when N > 16384.
+    let hasR4 := plan.stages.toList.any fun s => s.radix == .r4
+    let useWinner := isCompatible && (!hasR4 || n > 16384)
+    let stdPlan := if useWinner then plan
+      else NTTPlan.mkUniformPlan plan.field plan.size .r2 .harvey
+    -- ILP2 for Goldilocks R2 stages (same as legacy path L240-243)
+    let stdPlan := if cfg.k > 32 && !cfg.hw.isSimd then
+        let hasR2 := stdPlan.stages.toList.any fun s => s.radix == .r2
+        if hasR2 then stdPlan.withILP 2 else stdPlan
+      else stdPlan
+    emitCFromPlanStandard stdPlan cfg.k cfg.c cfg.mu funcName
   else
     emitCFromPlanVerified plan cfg.k cfg.c cfg.mu funcName
-  let rustCode := if cfg.rustSIMD && cfg.hw.isSimd then
+  let rustCode := if cfg.rustSIMD && cfg.hw.isSimd && cfg.k ≤ 32 then
     emitSIMDNTTRust plan simdTarget cfg.k cfg.c cfg.mu (funcName ++ "_rs") cfg.useSqdmulh
+  else if cfg.useStandardDFT then
+    let isCompatible := plan.stages.toList.all fun s =>
+      (s.radix == .r2 || s.radix == .r4) && s.direction == .DIT && s.reduction != .lazy
+    let hasR4 := plan.stages.toList.any fun s => s.radix == .r4
+    let useWinner := isCompatible && (!hasR4 || n > 16384)
+    let stdPlan := if useWinner then plan
+      else NTTPlan.mkUniformPlan plan.field plan.size .r2 .harvey
+    let stdPlan := if cfg.k > 32 && !cfg.hw.isSimd then
+        let hasR2 := stdPlan.stages.toList.any fun s => s.radix == .r2
+        if hasR2 then stdPlan.withILP 2 else stdPlan
+      else stdPlan
+    emitRustFromPlanStandard stdPlan cfg.k cfg.c cfg.mu (funcName ++ "_rs")
   else
     emitRustFromPlanVerified plan cfg.k cfg.c cfg.mu (funcName ++ "_rs")
 
@@ -203,9 +306,8 @@ def ultraPipeline (g : MixedEGraph)
       else (0, 0)
     else (0, 0)
   else (0, 0)
-  let verifiedResult := if n ≤ 256 then
-    AmoLean.EGraph.Verified.Matrix.CrossEGraphBridge.verifiedJointOptimize n p hw
-  else none
+  -- v3.13.0 E.3: verifiedJointOptimize was a stub (always none). CrossEGraphBridge deleted.
+  let verifiedResult := (none : Option (Nat × Nat))
 
   -- ── NE.4: Per-stage discovery costs (Fase Per-Stage v3.3.0) ──
   -- Guarded by jointThreshold (heavy: runs discoverAllStages → guidedOptimizeMixedF per stage)
@@ -242,11 +344,25 @@ def ultraPipeline (g : MixedEGraph)
     s!"--- Phase 24: Joint (Discovery bidirectional) ---\n" ++
     s!"Joint cost: {jointCost} cycles{if n > cfg.jointThreshold then s!" (skipped, N>{cfg.jointThreshold})" else ""}\n" ++
     s!"Joint plan: {jointPlanLen} stages{if n > cfg.jointThreshold then " (skipped)" else ""}\n" ++
-    s!"Verified path: {match verifiedResult with | some r => s!"{r.factorization.1}x{r.factorization.2.1} MatExpr, cost={r.totalCost}" | none => "unavailable"}\n" ++
+    s!"Verified path: {match verifiedResult with | some _ => "available" | none => "unavailable (stub removed v3.13.0)"}\n" ++
+    s!"--- v3.14.0: MatOp E-Graph (SPIRAL) ---\n" ++
+    s!"MatOp plan: {match matOpPlan with | some mp => s!"{mp.stages.size} stages (from e-graph)" | none => "skipped"}\n" ++
     s!"--- Gap 3: Colored Extraction ---\n" ++
     s!"Color preference: {repr colorPref}\n" ++
     s!"Active colored rules: {activeColoredRules.length}\n" ++
     s!"Colored extract: {if coloredExpr.isSome then "found" else "no root"}\n" ++
+    s!"--- Phase B: Discovery Plan Competition ---\n" ++
+    s!"Explored plan: {if exploredPlan.isSome then "participated" else s!"skipped (N>{cfg.jointThreshold})"}\n" ++
+    s!"Discovery won: {discoveryWon.getD false}\n" ++
+    s!"Total candidates: {allCandidates.size}\n" ++
+    -- v3.14.0 M.5: Cost model predictions for feedback loop
+    let candidateCosts := allCandidates.toList.map fun c =>
+      (planTotalCostWith c cfg.hw cfg.cacheConfig costFn, c.stages.size,
+       c.stages.toList.any (·.useShift))
+    let winnerCost := planTotalCostWith plan cfg.hw cfg.cacheConfig costFn
+    s!"--- v3.14.0: Cost Model Predictions ---\n" ++
+    s!"Winner cost: {winnerCost} ({plan.stages.size} stages)\n" ++
+    s!"Candidates ({candidateCosts.length}): {candidateCosts.map (·.1)}\n" ++
     s!"--- Gap 4: Verified Codegen ---\n" ++
     s!"C code: {code.length} chars (TrustLean.Stmt path)\n" ++
     s!"Rust code: {rustCode.length} chars (TrustLean.Stmt path)\n" ++

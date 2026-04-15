@@ -25,8 +25,7 @@
 -/
 import AmoLean.EGraph.Verified.Matrix.MatNodeOps
 import AmoLean.EGraph.Verified.Bitwise.CostModelDef
-import AmoLean.EGraph.Verified.Matrix.CrossEGraphBridge
-
+import AmoLean.EGraph.Verified.Bitwise.NTTPlanSelection
 set_option autoImplicit false
 
 namespace AmoLean.EGraph.Verified.Matrix.CrossEGraph

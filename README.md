@@ -7,32 +7,13 @@
 [![FRI Verified](https://img.shields.io/badge/FRI-189%20theorems%2C%200%20sorry-blue.svg)](#fri-formal-verification)
 [![Extraction Complete](https://img.shields.io/badge/Extraction-complete%20(0%20sorry)-blue.svg)](#verified-extraction-completeness)
 
-## What is AMO-Lean?
+## What is TruthResearch ZK?
 
-**AMO-Lean** is a verified optimizing compiler that transforms mathematical specifications written in Lean 4 into optimized C/Rust code with **formal correctness guarantees**. It targets cryptographic primitives used in STARK provers and zkVMs.
+**TruthResearch ZK (TRZK)** is a verified optimizing compiler that transforms mathematical specifications written in Lean 4 into optimized C/Rust code with **formal correctness guarantees**. It targets cryptographic primitives used in STARK provers and zkVMs.
 
 The core value proposition: **write your mathematical specification once in Lean 4, and get optimized C or Rust code that is correct by construction** — every optimization step is a formally proven theorem. This eliminates the traditional tradeoff between performance and correctness in cryptographic implementations.
 
-AMO-Lean currently covers the key building blocks of modern proof systems: NTT (Number Theoretic Transform), FRI (Fast Reed-Solomon IOP), field arithmetic (Goldilocks, BabyBear), Poseidon2 hashing, and a verified e-graph optimization engine. As of v2.4.1, the FRI protocol is formally verified end-to-end (189 theorems, 0 sorry, 0 custom axioms) with **operational-verified bridges** connecting 357 operational defs to algebraic specifications, including a **novel formalization of barycentric interpolation** — the first in any proof assistant. The generated code is Plonky3-compatible and achieves ~60% of hand-optimized Rust throughput with full formal verification.
-
-## Ecosystem & Comparisons
-
-AMO-Lean occupies a unique position: it combines **equality saturation optimization** with **formal verification** in a single tool. Most existing projects do one or the other.
-
-| Project | Approach | Proof Assistant | Verification Scope | Codegen Target |
-|---------|----------|-----------------|---------------------|----------------|
-| **AMO-Lean** | E-graph optimization + Sigma-SPL IR | Lean 4 | Full pipeline (spec → IR → code) | C, Rust |
-| [fiat-crypto](https://github.com/mit-plv/fiat-crypto) | Synthesis from field specs | Coq | Field arithmetic | C, Rust, Go, Java |
-| [Jasmin](https://github.com/jasmin-lang/jasmin) | Verified assembly compiler | Coq (EasyCrypt) | Compiler correctness | x86 assembly |
-| [CryptoLine](https://github.com/fmlab-iis/cryptoline) | Algebraic program verification | External (SMT) | Post-hoc verification | N/A (verifier only) |
-| [hacspec](https://github.com/hacspec/hacspec-v2) | Executable specification language | F\*/Coq | Spec extraction | Rust |
-| [SPIRAL](https://www.spiral.net/) | Autotuning + formal rewrite rules | Custom (GAP) | Transform correctness | C, CUDA, FPGA |
-
-**What makes AMO-Lean different:**
-- **Equality saturation** (e-graphs) explores the full space of equivalent rewrites simultaneously, extracting the globally optimal form — not just a locally optimal greedy result
-- **Sigma-SPL IR** enables algebraic reasoning about loop nest generation from Kronecker product decompositions
-- **Trust-Lean verified backend** provides a formally verified C code generator with sanitized identifiers and structural correctness proofs
-- **Single tool**: optimization, verification, and code generation in one pipeline, rather than separate tools stitched together
+TRZK covers the key building blocks of modern proof systems: NTT (Number Theoretic Transform), FRI (Fast Reed-Solomon IOP), field arithmetic (Goldilocks, BabyBear, KoalaBear, Mersenne31), Poseidon2 hashing, and a verified e-graph optimization engine with automatic bound-aware discovery.
 
 ## How It Works
 
@@ -58,7 +39,7 @@ Mathematical Spec (Lean 4)
 
 ### Formal Optimization Strategy
 
-AMO-Lean uses **equality saturation** via e-graphs to find optimal formal equivalent forms of mathematical expressions. Unlike hand-tuned optimizers, every rewrite rule in our e-graph is a formally proven theorem in Lean 4. The process:
+TRZK uses **equality saturation** via e-graphs to find optimal formal equivalent forms of mathematical expressions. Unlike hand-tuned optimizers, every rewrite rule in our e-graph is a formally proven theorem in Lean 4. The process:
 
 1. **Encode** the mathematical specification as an e-graph
 2. **Saturate** by applying all verified rewrite rules until a fixed point
@@ -67,317 +48,211 @@ AMO-Lean uses **equality saturation** via e-graphs to find optimal formal equiva
 
 This architecture is **portable and modular**: adding a new primitive means writing a Lean specification and lowering rules — the optimization engine and code generator are reusable across all primitives.
 
-### Two Operational Modes
+## Usage
 
-| Mode | Purpose | Status |
-|------|---------|--------|
-| **Verifier** | Certify external code (e.g., Plonky3) is mathematically correct | Production Ready |
-| **Generator** | Generate verified C/Rust code from Lean specs | Production Ready |
-
-## Features
-
-- **Verified Pipeline Soundness** — End-to-end `full_pipeline_soundness` theorem: saturation + extraction preserves semantics, **0 custom axioms**
-- **Translation Validation** — Level 2 soundness via `cryptoEquivalent` relation with congruence closure
-- **NTT** (Number Theoretic Transform) — Verified, optimized, Plonky3-compatible
-- **Radix-4 NTT** — 4-point butterfly (8 axioms pending formal implementation, v2.5.0)
-- **Goldilocks Field** — Scalar + AVX2 arithmetic (p = 2^64 - 2^32 + 1), **0 axioms**
-- **BabyBear Field** — Scalar arithmetic (p = 2^31 - 2^27 + 1), **0 axioms**
-- **FRI Formal Verification** — 16 verified modules (~4,450 LOC, 189 theorems, 0 sorry): fold soundness, Merkle integrity, Fiat-Shamir transcript, per-round soundness (Garreta 2025), verifier composition, pipeline integration, operational-verified bridges
-- **Operational-Verified FRI Bridges** — 7 bridge modules connecting 357 operational defs to algebraic specs: domain, fold, transcript, Merkle, plus integration capstone `operational_verified_bridge_complete`
-- **Barycentric Interpolation** — First formalization in any proof assistant: `barycentric_eq_lagrange` generic over `[Field F]`
-- **FRI Pipeline Integration** — `fri_pipeline_soundness` composes e-graph optimization (Level 1+2) with FRI algebraic guarantees (Level 3)
-- **E-Graph Optimization** — Verified engine (121 theorems, 0 sorry) + 19/20 rewrite rules
-- **Extraction Completeness** — DAG acyclicity (`computeCostsF_acyclic`) + fuel sufficiency (`extractAuto_complete`), 6 theorems, 0 sorry, 0 axioms
-- **Perm Algebra** — Tensor, stride, compose, inverse with **0 axioms** (equation compiler fix)
-- **Algebraic Semantics** — C-Lite++ lowering with verified scatter/gather (19/19 cases)
-- **Poseidon2 Hash** — BN254 t=3 with HorizenLabs-compatible test vectors
-- **Trust-Lean Bridge** — Verified type conversion with roundtrip proofs + injectivity (26 theorems, 0 sorry)
-
-## Quick Start
+### Quick Start
 
 ```bash
 # Clone and build
-git clone https://github.com/manuelpuebla/amo-lean.git
-cd amo-lean
+git clone https://github.com/lambdaclass/truth-research-zk.git
+cd truth-research-zk
 lake build
-
-# Run NTT oracle tests (C, no dependencies)
-clang -DFIELD_NATIVE -O2 -o test_ntt_oracle generated/test_ntt_oracle.c && ./test_ntt_oracle
-
-# Run Plonky3 equivalence tests (requires Rust)
-cd verification/plonky3/plonky3_shim && cargo build --release && cd ..
-./oracle_test
 ```
 
-### Compiler Driver
+### Generating Optimized NTT Code
 
-The `trzk` compiler driver lets you write an algorithm spec in Lean and compile it to C or Rust in one step.
-
-**1. Write your spec.** Create a `.lean` file with your algorithm expressed as matrix operations:
-
-```lean
--- my_transform.lean
-open AmoLean.Matrix (MatExpr)
-
-def spec : MatExpr Int 8 8 :=
-  let stage1 : MatExpr Int 8 8 := .kron (.identity 4) (.dft 2)
-  let stage2 : MatExpr Int 8 8 := .kron (.identity 2) (.kron (.dft 2) (.identity 2))
-  .compose stage2 stage1
-```
-
-No imports or boilerplate needed — just the algorithm definition.
-
-**2. Compile it:**
+TRZK generates verified, optimized C or Rust NTT implementations from 4 parameters:
 
 ```bash
-lake build trzk
-.lake/build/bin/trzk my_transform.lean --target c --name my_transform
+lake env lean --run Tests/benchmark/emit_code.lean <field> <logN> <lang> <hardware>
 ```
 
-**3. Use the generated code.** The compiler writes `my_transform.c` (or `.rs` for `--target rust`), which you can drop into your own project:
+| Parameter | Options | Description |
+|-----------|---------|-------------|
+| `field` | `babybear`, `koalabear`, `mersenne31`, `goldilocks` | Prime field |
+| `logN` | `10`, `14`, `16`, `20`, `22` | NTT size (N = 2^logN elements) |
+| `lang` | `c`, `rust` | Output language |
+| `hardware` | `arm-scalar`, `arm-neon`, `x86-avx2` | Hardware target |
 
-```c
-// my_transform.c (generated)
-void my_transform(double* restrict in, double* restrict out) {
-  for (int i0 = 0; i0 < 4; i0++) {
-    out[2 * i0 + 0] = (in[2 * i0 + 0] + in[2 * i0 + 1]);
-    out[2 * i0 + 1] = (in[2 * i0 + 0] - in[2 * i0 + 1]);
-  }
-  // ... stage 2
-}
-```
-
-Available matrix operations: `.dft`, `.identity`, `.kron` (Kronecker product), `.compose`, `.add`, `.smul`, `.transpose`, `.perm`, `.diag`, `.twiddle`, `.elemwise`. See the `examples/` directory for more specs.
-
-**Options:**
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--target c\|rust` | Output language | `c` |
-| `--output <path>` | Output file path | `<spec>.c` or `<spec>.rs` |
-| `--name <func>` | Function name in generated code | `spec` |
-
-### Integration Tests (DFT₄ Verification)
-
-The integration test verifies the `trzk` compiler end-to-end: compile a DFT₄ spec to C, build it, and check the output against a reference Walsh-Hadamard Transform on 25 test vectors.
-
-**Run everything in one command:**
+**Example: Generate BabyBear NTT for ARM scalar, N=16384**
 
 ```bash
-./integration_tests/run.sh
+lake env lean --run Tests/benchmark/emit_code.lean babybear 14 c arm-scalar > babybear_ntt.c
 ```
 
-This will:
-1. Compile `integration_tests/dft4_spec.lean` to C using `trzk`
-2. Build a binary by linking the generated kernel with a test harness
-3. Run the Python verifier against 25 test vectors
-4. Clean up generated artifacts
+This produces a complete C file with the NTT function and a benchmark harness. The NTT function itself is self-contained:
 
-**Or run the steps manually:**
+```c
+static inline uint32_t solinas_fold(int64_t x) { /* verified reduction */ }
+
+void babybear_ntt_ultra(uint32_t* data, const uint32_t* twiddles) {
+    /* mixed-radix R4/R2 plan, bound-aware Harvey/Solinas reduction */
+    /* generated by e-graph plan competition (10+ candidates evaluated) */
+}
+```
+
+**Example: Generate Goldilocks NTT in Rust**
 
 ```bash
-# Generate C from the spec
-.lake/build/bin/trzk integration_tests/dft4_spec.lean --target c --name dft4 --output integration_tests/dft4_spec.c
-
-# Compile with the test harness
-clang -O2 -o dft4 integration_tests/dft4_spec.c integration_tests/harness_4.c
-
-# Verify against the Walsh-Hadamard reference
-python3 integration_tests/verify_dft4.py --binary ./dft4 integration_tests/test_vectors.txt
-
-# Standalone self-test (no binary needed)
-python3 integration_tests/verify_dft4.py integration_tests/test_vectors.txt
-```
-### Using libamolean (Header-Only C Library)
-
-```c
-#include "amolean/amolean.h"
-
-// Goldilocks field arithmetic
-uint64_t a = goldilocks_mul(x, y);
-uint64_t b = goldilocks_add(a, z);
-
-// NTT with pre-computed context
-NttContext* ctx = ntt_context_create(10);  // N = 2^10 = 1024
-ntt_forward_ctx(ctx, data);
-ntt_inverse_ctx(ctx, data);
-ntt_context_destroy(ctx);
+lake env lean --run Tests/benchmark/emit_code.lean goldilocks 14 rust arm-scalar > goldilocks_ntt.rs
 ```
 
-## Examples
+The Rust output uses `overflowing_add`/`overflowing_sub` for carry/borrow detection, matching the C version's semantics exactly.
 
-All examples are runnable via `lake env lean AmoLean/Demo.lean`. See [DEMO_WALKTHROUGH.md](docs/DEMO_WALKTHROUGH.md) for all 11 examples across 3 pipelines.
+### Validating Generated Code
 
-### E-Graph: Multi-Rule Optimization (Pipeline 1)
+TRZK includes a validation harness that compiles the generated code and checks output against a Python reference NTT:
 
-A realistic expression with multiple redundant patterns:
-
-**Input:**
-```
-((x + 0) * 1 + (y * 0)) * (z^1 + w * 1) + 0
+```bash
+python3 Tests/benchmark/benchmark.py --validation-only --fields babybear,goldilocks --sizes 14
 ```
 
-The e-graph applies 6 verified rewrite rules (`add_zero`, `mul_one`, `mul_zero`, `pow_one`) in a single saturation pass:
-
-**Output:**
+Output:
 ```
-x * (z + w)
-```
-
-- Nodes: 18 → 5 (72% reduction)
-- Operations: 9 → 2 (78% reduction)
-
-**Generated C:**
-```c
-int64_t optimized_kernel(int64_t x, int64_t y, int64_t z, int64_t w) {
-  int64_t t0 = z;
-  int64_t t1 = (t0 + w);
-  int64_t t2 = (x * t1);
-  return t2;
-}
+[VAL] babybear/2^14/c/arm-scalar ... PASS (16384 elements)
+[VAL] goldilocks/2^14/c/arm-scalar ... PASS (16384 elements)
 ```
 
-### Matrix Algebra: DFT-2 to C (Pipeline 2)
+### What Happens Inside
 
-The 2-point DFT butterfly — the fundamental NTT building block — goes from Lean specification to C:
+When you run `emit_code.lean`, TRZK executes a multi-phase pipeline:
 
-**Specification:**
+```
+1. Field Configuration        FieldConfig (prime, Solinas constant, Montgomery mu, types)
+         |
+2. E-Graph Saturation         Bound propagation + reduction alternative rules
+         |                    (Harvey, Solinas, Montgomery, conditionalSub — 23 MixedNodeOp constructors)
+         |
+3. Plan Competition           10-11 candidate plans (R2/R4 × reductions) + Discovery explored plan
+         |                    Evaluated by hardware-aware cost model with cache penalty
+         |
+4. Verified Codegen           Selected plan → TrustLean.Stmt IR → stmtToC/stmtToRust
+         |                    F5c Stmt.call type boundary for Goldilocks (uint64_t internals)
+         |
+5. C / Rust Output            Complete benchmark-ready file with validated NTT function
+```
+
+Every optimization in steps 2-4 is either a formally proven rewrite rule or a cost-model-driven selection. The codegen in step 4 uses TrustLean's verified C/Rust backends.
+
+### Supported Fields
+
+| Field | Prime | Element Type | Wide Type | Status |
+|-------|-------|-------------|-----------|--------|
+| BabyBear | 2^31 - 2^27 + 1 | `uint32_t` | `int64_t` | Production |
+| KoalaBear | 2^31 - 2^24 + 1 | `uint32_t` | `int64_t` | Production |
+| Mersenne31 | 2^31 - 1 | `uint32_t` | `int64_t` | Production |
+| Goldilocks | 2^64 - 2^32 + 1 | `uint64_t` | `__uint128_t` | Production |
+
+### Custom Primitives via MatExpr (Experimental)
+
+TRZK includes an experimental pipeline for custom linear transforms expressed as matrix algebra. The user specifies a transform as a composition of Kronecker products, DFT matrices, and permutations:
+
 ```lean
-MatExpr.dft 2    -- The 2×2 DFT matrix [[1,1],[1,-1]]
+import AmoLean.Sigma.CodeGen
+
+-- Define a custom 4-point transform as DFT-2 butterflies
+def myTransform := MatExpr.compose
+  (MatExpr.kron (MatExpr.dft 2) (MatExpr.identity 2))   -- stage 2
+  (MatExpr.kron (MatExpr.identity 2) (MatExpr.dft 2))   -- stage 1
+
+-- Generate C code
+#eval matExprToC myTransform "my_transform"
 ```
 
-**Generated C:**
-```c
-void butterfly_2(double* restrict in, double* restrict out) {
-  out[0] = (in[0] + in[1]);
-  out[1] = (in[0] - in[1]);
-}
-```
+This generates C with verified loop structure from the Kronecker product decomposition. Available constructors: `identity`, `dft`, `ntt`, `twiddle`, `kron`, `compose`, `perm`, `transpose`.
 
-### Matrix Algebra: Parallel Butterflies (Pipeline 2)
+This pipeline does not include the NTT-specific optimizations (plan competition, Stmt.call butterflies, bound-aware reduction). It is suitable for exploring small custom transforms and verifying their structure.
 
-The Kronecker product `I_2 ⊗ DFT_2` means "apply DFT_2 independently to 2 blocks":
+### Verification Status
 
-**Specification:**
-```lean
-MatExpr.kron (MatExpr.identity 2) (MatExpr.dft 2)    -- I₂ ⊗ DFT₂
-```
+| Component | Verified | How |
+|---|---|---|
+| E-graph saturation + extraction | **Yes** | `full_pipeline_soundness`, 0 axioms |
+| Rewrite rules | **Yes** | Each rule is a proven theorem |
+| Plan → Stmt lowering | **Yes** | `lowerMixedExprFull_evaluates` |
+| Stmt → C emission | **Partial** | TrustLean `stmtToC` verified; `Stmt.call` trusted |
+| Preamble functions (goldi_*) | **No** | String emission, validated by benchmark |
+| FRI algebraic proofs | **Yes** | ~230 theorems, 0 sorry |
+| Primitive codegen (FRI, Horner, dot) | **Yes** | Path A: `lowerSolinasFold` + `lowerHarveyReduce` |
 
-**Generated C:**
-```c
-void parallel_butterfly(double* restrict in, double* restrict out) {
-  for (int i0 = 0; i0 < 2; i0++) {
-    out[2 * i0 + 0] = (in[2 * i0 + 0] + in[2 * i0 + 1]);
-    out[2 * i0 + 1] = (in[2 * i0 + 0] - in[2 * i0 + 1]);
-  }
-}
-```
+### In Development
 
-The Kronecker product with the identity on the left produces a loop over blocks, applying the butterfly to consecutive pairs. The gather/scatter patterns compute the correct base addresses automatically.
+| Feature | Description | Status |
+|---------|-------------|--------|
+| **Custom fields** | User-defined primes without editing Lean (CLI-driven `FieldConfig`) | Designed |
+| **Two-step NTT** | SPIRAL-style decomposition for Goldilocks (v3.13.0 Phase H) | In progress |
+| **Poseidon2 codegen** | Verified hash function code generation | Partial |
+| **SIMD for 64-bit fields** | ARM NEON for Goldilocks (Karatsuba decomposition infrastructure exists) | Partial |
 
-## Performance
+## What's New
 
-AMO-Lean NTT achieves **~60% of Plonky3 throughput** (1.65x slower on average) with full formal verification — 64/64 oracle tests pass with bit-exact match.
+### v3.12.0 — Emission Optimization + Discovery Wiring (April 2026)
 
-See [BENCHMARKS.md](docs/BENCHMARKS.md) for full NTT benchmark tables, test suite results, and verification criteria.
+**Gap closed**: Goldilocks NTT gap vs Plonky3 scalar went from 1.52x to **0.96x** (TRZK now faster).
 
-## What's New in v2.5.1
+1. **F5c: goldi_butterfly4 via Stmt.call** — Encapsulates full R4 butterfly (4 loads + 4 twiddle loads + 4 reduces + 8 add/sub + 4 stores) as single function call. Loop body becomes 1 Stmt.call → loop counters don't interact with `__uint128_t` butterfly internals.
+2. **CacheConfig fix** — L1D 32KB→128KB (Apple M-series), elementSize 4→8 for Goldilocks (uint64_t), L2 latency 12→16 cycles.
+3. **Level-aware planCacheCost** — R4 data-reuse model: second level free within same butterfly pass (R4 loads 4 elements once, processes 2 levels).
+4. **Discovery wiring** — `selectBestPlanExplored` (500 radix assignments) participates in plan competition via `selectPlanWith`.
+5. **Lazy reduction cost=0** — Plan selector sees lazy as free; codegen emits Solinas fold as correctness safety net (true passthrough deferred to v3.13.0).
 
-### Changes Since v2.5.0
+### v3.11.0 — Bound-aware Discovery Engine (April 2026)
 
-| Metric | v2.5.0 | v2.5.1 | Change |
-|--------|--------|--------|--------|
-| **Lines of Code** | ~48,000 | **~48,550** | +550 LOC (CompletenessSpec.lean) |
-| **Extraction theorems** | 121 | **147** | +26 (6 public + 20 private) |
-| **Total verified theorems** | ~990 | **~1,016** | +26 |
-| **Axioms** | 11 | **11** | No new axioms |
-| **Active sorry** | 12 | **12** | Same (Poseidon only) |
+1. **conditionalSub** — 23rd MixedNodeOp constructor: `if x ≥ p then x - p else x` (simpler than Harvey's 3 branches). Added across 13 files with extractable sound proof.
+2. **boundAwareEqStep** — 5th layer in tiered saturation: reads live bounds from relation DAG, activates `conditionalSub` when `boundK ≤ 2`. Field-independent (works for any prime).
+3. **goldi_add/goldi_sub via Stmt.call** (F5b) — Same type boundary pattern as F5. Gap 1.28x → 1.22x.
+4. **Stark252 config** — Added with 0 field-specific rules. Infrastructure for automatic discovery testing.
 
-### Key Achievements (v2.5.0 -> v2.5.1)
+### v3.10.1 — Goldilocks NTT Corrections (April 2026)
 
-1. **Extraction completeness** (Fase 16) — Formal proof that e-graph extraction is complete: bestNode pointers form an acyclic DAG and `extractAuto` always succeeds. Closes the two remaining gaps (G1, G2) in verified extraction. 550 LOC, 6 public theorems, 0 sorry, 0 axioms.
-2. **DAG acyclicity** (G1) — `computeCostsF_acyclic`: after cost iteration with positive costs, the bestNode pointers form an acyclic DAG. Proof via `BestCostLowerBound` as ranking function + `bestCostLowerBound_acyclic`.
-3. **Fuel sufficiency** (G2) — `extractAuto_complete`: `extractAuto g rootId` always returns `some` when the DAG is acyclic and all classes have bestNodes. Proof via strong induction on rank (`Nat.strongRecOn`), not simple induction on fuel.
-4. **computeCostsF bridge** — Adapted OptiSat's `processKeys` proof to amo-lean's fold-based `computeCostsF`. Key technique: `singlePass` definition matching `computeCostsF` body exactly, enabling `computeCostsF_succ_eq` by `rfl`. Bridge lemmas (`cost_form_eq`, `foldl_cost_bridge`) convert between `Option.map.getD` and abstract `getCost` forms.
-5. **SelfLB invariant** — Self-referential lower bound: every bestNode's cost ≥ costFn + children's costs. Preserved through nested fold induction with compound invariant (unionFind preserved ∧ SelfLB preserved).
+1. **Fair baseline** — 3-column table separating TRZK vs Plonky3 scalar vs Plonky3 vectorized.
+2. **Conditional subtract** (AC-6) — 10.4% speedup for bounded stages.
+3. **Dynamic cost caching** — `computeDynamicCost` + `mkCachedDynamicCostFn` for e-graph saturation cost.
 
-### Previous: v2.5.0 — Verified E-Graph Extraction
+### v3.9.0 — Goldilocks Enablement (April 2026)
 
-1. **Verified e-graph extraction engine** (Fase 14-15) — Complete extraction pipeline with soundness proofs: `extractF_correct` (greedy extraction preserves semantics), `SoundRewriteRule` (10 verified rewrite rules), `CircuitAdaptor` (domain-specific bridge). 914 LOC, 17 theorems, 0 sorry, 0 axioms.
-
-### Previous: v2.4.1 — Operational-Verified FRI Bridges
-
-1. **Operational-verified FRI bridges** (Fase 13) — 7 bridge modules connecting 357 operational FRI defs to the 123 verified algebraic theorems from Fase 12. Each bridge has a roundtrip or equivalence proof. 6 nodes, 1,606 LOC, ~66 theorems, 0 sorry, 0 new axioms.
-2. **Domain bridge** (N13.2) — `friParamsToDomain` converts operational `FRIParams` to verified `FRIEvalDomain`. `ValidFRIParams` ensures well-formedness. `squaredDomain` for folded domains. 337 LOC, 19 theorems.
-3. **Fold bridge** (N13.4) — `foldSpec` as universal interface: operational fold = polynomial evaluation on squared domain via `foldBridge_equivalence`. `EvenOddInterpretation` links array layout to polynomials. 272 LOC, 11 theorems.
-4. **Capstone theorem** — `operational_verified_bridge_complete` (N13.6) composes domain + fold bridges end-to-end: foldSpec = polynomial evaluation AND degree halving AND ConsistentWithDegree on D'.
-5. **Property testing** (N13.1 + N13.6) — First PBT framework in AMO-Lean. `PlausibleSetup` provides `SampleableExt` instances for FRI types. 14 property tests across 4 categories + 5 smoke tests. 272 LOC.
-6. **Definitional equality bridges** — Transcript bridge achieves gold standard: `toFormalTranscript`/`fromFormalTranscript` roundtrip, absorb/squeeze commutativity all proved by `rfl`.
-
-### Previous: v2.4.0 — FRI Formal Verification
-
-1. **FRI formal verification** (Fase 12) — Complete formal verification of FRI (Fast Reed-Solomon IOP of Proximity) for Plonky3 certification. 9 new files in `AmoLean/FRI/Verified/`, ~2,840 LOC, 123 theorems, 0 sorry, 0 custom axioms (3 crypto axioms are type `True`).
-2. **Barycentric interpolation** (N12.3) — First formalization in any proof assistant. `barycentric_eq_lagrange` proven generic over `[Field F]`, connecting to Mathlib's `Lagrange.interpolate`. 238 LOC.
-3. **Three-level verification architecture**:
-   - Level 1 (e-graph): `ConsistentValuation` preserved through pipeline
-   - Level 2 (TV): `cryptoEquivalent` removes e-graph from TCB
-   - Level 3 (FRI): Polynomial evaluations consistent with degree bound via `fri_pipeline_soundness`
-4. **Per-round soundness** (N12.7) — Formalized Garreta 2025 simplified round-by-round proof. `per_round_soundness` composes fold degree halving, query detection, and polynomial uniqueness. 422 LOC.
-5. **Capstone theorem** — `fri_pipeline_soundness` (N12.9) composes e-graph optimization (Level 1+2) with FRI algebraic guarantees (Level 3). Uses 0 custom axioms.
-
-### Previous: v2.3.0 — Pipeline Soundness + Perm Axiom Eliminated
-
-1. **Verified pipeline soundness** (Fase 11, Subfase 1) — `full_pipeline_soundness` and `full_pipeline_contract` proven end-to-end: saturation preserves `ConsistentValuation`, extraction is correct, 0 sorry, 0 custom axioms. 5 new files, 1,991 LOC, 77 declarations.
-2. **Translation validation framework** (N11.11) — Level 2 soundness via `cryptoEquivalent` relation (refl/symm/trans + congruence for add/mul/neg/smul). 229 LOC, 11 theorems, 0 axioms.
-3. **Perm axiom eliminated** (Corrección 1) — `applyIndex_tensor_eq` is now a theorem, not an axiom. Root cause: nested `inverse` sub-patterns blocked equation compiler splitter. Fix: `applyInverse` helper extraction (~20 LOC change).
-4. **Zero-axiom audit** (N11.12) — All 9 key pipeline theorems audited via `#print axioms` = 0 custom axioms. Integration test: 13 examples, 25 `#check`, 190 LOC.
-
-### Previous: v2.2.0 — Trust-Lean Bridge
-
-1. **Trust-Lean integration** — Trust-Lean v1.2.0 added as lake dependency for verified C code generation
-2. **Bridge module** (`AmoLean.Bridge.TrustLean`, 544 LOC) — 21 conversion definitions, 26 theorems (roundtrip + injectivity, zero sorry)
-3. **Verified C pipeline** — `verifiedCodeGen : ExpandedSigma -> Option String` chains conversion through Trust-Lean's CBackend
-4. **Integration tests** (199 LOC) — All 6 constructors, DFT_4 end-to-end, stress test (>100 sub-expressions, 8261 chars of verified C)
-
-### Previous: v2.1.0 — Lean 4.26 + Verified E-Graph Engine
-
-1. **Lean 4.26 migration** — Full codebase migrated (28 API renames, 61 files, 0 regressions)
-2. **Verified e-graph engine** — 13 files with 121 theorems, zero sorry (UnionFind, CoreSpec, ILP extraction)
-3. **Bridge adapter** — Transparent `Expr Int <-> CircuitNodeOp` mapping
-4. **100% op reduction** — Verified optimizer achieves full simplification on all 9 benchmark cases
+1. **Goldilocks scalar end-to-end** — C + Rust verified NTT for p = 2^64 - 2^32 + 1. Fixed 11 emission bugs (signed/unsigned, overflow, truncation).
+2. **Verified Rust SIMD NTT** — 62.8% faster than Plonky3 for BabyBear via ARM NEON `vqdmulhq_s32`.
 
 ### Version History
 
 ```
-v1.0.0 (Feb 6)    17 axioms    35 sorry    AlgebraicSemantics: 8 axioms eliminated
-v1.0.1 (Feb 9)    17 axioms    30 sorry    Benchmark audit, 2850+ tests
-v1.1.0 (Feb 12)    9 axioms    12 sorry    Goldilocks/BabyBear 0 axioms, Kron 0 sorry
-v2.0.0 (Feb 17)    9 axioms    12 sorry    Lean 4.16 → 4.26 migration complete
-v2.1.0 (Feb 17)    9 axioms    12 sorry    Verified e-graph engine (121 theorems, 0 sorry)
-v2.2.0 (Feb 21)    9 axioms    12 sorry    Trust-Lean bridge (26 theorems, 0 sorry)
-v2.3.0 (Feb 27)    8 axioms    12 sorry    Pipeline soundness + Perm axiom eliminated
-v2.4.0 (Feb 27)   11 axioms    12 sorry    FRI formal verification (123 theorems, barycentric interpolation)
-v2.4.1 (Feb 27)   11 axioms    12 sorry    Operational-verified FRI bridges (66 theorems, 19 property tests)
-v2.5.0 (Mar 2)    11 axioms    12 sorry    Verified extraction engine (17 theorems, SoundRewriteRule)
-v2.5.1 (Mar 3)    11 axioms    12 sorry    Extraction completeness: DAG acyclicity + fuel sufficiency (26 theorems)
+v3.12.0 (Apr 12)   F5c butterfly Stmt.call, Discovery wiring, gap 0.96x
+v3.11.0 (Apr 11)   conditionalSub + boundAwareEqStep + goldi_add/sub Stmt.call
+v3.10.1 (Apr 10)   Fair baseline, conditional subtract, dynamic cost caching
+v3.9.0  (Apr 10)   Goldilocks scalar end-to-end, Verified Rust SIMD NTT
 ```
-
-Note: v2.4.0 adds 3 cryptographic axioms (type `True` — standard assumptions: proximity gap, collision resistance, Random Oracle Model). v2.5.1 adds no new axioms. All pipeline and extraction theorems remain axiom-free.
 
 ## Future Work
 
 | Task | Relevance | Difficulty | Status |
 |------|-----------|------------|--------|
-| **NTT Radix-4 axiom elimination** (8 axioms) | High — last remaining non-crypto axioms | High — requires function implementations | Pending (v2.5.0, N11.6-N11.9) |
-| **Poseidon formal proofs** (12 sorry) | Medium — currently validated computationally | Medium — Lean match splitter limitation | Tests pass; formal proofs deferred |
-| **Mersenne31 field** | High — enables SP1 verification | Medium — architecture supports it | Designed |
-| ~~**Perm axiom** (1)~~ | ~~Low~~ | ~~Very High~~ | **RESOLVED** (Corrección 1) |
-| ~~**FRI formal verification**~~ | ~~Critical~~ | ~~Very High~~ | **RESOLVED** (Fase 12, v2.4.0) |
-| ~~**Operational-Verified FRI bridge**~~ | ~~High~~ | ~~Medium~~ | **RESOLVED** (Fase 13, v2.4.1) |
-| ~~**Property testing**~~ | ~~Medium~~ | ~~Low~~ | **RESOLVED** (Fase 13, v2.4.1 — 19 tests via Plausible) |
-| ~~**Extraction completeness**~~ | ~~High~~ | ~~High~~ | **RESOLVED** (Fase 16, v2.5.1 — DAG acyclicity + fuel sufficiency, 26 theorems) |
+| **Two-step NTT decomposition** | High — enables NTT trick (shift instead of multiply for inner stages) | Medium | Designed (v3.13.0, `goldi_mul_tw` ready) |
+| **True lazy reduction passthrough** | Medium — requires separating butterfly-internal from stage-level reduction | Medium | Cost model ready (v3.12.0), codegen deferred |
+| **Four-step NTT** (cache-oblivious) | Medium — ~25% gain for N > 2^14 | High — needs Transpose in IR | Designed (v3.13.0) |
+| **MatOp e-graph** (equality saturation over factorizations) | Medium — enables automatic Bowers/NTT-trick discovery | Medium | Infrastructure exists (`MatNodeOps`, `CrossEGraphProtocol`) |
+| **Compiled TRZK binary** | High — 100x faster planning | Low | `lake build` target needed |
+| ~~**Goldilocks gap**~~ | ~~Critical~~ | ~~High~~ | **RESOLVED** (v3.12.0 F5c, gap 0.96x) |
+| ~~**Bound-aware discovery**~~ | ~~High~~ | ~~Medium~~ | **RESOLVED** (v3.11.0, conditionalSub + boundAwareEqStep) |
 
-The 12 remaining sorry are isolated to Poseidon2 (Lean match splitter limitation), backed by 21 test vectors. The 8 NTT Radix-4 axioms are the only non-crypto axioms remaining (opaque interface, pending v2.5.0). The 3 FRI crypto axioms (proximity gap, collision resistance, ROM) are standard cryptographic assumptions declared as `True`. The entire e-graph pipeline, extraction completeness, Perm algebra, translation validation, FRI algebraic chain, and operational-verified bridges are **fully axiom-free**.
+## Ecosystem & Comparisons
+
+TRZK occupies a unique position: it combines **equality saturation optimization** with **formal verification** in a single tool. Most existing projects do one or the other.
+
+| Project | Approach | Proof Assistant | Verification Scope | Codegen Target |
+|---------|----------|-----------------|---------------------|----------------|
+| **TRZK** | E-graph optimization + Sigma-SPL IR | Lean 4 | Full pipeline (spec → IR → code) | C, Rust |
+| [fiat-crypto](https://github.com/mit-plv/fiat-crypto) | Synthesis from field specs | Coq | Field arithmetic | C, Rust, Go, Java |
+| [Jasmin](https://github.com/jasmin-lang/jasmin) | Verified assembly compiler | Coq (EasyCrypt) | Compiler correctness | x86 assembly |
+| [CryptoLine](https://github.com/fmlab-iis/cryptoline) | Algebraic program verification | External (SMT) | Post-hoc verification | N/A (verifier only) |
+| [hacspec](https://github.com/hacspec/hacspec-v2) | Executable specification language | F\*/Coq | Spec extraction | Rust |
+| [SPIRAL](https://www.spiral.net/) | Autotuning + formal rewrite rules | Custom (GAP) | Transform correctness | C, CUDA, FPGA |
+
+**What makes TRZK different:**
+- **Equality saturation** (e-graphs) explores the full space of equivalent rewrites simultaneously, extracting the globally optimal form — not just a locally optimal greedy result
+- **Sigma-SPL IR** enables algebraic reasoning about loop nest generation from Kronecker product decompositions
+- **Trust-Lean verified backend** provides a formally verified C code generator with sanitized identifiers and structural correctness proofs
+- **Single tool**: optimization, verification, and code generation in one pipeline, rather than separate tools stitched together
 
 ## References
 
@@ -394,4 +269,4 @@ MIT License — see [LICENSE](LICENSE) for details.
 
 ---
 
-**AMO-Lean v2.5.1** — Extraction completeness (26 theorems, 0 sorry): DAG acyclicity + fuel sufficiency for verified e-graph extraction.
+**TruthResearch ZK v3.12.0** — Verified NTT compiler: 0.96x vs Plonky3 scalar for Goldilocks, +62.8% faster for BabyBear. Bound-aware discovery engine with automatic reduction selection.

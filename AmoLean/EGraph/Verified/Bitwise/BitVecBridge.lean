@@ -85,6 +85,8 @@ def evalMixedBV (w : Nat) (op : MixedNodeOp) (env : MixedEnv)
   | .montyReduce a p _mu   => BitVec.ofNat w ((v a).toNat % p)
   | .barrettReduce a p _m  => BitVec.ofNat w ((v a).toNat % p)
   | .harveyReduce a p      => BitVec.ofNat w ((v a).toNat % p)
+  | .conditionalSub a p    =>
+    let va := (v a).toNat; BitVec.ofNat w (if va ≥ p then va - p else va)
 
 /-! ## Boundedness predicates -/
 
@@ -114,6 +116,7 @@ def ArithNoOverflow (w : Nat) (op : MixedNodeOp) (env : MixedEnv)
   | .montyReduce a p _   => v a % p < 2 ^ w
   | .barrettReduce a p _ => v a % p < 2 ^ w
   | .harveyReduce a p    => v a % p < 2 ^ w
+  | .conditionalSub a p  => (if v a ≥ p then v a - p else v a) < 2 ^ w
   | _               => True
 
 /-! ## Lifting: Nat valuation → BitVec valuation -/
@@ -507,6 +510,9 @@ theorem evalMixed_bv_agree_arith (op : MixedNodeOp) (env : MixedEnv)
     have h : v a % p < 2 ^ w := hno
     rw [BitVec.toNat_ofNat, BitVec.toNat_ofNat, Nat.mod_eq_of_lt (hb a),
         Nat.mod_eq_of_lt h]
+  case conditionalSub a p =>
+    have h : (if v a ≥ p then v a - p else v a) < 2 ^ w := hno
+    simp only [BitVec.toNat_ofNat, Nat.mod_eq_of_lt (hb a), Nat.mod_eq_of_lt h]
 
 /-! ## Full bridge (all ops) -/
 
@@ -535,6 +541,7 @@ def OpInBounds (w : Nat) (op : MixedNodeOp) (env : MixedEnv)
   | .montyReduce a p _   => v a % p < 2 ^ w
   | .barrettReduce a p _ => v a % p < 2 ^ w
   | .harveyReduce a p    => v a % p < 2 ^ w
+  | .conditionalSub a p  => (if v a ≥ p then v a - p else v a) < 2 ^ w
   | _               => True
 
 /-- **Full bridge**: for ANY MixedNodeOp, if values and environment are in bounds
@@ -638,6 +645,9 @@ theorem evalMixed_bv_agree (op : MixedNodeOp) (env : MixedEnv)
     have h : v a % p < 2 ^ w := hop
     rw [BitVec.toNat_ofNat, BitVec.toNat_ofNat, Nat.mod_eq_of_lt (hb a),
         Nat.mod_eq_of_lt h]
+  case conditionalSub a p =>
+    have h : (if v a ≥ p then v a - p else v a) < 2 ^ w := hop
+    simp only [BitVec.toNat_ofNat, Nat.mod_eq_of_lt (hb a), Nat.mod_eq_of_lt h]
 
 /-! ## Non-vacuity: concrete instantiation of the master bridge -/
 
@@ -754,5 +764,7 @@ theorem evalMixed_bv_agree_mod (op : MixedNodeOp) (env : MixedEnv)
     rw [BitVec.toNat_ofNat, BitVec.toNat_ofNat, Nat.mod_eq_of_lt (hb a)]
   case harveyReduce a p =>
     rw [BitVec.toNat_ofNat, BitVec.toNat_ofNat, Nat.mod_eq_of_lt (hb a)]
+  case conditionalSub a p =>
+    simp only [BitVec.toNat_ofNat, Nat.mod_eq_of_lt (hb a)]
 
 end AmoLean.EGraph.Verified.Bitwise

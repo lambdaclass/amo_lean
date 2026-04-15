@@ -1,5 +1,5 @@
 /-
-  AMO-Lean Benchmarker v1.0
+  TRZK Benchmarker v1.0
   Run: lake env lean --run Bench.lean -- [flags]
 
   Flags:
@@ -18,7 +18,7 @@ import AmoLean.EGraph.Verified.Bitwise.CostModelDef
 import AmoLean.EGraph.Verified.Bitwise.VerifiedCodeGen
 import AmoLean.EGraph.Verified.Bitwise.OptimizedNTTPipeline
 import AmoLean.EGraph.Verified.Bitwise.CrossRelNTT
-import AmoLean.EGraph.Verified.Bitwise.NTTPlanCodeGen
+-- v3.13.0 F.5: NTTPlanCodeGen import removed (Bench uses OptimizedNTTPipeline, not legacy)
 
 open AmoLean.EGraph.Verified.Bitwise
 open AmoLean.EGraph.Verified.Bitwise.VerifiedCodeGen (emitC emitSolinasFoldC lowerMixedExprToLLE)
@@ -52,6 +52,7 @@ structure BenchConfig where
   explain : Bool := true
   csvPath : Option String := none
   pipeline : String := "legacy"  -- "legacy" or "ultra"
+  useStandard : Bool := true     -- v3.15.0 B5: default true (standard DFT). --use-legacy to revert.
 
 -- ═══════════════════════════════════════════════════════════════════
 -- Section 2: Field data
@@ -508,8 +509,8 @@ structure BenchResult where
   diffPct : Float
 
 def compileAndRunC (code : String) : IO (Option BenchResult) := do
-  let srcPath := "/tmp/amobench.c"
-  let binPath := "/tmp/amobench"
+  let srcPath := "/tmp/trzk_bench.c"
+  let binPath := "/tmp/trzk_bench"
   IO.FS.writeFile ⟨srcPath⟩ code
   let comp ← IO.Process.output { cmd := "cc", args := #["-O2", "-o", binPath, srcPath] }
   if comp.exitCode != 0 then
@@ -535,7 +536,7 @@ def compileAndRunC (code : String) : IO (Option BenchResult) := do
 def printHeader (cfg : BenchConfig) : IO Unit := do
   IO.println ""
   IO.println "  ═══════════════════════════════════════════════════════════════"
-  IO.println "  AMO-Lean Benchmarker v1.0"
+  IO.println "  TRZK Benchmarker v1.0"
   IO.println "  ═══════════════════════════════════════════════════════════════"
   IO.println ""
   let fieldNames := cfg.fields.map (fun f => (fieldData f).name) |>.intersperse ", " |> String.join
@@ -576,8 +577,8 @@ def runOneBenchC (hw : HardwareCost) (fd : FieldData) (prim : PrimChoice)
     | .ntt => genOptimizedBenchC fc logN iters hw
     | _ => genLinearBenchC fd prim logN iters
 
-  let srcPath := "/tmp/amobench.c"
-  let binPath := "/tmp/amobench"
+  let srcPath := "/tmp/trzk_bench.c"
+  let binPath := "/tmp/trzk_bench"
   IO.FS.writeFile ⟨srcPath⟩ code
 
   let comp ← IO.Process.output { cmd := "cc", args := #["-O2", "-o", binPath, srcPath] }
@@ -602,7 +603,7 @@ def runOneBenchC (hw : HardwareCost) (fd : FieldData) (prim : PrimChoice)
     let n := 2^logN
     IO.println ""
     IO.println s!"  Result:"
-    IO.println s!"    AMO-Lean:   {amoStr} us"
+    IO.println s!"    TRZK:   {amoStr} us"
     IO.println s!"    Plonky3:    {p3Str} us"
     IO.println s!"    Throughput: {melemStr} Melem/s"
     IO.println s!"    Difference: {diffStr}%"
@@ -661,12 +662,14 @@ def parseArgs (args : List String) : BenchConfig :=
     | "--no-explain" :: rest, cfg => go rest { cfg with explain := false }
     | "--csv" :: v :: rest, cfg => go rest { cfg with csvPath := some v }
     | "--pipeline" :: v :: rest, cfg => go rest { cfg with pipeline := v }
+    | "--use-standard" :: rest, cfg => go rest { cfg with useStandard := true }
+    | "--use-legacy" :: rest, cfg => go rest { cfg with useStandard := false }
     | "--help" :: _, _ => { explain := true }  -- handled in main
     | _ :: rest, cfg => go rest cfg
   go args {}
 
 def showHelp : IO Unit := do
-  IO.println "AMO-Lean Benchmarker v1.0"
+  IO.println "TRZK Benchmarker v1.0"
   IO.println ""
   IO.println "Usage: lake env lean --run Bench.lean -- [flags]"
   IO.println ""
@@ -734,15 +737,15 @@ def main (args : List String) : IO Unit := do
             let fdConfig := fieldDataToConfig fd
             let code := match prim with
               | .ntt => if cfg.pipeline == "ultra"
-                then genOptimizedBenchC_ultra fdConfig logN iters hw
+                then genOptimizedBenchC_ultra fdConfig logN iters hw (useStandardDFT := cfg.useStandard)
                 else genOptimizedBenchC fdConfig logN iters hw
               | _ => genLinearBenchC fd prim logN iters
-            IO.FS.writeFile ⟨"/tmp/amobench.c"⟩ code
-            let comp ← IO.Process.output { cmd := "cc", args := #["-O2", "-o", "/tmp/amobench", "/tmp/amobench.c"] }
+            IO.FS.writeFile ⟨"/tmp/trzk_bench.c"⟩ code
+            let comp ← IO.Process.output { cmd := "cc", args := #["-O2", "-o", "/tmp/trzk_bench", "/tmp/trzk_bench.c"] }
             if comp.exitCode != 0 then
               IO.println s!"  {fd.name}  2^{logN}  {langStr}  COMPILE ERROR"
               continue
-            let run ← IO.Process.output { cmd := "/tmp/amobench" }
+            let run ← IO.Process.output { cmd := "/tmp/trzk_bench" }
             let parts := run.stdout.trim.splitOn ","
             -- Output format: name,strategy,amo_us,p3_us,melem,diff%
             if h : parts.length ≥ 6 then
@@ -758,16 +761,16 @@ def main (args : List String) : IO Unit := do
             let fdConfigRust := fieldDataToConfig fd
             let code := match prim with
               | .ntt => if cfg.pipeline == "ultra"
-                then genOptimizedBenchRust_ultra fdConfigRust logN iters hw
+                then genOptimizedBenchRust_ultra fdConfigRust logN iters hw (useStandardDFT := cfg.useStandard)
                 else genOptimizedBenchRust fdConfigRust logN iters hw
               | _ => genLinearBenchRust fd prim logN iters
-            IO.FS.writeFile ⟨"/tmp/amobench.rs"⟩ code
-            let comp ← IO.Process.output { cmd := "rustc", args := #["-O", "/tmp/amobench.rs", "-o", "/tmp/amobench_rs"] }
+            IO.FS.writeFile ⟨"/tmp/trzk_bench.rs"⟩ code
+            let comp ← IO.Process.output { cmd := "rustc", args := #["-O", "/tmp/trzk_bench.rs", "-o", "/tmp/trzk_bench_rs"] }
             if comp.exitCode != 0 then
               IO.println s!"  {fd.name}  2^{logN}  {langStr}  COMPILE ERROR"
               IO.eprintln s!"    {comp.stderr.take 200}"
               continue
-            let run ← IO.Process.output { cmd := "/tmp/amobench_rs" }
+            let run ← IO.Process.output { cmd := "/tmp/trzk_bench_rs" }
             let parts := run.stdout.trim.splitOn ","
             -- Output format: name,strategy,amo_us,p3_us,melem,diff%
             if h : parts.length ≥ 6 then

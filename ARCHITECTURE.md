@@ -1,313 +1,503 @@
 # TRZK: Architecture
 
-## Next Version: 3.8.0
+## Next Version: 3.13.0
 
-### Verified Rust SIMD NTT v3.8.0
+### SPIRAL + Compiler Driver + Path A Migration v3.13.0
 
-**Contents**: Emit Rust NEON NTT from the same verified Stmt IR that produces C NEON.
-Reuses v3.7.0 butterflies (Stmt.call sequences) + NeonIntrinsic ADT. New: `simdStmtToRust`
-emitter (Rust `core::arch::aarch64` intrinsics in `unsafe` blocks), Rust helpers, and
-`emitSIMDNTTRust` pipeline. Enables apple-to-apple benchmark vs Plonky3 monty-31.
+**Contents**: Two-step NTT decomposition (SPIRAL-style), compiler driver rewired to Path A,
+migration of remaining primitives from string emission to verified codegen, ILP2 interleaving
+for Goldilocks. Cleanup of legacy code and dead ends from v3.12.0.
 
-**Design**: Extend, don't duplicate. ARM NEON intrinsics have identical names in C and Rust.
-The only differences: `unsafe { }` wrapping, tuple struct decomposition (`.0/.1` vs `.val[0]`),
-raw pointer setup (`as_ptr().add(i)` vs `&data[i]`), and variable declarations
-(`let mut nv0: int32x4_t` vs `int32x4_t nv0`). See TRZK_rust_insights.md §5-6.
+**Vision**: Two-step decomposition is the factorization that Discovery (Fibonacci r2/r4
+enumeration) CANNOT find. It decomposes NTT_N = NTT_{N/64} × TwiddleMatrix × NTT_64,
+where NTT_64 uses omega_64=8 (power-of-2 root → all 6 inner stages use shifts instead
+of multiplies). Outer stages use standard Cooley-Tukey. MatOp e-graph deferred to v3.14.0.
 
-**Key reuse from v3.7.0** (zero modification):
-- `sqdmulhButterflyStmt`, `hs2ButterflyStmt`, `hs1ButterflyStmt` — Stmt-pure, backend-agnostic
-- `NeonIntrinsic` ADT (21 constructors), `isVoid`, `fromCName`, `neonCall`/`neonCallVoid`
-- `countCalls`, `collectCallNames`, `allCallsKnown` — structural verification infra
-- All 12 theorems in `VerifiedSIMDButterflyProofs.lean` — apply to Rust path too (same Stmt)
+**State post-v3.12.0**: Gap Goldilocks 0.96x (TRZK faster than Plonky3 scalar).
+F5c (Stmt.call) resolved emission bottleneck. Discovery wired but N≤1024 only
+(Lean interpreter slow). Team feedback (PR #11, #12): Path B codegen copy-paste,
+types don't match, verification status unclear. NTT trick reverted (hurts without
+two-step), lazy real confirmed dead end.
 
-**New components**:
-- `NeonIntrinsic.toRustCall` — wraps `toCName` in `unsafe { }`
-- `simdStmtToRust` — Rust SIMD emitter (gemelo de `simdStmtToC`)
-- `neonTempDeclsRust`, `deinterleaveHelperRust`, `interleaveStoreHelperRust`
-- `emitStageRust`, `emitSIMDNTTRust` — Rust pipeline (gemelo de C pipeline)
-- `UltraConfig.rustSIMD` flag + benchmark wiring
+**Dead ends (DO NOT REPEAT)**:
+- Lazy real: storeTrunc corrupts values > p. Requires wideType arrays → 2x memory, kills F5c.
+- Prefetch N ≤ 2^14: cache=0 (data fits in L1). Only useful N ≥ 2^16.
+- NEON Karatsuba for Goldilocks: scalar mul+umulh = 2 instr vs Karatsuba 12+.
+- NTT trick standalone: reverted in v3.12.0 (0.96→1.18x). Only useful WITH two-step.
 
-**Lessons applied**: L-730 (audit wiring — no string bypass), L-728 (fuel-free Stmt chains),
-L-309 (Rust idioms: `as usize`, unsafe blocks, raw pointers).
+**4 Phases**:
+- Phase E: Cleanup + infrastructure (1-2 days, ~-260 LOC net)
+- Phase F: Compiler driver + Path A migration (3-4 days, ~-611 LOC net)
+- Phase G: ILP2 for Goldilocks (2-3 days, ~50 LOC)
+- Phase H: Two-Step NTT (5-6 days, ~293 LOC)
+- Phase I: Optional (prefetch, four-step, Bowers)
 
-**Files**:
-- `AmoLean/Bridge/SIMDStmtToC.lean` (MODIFY — add toRustCall + simdStmtToRust)
-- `AmoLean/EGraph/Verified/Bitwise/SIMDEmitter.lean` (MODIFY — add Rust helpers + emitSIMDNTTRust)
-- `AmoLean/EGraph/Verified/Bitwise/UltraPipeline.lean` (MODIFY — rustSIMD flag)
-- `AmoLean/EGraph/Verified/Bitwise/OptimizedNTTPipeline.lean` (MODIFY — Rust SIMD wiring)
-- `Tests/benchmark/emit_code.lean` (MODIFY — --rust-simd flag)
-- `Tests/benchmark/lean_driver.py` (MODIFY — rust_simd param)
-- `Tests/benchmark/benchmark.py` (MODIFY — --rust-simd flag)
+**Key infrastructure VERIFIED against code (2025-04-13)**:
+- `nttDataIndex` (VerifiedPlanCodeGen:240) has NO offset/stride — H.2 adds them
+- `nttTwiddleIndex` (VerifiedPlanCodeGen:246) has NO twiddleOffset — H.2 adds it
+- `NTTStage` (NTTPlan:66-74) has NO useShift — H.1 adds it
+- `generateCandidates` (NTTPlanSelection:97-126) has 11 candidates — H.11 adds two-step
+- `goldi_mul_tw` (VerifiedPlanCodeGen:657), `goldi_butterfly4` (:675), `goldi_reduce128` (:630) EXIST
+- `friFoldExpr` (:37), `hornerExpr` (:116) return `MixedExpr` — ready for Path A
+- `UnifiedCodeGen` imported by PrimitiveOptimizer — F.2-F.4 removes dependency
+- `reductionCostForHW .lazy = 0` (CrossRelNTT:96) — E.1 reverts to Solinas cost
 
-#### DAG (3.8.0)
+#### DAG (3.13.0)
 
-| Nodo | Tipo | Deps | Status |
-|------|------|------|--------|
-| N38.1 toRustCall + simdStmtToRust emitter | FUND | — | pending |
-| N38.2 Rust SIMD helpers + temp declarations | FUND | — | pending |
-| N38.3 emitSIMDNTTRust — full Rust SIMD NTT generator | CRIT | N38.1, N38.2 | done |
-| N38.4 Pipeline integration (rustSIMD flag + wiring) | CRIT | N38.3 | done |
-| N38.5 Validation + benchmark vs Plonky3 | HOJA | N38.4 | done |
+| Nodo | Tipo | Deps | Files | LOC | Status |
+|------|------|------|-------|-----|--------|
+| N313.1 E.1: Revert lazy cost model | FUND | — | CrossRelNTT.lean, NTTPlan.lean | ~10 | done |
+| N313.2 E.2: Compiled TRZK binary | PAR | N313.1 | lakefile.lean, TRZKGen.lean | ~30 | done |
+| N313.3 E.3: Eliminate dead code | PAR | N313.1 | CrossEGraphBridge.lean, BreakdownBridge.lean, UltraPipeline.lean | ~-300 | done |
+| N313.4 E.4: Benchmark Rust vs Plonky3 | HOJA | N313.1 | benchmark scripts | ~0 | pending-measurement |
+| N313.5 F.1: Compiler driver → UltraPipeline | CRIT | N313.1 | Compile.lean | ~50 | done |
+| N313.6 F.2: FRI fold Path A | PAR | N313.1 | PrimitiveOptimizer.lean | ~100 | done |
+| N313.7 F.3: Horner Path A | PAR | N313.1 | PrimitiveOptimizer.lean | ~100 | done |
+| N313.8 F.4: Dot product Path A | PAR | N313.1 | PrimitiveOptimizer.lean | ~80 | done |
+| N313.9 F.5: Remove stale imports (partial — Phase23Integration still uses NTTPlanCodeGen) | HOJA | N313.6, N313.7, N313.8 | Bench.lean, MatNodeOps.lean | ~-4 | done |
+| N313.10 F.6: Verification Status README | PAR | N313.5 | README.md | ~30 | done |
+| N313.11 F.7: CI benchmark validation | PAR | N313.5 | .github/workflows/ci.yml | ~50 | done |
+| N313.12 G.1: ILP2 interleaving Goldilocks F5c | PAR | N313.1 | VerifiedPlanCodeGen.lean | ~50 | done |
+| N313.13 H.1-H.6: Two-step infrastructure | FUND | N313.1 | NTTPlan.lean, VerifiedPlanCodeGen.lean, NTTPlanSelection.lean, MatNodeOps.lean | ~43 | done |
+| N313.14 H.7-H.9: Python reference + validation (stage-split, not four-step) | CRIT | N313.13 | Tests/benchmark/ | ~85 | done |
+| N313.15 H.10-H.12: mkTwoStepPlan (shift stages) + generateCandidates | PAR | N313.13 | NTTPlanSelection.lean | ~45 | done |
+| N313.16 H.13-H.17: useShift dispatch + preambles (scope reduced from four-step) | CRIT | N313.14, N313.15 | VerifiedPlanCodeGen.lean, NTTPlanSelection.lean, CrossEGraphProtocol.lean, MatNodeOps.lean | ~25 | done |
+| N313.17 H.18-H.19: Validation + benchmark | HOJA | N313.16 | Tests/benchmark/ | ~25 | done |
 
-#### Formal Properties (3.8.0)
-
-| Nodo | Propiedad | Tipo | Prioridad |
-|------|-----------|------|-----------|
-| N38.1 | simdStmtToRust produces non-empty output for all 3 butterflies | INVARIANT | P0 |
-| N38.1 | simdStmtToRust delegates non-call Stmt to stmtToRust | EQUIVALENCE | P0 |
-| N38.1 | toRustCall wraps every intrinsic in unsafe block | INVARIANT | P0 |
-| N38.3 | emitSIMDNTTRust produces compilable Rust for BabyBear 2^14 | INVARIANT | P0 |
-| N38.4 | benchmark.py --rust-simd --validation-only PASS (end-to-end chain) | SOUNDNESS | P0 |
-| N38.5 | Rust SIMD output validates against Python NTT reference (performance run) | SOUNDNESS | P0 |
-| N38.5 | Performance within ±10% of C SIMD verified path | OPTIMIZATION | P1 |
-| N38.5 | Plonky3 monty-31 direct comparison with concrete μs numbers | OPTIMIZATION | P0 |
-
-> **Trust boundary**: Identical to v3.7.0. `evalStmt(.call) = none`. The 12 structural
-> theorems from v3.7.0 apply unchanged — the Stmt is the same, only the emitter differs.
-> Rust intrinsic semantics are trusted (ARM-specified, same as C).
-
-#### Bloques
-
-- [ ] **Bloque 0 — Rust Emitter (N38.1 + N38.2)**: Add `toRustCall` + `simdStmtToRust` to SIMDStmtToC.lean. Add Rust helpers + temp decls to SIMDEmitter.lean. Gate: `lake build` + smoke tests with butterfly → Rust string.
-- [ ] **Bloque 1 — Rust NTT Generator (N38.3)**: Create `emitStageRust` + `emitSIMDNTTRust` in SIMDEmitter.lean. Gate: generates complete Rust NTT function for BabyBear 2^14.
-- [ ] **Bloque 2 — Pipeline + Benchmark (N38.4 + N38.5)**: Wire rustSIMD flag end-to-end. N38.4 gate: `benchmark.py --rust-simd --validation-only --fields babybear --sizes 14` PASS (full chain). N38.5 gate: performance benchmark + Plonky3 direct comparison with concrete numbers.
-
-#### Bloque 0 Detail — Rust Emitter (N38.1 + N38.2)
-
-**N38.1: toRustCall + simdStmtToRust** (SIMDStmtToC.lean, ~60 líneas nuevas)
-
-Infraestructura reutilizada (0 cambios):
-- `NeonIntrinsic` inductive (line 35-64) — 21 constructors
-- `toCName` (line 68-89) — used by toRustCall internally
-- `isVoid` (line 92-94) — shared for void detection
-- `fromCName` (line 119-141) — shared for reverse lookup
-- `neonCall`/`neonCallVoid` (line 103-110) — Stmt builders unchanged
-
-Infraestructura nueva:
-```lean
-/-- Map NeonIntrinsic to Rust unsafe call expression. Same names as C (ARM NEON
-    intrinsics are identical in core::arch::aarch64), wrapped in unsafe. -/
-def NeonIntrinsic.toRustCall (intr : NeonIntrinsic) (argsStr : String) : String :=
-  s!"unsafe \{ {intr.toCName}({argsStr}) }"
-```
-
-```lean
-/-- Emit Stmt to Rust with NEON intrinsic handling.
-    Gemelo of simdStmtToC. Differences:
-    - Void: "unsafe { fname(args) };" (no result)
-    - Value: "result = unsafe { fname(args) };" (with result)
-    - Delegation: stmtToRust (not stmtToC) for non-call Stmt
-    - joinCode reused as-is -/
-def simdStmtToRust (level : Nat) : Stmt → String
-```
-
-Smoke tests: 5+ examples covering value-returning, void, addrOf, delegation, butterfly output.
-
-**N38.2: Rust helpers + temp declarations** (SIMDEmitter.lean, ~50 líneas nuevas)
-
-Infraestructura reutilizada:
-- `deinterleaveHelperC` (line 546-554) — template for Rust version
-- `interleaveStoreHelperC` (line 560-569) — template for Rust version
-- `neonTempDecls` (line 575-580) — template for Rust version
-
-Infraestructura nueva:
-```lean
-def deinterleaveHelperRust : String  -- uses .0/.1 tuple access (not .val[0])
-def interleaveStoreHelperRust : String  -- uses int32x4x2_t(a, b) tuple constructor
-def neonTempDeclsRust (numSigned numUnsigned numHalf : Nat) : String
-  -- "let mut nv0: int32x4_t; ..." (MaybeUninit::uninit().assume_init() for each)
-```
-
-Gate: `lake build SIMDEmitter` + helpers produce non-empty compilable Rust fragments.
-
-#### Bloque 1 Detail — Rust NTT Generator (N38.3)
-
-**N38.3: emitStageRust + emitSIMDNTTRust** (SIMDEmitter.lean, ~120 líneas nuevas)
-
-Infraestructura reutilizada:
-- `emitStageC` dispatch structure (line 393-460) — template for Rust dispatch
-- `emitSIMDNTTC` orchestrator (line 594-698) — template for Rust orchestrator
-- `sqdmulhButterflyStmt` / `hs2ButterflyStmt` / `hs1ButterflyStmt` — IDENTICAL Stmts
-- `simdStmtToRust` (from N38.1) — emitter
-
-Infraestructura nueva:
-```lean
-/-- Emit one NTT stage as Rust code. Dispatches by halfSize:
-    ≥4 → sqdmulhButterflyStmt via simdStmtToRust
-    =2 → hs2ButterflyStmt via simdStmtToRust
-    =1 → hs1ButterflyStmt via simdStmtToRust
-    Pointer setup: data.as_mut_ptr().add(offset) for raw ptrs. -/
-private def emitStageRust (stage : NTTStage) ... : String
-
-/-- Emit complete Rust SIMD NTT function.
-    Structure: use statement + helpers + fn sig + temp decls + const broadcasts + stages.
-    Output: unsafe fn with #[cfg(target_arch = "aarch64")]. -/
-def emitSIMDNTTRust (plan : Plan) (target : SIMDTarget) (k c mu : Nat)
-    (funcName : String) (useSqdmulh : Bool) : String
-```
-
-Key Rust-specific differences from C in emitStageRust:
-- Pointer setup: `let a_ptr = data.as_mut_ptr().add(idx);` (not `int32_t* a_ptr = &data[idx];`)
-- Const broadcast: `unsafe { vdupq_n_u32(p) }` (not `vdupq_n_u32(p)`)
-- Loop syntax: `for grp in 0..{numGroups} {` (not `for (size_t grp = 0; ...)`)
-- Variable init: `let mut nv0: int32x4_t = unsafe { vdupq_n_s32(0) };` (Rust requires init)
-
-Gate: `emitSIMDNTTRust` produces non-empty Rust for BabyBear 2^14 plan.
-
-#### Bloque 2 Detail — Pipeline + Benchmark (N38.4 + N38.5)
-
-**N38.4: Pipeline wiring** (~30 líneas across 5 files)
-
-| Archivo | Cambio | Líneas |
-|---------|--------|--------|
-| `UltraPipeline.lean:112` | Add `rustSIMD : Bool := false` to UltraConfig | +1 |
-| `UltraPipeline.lean:180` | When rustSIMD, call emitSIMDNTTRust instead of emitSIMDNTTC | +3 |
-| `OptimizedNTTPipeline.lean:437` | Add rustSIMD param to optimizedNTTC_ultra | +2 |
-| `OptimizedNTTPipeline.lean:557` | Add rustSIMD to genOptimizedBenchRust_ultra_simd | +5 |
-| `Tests/benchmark/emit_code.lean:30-55` | Add --rust-simd arg, call Rust SIMD path | +8 |
-| `Tests/benchmark/lean_driver.py:22-36` | Pass rust_simd flag to Lean | +3 |
-| `Tests/benchmark/benchmark.py:36-45` | Add --rust-simd CLI flag | +3 |
-
-Gate: `benchmark.py --rust-simd --validation-only --fields babybear --sizes 14` **PASS**.
-This requires the ENTIRE chain to be connected end-to-end:
-benchmark.py → lean_driver.py → emit_code.lean → ultraPipeline → emitSIMDNTTRust →
-.rs file → rustc → execution → numerical validation against Python NTT reference.
-`lake build` alone is NOT sufficient — the gate is runtime correctness.
-
-**N38.5: Validation + Benchmark vs Plonky3** (~1 día)
-
-1. Performance benchmark:
-   `benchmark.py --rust-simd --fields babybear --sizes 14` (full run, not --validation-only)
-2. Compare times:
-   - Rust SIMD verified (new) vs C SIMD verified (v3.7.0)
-   - Performance delta must be within ±10%
-3. **Plonky3 direct comparison** (mandatory, not optional):
-   - Build `Tests/benchmark/bench_plonky3_comparison/` with `p3-baby-bear`, `p3-ntt`, `p3-monty-31`
-   - Run `criterion` benchmark for BabyBear NTT on same N, same hardware
-   - Report: our Rust SIMD verified vs Plonky3 monty-31 real (μs + % difference)
-
-Gate: `benchmark.py --rust-simd --fields babybear --sizes 14` **PASS** (validation + performance)
-+ Plonky3 comparison report with concrete numbers.
-
----
-
-### v3.7.0 Planning Detail (Option D: Stmt.call + simdStmtToC)
-
-**Contents**: Route NEON butterflies through TrustLean.Stmt IR using Stmt.call constructor + AmoLean wrapper for void/struct intrinsics. TrustLean expanded with `LowLevelExpr.addrOf` (commit 5d42bae) for pointer emission. Includes cleanup: FRIFoldPlan Montgomery fix + reductionCost migration.
-
-**Design**: Option D — chosen after 6 adversarial debates evaluating Options A/A'/B/C/D/D'. See TRZK_filosofico.md §v3.7.0 for full analysis. Post-Block-1 audit identified `&` emission gap resolved via TrustLean expansion + decision to use Approach A (all butterflies via Stmt, including hs2).
-
-**Files**:
-- `AmoLean/Bridge/SIMDStmtToC.lean` (NEW — NeonIntrinsic ADT + simdStmtToC wrapper)
-- `AmoLean/EGraph/Verified/Bitwise/VerifiedSIMDButterfly.lean` (NEW — butterflies as Stmt)
-- `AmoLean/EGraph/Verified/Bitwise/VerifiedSIMDButterflyProofs.lean` (NEW — structural theorems)
-- `AmoLean/EGraph/Verified/Bitwise/SIMDEmitter.lean` (dispatch + NEON decls + helper)
-- `AmoLean/EGraph/Verified/Bitwise/FRIFoldPlan.lean` (C1: Montgomery fix)
-- `AmoLean/EGraph/Verified/Bitwise/CrossRelNTT.lean` (C2: reductionCost migration)
-- `AmoLean/EGraph/Verified/Bitwise/PrimitivesIntegration.lean` (C2: reductionCost migration)
-
-#### Post-Block-1 Audit Decisions (2026-04-08)
-
-1. **`&` issue resolved**: `LowLevelExpr.addrOf` added to TrustLean (commit 5d42bae). `exprToC (.addrOf v)` emits `"&" ++ varNameToC v`. TRZK dependency updated to consume this. Use `.addrOf` for deinterleaveLoad output pointer args.
-
-2. **Approach A for hs2**: ALL butterflies (sqdmulh, hs1, hs2) go through verified Stmt path. No legacy string-emission exceptions. Requires extending NeonIntrinsic ADT with ~6 constructors for 2-lane ops + `sub_s32`.
-
-3. **`sub_s32` as insurance**: Added to ADT regardless of whether unsigned-only restructuring works. Allows fallback to proven signed subtract if needed.
-
-4. **`neonTempDecls` needs `int32x2_t`**: hs2 uses 2-lane intrinsics. Add `int32x2_t nh0, nh1, ...;` declarations alongside existing `nv*` and `nu*`.
-
-5. **`voidIntrinsicNames` sync risk**: Replace string-list lookup with `fromCName : String → Option NeonIntrinsic` reverse map + `isVoid` query. Single source of truth.
-
-6. **`deinterleaveLoad` docstring**: Fix "each constructor maps to one ARM NEON intrinsic" — deinterleaveLoad maps to a custom C helper, not a hardware intrinsic.
-
-#### DAG (3.7.0)
-
-| Nodo | Tipo | Deps | Status |
-|------|------|------|--------|
-| C1 Fix FRIFoldPlan Montgomery bug | FIX | — | done |
-| C2 Migrate reductionCost callers to reductionCostForHW | CLEANUP | — | done |
-| N37.1 NeonIntrinsic ADT + simdStmtToC wrapper | FUND | — | done |
-| N37.2 Deinterleave helper function (vld2q decomposition) | FUND | — | done |
-| N37.3 NEON temp variable declarations in emitSIMDNTTC | FUND | — | done |
-| N37.4 Rewrite all NEON butterflies as Stmt.call sequences | CRIT | N37.1, N37.2, N37.3 | done |
-| N37.5 Connect verified SIMD path to emitStageC pipeline | CRIT | N37.4 | done |
-| N37.6 Structural verification theorems + trust boundary doc | CRIT | N37.5 | done |
-| N37.7 Benchmark regression check (±3% vs v3.6.0) | HOJA | N37.5 | done |
-
-#### Formal Properties (3.7.0)
+#### Formal Properties (3.13.0)
 
 | Nodo | Propiedad | Tipo | Prioridad |
 |------|-----------|------|-----------|
-| N37.4 | Butterflies produce valid Stmt sequences (all calls use NeonIntrinsic names) | INVARIANT | P0 |
-| N37.6 | sqdmulh butterfly has 17 operations (structural count) | EQUIVALENCE | P0 |
-| N37.6 | All calls in butterfly use known NEON intrinsics (exhaustive check) | INVARIANT | P0 |
-| N37.6 | Data flow pattern matches scalar butterfly (prod→reduce→sum→diff→harvey) | EQUIVALENCE | P1 |
-| C1 | FRIFoldPlan never returns Montgomery for sums | SOUNDNESS | P0 |
-
-> **Nota**: Trust boundary: `evalStmt(.call) = none`. NEON intrinsics are trusted
-> external calls, same as `stmtToC` is trusted for scalar emission.
-> Structural proofs verify the ALGORITHM is correct; intrinsic semantics are TRUSTED.
-
-#### Bloques
-
-- [x] **Bloque 0 — Cleanup (C1 + C2)**: C1 FRIFoldPlan Montgomery fix, C2 reductionCost migration. DONE.
-- [x] **Bloque 1 — Foundation (N37.1 + N37.2 + N37.3)**: NeonIntrinsic ADT, deinterleave helper, NEON temp decls. DONE. Post-audit: TrustLean expanded with `LowLevelExpr.addrOf` (commit 5d42bae). Approach A decided for hs2.
-- [ ] **Bloque 2 — Butterflies as Stmt (N37.4)**: Rewrite sqdmulh, hs1, hs2 butterflies as Stmt.call sequences. PRE-REQUISITES before butterfly rewrite: (1) extend NeonIntrinsic ADT with `sub_s32` + 2-lane ops for hs2 (`load2_s32`, `store2_s32`, `combine_s32`, `get_low_s32`, `get_high_s32`), (2) add `fromCName` reverse map replacing `voidIntrinsicNames`, (3) extend `neonTempDecls` with `int32x2_t nh*` variables, (4) use `.addrOf` for `deinterleaveLoad` output pointer args. See TRZK_filosofico.md §Post-Block-1 Audit.
-- [ ] **Bloque 3 — Pipeline Integration (N37.5)**: Add useVerifiedSIMD dispatch to emitStageC.
-- [ ] **Bloque 4 — Verification + Benchmark (N37.6 + N37.7)**: Structural theorems + regression check.
-
----
-
-## Current Version: 3.7.0 (COMPLETE)
-
-
-### Verified SIMD Codegen v3.7.0 (Option D: Stmt.call + simdStmtToC)
-
-**Contents**: Route NEON butterflies through TrustLean.Stmt IR using Stmt.call constructor + AmoLean wrapper. TrustLean expanded with `LowLevelExpr.addrOf` (commit 5d42bae). Includes cleanup: FRIFoldPlan Montgomery fix + reductionCost migration. All 9 DAG nodes done. 12 theorems, 0 sorry. Benchmark: verified path +3.9% vs legacy.
-
-**Files**:
-- `AmoLean/EGraph/Verified/Bitwise/FRIFoldPlan.lean`
-- `AmoLean/EGraph/Verified/Bitwise/CrossRelNTT.lean`
-- `AmoLean/EGraph/Verified/Bitwise/PrimitivesIntegration.lean`
-- `AmoLean/EGraph/Verified/Bitwise/CrossEGraphProtocol.lean`
-- `AmoLean/Bridge/SIMDStmtToC.lean`
-- `AmoLean/EGraph/Verified/Bitwise/SIMDEmitter.lean`
-- `AmoLean/EGraph/Verified/Bitwise/VerifiedSIMDButterfly.lean`
-- `AmoLean/EGraph/Verified/Bitwise/VerifiedSIMDButterflyProofs.lean`
-- `Tests/benchmark/`
-
-#### DAG (3.7.0)
-
-| Nodo | Tipo | Deps | Status |
-|------|------|------|--------|
-| C1 Fix FRIFoldPlan Montgomery bug | PAR | — | done |
-| C2 Migrate reductionCost callers to reductionCostForHW | PAR | — | done |
-| N37.1 NeonIntrinsic ADT + simdStmtToC wrapper | FUND | — | done |
-| N37.2 Deinterleave helper function | FUND | — | done |
-| N37.3 NEON temp variable declarations | FUND | — | done |
-| N37.4 Rewrite NEON butterflies as Stmt.call sequences | CRIT | N37.1, N37.2, N37.3 | done |
-| N37.5 Connect verified SIMD path to emitStageC | CRIT | N37.4 | done |
-| N37.6 Structural verification theorems | CRIT | N37.5 | done |
-| N37.7 Benchmark regression check | HOJA | N37.5 | done |
-
-#### Formal Properties (3.7.0)
-
-| Nodo | Propiedad | Tipo | Prioridad |
-|------|-----------|------|-----------|
-| N37.4 | Butterflies produce valid Stmt (all calls use NeonIntrinsic names) | INVARIANT | P0 |
-| N37.6 | sqdmulh butterfly has 17 operations | EQUIVALENCE | P0 |
-| C1 | FRIFoldPlan never returns Montgomery for sums | SOUNDNESS | P0 |
+| N313.1 | reductionCostForHW .lazy ≠ 0 (matches Solinas cost) | PRESERVATION | P0 |
+| N313.1 | costAwareReductionForBound never returns .lazy | PRESERVATION | P0 |
+| N313.5 | trzk --target c produces verified C via Path A | SOUNDNESS | P0 |
+| N313.6 | FRI fold Path A output numerically identical to Path B | EQUIVALENCE | P0 |
+| N313.7 | Horner Path A output numerically identical to Path B | EQUIVALENCE | P0 |
+| N313.8 | Dot product Path A output numerically identical to Path B | EQUIVALENCE | P0 |
+| N313.9 | grep "import.*UnifiedCodeGen" returns 0 active importers | PRESERVATION | P0 |
+| N313.12 | ILP2 output numerically identical to non-ILP2 | EQUIVALENCE | P0 |
+| N313.13 | useShift=false produces identical behavior to v3.12 | PRESERVATION | P0 |
+| N313.13 | nttDataIndex(offset=0,stride=1) = v3.12 nttDataIndex | PRESERVATION | P0 |
+| N313.14 | two_step_ntt == reference_dit_ntt for ALL sizes × inputs | EQUIVALENCE | P0 |
+| N313.15 | mkTwoStepPlan.wellFormed = true | SOUNDNESS | P0 |
+| N313.15 | planTotalCostWith includes twiddle matrix cost for two-step | SOUNDNESS | P0 |
+| N313.16 | lowerTwoStepNTT produces valid C (compiles + runs) | SOUNDNESS | P0 |
+| N313.16 | Two-step output numerically identical to standard NTT | EQUIVALENCE | P0 |
+| N313.17 | benchmark validation PASS + gap < 0.85x Goldilocks | OPTIMIZATION | P0 |
 
 > **Nota**: Propiedades en lenguaje natural (intención de diseño).
 > Los stubs ejecutables están en BENCHMARKS.md § Formal Properties.
 
 #### Bloques
 
-- [x] **Bloque 0 — Cleanup**: C1, C2. DONE.
-- [x] **Bloque 1 — Foundation**: N37.1, N37.2, N37.3. DONE. TrustLean expanded (addrOf). Approach A for hs2.
-- [ ] **Bloque 2 — Butterflies as Stmt**: N37.4. Pre-reqs: extend ADT + fromCName + neonTempDecls int32x2_t.
-- [ ] **Bloque 3 — Pipeline Integration**: N37.5.
-- [ ] **Bloque 4 — Verification + Benchmark**: N37.6, N37.7.
+- [x] **B1 — E.1 Cleanup Foundation (N313.1)**: FUND, secuencial. Revert lazy cost model: `reductionCostForHW .lazy` = Solinas cost (CrossRelNTT.lean:96), remove `.lazy` from candidates in `costAwareReductionForBound` (L67), restore wellFormed tests. Gate: `lake build` + existing tests PASS. **DONE 2025-04-13.**
+
+- [x] **B2 — E Infrastructure (N313.2, N313.3, N313.4)**: 3 nodos paralelos. E.2: `lake build trzk-gen` nativo. E.3: eliminados CrossEGraphBridge(22 LOC) + BreakdownBridge(146 LOC). E.4: pending-measurement. Gate: `wiring_check.py` W1+W6 PASS, trzk-gen compiles. **DONE 2025-04-13.**
+
+- [x] **B3 — F+G Path A + ILP2 (N313.5, N313.6, N313.7, N313.8, N313.12)**: F.1: Compile.lean rewritten (keyword mode + UltraPipeline). F.2-F.4: PrimitiveOptimizer.lean rewritten (Path A via lowerSolinasFold + lowerHarveyReduce). G.1: F5c ILP2 added (2 Stmt.call per iteration). Gate: `lake build` PASS. **DONE 2025-04-13.**
+
+- [x] **B4 — F Close + Docs (N313.9, N313.10, N313.11)**: F.5: stale imports removed from Bench.lean+MatNodeOps.lean (full delete deferred: Phase23Integration still uses NTTPlanCodeGen). F.6: Verification Status table added to README. F.7: benchmark-validation CI job added. **DONE 2025-04-13.**
+
+- [x] **B5 — H-pre Infrastructure (N313.13)**: FUND, secuencial. H.1: useShift in NTTStage. H.2: offset/stride/twiddleOffset. H.3: butterflyCost useShift. H.4: goldi_butterfly4_shift preamble. H.5: twiddle matrix cost. H.6: Hashable+DecidableEq MatOp. ALL backward compatible. Gate: `lake build` 3136 jobs PASS. **DONE 2025-04-13.**
+
+- [x] **B6 — H De-risk + Plan (N313.14, N313.15)**: H.7-H.9: Python validation — shift NTT == standard NTT (40/40 PASS, Goldilocks+BabyBear). Pow2 analysis: last 2 stages 100%, stage-2-before 50%. H.10-H.12: mkTwoStepPlan with useShift=true for last 4 stages + push in generateCandidates. Four-step deferred to v3.14.0 (DIT bit-reversal permutation complexity). **DONE 2025-04-13.**
+
+- [x] **B7 — H Codegen (N313.16)**: Scope reduced (stage-split, not four-step). useShift dispatch in lowerStageR4 + lowerStageVerified + lowerStageVerified_ILP2. R2 preambles goldi_butterfly_shift (C+Rust). twiddle matrix cost removed (not needed for stage-split). Import fixes (MatNodeOps, CrossEGraphProtocol). Gate: generated C compiles + output matches Python reference 100%. **DONE 2025-04-13.**
+
+- [x] **B8 — H Wire + Benchmark (N313.17)**: Validation: 3/3 PASS (N=128,256,1024 vs Python ref). Performance: shift R2 plan is 13% SLOWER than standard (popcnt branch overhead > shift savings). selectBestPlan correctly picks R4 plan. **Stage-split shift not beneficial; four-step (v3.14.0) needed for real gain. DONE 2025-04-13.**
+
+#### Orden Topológico
+
+```
+B1 → B2 → B3 → {B4, B5} → B6 → B7 → B8
+```
+
+B4 y B5 son paralelos (B4: F close + docs, B5: H-pre infra). Sin conflictos de archivo.
+B3 y B5 NO son paralelos (G.1 y H-pre ambos tocan VerifiedPlanCodeGen.lean).
+
+#### Expectations
+
+```
+                      Goldilocks (0.96x)    BabyBear (+62.8%)
+Phase E (cleanup):    sin cambio            sin cambio
+Phase F (driver+CI):  sin cambio perf       mejor tooling + confianza
+Phase G (ILP2):       ~0.80-0.86x           N/A (k≤32)
+Phase H (two-step):   ~0.65-0.75x           N/A (solo Goldilocks)
+─────────────────     ──────────────        ─────────────────
+Acumulativo:          ~0.65-0.80x           +70-85% vs Plonky3
+Neto código:          -530 LOC (más limpio, menos legacy)
+```
+
+---
+
+## Next Version: 3.16.0
+
+### Benchmark Framework C + Rust v3.16.0
+
+**Contents**: Puesta a punto del framework de benchmark y testing. NO features nuevas.
+Métricas de correctness y performance rigurosas, reproducibles, presentables.
+Detalle completo en TRZK_spiral_idea.md §3.10.
+
+**Vision**: Saber dónde estamos vs Plonky3 real. Tener Rust funcional. CI completo.
+Los números deben cumplir los 6 requisitos de reporting (§3.10 puntos 0-5).
+
+**State post-v3.15.0**: NTTs correctas (DFT estándar, 36/36 PASS). Pipeline ultra activa
+(R4 inverted, ILP2, bound-aware). Rust Goldilocks no compila (type mismatch u64→u128).
+Benchmarks comparan contra P3 naive, no Plonky3 real. "0.96x" de v3.12.0 era INVÁLIDO.
+
+**Mandatory constraints**:
+- SOLO benchmark/testing. No four-step, no SIMD, no features nuevas.
+- Scalar only (C -O2, Rust --release). SIMD → v3.17.0.
+- B2 es el ÚNICO bloque que toca codegen. Todo lo demás es infra de test aislada.
+- TODO benchmark debe cumplir los 6 requisitos de reporting (§3.10).
+
+#### DAG (3.16.0)
+
+| Nodo | Tipo | Deps | Files | LOC | Status |
+|------|------|------|-------|-----|--------|
+| N316.1 Oracle Validation (TRZK C vs Plonky3 real via FFI) | CRIT | — | Tests/benchmark/oracle_validate.py | ~130 | done |
+| N316.2 Rust type mismatch fix (17 preambles u64→u128) | CRIT | — | VerifiedPlanCodeGen.lean | ~20 | done (Goldilocks) |
+| N316.3 Benchmark vs Plonky3 real timing | PAR | — | Tests/benchmark/benchmark_plonky3.py | ~170 | done |
+| N316.4 Pipeline value benchmark (baseline vs winner) | PAR | N316.2 | Tests/benchmark/benchmark_pipeline.py | ~130 | done |
+| N316.5 Limpieza bench binary + output directory structure | PAR | — | OptimizedNTTPipeline.lean, .gitignore | ~-30 | done |
+| N316.6 CI completo (Rust + Oracle gate) | HOJA | N316.1, N316.2 | .github/workflows/ci.yml | ~10 | done |
+| N316.7 BENCHMARKS.md final report | HOJA | N316.1-N316.5 | BENCHMARKS.md | ~80 | done |
+
+#### Formal Properties (3.16.0)
+
+| Nodo | Propiedad | Tipo | Prioridad |
+|------|-----------|------|-----------|
+| N316.1 | TRZK C output == Plonky3 output element-by-element | EQUIVALENCE | P0 |
+| N316.2 | Rust Goldilocks compiles with rustc --release | SOUNDNESS | P0 |
+| N316.2 | Rust Goldilocks NTT output == Python standard DFT | EQUIVALENCE | P0 |
+| N316.3 | Performance numbers reported with 6 reporting requirements | COMPLETENESS | P0 |
+| N316.5 | Bench binary runs without internal correctness check | PRESERVATION | P0 |
+| N316.6 | CI: C + Rust scalar + Oracle all PASS | SOUNDNESS | P0 |
+
+#### Bloques
+
+- [x] **B1 — Oracle Validation (N316.1)**: CRIT. oracle_validate.py (TRZK C vs Plonky3 real via FFI ctypes). R2: 14/14 PASS (BabyBear 7/7 + Goldilocks 7/7). R4: 10/10 PASS. Total 24/24. **DONE 2026-04-14.**
+
+- [x] **B2 — Rust Type Fix (N316.2)**: CRIT. Goldilocks: 7 standard preambles → u128 return + u128 index params + internal as u64/as usize casts. bitRevPermutePreambleRust refactored with retType + indexType params. Rust correctness check conditioned (same as C). Gate: Goldilocks Rust 688.0us benchmark PASS. BabyBear Rust: separate transmute boundary issue (i32 vs u32), deferred. **DONE 2026-04-14.**
+
+- [x] **B3 — Plonky3 Real Timing (N316.3)**: PAR. benchmark_plonky3.py: TRZK C scalar vs Plonky3 Rust --release via FFI. After B4 R4-threshold fix: BabyBear **0.45x** (55% faster), Goldilocks **1.18x** (18% slower). R2 uniform at N=2^14. **DONE 2026-04-14.**
+
+- [x] **B4 — Pipeline Value (N316.4)**: PAR. Baseline R2 vs mkMixedRadixPlan R4. FINDING: R4 mixed is SLOWER at N=2^14 (BabyBear 0.61x, Goldilocks 0.68x). R4 inverted overhead > 25% butterfly savings for small N. Same pattern as v3.13.0 stage-split. R4 benefit expected at larger N where cache effects dominate. **DONE 2026-04-14.**
+
+- [x] **B5 — Limpieza (N316.5)**: PAR. Correctness check interno ELIMINADO (C + Rust, ~30 LOC removed). output/latest/ + output/history/ creados. .gitignore updated. Bench binary limpio: BabyBear 369us, Goldilocks 842us sin MISMATCH/PARSE ERROR. **DONE 2026-04-14.**
+
+- [x] **B6 — CI + Report (N316.6 + N316.7)**: HOJA. CI: C scalar + Oracle validation (Plonky3 FFI). BENCHMARKS.md rewritten with 6 reporting requirements. BabyBear **0.45x** (55% faster), Goldilocks **1.18x** (18% slower). **DONE 2026-04-14.**
+
+#### Orden Topológico
+
+```
+{B1, B2, B3, B5} (paralelos) → B4 (dep B2) → B6
+```
+
+---
+
+## Completed: v3.15.0
+
+### DFT Standard Migration + Plonky3 Match v3.15.0
+
+**Contents**: Migrate from non-standard ref_dit transform (DIT large→small) to standard DFT
+(bitrev input + DIT small→large). Create parallel `emitCFromPlanStandard` pipeline.
+100% element-by-element match against Plonky3 real. Detalle completo en TRZK_spiral_idea.md §3.9.
+
+**Vision**: `.reverse` on stage ordering + bitrev preamble = DFT standard, with 0 changes to
+butterflies, twiddle tables, or lowerStageVerified. ~163 LOC across 4 axes.
+
+**State post-v3.14.0**: Cost model (branchCheck, staticShift, pow2Fraction), feedback loop
+functional, four-step NTT (1024/1024 PASS vs naive DFT), DIF preambles, MatOp e-graph wired.
+CRITICAL FINDING: ref_dit ≠ DFT (different transform, not permutation). ntt_skeleton.c matches
+Plonky3 (64/64 PASS). emitCFromPlanVerified does NOT match Plonky3.
+
+**Dead ends (DO NOT REPEAT)**:
+- R4 with `.reverse`: FAIL (4/4 numéricamente). R4 stages cover 2 levels, inverting order breaks.
+- DIF butterfly (Opción 3): requires rewriting entire reduction chain + SIMD + R4. ~200 LOC.
+- Stage-split shift: +13% overhead (v3.13.0). Runtime popcnt branch > shift savings.
+- Matching ref_dit with four-step: impossible (ref_dit ≠ DFT).
+
+**Verified numerical results (DO NOT re-investigate)**:
+1. bitrev(input) + DIT stages .reverse = DFT (7/7 PASS, Goldilocks+BabyBear)
+2. Existing twiddle table (_init_twiddles_real) works WITHOUT changes with .reverse (3/3 PASS)
+3. ntt_skeleton.c = bitrev + small→large DIT = DFT (64/64 match Plonky3)
+
+**Mandatory constraints**:
+- R2 only (no R4). Scalar only (no SIMD). useStandardDFT only on scalar path.
+- Legacy pipeline (emitCFromPlanVerified) NOT modified.
+- lowerStageVerified, nttTwiddleIndex, butterflies NOT modified.
+- Codegen validation gate per CLAUDE.md: benchmark.py --validation-only --use-standard.
+
+#### DAG (3.15.0)
+
+| Nodo | Tipo | Deps | Files | LOC | Status |
+|------|------|------|-------|-----|--------|
+| N315.1 B.1+B.2: Python reference_standard_ntt + naive DFT validation | FUND | — | reference_ntt.py | ~25 | done |
+| N315.2 A.1: Preamble bit_reverse_permute C+Rust | FUND | — | VerifiedPlanCodeGen.lean | ~25 | done |
+| N315.3 A.3: lowerNTTFromPlanStandard (.reverse) | CRIT | N315.2 | VerifiedPlanCodeGen.lean | ~15 | done |
+| N315.4 A.4: emitCFromPlanStandard + emitRustFromPlanStandard | PAR | N315.3 | VerifiedPlanCodeGen.lean | ~30 | done |
+| N315.5 A.5: useStandardDFT dispatch + emit_code flag | PAR | N315.4 | UltraPipeline, OptimizedNTTPipeline, emit_code | ~15 | done |
+| N315.6 B.3: Benchmark harness --use-standard | PAR | N315.1, N315.5 | benchmark.py, validator.py, lean_driver.py, Bench.lean | ~28 | done |
+| N315.7 B.4+B.5: Validation gate vs Python + Plonky3 oracle | GATE | N315.5, N315.6 | Tests/benchmark/ | ~0 | done |
+| N315.10 R4 inverted butterfly for standard DFT | CRIT | N315.3 | VerifiedPlanCodeGen.lean | ~20 | done |
+| N315.11 R4 inverted preambles C+Rust (goldi_butterfly4_inverted) | PAR | N315.10 | VerifiedPlanCodeGen.lean | ~30 | done |
+| N315.12 emitCFromPlanStandard R4 support (decls+preambles+guard) | PAR | N315.11 | VerifiedPlanCodeGen.lean | ~20 | done |
+| N315.13 emitRustFromPlanStandard R4 support (mirror) | PAR | N315.11 | VerifiedPlanCodeGen.lean | ~25 | done |
+| N315.14 ultraPipeline: use competition winner (R2∨R4 DIT, no lazy) | PAR | N315.12 | UltraPipeline.lean | ~10 | done |
+| N315.15 Python R4 standard validation (reference + naive DFT) | FUND | — | reference_ntt.py | ~30 | done |
+| N315.16 Validation gate R4 standard vs Python (BabyBear+Goldilocks) | GATE | N315.14, N315.15 | Tests/benchmark/ | ~0 | done |
+| N315.17 Fix P3 twiddle dispatch in optimizedNTTC_ultra | CRIT | N315.7 | OptimizedNTTPipeline.lean | ~15 | done |
+| N315.18 Flip useStandardDFT := true (cutover) | HOJA | N315.17, N315.16 | UltraPipeline.lean | ~1 | done |
+| N315.19 Verify legacy fallback (useStandardDFT=false) | GATE | N315.18 | Tests/benchmark/ | ~0 | done |
+| N315.8 D.1: Four-step wiring useStandardDFT=true | PAR | N315.5 | UltraPipeline, VerifiedPlanCodeGen | ~80 | **DEFERRED → v3.16.0** |
+
+#### Formal Properties (3.15.0)
+
+| Nodo | Propiedad | Tipo | Prioridad |
+|------|-----------|------|-----------|
+| N315.1 | reference_standard_ntt == naive_dft for all 8 sizes | EQUIVALENCE | P0 |
+| N315.3 | lowerNTTFromPlanStandard compiles and produces valid Stmt | SOUNDNESS | P0 |
+| N315.4 | emitCFromPlanStandard output C compiles with gcc/clang | SOUNDNESS | P0 |
+| N315.5 | useStandardDFT=false → output identical to v3.14.0 | PRESERVATION | P0 |
+| N315.7 | Generated C vs Python standard: 0 mismatches | EQUIVALENCE | P0 |
+| N315.7 | Generated C vs Plonky3 oracle: 0 mismatches | EQUIVALENCE | P0 |
+| N315.10 | R4 inverted butterfly matches 2×R2 reversed (numerical) | EQUIVALENCE | P0 |
+| N315.15 | Python R4 standard NTT == naive DFT for R4 plans | EQUIVALENCE | P0 |
+| N315.16 | Generated C (R4 plan) vs Python standard: 0 mismatches | EQUIVALENCE | P0 |
+| N315.14 | Competition winner with R4 → same perf as legacy R4 | PRESERVATION | P0 |
+| N315.17 | P3 twiddle fix: Goldilocks benchmark correctness check PASS | EQUIVALENCE | P0 |
+| N315.18 | Post-cutover: default useStandardDFT=true produces DFT | SOUNDNESS | P0 |
+| N315.19 | Legacy fallback: useStandardDFT=false → output identical to v3.14.0 | PRESERVATION | P0 |
+| N315.8 | Four-step with useStandardDFT=true inner NTT = DFT | SOUNDNESS | **DEFERRED → v3.16.0** |
+
+#### Bloques
+
+- [x] **B1 — Foundations (N315.1 + N315.2)**: 2 FUND parallel. Python reference_standard_ntt (bitrev+small→large) + validate vs naive DFT (16/16 PASS: BabyBear+Goldilocks, N=8..1024). Lean bit_reverse_permute preamble C+Rust (returns dummy 0 for Stmt.call compat). Gate: Python 16/16 PASS + lake build 3136 jobs PASS. **DONE 2026-04-14.**
+
+- [x] **B2 — Lean Pipeline + Dispatch (N315.3 + N315.4 + N315.5)**: 3 nodos secuenciales. lowerNTTFromPlanStandard = bitrev Stmt.call(.user "group") + .reverse. emitCFromPlanStandard/Rust with R2 DIT preambles + bitrev. useStandardDFT flag in UltraConfig + dispatch in ultraPipeline (R2-only mkUniformPlan + ILP2 for Goldilocks) + thread through OptimizedNTTPipeline + emit_code --use-standard. Gate: lake build 3136 jobs PASS. **DONE 2026-04-14.**
+
+- [x] **B3 — Harness + Validation Gate (N315.6 + N315.7)**: --use-standard in harness chain (benchmark.py, validator.py, lean_driver.py, Bench.lean, emit_standard.lean). CRITICAL FINDING: Goldilocks butterfly uses goldi_reduce128 (PZT mod p, NOT Montgomery REDC) → Montgomery twiddles add extra R factor → must pass STANDARD twiddles for Goldilocks. BabyBear uses REDC (R cancels). GATE: 14/14 PASS (BabyBear 7/7 + Goldilocks 7/7, N=8..1024). **DONE 2026-04-14.**
+
+- [x] **B3.5 — R4 Inverted Butterfly + Ultra Competition (N315.10-N315.16)**: CRIT. Habilita R4 y mixed-radix plans en el standard DFT path. Causa raíz del gap R4+.reverse: intra-block level order hardcodeado (inner=L, outer=L+1) pero standard DFT necesita (inner=L+1, outer=L). Fix: nuevo `lowerRadix4ButterflyByReduction_Inverted` que swapea inner/outer + preamble `goldi_butterfly4_inverted`. `emitCFromPlanStandard` + `emitRustFromPlanStandard` extendidos con R4 decls+preambles. `ultraPipeline` dispatch usa competition winner si es R2∨R4 DIT sin lazy (guard contra bounds chain). Python validation R4 PRIMERO (per workflow). Gate: R4 standard 14/14 PASS + performance ≥ legacy R4. ~141 LOC total, 0 cambios a legacy path.
+
+- [x] **B5 — Cutover (N315.17 + N315.18 + N315.19)**: Fix P3 twiddle dispatch en optimizedNTTC_ultra (nttCall pasa tw en vez de tw_mont para Goldilocks cuando useStandardDFT=true, ~5 LOC, pattern de emit_standard.lean L50-70). Mismo fix para Rust path. Flip useStandardDFT := true (1 LOC). Verify legacy fallback. Gate: Bench.lean --field goldilocks sin MISMATCH + benchmark.py --validation-only sin --use-standard (now default) PASS + legacy fallback PASS. ~20 LOC total.
+
+- **B4 — Four-step Wiring (N315.8)**: **DEFERRED → v3.16.0**. Complejidad real ~60-80 LOC (vs ~20 estimados en §3.9). Gaps: (1) twiddle table layout 3 regiones separadas vs flat ~30 LOC ALTO riesgo, (2) preamble DIF faltante ~10 LOC, (3) stack overflow Phase 6 `uint64_t tmp_unstride[N]` ~5 LOC, (4) Goldilocks only, (5) m selection. B3.5 ya cerró el gap de performance con R4 inverted — four-step es optimización adicional para N≥2^14.
+
+#### Orden Topológico
+
+```
+B1 → B2 → B3 → B3.5 → B5 → SHIP v3.15.0
+```
+
+#### Expectations
+
+```
+                      Goldilocks (0.96x)
+Eje A (migration):    ~0.96x (R4 inverted + competition winner)
+Eje B (validation):   output matches Plonky3 real (DFT standard)
+Eje D (four-step):    DEFERRED v3.16.0 (~0.85x target)
+─────────────────     ──────────────
+Post-v3.15.0:         ~0.85x vs Plonky3 scalar, outputs IDENTICAL
+```
+
+---
+
+## Completed: v3.14.0 — Cost Model Feedback + Four-Step NTT + MatOp E-Graph
+
+**3 Ejes, ~516 LOC, 8-11 días.** Detalle completo en TRZK_spiral_idea.md §3.8.
+
+**State post-v3.13.0**: Infraestructura two-step lista. Stage-split shift +13% slower
+(popcnt branch overhead). selectBestPlan correctly picks R4 over two-step R2.
+Four-step decomposition needed for real gain (~100% pow2 inner, no runtime check).
+
+#### DAG (3.14.0)
+
+| Nodo | Tipo | Deps | LOC | Status |
+|------|------|------|-----|--------|
+| N314.1 M.1+M.3: branchCheck + staticShift in butterflyCost | FUND | — | ~15 | done |
+| N314.2 M.2: pow2Fraction per stage | PAR | N314.1 | ~15 | done |
+| N314.3 M.3: staticShift for four-step | PAR | N314.1 | ~5 | done (combined with M.1) |
+| N314.4 M.4: Calibration script | HOJA | — | ~20 | done |
+| N314.5 M.5: feedback_loop.py (3-layer) + cost predictions in report | CRIT | N314.1,2 | ~60 | done |
+| N314.6 Eje 2a: Python four-step verification | FUND | — | ~70 | done |
+| N314.7 DIF butterfly preambles C+Rust | PAR | N314.6 | ~46 | done |
+| N314.8 lowerStageDIF dispatch | PAR | N314.7 | ~15 | done |
+| N314.9 emitFourStepC (col_DIF + bitrev + twiddle + row_DIF + bitrev) | CRIT | N314.8,6 | ~85 | done |
+| N314.10 mkFourStepPlan + twiddle tables | PAR | N314.3,6 | ~50 | pending |
+| N314.11 Four-step validation + benchmark | HOJA | N314.9,10 | ~30 | pending |
+| N314.12 Eje 3a: NodeOps MatOp instance + laws | FUND | — | ~45 | done |
+| N314.13 Eje 3b: MatExprFlat + Extractable + bridge | PAR | N314.12 | ~30 | done |
+| N314.14 Eje 3c: applyBreakdownInEGraph | CRIT | N314.13 | ~40 | done |
+| N314.15 Eje 3d: UltraPipeline wiring | HOJA | N314.14,9 | ~35 | done |
+
+#### Bloques
+
+- [x] **B1 — Cost Model Foundation (N314.1+M.3)**: FUND. branchCheck + staticShift. Runtime shift now costs MORE than standard (14 vs 12 R2), matching v3.13.0 measurement. Static shift costs LESS (9, for future four-step). **DONE 2025-04-13.**
+- [x] **B2 — Cost Model Extensions (N314.2, N314.3, N314.4)**: M.2: pow2Fraction field + empirical assignment in mkTwoStepPlan. M.3: done in B1. M.4: calibrate_hw.py — measured mul=1.4c shift=1.6c add=1.4c branch=2.5c (latency vs throughput delta explainable). **DONE 2025-04-13.**
+- [x] **B3 — Feedback Loop (N314.5)**: CRIT. Cost predictions added to UltraPipeline report. feedback_loop.py extracts + ranks all candidates. Goldilocks 11 candidates, R4 wins (65280), two-step penalized (96256). BabyBear 10 candidates (no two-step). **DONE 2025-04-13.**
+- [x] **B4 — Four-step Python verification (N314.6)**: FUND. Both variants verified 6/6 PASS for Goldilocks. (1) Naive four-step: col_DFTs→tw→row_DFTs→unstride=DFT. (2) **DIF+bitrev pipeline (Opción B corrected)**: col_DIF→col_bitrev→tw(ω^(r·c))→row_DIF→row_bitrev→unstride=DFT. Row DIF uses ω_m=ω_64=8 → 100% pow2 → shifts! Overhead: 2 bitrev passes O(N) + 1 twiddle + 1 unstride. Bug was: rows-first order is WRONG (twiddle depends on original col index lost after row DFT); correct order is cols-first. **DONE 2025-04-13.**
+- [x] **B5 — DIF preambles + dispatch (N314.7, N314.8)**: R2+R4 DIF shift preambles (C+Rust, ~46 LOC). 3-point dispatch (direction × useShift) in lowerStageR4, lowerStageVerified, lowerStageVerified_ILP2. **DONE 2025-04-13.**
+- [x] **B6 — Four-step codegen (N314.9)**: CRIT. `emitFourStepC`: 6-phase C generator (col_DIF + col_bitrev + twiddle + row_DIF + row_bitrev + unstride). N=1024: 1024/1024 match naive DFT. **KEY FINDING**: ref_dit ≠ DFT (different transform, not permutation). Four-step computes DFT, pipeline uses ref_dit → incompatible. Integration deferred to v3.15.0 (pipeline migration to DFT standard). **DONE 2025-04-13.**
+- [ ] **B7 — Four-step plan + validation (N314.10, N314.11)**: HOJA. mkFourStepPlan + benchmark gap < 0.85x.
+- [x] **B8 — NodeOps MatOp (N314.12)**: FUND. mapChildren/replaceChildren/localCost + 4 laws (all by cases+simp). EGraph MatOp smoke test: 3 classes, children correct. No import cycle. **DONE 2025-04-13.**
+- [x] **B9 — MatExprFlat + Extractable (N314.13)**: MatExprFlat (7 ctors) + matReconstruct + Extractable instance + matExprFlatToTree bridge. Smoke: EGraph(5 classes) → extractAuto → MatExprFlat → FactorizationTree(5 nodes). **DONE 2025-04-13.**
+- [x] **B10 — applyBreakdownInEGraph (N314.14)**: CRIT. Injects BreakdownRule.decompose into EGraph MatOp: remaps indices → EClassIds, merges root with NTT class. DFT(8) + CT(2,4) + CT(4,2) → 19 classes. Extraction works (returns cheapest). **DONE 2025-04-13.**
+- [x] **B11 — UltraPipeline wiring (N314.15)**: HOJA. MatOp e-graph wired in ultraPipeline: NTT node → applyAllBreakdowns(standardRules) → computeCosts → extract → factorizationToPlan → push to allCandidates. R4 wins (expected — e-graph plan incompatible with ref_dit until v3.15.0). **DONE 2025-04-13.**
+
+#### Orden Topológico
+
+```
+{B1, B4, B8} (parallel — independent foundations)
+  → {B2, B3} + {B5, B9}
+  → B6 + B10
+  → {B7, B11}
+```
+
+#### Expectations
+
+```
+                      Goldilocks (0.96x)
+Cost model (Eje 1):  sin cambio perf (mejor predicción)
+Feedback (Eje 1b):   sin cambio perf (detecta divergencias)
+Four-step (Eje 2):   ~0.85x (12% savings, conservador)
+MatOp e-graph (3):   sin cambio perf (infra, descubre factorizaciones)
+─────────────────     ──────────────
+Post-v3.14.0:         ~0.75-0.85x vs Plonky3 scalar
+```
+
+---
+
+## Completed: v3.12.0 — F5c Butterfly + Discovery Wiring (Phase A+B)
+
+F5c butterfly Stmt.call resolved Goldilocks emission bottleneck (gap 1.28x→0.96x).
+Discovery wired via selectBestPlanExplored. NTT trick reverted (hurts without two-step).
+Lazy reduction confirmed dead end (storeTrunc corrupts, kills F5c). Phase C+D abandoned.
+
+## Completed: v3.11.0 — Bound-aware Codegen + NTTStrategy (BF1+BF4)
+
+BF1: boundK param in lowerDIFButterflyByReduction, dispatch by bounds. DONE.
+BF4: twoStepGoldilocks added to NTTStrategy. DONE.
+BF2+BF3 (conditionalSub + Stark252): deferred to future version.
+
+---
+
+## Current Version: 3.10.1 (COMPLETE)
+
+
+### Phase A: Emission optimization + cache fixes
+
+**Contents**: F5c butterfly Stmt.call closes loop overhead gap. CacheConfig fix + level-aware model improve plan accuracy. Benchmark Rust vs Plonky3.
+
+**Files**:
+- `AmoLean/EGraph/Verified/Bitwise/NTTPlanSelection.lean`
+- `AmoLean/EGraph/Verified/Bitwise/VerifiedPlanCodeGen.lean`
+
+#### DAG (3.12.0)
+
+| Nodo | Tipo | Deps | Status |
+|------|------|------|--------|
+| N312.1 A.2: CacheConfig fix (l1DataSize, elementSize, l2MissCycles) | HOJA | — | pending |
+| N312.2 A.4: Cache model level-aware with data-reuse | PAR | N312.1 | pending |
+| N312.3 A.1: F5c butterfly Stmt.call + loop uint64_t | CRIT | — | pending |
+| N312.4 A.5: Benchmark Rust vs Plonky3 Rust | HOJA | N312.3 | pending |
+
+#### Formal Properties (3.12.0)
+
+| Nodo | Propiedad | Tipo | Prioridad |
+|------|-----------|------|-----------|
+| N312.1 | CacheConfig l1DataSize=131072 for Apple M-series | PRESERVATION | P0 |
+| N312.2 | planCacheCost(R4_plan) < planCacheCost(R2_plan) for N>2^14 | OPTIMIZATION | P1 |
+| N312.3 | goldi_butterfly emits uint64_t-only function body | SOUNDNESS | P0 |
+| N312.3 | F5c output numerically identical to non-F5c for same input | EQUIVALENCE | P0 |
+
+> **Nota**: Propiedades en lenguaje natural (intención de diseño).
+> Los stubs ejecutables están en BENCHMARKS.md § Formal Properties.
+
+#### Bloques
+
+- [ ] **Emission + Cache**: N312.1, N312.2, N312.3, N312.4
+
+### Phase B: Discovery wiring via selectBestPlanExplored
+
+**Contents**: Connect existing Discovery pipeline to plan competition. selectBestPlanExplored already does oracle→explore→Plan with theorems for 3 fields. Just push as candidate.
+
+**Files**:
+- `AmoLean/EGraph/Verified/Bitwise/UltraPipeline.lean`
+
+#### DAG (3.12.0)
+
+| Nodo | Tipo | Deps | Status |
+|------|------|------|--------|
+| N312.5 B.1: selectBestPlanExplored as plan candidate | PAR | N312.2 | pending |
+
+#### Formal Properties (3.12.0)
+
+| Nodo | Propiedad | Tipo | Prioridad |
+|------|-----------|------|-----------|
+| N312.5 | Discovery plan competes in selectPlanWith with full cost model | SOUNDNESS | P0 |
+
+> **Nota**: Propiedades en lenguaje natural (intención de diseño).
+> Los stubs ejecutables están en BENCHMARKS.md § Formal Properties.
+
+#### Bloques
+
+- [ ] **Discovery wiring**: N312.5
+
+### Phase C: NTT trick runtime branch
+
+**Contents**: Exploit Goldilocks omega_64=8: twiddles that are powers-of-2 use shift instead of multiply. Runtime popcnt branch in goldi_butterfly.
+
+**Files**:
+- `AmoLean/EGraph/Verified/Bitwise/VerifiedPlanCodeGen.lean`
+
+#### DAG (3.12.0)
+
+| Nodo | Tipo | Deps | Status |
+|------|------|------|--------|
+| N312.6 C.1: NTT trick runtime popcnt branch | PAR | N312.3 | pending |
+
+#### Bloques
+
+- [ ] **NTT trick**: N312.6
+
+### Phase D: Lazy reduction REAL + prefetch
+
+**Contents**: Fix lazy's 3-layer fiction: safety gate u128, cost model lazy=0, codegen skip reduction. Add software prefetch for early stages.
+
+**Files**:
+- `AmoLean/EGraph/Verified/Bitwise/BoundPropagation.lean`
+- `AmoLean/EGraph/Verified/Bitwise/CrossRelNTT.lean`
+- `AmoLean/EGraph/Verified/Bitwise/VerifiedPlanCodeGen.lean`
+- `AmoLean/EGraph/Verified/Bitwise/NTTPlan.lean`
+- `AmoLean/EGraph/Verified/Bitwise/BoundIntegration.lean`
+- `AmoLean/EGraph/Verified/Bitwise/Discovery/MatPlanExtraction.lean`
+
+#### DAG (3.12.0)
+
+| Nodo | Tipo | Deps | Status |
+|------|------|------|--------|
+| N312.7 D.1: lazyReductionSafe parametrize wordBits | FUND | — | pending |
+| N312.8 D.2+D.3: Cost model lazy=0 + codegen skip reduction | CRIT | N312.7 | pending |
+| N312.9 D.4: wordBits propagation to callers | PAR | N312.7 | pending |
+| N312.10 D.5: Proofs for lazy passthrough | HOJA | N312.8 | pending |
+| N312.11 D.6: Software prefetch for early stages | HOJA | — | pending |
+
+#### Formal Properties (3.12.0)
+
+| Nodo | Propiedad | Tipo | Prioridad |
+|------|-----------|------|-----------|
+| N312.7 | lazyReductionSafe(1, goldiP, 128) = true | SOUNDNESS | P0 |
+| N312.8 | lowerReductionChoice .lazy emits passthrough (no Solinas fold) | EQUIVALENCE | P0 |
+| N312.8 | reductionCostForHW .lazy = 0 (not Solinas cost) | OPTIMIZATION | P0 |
+
+> **Nota**: Propiedades en lenguaje natural (intención de diseño).
+> Los stubs ejecutables están en BENCHMARKS.md § Formal Properties.
+
+#### Bloques
+
+- [ ] **Lazy + Prefetch**: N312.7, N312.8, N312.9, N312.10, N312.11
 
 ---
 

@@ -1,4 +1,4 @@
-"""Field definitions for AMO-Lean NTT benchmark harness.
+"""Field definitions for TRZK NTT benchmark harness.
 
 Constants match OptimizedNTTPipeline.lean:89-120 and Bench.lean:60-88.
 """
@@ -50,8 +50,8 @@ GOLDILOCKS = FieldDef(
     name="goldilocks", display="Goldilocks",
     p=18446744069414584321, c=4294967295, k=64, generator=7,
     mu=0, R=2**64,
-    elem_c="int64_t", wide_c="__int128",
-    elem_rs="u64", wide_rs="i128",
+    elem_c="uint64_t", wide_c="__uint128_t",
+    elem_rs="u64", wide_rs="u128",
 )
 
 ALL_FIELDS = {f.name: f for f in [BABYBEAR, KOALABEAR, MERSENNE31, GOLDILOCKS]}

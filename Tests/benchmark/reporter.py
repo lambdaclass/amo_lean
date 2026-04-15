@@ -44,7 +44,7 @@ def generate_report(
 
     # Markdown
     lines = [
-        f"# AMO-Lean NTT Benchmark Report",
+        f"# TRZK NTT Benchmark Report",
         f"**Date:** {now}",
         f"**Platform:** {arch}",
         "",
@@ -54,7 +54,7 @@ def generate_report(
         "|--------|-------------|",
         "| **Lang** | Output language: `c` = compiled C, `rust` = compiled Rust |",
         "| **HW** | Hardware target: `arm-scalar` = no SIMD, `arm-neon` = ARM NEON 4-lane SIMD |",
-        "| **AMO** | AMO-Lean Ultra pipeline: verified codegen with e-graph optimization |",
+        "| **AMO** | TRZK Ultra pipeline: verified codegen with e-graph optimization |",
         "| **P3 naive** | Scalar reference using naive `% p` modular reduction (NOT actual Plonky3) |",
         "| **P3 real** | Actual Plonky3 library via FFI (when available) |",
         "| **vs P3 naive** | `(P3_naive - AMO) / P3_naive × 100%` — positive = AMO faster |",

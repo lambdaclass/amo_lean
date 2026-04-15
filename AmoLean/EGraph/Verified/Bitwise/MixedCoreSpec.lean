@@ -51,6 +51,7 @@ instance mixedHashable : Hashable MixedNodeOp where
     | .montyReduce a p mu => mixHash 21 (mixHash (mixHash (hash a) (hash p)) (hash mu))
     | .barrettReduce a p m => mixHash 22 (mixHash (mixHash (hash a) (hash p)) (hash m))
     | .harveyReduce a p => mixHash 23 (mixHash (hash a) (hash p))
+    | .conditionalSub a p => mixHash 25 (mixHash (hash a) (hash p))
 
 /-- BEq for MixedNodeOp comes from DecidableEq and is lawful. -/
 instance mixedLawfulBEq : LawfulBEq MixedNodeOp where

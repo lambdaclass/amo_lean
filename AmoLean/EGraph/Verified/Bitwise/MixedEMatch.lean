@@ -47,6 +47,7 @@ instance : Hashable MixedNodeOp where
     | .montyReduce a p mu => mixHash 21 (mixHash (mixHash (hash a) (hash p)) (hash mu))
     | .barrettReduce a p m => mixHash 22 (mixHash (mixHash (hash a) (hash p)) (hash m))
     | .harveyReduce a p => mixHash 23 (mixHash (hash a) (hash p))
+    | .conditionalSub a p => mixHash 25 (mixHash (hash a) (hash p))
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 1: Pattern and Substitution
@@ -196,6 +197,33 @@ structure RewriteRule (Op : Type) [BEq Op] [Hashable Op] where
   lhs : Pattern Op
   rhs : Pattern Op
   sideCondCheck : Option (EGraph Op → Substitution → Bool) := none
+
+-- ══════════════════════════════════════════════════════════════════
+-- Section 5b: ModularRewriteRule — rewrite valid only mod p (v3.9.0 N39.6)
+-- ══════════════════════════════════════════════════════════════════
+
+/-- A rewrite rule valid only modulo a prime p (not in Nat).
+    Example: Karatsuba identity φ²=φ-1 where φ=2^32, valid mod p=2^64-2^32+1.
+    The RHS is automatically wrapped in reduceGate(rhs, p) during application,
+    ensuring the result is reduced to [0, p). Uses Nat with % p equality,
+    not ZMod (avoids Mathlib dependency, simpler API). -/
+structure ModularRewriteRule (Op : Type) [BEq Op] [Hashable Op] where
+  name : String
+  prime : Nat
+  lhs : Pattern Op
+  rhs : Pattern Op
+  sideCondCheck : Option (EGraph Op → Substitution → Bool) := none
+
+/-- Convert a ModularRewriteRule to a standard RewriteRule by wrapping
+    the RHS in reduceGate(rhs, p). This ensures the rewrite produces
+    values in [0, p) even though the identity only holds mod p. -/
+def ModularRewriteRule.toRewriteRule [BEq Op] [Hashable Op]
+    (mr : ModularRewriteRule Op) (wrapRHS : Pattern Op → Nat → Pattern Op) :
+    RewriteRule Op :=
+  { name := mr.name
+    lhs := mr.lhs
+    rhs := wrapRHS mr.rhs mr.prime
+    sideCondCheck := mr.sideCondCheck }
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 6: Smoke tests — non-vacuity

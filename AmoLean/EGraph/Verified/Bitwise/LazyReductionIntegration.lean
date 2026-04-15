@@ -87,6 +87,7 @@ def propagateBounds (op : MixedNodeOp) (bg : BoundedEGraph) : Nat :=
   | .montyReduce _ p _   => if p > 0 then p - 1 else 0
   | .barrettReduce _ p _ => if p > 0 then p - 1 else 0
   | .harveyReduce _ p    => if p > 0 then p - 1 else 0
+  | .conditionalSub _ p  => if p > 0 then p - 1 else 0
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 3: shouldInsertReduce — decide when reduction is mandatory

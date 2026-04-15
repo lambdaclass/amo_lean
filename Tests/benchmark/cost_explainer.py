@@ -8,7 +8,7 @@ def extract_ultra_report(source: str) -> str:
     """Extract the Ultra report from the C/Rust source header comment.
 
     The generated code starts with a block comment containing the report:
-    /* AMO-Lean Ultra NTT Benchmark
+    /* TRZK Ultra NTT Benchmark
      * Field: BabyBear (p = 2013265921)
      * Pipeline: Ultra (Ruler + bounds + colored + verified codegen)
      *    === Truth Ultra Report ===
