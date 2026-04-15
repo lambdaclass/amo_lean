@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AMO-Lean NTT Benchmark Harness.
+"""TRZK NTT Benchmark Harness.
 
 Validates correctness BEFORE measuring performance.
 Independent Python NTT reference for cross-validation.
@@ -24,7 +24,7 @@ from reporter import generate_report
 
 
 def main():
-    parser = argparse.ArgumentParser(description="AMO-Lean NTT Benchmark Harness")
+    parser = argparse.ArgumentParser(description="TRZK NTT Benchmark Harness")
     parser.add_argument("--fields", default="babybear,koalabear,mersenne31",
                         help="Comma-separated fields or 'all'")
     parser.add_argument("--sizes", default="14,16",
@@ -72,7 +72,7 @@ def main():
     langs = [l.strip() for l in args.langs.split(",")]
     hardware = args.hardware
 
-    print(f"AMO-Lean NTT Benchmark Harness")
+    print(f"TRZK NTT Benchmark Harness")
     print(f"  Fields:   {fields}")
     print(f"  Sizes:    {['2^'+str(s) for s in sizes]}")
     print(f"  Langs:    {langs}")
@@ -87,7 +87,7 @@ def main():
     benchmarks = []
     explanations = []
 
-    with tempfile.TemporaryDirectory(prefix="amobench_") as tmpdir:
+    with tempfile.TemporaryDirectory(prefix="trzk_bench_") as tmpdir:
         work_dir = Path(tmpdir)
 
         for field_name in fields:

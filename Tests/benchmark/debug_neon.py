@@ -33,7 +33,7 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 def generate_c_code(field_name: str, logn: int, hardware: str) -> str:
     """Generate C code from Lean for the given field and hardware.
 
-    Bench.lean writes C to /tmp/amobench.c. We run it and read the file.
+    Bench.lean writes C to /tmp/trzk_bench.c. We run it and read the file.
     """
     cmd = [
         "lake", "env", "lean", "--run", "Bench.lean", "--",
@@ -44,13 +44,13 @@ def generate_c_code(field_name: str, logn: int, hardware: str) -> str:
         "--lang", "c",
         "--primitive", "ntt",
     ]
-    # Bench.lean writes C to /tmp/amobench.c, then tries to compile+run.
+    # Bench.lean writes C to /tmp/trzk_bench.c, then tries to compile+run.
     # We only care about the C file — ignore compile/run errors (NEON may
     # not compile on this host, and that's fine).
     result = subprocess.run(cmd, cwd=PROJECT_ROOT, capture_output=True, text=True,
                             timeout=300)
     # Read the generated C file regardless of exit code
-    c_path = "/tmp/amobench.c"
+    c_path = "/tmp/trzk_bench.c"
     if not os.path.exists(c_path):
         print(f"ERROR: {c_path} not generated (Lean exit={result.returncode})",
               file=sys.stderr)

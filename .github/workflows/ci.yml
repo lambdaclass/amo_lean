@@ -236,7 +236,7 @@ jobs:
         ./generated/verify_assembly.sh
 
   benchmark-validation:
-    name: Benchmark Validation (v3.13.0 F.7)
+    name: Benchmark Validation (v3.16.0)
     runs-on: ubuntu-latest
     needs: build
 
@@ -260,17 +260,26 @@ jobs:
           ${{ runner.os }}-lake-
 
     - name: Install dependencies
-      run: sudo apt-get update && sudo apt-get install -y clang python3
+      run: |
+        sudo apt-get update && sudo apt-get install -y clang python3 rustc cargo
 
     - name: Build bench executable
       run: lake build bench
 
-    - name: Benchmark validation (correctness only)
+    - name: C scalar validation (standard DFT)
       run: |
-        echo "=== Benchmark Validation: Standard DFT (v3.15.0) ==="
+        echo "=== C Scalar Validation: Standard DFT ==="
         python3 Tests/benchmark/benchmark.py \
           --validation-only --use-standard --fields babybear,goldilocks --sizes 14
-        echo "Benchmark validation PASS"
+        echo "C scalar validation PASS"
+
+    - name: Oracle validation (TRZK vs Plonky3 real)
+      run: |
+        echo "=== Oracle: TRZK C vs Plonky3 Real (FFI) ==="
+        cd verification/plonky3 && make shim && cd ../..
+        python3 Tests/benchmark/oracle_validate.py \
+          --fields babybear,goldilocks --sizes 3,6,10
+        echo "Oracle validation PASS"
 
   summary:
     name: CI Summary

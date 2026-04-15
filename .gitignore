@@ -20,6 +20,10 @@ Tests/poseidon_c/build/
 Tests/poseidon_fuzz/target/
 Cargo.lock
 
+# Benchmark output (reproducible artifacts, not committed)
+Tests/benchmark/output/latest/
+Tests/benchmark/output/history/
+
 # Research & design documents (local only, not for remote)
 research/
 TRZK_filosofico.md

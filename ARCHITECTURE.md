@@ -130,7 +130,73 @@ Neto código:          -530 LOC (más limpio, menos legacy)
 
 ---
 
-## Next Version: 3.15.0
+## Next Version: 3.16.0
+
+### Benchmark Framework C + Rust v3.16.0
+
+**Contents**: Puesta a punto del framework de benchmark y testing. NO features nuevas.
+Métricas de correctness y performance rigurosas, reproducibles, presentables.
+Detalle completo en TRZK_spiral_idea.md §3.10.
+
+**Vision**: Saber dónde estamos vs Plonky3 real. Tener Rust funcional. CI completo.
+Los números deben cumplir los 6 requisitos de reporting (§3.10 puntos 0-5).
+
+**State post-v3.15.0**: NTTs correctas (DFT estándar, 36/36 PASS). Pipeline ultra activa
+(R4 inverted, ILP2, bound-aware). Rust Goldilocks no compila (type mismatch u64→u128).
+Benchmarks comparan contra P3 naive, no Plonky3 real. "0.96x" de v3.12.0 era INVÁLIDO.
+
+**Mandatory constraints**:
+- SOLO benchmark/testing. No four-step, no SIMD, no features nuevas.
+- Scalar only (C -O2, Rust --release). SIMD → v3.17.0.
+- B2 es el ÚNICO bloque que toca codegen. Todo lo demás es infra de test aislada.
+- TODO benchmark debe cumplir los 6 requisitos de reporting (§3.10).
+
+#### DAG (3.16.0)
+
+| Nodo | Tipo | Deps | Files | LOC | Status |
+|------|------|------|-------|-----|--------|
+| N316.1 Oracle Validation (TRZK C vs Plonky3 real via FFI) | CRIT | — | Tests/benchmark/oracle_validate.py | ~130 | done |
+| N316.2 Rust type mismatch fix (17 preambles u64→u128) | CRIT | — | VerifiedPlanCodeGen.lean | ~20 | done (Goldilocks) |
+| N316.3 Benchmark vs Plonky3 real timing | PAR | — | Tests/benchmark/benchmark_plonky3.py | ~170 | done |
+| N316.4 Pipeline value benchmark (baseline vs winner) | PAR | N316.2 | Tests/benchmark/benchmark_pipeline.py | ~130 | done |
+| N316.5 Limpieza bench binary + output directory structure | PAR | — | OptimizedNTTPipeline.lean, .gitignore | ~-30 | done |
+| N316.6 CI completo (Rust + Oracle gate) | HOJA | N316.1, N316.2 | .github/workflows/ci.yml | ~10 | done |
+| N316.7 BENCHMARKS.md final report | HOJA | N316.1-N316.5 | BENCHMARKS.md | ~80 | done |
+
+#### Formal Properties (3.16.0)
+
+| Nodo | Propiedad | Tipo | Prioridad |
+|------|-----------|------|-----------|
+| N316.1 | TRZK C output == Plonky3 output element-by-element | EQUIVALENCE | P0 |
+| N316.2 | Rust Goldilocks compiles with rustc --release | SOUNDNESS | P0 |
+| N316.2 | Rust Goldilocks NTT output == Python standard DFT | EQUIVALENCE | P0 |
+| N316.3 | Performance numbers reported with 6 reporting requirements | COMPLETENESS | P0 |
+| N316.5 | Bench binary runs without internal correctness check | PRESERVATION | P0 |
+| N316.6 | CI: C + Rust scalar + Oracle all PASS | SOUNDNESS | P0 |
+
+#### Bloques
+
+- [x] **B1 — Oracle Validation (N316.1)**: CRIT. oracle_validate.py (TRZK C vs Plonky3 real via FFI ctypes). R2: 14/14 PASS (BabyBear 7/7 + Goldilocks 7/7). R4: 10/10 PASS. Total 24/24. **DONE 2026-04-14.**
+
+- [x] **B2 — Rust Type Fix (N316.2)**: CRIT. Goldilocks: 7 standard preambles → u128 return + u128 index params + internal as u64/as usize casts. bitRevPermutePreambleRust refactored with retType + indexType params. Rust correctness check conditioned (same as C). Gate: Goldilocks Rust 688.0us benchmark PASS. BabyBear Rust: separate transmute boundary issue (i32 vs u32), deferred. **DONE 2026-04-14.**
+
+- [x] **B3 — Plonky3 Real Timing (N316.3)**: PAR. benchmark_plonky3.py: TRZK C scalar vs Plonky3 Rust --release via FFI. After B4 R4-threshold fix: BabyBear **0.45x** (55% faster), Goldilocks **1.18x** (18% slower). R2 uniform at N=2^14. **DONE 2026-04-14.**
+
+- [x] **B4 — Pipeline Value (N316.4)**: PAR. Baseline R2 vs mkMixedRadixPlan R4. FINDING: R4 mixed is SLOWER at N=2^14 (BabyBear 0.61x, Goldilocks 0.68x). R4 inverted overhead > 25% butterfly savings for small N. Same pattern as v3.13.0 stage-split. R4 benefit expected at larger N where cache effects dominate. **DONE 2026-04-14.**
+
+- [x] **B5 — Limpieza (N316.5)**: PAR. Correctness check interno ELIMINADO (C + Rust, ~30 LOC removed). output/latest/ + output/history/ creados. .gitignore updated. Bench binary limpio: BabyBear 369us, Goldilocks 842us sin MISMATCH/PARSE ERROR. **DONE 2026-04-14.**
+
+- [x] **B6 — CI + Report (N316.6 + N316.7)**: HOJA. CI: C scalar + Oracle validation (Plonky3 FFI). BENCHMARKS.md rewritten with 6 reporting requirements. BabyBear **0.45x** (55% faster), Goldilocks **1.18x** (18% slower). **DONE 2026-04-14.**
+
+#### Orden Topológico
+
+```
+{B1, B2, B3, B5} (paralelos) → B4 (dep B2) → B6
+```
+
+---
+
+## Completed: v3.15.0
 
 ### DFT Standard Migration + Plonky3 Match v3.15.0
 

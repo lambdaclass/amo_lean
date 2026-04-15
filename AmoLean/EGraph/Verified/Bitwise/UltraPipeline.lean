@@ -260,7 +260,12 @@ def ultraPipeline (g : MixedEGraph)
     -- Fallback to uniform R2 Harvey if winner is incompatible (DIF, lazy).
     let isCompatible := plan.stages.toList.all fun s =>
       (s.radix == .r2 || s.radix == .r4) && s.direction == .DIT && s.reduction != .lazy
-    let stdPlan := if isCompatible then plan
+    -- v3.16.0 B4: R4 only benefits at large N (cache effects dominate).
+    -- At N ≤ 2^14, R4 inverted overhead > 25% butterfly savings.
+    -- Force R2 for small N; allow R4 winner only when N > 16384.
+    let hasR4 := plan.stages.toList.any fun s => s.radix == .r4
+    let useWinner := isCompatible && (!hasR4 || n > 16384)
+    let stdPlan := if useWinner then plan
       else NTTPlan.mkUniformPlan plan.field plan.size .r2 .harvey
     -- ILP2 for Goldilocks R2 stages (same as legacy path L240-243)
     let stdPlan := if cfg.k > 32 && !cfg.hw.isSimd then
@@ -275,7 +280,9 @@ def ultraPipeline (g : MixedEGraph)
   else if cfg.useStandardDFT then
     let isCompatible := plan.stages.toList.all fun s =>
       (s.radix == .r2 || s.radix == .r4) && s.direction == .DIT && s.reduction != .lazy
-    let stdPlan := if isCompatible then plan
+    let hasR4 := plan.stages.toList.any fun s => s.radix == .r4
+    let useWinner := isCompatible && (!hasR4 || n > 16384)
+    let stdPlan := if useWinner then plan
       else NTTPlan.mkUniformPlan plan.field plan.size .r2 .harvey
     let stdPlan := if cfg.k > 32 && !cfg.hw.isSimd then
         let hasR2 := stdPlan.stages.toList.any fun s => s.radix == .r2

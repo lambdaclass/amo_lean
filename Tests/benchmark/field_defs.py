@@ -1,4 +1,4 @@
-"""Field definitions for AMO-Lean NTT benchmark harness.
+"""Field definitions for TRZK NTT benchmark harness.
 
 Constants match OptimizedNTTPipeline.lean:89-120 and Bench.lean:60-88.
 """

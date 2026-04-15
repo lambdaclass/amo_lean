@@ -1,5 +1,5 @@
 /-
-  AMO-Lean Benchmarker v1.0
+  TRZK Benchmarker v1.0
   Run: lake env lean --run Bench.lean -- [flags]
 
   Flags:
@@ -509,8 +509,8 @@ structure BenchResult where
   diffPct : Float
 
 def compileAndRunC (code : String) : IO (Option BenchResult) := do
-  let srcPath := "/tmp/amobench.c"
-  let binPath := "/tmp/amobench"
+  let srcPath := "/tmp/trzk_bench.c"
+  let binPath := "/tmp/trzk_bench"
   IO.FS.writeFile ⟨srcPath⟩ code
   let comp ← IO.Process.output { cmd := "cc", args := #["-O2", "-o", binPath, srcPath] }
   if comp.exitCode != 0 then
@@ -536,7 +536,7 @@ def compileAndRunC (code : String) : IO (Option BenchResult) := do
 def printHeader (cfg : BenchConfig) : IO Unit := do
   IO.println ""
   IO.println "  ═══════════════════════════════════════════════════════════════"
-  IO.println "  AMO-Lean Benchmarker v1.0"
+  IO.println "  TRZK Benchmarker v1.0"
   IO.println "  ═══════════════════════════════════════════════════════════════"
   IO.println ""
   let fieldNames := cfg.fields.map (fun f => (fieldData f).name) |>.intersperse ", " |> String.join
@@ -577,8 +577,8 @@ def runOneBenchC (hw : HardwareCost) (fd : FieldData) (prim : PrimChoice)
     | .ntt => genOptimizedBenchC fc logN iters hw
     | _ => genLinearBenchC fd prim logN iters
 
-  let srcPath := "/tmp/amobench.c"
-  let binPath := "/tmp/amobench"
+  let srcPath := "/tmp/trzk_bench.c"
+  let binPath := "/tmp/trzk_bench"
   IO.FS.writeFile ⟨srcPath⟩ code
 
   let comp ← IO.Process.output { cmd := "cc", args := #["-O2", "-o", binPath, srcPath] }
@@ -603,7 +603,7 @@ def runOneBenchC (hw : HardwareCost) (fd : FieldData) (prim : PrimChoice)
     let n := 2^logN
     IO.println ""
     IO.println s!"  Result:"
-    IO.println s!"    AMO-Lean:   {amoStr} us"
+    IO.println s!"    TRZK:   {amoStr} us"
     IO.println s!"    Plonky3:    {p3Str} us"
     IO.println s!"    Throughput: {melemStr} Melem/s"
     IO.println s!"    Difference: {diffStr}%"
@@ -669,7 +669,7 @@ def parseArgs (args : List String) : BenchConfig :=
   go args {}
 
 def showHelp : IO Unit := do
-  IO.println "AMO-Lean Benchmarker v1.0"
+  IO.println "TRZK Benchmarker v1.0"
   IO.println ""
   IO.println "Usage: lake env lean --run Bench.lean -- [flags]"
   IO.println ""
@@ -740,12 +740,12 @@ def main (args : List String) : IO Unit := do
                 then genOptimizedBenchC_ultra fdConfig logN iters hw (useStandardDFT := cfg.useStandard)
                 else genOptimizedBenchC fdConfig logN iters hw
               | _ => genLinearBenchC fd prim logN iters
-            IO.FS.writeFile ⟨"/tmp/amobench.c"⟩ code
-            let comp ← IO.Process.output { cmd := "cc", args := #["-O2", "-o", "/tmp/amobench", "/tmp/amobench.c"] }
+            IO.FS.writeFile ⟨"/tmp/trzk_bench.c"⟩ code
+            let comp ← IO.Process.output { cmd := "cc", args := #["-O2", "-o", "/tmp/trzk_bench", "/tmp/trzk_bench.c"] }
             if comp.exitCode != 0 then
               IO.println s!"  {fd.name}  2^{logN}  {langStr}  COMPILE ERROR"
               continue
-            let run ← IO.Process.output { cmd := "/tmp/amobench" }
+            let run ← IO.Process.output { cmd := "/tmp/trzk_bench" }
             let parts := run.stdout.trim.splitOn ","
             -- Output format: name,strategy,amo_us,p3_us,melem,diff%
             if h : parts.length ≥ 6 then
@@ -764,13 +764,13 @@ def main (args : List String) : IO Unit := do
                 then genOptimizedBenchRust_ultra fdConfigRust logN iters hw (useStandardDFT := cfg.useStandard)
                 else genOptimizedBenchRust fdConfigRust logN iters hw
               | _ => genLinearBenchRust fd prim logN iters
-            IO.FS.writeFile ⟨"/tmp/amobench.rs"⟩ code
-            let comp ← IO.Process.output { cmd := "rustc", args := #["-O", "/tmp/amobench.rs", "-o", "/tmp/amobench_rs"] }
+            IO.FS.writeFile ⟨"/tmp/trzk_bench.rs"⟩ code
+            let comp ← IO.Process.output { cmd := "rustc", args := #["-O", "/tmp/trzk_bench.rs", "-o", "/tmp/trzk_bench_rs"] }
             if comp.exitCode != 0 then
               IO.println s!"  {fd.name}  2^{logN}  {langStr}  COMPILE ERROR"
               IO.eprintln s!"    {comp.stderr.take 200}"
               continue
-            let run ← IO.Process.output { cmd := "/tmp/amobench_rs" }
+            let run ← IO.Process.output { cmd := "/tmp/trzk_bench_rs" }
             let parts := run.stdout.trim.splitOn ","
             -- Output format: name,strategy,amo_us,p3_us,melem,diff%
             if h : parts.length ≥ 6 then

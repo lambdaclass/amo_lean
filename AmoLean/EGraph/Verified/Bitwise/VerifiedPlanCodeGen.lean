@@ -770,9 +770,14 @@ def bitRevPermutePreambleC (elemType : String) : String :=
 /-- Rust preamble for bit-reversal permutation.
     Returns dummy 0 for Stmt.call compatibility (same pattern as goldi_butterfly).
     Parameter n kept for C symmetry (Rust has data.len() but call site passes N explicitly). -/
-def bitRevPermutePreambleRust (elemType : String) : String :=
+def bitRevPermutePreambleRust (elemType : String) (retType : String := elemType)
+    (indexType : String := "usize") : String :=
+  let castLine := if indexType != "usize" then
+    s!"  let (n, logn) = (n as usize, logn as u32);\n" else ""
+  let lognType := if indexType != "usize" then indexType else "u32"
   s!"#[inline(always)]\n" ++
-  s!"fn bit_reverse_permute(data: &mut [{elemType}], n: usize, logn: u32) -> {elemType} \{\n" ++
+  s!"fn bit_reverse_permute(data: &mut [{elemType}], n: {indexType}, logn: {lognType}) -> {retType} \{\n" ++
+  castLine ++
   s!"  for i in 0..n \{\n" ++
   s!"    let mut j: usize = 0;\n" ++
   s!"    let mut tmp = i;\n" ++
@@ -1209,7 +1214,10 @@ def emitRustFromPlanStandard (plan : Plan) (k c mu : Nat)
   let goldiPreambleRust := if k == 64 then
     let pStr := toString plan.field
     s!"#[inline(always)]\n" ++
-    s!"fn goldi_reduce128(x: u128) -> u64 \{\n" ++
+    -- v3.16.0 B2: All preambles return u128 (wideType) so Stmt.call assignments type-check.
+    -- Internal computation stays u64; only the final return is cast with `as u128`.
+    -- goldi_reduce128/add/sub/mul_tw: `r as u128`. Butterflies: `0u128`.
+    s!"fn goldi_reduce128(x: u128) -> u128 \{\n" ++
     s!"  let lo = x as u64;\n" ++
     s!"  let hi = (x >> 64) as u64;\n" ++
     s!"  let hh = hi >> 32;\n" ++
@@ -1219,57 +1227,64 @@ def emitRustFromPlanStandard (plan : Plan) (k c mu : Nat)
     s!"  let t1 = hl.wrapping_mul(0xFFFFFFFF_u64);\n" ++
     s!"  let (mut r, carry) = t0.overflowing_add(t1);\n" ++
     s!"  if carry || r >= {pStr}_u64 \{ r = r.wrapping_sub({pStr}_u64); }\n" ++
-    s!"  r\n}\n\n" ++
+    s!"  r as u128\n}\n\n" ++
     s!"#[inline(always)]\n" ++
-    s!"fn goldi_add(a: u64, b: u64) -> u64 \{\n" ++
+    s!"fn goldi_add(a: u64, b: u64) -> u128 \{\n" ++
     s!"  let (mut r, carry) = a.overflowing_add(b);\n" ++
     s!"  if carry || r >= {pStr}_u64 \{ r = r.wrapping_sub({pStr}_u64); }\n" ++
-    s!"  r\n}\n\n" ++
+    s!"  r as u128\n}\n\n" ++
     s!"#[inline(always)]\n" ++
-    s!"fn goldi_sub(a: u64, b: u64) -> u64 \{\n" ++
+    s!"fn goldi_sub(a: u64, b: u64) -> u128 \{\n" ++
     s!"  let (mut r, borrow) = a.overflowing_sub(b);\n" ++
     s!"  if borrow \{ r = r.wrapping_add({pStr}_u64); }\n" ++
-    s!"  r\n}\n\n" ++
+    s!"  r as u128\n}\n\n" ++
     s!"#[inline(always)]\n" ++
-    s!"fn goldi_mul_tw(val: u64, tw: u64) -> u64 \{\n" ++
+    s!"fn goldi_mul_tw(val: u64, tw: u64) -> u128 \{\n" ++
     s!"  if tw.count_ones() == 1 \{\n" ++
     s!"    goldi_reduce128((val as u128) << tw.trailing_zeros())\n" ++
     s!"  } else \{\n" ++
     s!"    goldi_reduce128((tw as u128) * (val as u128))\n" ++
     s!"  }\n}\n\n" ++
     s!"#[inline(always)]\n" ++
-    s!"fn goldi_butterfly(data: &mut [u64], twiddles: &[u64], i: usize, j: usize, tw_idx: usize) -> u64 \{\n" ++
+    s!"fn goldi_butterfly(data: &mut [u64], twiddles: &[u64], i: u128, j: u128, tw_idx: u128) -> u128 \{\n" ++
+    s!"  let (i,j,tw_idx) = (i as usize, j as usize, tw_idx as usize);\n" ++
     s!"  let a = data[i]; let b = data[j]; let w = twiddles[tw_idx];\n" ++
-    s!"  let wb = goldi_reduce128((w as u128) * (b as u128));\n" ++
-    s!"  data[i] = goldi_add(a, wb);\n" ++
-    s!"  data[j] = goldi_sub(a, wb);\n" ++
-    s!"  0\n}\n\n" ++
+    s!"  let wb = goldi_reduce128((w as u128) * (b as u128)) as u64;\n" ++
+    s!"  data[i] = goldi_add(a, wb) as u64;\n" ++
+    s!"  data[j] = goldi_sub(a, wb) as u64;\n" ++
+    s!"  0u128\n}\n\n" ++
     s!"#[inline(always)]\n" ++
-    s!"fn goldi_butterfly_shift(data: &mut [u64], twiddles: &[u64], i: usize, j: usize, tw_idx: usize) -> u64 \{\n" ++
+    s!"fn goldi_butterfly_shift(data: &mut [u64], twiddles: &[u64], i: u128, j: u128, tw_idx: u128) -> u128 \{\n" ++
+    s!"  let (i,j,tw_idx) = (i as usize, j as usize, tw_idx as usize);\n" ++
     s!"  let a = data[i]; let b = data[j]; let w = twiddles[tw_idx];\n" ++
-    s!"  let wb = goldi_mul_tw(b, w);\n" ++
-    s!"  data[i] = goldi_add(a, wb);\n" ++
-    s!"  data[j] = goldi_sub(a, wb);\n" ++
-    s!"  0\n}\n\n" ++
-    -- v3.15.0 B3.5: R4 inverted butterfly (Rust)
+    s!"  let wb = goldi_mul_tw(b, w) as u64;\n" ++
+    s!"  data[i] = goldi_add(a, wb) as u64;\n" ++
+    s!"  data[j] = goldi_sub(a, wb) as u64;\n" ++
+    s!"  0u128\n}\n\n" ++
+    -- v3.15.0 B3.5: R4 inverted butterfly (Rust) — v3.16.0 B2: returns u128
     s!"#[inline(always)]\n" ++
     s!"fn goldi_butterfly4_inverted(data: &mut [u64], twiddles: &[u64],\n" ++
-    s!"    i0: usize, i1: usize, i2: usize, i3: usize,\n" ++
-    s!"    tw2i: usize, tw3i: usize, tw1i: usize, tw1pi: usize) -> u64 \{\n" ++
+    s!"    i0: u128, i1: u128, i2: u128, i3: u128,\n" ++
+    s!"    tw2i: u128, tw3i: u128, tw1i: u128, tw1pi: u128) -> u128 \{\n" ++
+    s!"  let (i0,i1,i2,i3) = (i0 as usize, i1 as usize, i2 as usize, i3 as usize);\n" ++
+    s!"  let (tw2i,tw3i,tw1i,tw1pi) = (tw2i as usize, tw3i as usize, tw1i as usize, tw1pi as usize);\n" ++
     s!"  let (a,b,c,d) = (data[i0],data[i1],data[i2],data[i3]);\n" ++
     s!"  let (w2,w3) = (twiddles[tw2i],twiddles[tw3i]);\n" ++
     s!"  let (w1,w1p) = (twiddles[tw1i],twiddles[tw1pi]);\n" ++
-    s!"  let w1b = goldi_reduce128((w1 as u128)*(b as u128));\n" ++
-    s!"  let (r0,r1) = (goldi_add(a,w1b), goldi_sub(a,w1b));\n" ++
-    s!"  let w1pd = goldi_reduce128((w1p as u128)*(d as u128));\n" ++
-    s!"  let (r2,r3) = (goldi_add(c,w1pd), goldi_sub(c,w1pd));\n" ++
-    s!"  let w2r2 = goldi_reduce128((w2 as u128)*(r2 as u128));\n" ++
-    s!"  data[i0] = goldi_add(r0,w2r2); data[i2] = goldi_sub(r0,w2r2);\n" ++
-    s!"  let w3r3 = goldi_reduce128((w3 as u128)*(r3 as u128));\n" ++
-    s!"  data[i1] = goldi_add(r1,w3r3); data[i3] = goldi_sub(r1,w3r3);\n" ++
-    s!"  0\n}\n\n"
+    s!"  let w1b = goldi_reduce128((w1 as u128)*(b as u128)) as u64;\n" ++
+    s!"  let (r0,r1) = (goldi_add(a,w1b) as u64, goldi_sub(a,w1b) as u64);\n" ++
+    s!"  let w1pd = goldi_reduce128((w1p as u128)*(d as u128)) as u64;\n" ++
+    s!"  let (r2,r3) = (goldi_add(c,w1pd) as u64, goldi_sub(c,w1pd) as u64);\n" ++
+    s!"  let w2r2 = goldi_reduce128((w2 as u128)*(r2 as u128)) as u64;\n" ++
+    s!"  data[i0] = goldi_add(r0,w2r2) as u64; data[i2] = goldi_sub(r0,w2r2) as u64;\n" ++
+    s!"  let w3r3 = goldi_reduce128((w3 as u128)*(r3 as u128)) as u64;\n" ++
+    s!"  data[i1] = goldi_add(r1,w3r3) as u64; data[i3] = goldi_sub(r1,w3r3) as u64;\n" ++
+    s!"  0u128\n}\n\n"
   else ""
-  goldiPreambleRust ++ bitRevPermutePreambleRust uElemType ++
+  -- v3.16.0 B2: retType=wideType, indexType=wideType for Goldilocks (Rust has no implicit widening)
+  -- elemType (not uElemType) because BabyBear transmutes data to &mut [i32] before Stmt.call
+  let indexType := if k == 64 then "u128" else "usize"
+  goldiPreambleRust ++ bitRevPermutePreambleRust elemType wideType indexType ++
   s!"fn {funcName}(data: &mut [{uElemType}], twiddles: &[{uElemType}]) \{\n{tempDecls}{loopDecls}{loadDecls}{r4LoadDecls}{ilp2Decls}{transmute}{bodyRust}\n}"
 
 /-- Emit verified Rust function from Plan.

@@ -1,5 +1,5 @@
 /-
-  AMO-Lean -- Optimized NTT Pipeline (End-to-End Integration)
+  TRZK -- Optimized NTT Pipeline (End-to-End Integration)
 
   Connects ALL optimization layers into a single function:
   (prime, hardware, NTT_size) -> optimized verified C/Rust code
@@ -393,7 +393,7 @@ def optimizedNTTC (fc : FieldConfig) (hw : HardwareCost) (logN iters : Nat)
     some (lowerNTTFromPlanSIMD plan simdCfg fc.k fc.cNat fc.muNat logN)
   else none
   -- Step 7: Assemble the complete benchmark program
-  s!"/* AMO-Lean Optimized NTT Benchmark
+  s!"/* TRZK Optimized NTT Benchmark
  * Field: {fc.name} (p = {fc.pNat})
  * E-graph selected: {optResult.strategyName}
  * Improved over seed: {optResult.improved}
@@ -541,7 +541,7 @@ def optimizedNTTC_ultra (fc : FieldConfig) (hw : HardwareCost) (logN iters : Nat
   let p3Loop := genNTTLoopC "p3_bf" logN
   -- R = 2^32 for Montgomery twiddles (2^64 for Goldilocks)
   let rLit := if fc.k == 64 then "(__uint128_t)1<<64" else "4294967296ULL"
-  s!"/* AMO-Lean Ultra NTT Benchmark
+  s!"/* TRZK Ultra NTT Benchmark
  * Field: {fc.name} (p = {fc.pNat})
  * Pipeline: Ultra (Ruler + bounds + colored + verified codegen)
  * {report.splitOn "\n" |>.take 5 |>.map ("   " ++ ·) |> String.intercalate "\n"}
@@ -595,27 +595,9 @@ int main(void) \{
     volatile {fc.elemType} sink;
     struct timespec s,e;
 
-    /* === Correctness check: compare Ultra vs P3 outputs === */
-    /* v3.15.0: Skip when useStandardDFT — Ultra computes standard DFT (bitrev+small→large)
-       while P3 computes legacy ref_dit (large→small). Different transforms → expected mismatch.
-       Standard DFT correctness validated via emit_standard.lean (14/14 PASS vs naive DFT). */
-    {if useStandardDFT then
-      s!"/* Correctness check SKIPPED: standard DFT != ref_dit (validated externally) */\n"
-    else
-      s!"{fc.elemType} *amo_out=malloc(n*sizeof({fc.elemType}));\n" ++
-      s!"    {fc.elemType} *p3_out=malloc(n*sizeof({fc.elemType}));\n" ++
-      s!"    for(size_t i=0;i<n;i++) amo_out[i]=orig[i];\n" ++
-      s!"    {nttCall "amo_out"};\n" ++
-      s!"    for(size_t i=0;i<n;i++) p3_out[i]=orig[i];\n" ++
-      "    { " ++ s!"{fc.elemType} *d=p3_out; {p3Loop} " ++ "}\n" ++
-      s!"    for(size_t i=0;i<n;i++) " ++ "{\n" ++
-      s!"      {fc.wideType} a=(({fc.wideType})amo_out[i])%({fc.wideType}){fc.pLit};\n" ++
-      s!"      {fc.wideType} b=(({fc.wideType})p3_out[i])%({fc.wideType}){fc.pLit};\n" ++
-      "      if(a!=b) {\n" ++
-      s!"        fprintf(stderr,\"MISMATCH at i=%zu: ultra=%lld p3=%lld\\n\",i,(long long)a,(long long)b);\n" ++
-      s!"        free(amo_out); free(p3_out); free(d); free(orig); free(tw);\n" ++
-      "        return 1;\n      }\n    }\n" ++
-      "    free(amo_out); free(p3_out);\n"}
+    /* v3.16.0 B5: Internal correctness check REMOVED.
+       Correctness validated externally: oracle_validate.py (24/24 PASS vs Plonky3 real),
+       reference_ntt.py (36/36 PASS vs naive DFT), benchmark.py --validation-only. */
 
     /* warmup */
     for(size_t i=0;i<n;i++) d[i]=orig[i];
@@ -758,7 +740,7 @@ fn amo_bf(a: &mut {et}, b: &mut {et}, w: {et}) \{
     some (lowerNTTFromPlanSIMDRust plan simdCfg fc.k fc.cNat fc.muNat logN)
   else none
   -- Step 6: Assemble the complete Rust benchmark
-  s!"// AMO-Lean Optimized NTT Benchmark (Rust)
+  s!"// TRZK Optimized NTT Benchmark (Rust)
 // Field: {fc.name} (p = {fc.pNat})
 // E-graph selected: {optResult.strategyName}
 // Reduction: verified via TrustLean.Stmt
@@ -856,7 +838,7 @@ def genOptimizedBenchRust_ultra (fc : FieldConfig) (logN iters : Nat)
   let p3Bf := genP3ButterflyRust fc
   -- R for Montgomery twiddles: 2^32 for 32-bit fields, 2^64 for Goldilocks
   let rVal := if fc.k == 64 then s!"1{wt}<<64" else s!"4294967296_{wt}"
-  s!"// AMO-Lean Ultra NTT Benchmark (Rust, verified codegen)
+  s!"// TRZK Ultra NTT Benchmark (Rust, verified codegen)
 // Field: {fc.name} (p = {fc.pNat})
 // Pipeline: Ultra (Ruler + bounds + cost model + verified codegen)
 // {report.splitOn "\n" |>.take 3 |>.map ("// " ++ ·) |> String.intercalate "\n"}
@@ -901,28 +883,8 @@ fn main() \{
     let mu_tw: Vec<{et}> = tw_mont.iter().map(|&t| ((t as {wt} * {ucfg.mu}{wt}) & 0xFFFFFFFF) as {et}).collect();
     let orig: Vec<{et}> = (0..n).map(|i| ((i as {wt} * 1000000007) % p) as {et}).collect();
 
-    /* Correctness check: compare Ultra vs P3 outputs */
-    let mut amo_out = orig.clone();
-    {-- v3.15.0 B5: Goldilocks uses standard twiddles when useStandardDFT (PZT ≠ REDC)
-    let twArgRs := if fc.k > 32 && useStandardDFT then "tw" else "tw_mont"
-    if rustSIMD then
-      s!"unsafe \{ {funcNameRs}(amo_out.as_mut_ptr() as *mut i32, tw_mont.as_ptr() as *const i32, mu_tw.as_ptr() as *const i32) }"
-    else
-      s!"{funcNameRs}(&mut amo_out, &{twArgRs})"};
-    let mut p3_out = orig.clone();
-    for st in 0..logn \{ let h = 1usize << (logn-st-1);
-      for g in 0..(1usize<<st) \{ for pp in 0..h \{
-        let i=g*2*h+pp; let j=i+h; let w=tw[(st*(n/2)+g*h+pp)%tw_sz];
-        let (l,r) = p3_out.split_at_mut(j); p3_bf(&mut l[i], &mut r[0], w);
-      }}}
-    for i in 0..n \{
-      let a = (amo_out[i] as {wt}).rem_euclid(p);
-      let b = (p3_out[i] as {wt}).rem_euclid(p);
-      if a != b \{
-        eprintln!(\"MISMATCH at i=\{}: ultra=\{} p3=\{}\", i, a, b);
-        std::process::exit(1);
-      }
-    }
+    /* v3.16.0 B5: Internal correctness check REMOVED (Rust path).
+       Validated externally: oracle_validate.py + reference_ntt.py. */
 
     /* warmup */
     let mut d = orig.clone();
