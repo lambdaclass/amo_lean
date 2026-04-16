@@ -51,20 +51,23 @@ def plonky3_timing(lib, field_name: str, log_n: int, iters: int) -> float:
         fn.argtypes = [ctypes.POINTER(ctypes.c_uint64), ctypes.c_size_t]
     fn.restype = ctypes.c_int32
 
-    # Warmup
-    arr = ArrayType(*data_template)
-    fn(arr, n)
+    # v3.17.0 post-B6: multi-iter warmup + min-of-iters (matches TRZK harness
+    # methodology). Single warmup + average was biased by cold-cache outliers.
+    for _ in range(5):
+        arr = ArrayType(*data_template)
+        fn(arr, n)
 
-    # Timed iterations
-    total = 0.0
+    # Timed iterations — report MIN (matches TRZK harness `min_us`)
+    min_us = float("inf")
     for _ in range(iters):
         arr = ArrayType(*data_template)
         t0 = time.perf_counter()
         fn(arr, n)
         t1 = time.perf_counter()
-        total += (t1 - t0)
-
-    return (total / iters) * 1e6  # microseconds
+        us = (t1 - t0) * 1e6
+        if us < min_us:
+            min_us = us
+    return min_us
 
 
 def trzk_c_timing(project_root: Path, field_name: str, log_n: int, iters: int,
@@ -169,11 +172,22 @@ int main(void) {{
     if not cr.success:
         raise RuntimeError(f"Compilation failed ({profile}): {cr.error[:200]}")
 
-    run = subprocess.run([bin_path], capture_output=True, text=True, timeout=300)
-    if run.returncode != 0:
-        raise RuntimeError(f"Execution failed (exit {run.returncode})")
-
-    us = float(run.stdout.strip())
+    # v3.17.0 post-B6 fix: process-level warmup. Fresh-compile + first run hits
+    # cold iTLB/cache/thermal state; binary's internal `min of 30 iters` still
+    # reflects the cold window. Run binary N_WARMUP times discarding results,
+    # then N_MEASURE times keeping the minimum across all measurement runs.
+    # See /tmp/bb_inv investigation in conversation log.
+    N_WARMUP = 2
+    N_MEASURE = 3
+    for _ in range(N_WARMUP):
+        subprocess.run([bin_path], capture_output=True, text=True, timeout=300)
+    measured = []
+    for _ in range(N_MEASURE):
+        run = subprocess.run([bin_path], capture_output=True, text=True, timeout=300)
+        if run.returncode != 0:
+            raise RuntimeError(f"Execution failed (exit {run.returncode})")
+        measured.append(float(run.stdout.strip()))
+    us = min(measured)
     plan_desc = "R4+R2 mixed DIT" if use_r4 else "R2 uniform Harvey"
     return us, plan_desc
 
@@ -312,10 +326,18 @@ fn main() {{
     cr = compile_rust(src, bin_path, profile=profile)
     if not cr.success:
         raise RuntimeError(f"Rust compile failed ({profile}): {cr.error[:400]}")
-    run = subprocess.run([str(bin_path)], capture_output=True, text=True, timeout=300)
-    if run.returncode != 0:
-        raise RuntimeError(f"Rust execution failed (exit {run.returncode}): {run.stderr[:200]}")
-    us = float(run.stdout.strip())
+    # Process-level warmup (see trzk_c_timing comment for rationale)
+    N_WARMUP = 2
+    N_MEASURE = 3
+    for _ in range(N_WARMUP):
+        subprocess.run([str(bin_path)], capture_output=True, text=True, timeout=300)
+    measured = []
+    for _ in range(N_MEASURE):
+        run = subprocess.run([str(bin_path)], capture_output=True, text=True, timeout=300)
+        if run.returncode != 0:
+            raise RuntimeError(f"Rust execution failed (exit {run.returncode}): {run.stderr[:200]}")
+        measured.append(float(run.stdout.strip()))
+    us = min(measured)
     plan_desc = "R4+R2 mixed DIT" if use_r4 else "R2 uniform Harvey"
     return us, plan_desc
 
