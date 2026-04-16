@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 """verify_dft4.py — Verify AMO-Lean generated DFT_4 binaries.
 
+Reads test vectors from stdin, line by line, so infinite generators work.
+
 Usage:
-    python3 verify_dft4.py --binary ./dft4 test_vectors.txt
-    python3 verify_dft4.py --binary ./dft4_rs test_vectors.txt
+    cat test_vectors/wht4/*.txt | python3 verify_dft4.py --binary ./dft4
+    ./generators/wht4.py | python3 verify_dft4.py --binary ./dft4
+
+Fuzz mode (--fuzz): exit non-zero on the first mismatch, printing input,
+expected and actual output. Intended to pair with an infinite generator.
 """
 
+import signal
 import subprocess
 import sys
 
@@ -16,99 +22,136 @@ import sys
 #            [1, -1,  1, -1],
 #            [1,  1, -1, -1],
 #            [1, -1, -1,  1]]
-#
-# Expected outputs are stored directly in test_vectors.txt alongside inputs.
 
 
-def load_vectors(path):
-    """Load (input, expected) pairs from test_vectors.txt.
+def parse_line(line, lineno):
+    """Parse one `a b c d : e f g h` line. Returns (input, expected) or None."""
+    line = line.strip()
+    if not line or line.startswith('#'):
+        return None
+    if ':' not in line:
+        print(f"WARNING: line {lineno} missing ':' separator, skipping: {line}", file=sys.stderr)
+        return None
+    left, right = line.split(':', 1)
+    left_parts = left.split()
+    right_parts = right.split()
+    if len(left_parts) != 4 or len(right_parts) != 4:
+        print(f"WARNING: line {lineno} expected 4:4 values, skipping: {line}", file=sys.stderr)
+        return None
+    try:
+        return [int(x) for x in left_parts], [int(x) for x in right_parts]
+    except ValueError:
+        print(f"WARNING: line {lineno} non-integer value, skipping: {line}", file=sys.stderr)
+        return None
 
-    Format per non-comment, non-empty line:
-        a b c d : e f g h
+
+def run_one(binary, vec, expected):
+    """Run binary on vec, compare to expected.
+
+    Returns None on pass, a list[int] with the actual output on mismatch,
+    or a str describing any other failure (non-zero exit, parse error, etc.).
     """
-    pairs = []
-    with open(path) as f:
-        for lineno, line in enumerate(f, 1):
-            line = line.strip()
-            if not line or line.startswith('#'):
-                continue
-            if ':' not in line:
-                print(f"WARNING: line {lineno} missing ':' separator, skipping: {line}", file=sys.stderr)
-                continue
-            left, right = line.split(':', 1)
-            left_parts = left.split()
-            right_parts = right.split()
-            if len(left_parts) != 4 or len(right_parts) != 4:
-                print(f"WARNING: line {lineno} expected 4:4 values, skipping: {line}", file=sys.stderr)
-                continue
-            pairs.append(([int(x) for x in left_parts], [int(x) for x in right_parts]))
-    return pairs
-
-
-def verify_with_binary(binary, pairs):
-    passed = 0
-    failed = 0
-    print(f"\n══ Verification ({binary}) — {len(pairs)} test vectors ═══════════")
-    for i, (vec, expected) in enumerate(pairs):
-        args = [binary] + [str(x) for x in vec]
-        result = subprocess.run(args, capture_output=True, text=True)
-        if result.returncode != 0:
-            failed += 1
-            print(f"  FAIL test {i}: binary returned {result.returncode}")
-            if result.stderr:
-                print(f"    stderr: {result.stderr.strip()}")
-            continue
-        try:
-            output = [int(x) for x in result.stdout.split()]
-        except ValueError:
-            failed += 1
-            print(f"  FAIL test {i}: could not parse output: {result.stdout.strip()}")
-            continue
-        if len(output) != 4:
-            failed += 1
-            print(f"  FAIL test {i}: expected 4 values, got {len(output)}")
-            continue
-        ok = output == expected
-        if ok:
-            passed += 1
-        else:
-            failed += 1
-            print(f"  FAIL test {i}: input={vec}")
-            print(f"    output   = {output}")
-            print(f"    expected = {expected}")
-    print(f"\n  Results: {passed}/{len(pairs)} passed, {failed} failed")
-    if failed == 0:
-        print(f"  PASS: All {len(pairs)} test vectors match WHT_4")
-    return failed == 0
+    args = [binary] + [str(x) for x in vec]
+    result = subprocess.run(args, capture_output=True, text=True)
+    if result.returncode != 0:
+        msg = f"binary returned {result.returncode}"
+        if result.stderr:
+            msg += f"; stderr: {result.stderr.strip()}"
+        return msg
+    try:
+        output = [int(x) for x in result.stdout.split()]
+    except ValueError:
+        return f"could not parse output: {result.stdout.strip()}"
+    if len(output) != 4:
+        return f"expected 4 values, got {len(output)}: {output}"
+    if output != expected:
+        return output
+    return None
 
 
 def main():
     binary = None
-    vectors_path = None
-
+    fuzz = False
     args = sys.argv[1:]
     i = 0
     while i < len(args):
         if args[i] == "--binary" and i + 1 < len(args):
             binary = args[i + 1]
             i += 2
-        else:
-            vectors_path = args[i]
+        elif args[i] == "--fuzz":
+            fuzz = True
             i += 1
+        else:
+            print(f"Unknown argument: {args[i]}", file=sys.stderr)
+            sys.exit(2)
 
-    if not vectors_path or not binary:
-        print(f"Usage: {sys.argv[0]} --binary <path> <test_vectors.txt>", file=sys.stderr)
-        print(f"  e.g.: {sys.argv[0]} --binary generated/dft4 test_vectors.txt", file=sys.stderr)
-        print(f"        {sys.argv[0]} --binary generated/dft4_rs test_vectors.txt", file=sys.stderr)
+    if not binary:
+        print(f"Usage: {sys.argv[0]} --binary <path> [--fuzz]  (test vectors on stdin)",
+              file=sys.stderr)
+        print(f"  e.g.: cat vectors.txt | {sys.argv[0]} --binary generated/dft4", file=sys.stderr)
         sys.exit(1)
 
-    pairs = load_vectors(vectors_path)
-    if not pairs:
-        print(f"No vectors loaded from {vectors_path}", file=sys.stderr)
-        sys.exit(1)
+    print(f"\n══ Verification ({binary}) — reading stdin ═══════════")
+    stats = {"passed": 0, "failed": 0, "total": 0, "interrupted": False}
 
-    ok = verify_with_binary(binary, pairs)
-    sys.exit(0 if ok else 1)
+    def summarize_and_exit():
+        total = stats["total"]
+        passed = stats["passed"]
+        failed = stats["failed"]
+        if stats["interrupted"]:
+            print("\n  Interrupted — partial results follow")
+        if total == 0:
+            print("No vectors read from stdin", file=sys.stderr)
+            sys.exit(1)
+        print(f"\n  Results: {passed}/{total} passed, {failed} failed")
+        if failed == 0 and not stats["interrupted"]:
+            print(f"  PASS: All {total} test vectors match WHT_4")
+        sys.exit(0 if failed == 0 and not stats["interrupted"] else 1)
+
+    def on_signal(signum, _frame):
+        stats["interrupted"] = True
+        print(f"\n  Received signal {signal.Signals(signum).name}, shutting down...",
+              file=sys.stderr)
+        summarize_and_exit()
+
+    for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT):
+        try:
+            signal.signal(sig, on_signal)
+        except (ValueError, OSError):
+            pass
+
+    try:
+        for lineno, line in enumerate(sys.stdin, 1):
+            parsed = parse_line(line, lineno)
+            if parsed is None:
+                continue
+            vec, expected = parsed
+            stats["total"] += 1
+            idx = stats["total"] - 1
+            result = run_one(binary, vec, expected)
+            if result is None:
+                stats["passed"] += 1
+                continue
+            stats["failed"] += 1
+            if fuzz:
+                print(f"\n  FUZZ FAIL on test {idx}:")
+                print(f"    input    = {vec}")
+                print(f"    expected = {expected}")
+                if isinstance(result, list):
+                    print(f"    actual   = {result}")
+                else:
+                    print(f"    error    = {result}")
+                sys.exit(1)
+            if isinstance(result, list):
+                print(f"  FAIL test {idx}: input={vec}")
+                print(f"    output   = {result}")
+                print(f"    expected = {expected}")
+            else:
+                print(f"  FAIL test {idx}: {result}")
+    except KeyboardInterrupt:
+        stats["interrupted"] = True
+
+    summarize_and_exit()
 
 
 if __name__ == "__main__":
