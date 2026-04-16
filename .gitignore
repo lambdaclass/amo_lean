@@ -43,6 +43,12 @@ Tests/Plonky3/Hardening/*.txt
 Tests/NTT/cached_benchmark
 generated/ntt_cached_test
 
+# Local research/design docs (shared manually, not tracked)
+research/
+
+# DAG snapshots (internal planning artifacts)
+dag*.json
+
 # Binary documents (keep in local biblioteca, not in git)
 *.pdf
 *.pptx
