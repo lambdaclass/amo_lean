@@ -1320,6 +1320,10 @@ def emitRustFromPlanStandard (plan : Plan) (k c mu : Nat)
   -- v3.16.0 B2: retType=wideType, indexType=wideType for Goldilocks (Rust has no implicit widening)
   -- elemType (not uElemType) because BabyBear transmutes data to &mut [i32] before Stmt.call
   let indexType := if k == 64 then "u128" else "usize"
+  -- v3.17.0 post-B6: silence 300+ warnings that are all unused_parens / dead_code artifacts
+  -- of the mechanical codegen (stmtToRust emits conservative parens; some t0/t1 temps are
+  -- assigned but not read in all branches of the dispatch). None are correctness-indicative.
+  "#![allow(unused_parens, unused_variables, unused_assignments, unused_mut, dead_code)]\n" ++
   goldiPreambleRust ++ bitRevPermutePreambleRust elemType wideType indexType ++
   s!"fn {funcName}(data: &mut [{uElemType}], twiddles: &[{uElemType}]) \{\n{tempDecls}{loopDecls}{loadDecls}{r4LoadDecls}{ilp2Decls}{transmute}{bodyRust}\n}"
 
@@ -1491,6 +1495,8 @@ def emitRustFromPlanVerified (plan : Plan) (k c mu : Nat)
     s!"  data[i2] = goldi_add(d0,d1); data[i3] = goldi_mul_tw(goldi_sub(d0,d1), w1p);\n" ++
     s!"  0\n}\n\n"
   else ""
+  -- v3.17.0 post-B6: crate-level allow for mechanical codegen artifacts (see Standard).
+  "#![allow(unused_parens, unused_variables, unused_assignments, unused_mut, dead_code)]\n" ++
   goldiPreambleRust ++
   s!"fn {funcName}(data: &mut [{uElemType}], twiddles: &[{uElemType}]) \{\n{tempDecls}{loopDecls}{loadDecls}{r4LoadDecls}{transmute}{bodyRust}\n}"
 
