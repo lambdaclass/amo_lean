@@ -28,8 +28,8 @@ echo "Generating C code from dft4_spec.lean..."
 echo "Compiling..."
 clang -O2 -o "$SCRIPT_DIR/dft4" "$SCRIPT_DIR/dft4_spec.c" "$SCRIPT_DIR/harness_4.c"
 
-# 4. Verify against reference
-echo "Verifying against Walsh-Hadamard reference..."
+# 4. Verify against expected outputs in test_vectors.txt
+echo "Verifying against test vectors..."
 python3 "$SCRIPT_DIR/verify_dft4.py" --binary "$SCRIPT_DIR/dft4" "$SCRIPT_DIR/test_vectors.txt"
 RESULT=$?
 
