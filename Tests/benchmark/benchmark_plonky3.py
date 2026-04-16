@@ -22,6 +22,8 @@ from pathlib import Path
 from datetime import datetime
 
 from field_defs import get_field, BABYBEAR, GOLDILOCKS
+from compiler import (compile_c, compile_rust, describe_profile_c,
+                      describe_profile_rust, PLONKY3_PROFILE_DESCRIPTION)
 
 
 def load_plonky3_shim(project_root: Path):
@@ -66,8 +68,11 @@ def plonky3_timing(lib, field_name: str, log_n: int, iters: int) -> float:
 
 
 def trzk_c_timing(project_root: Path, field_name: str, log_n: int, iters: int,
-                  use_r4: bool = False) -> tuple[float, str]:
-    """Generate TRZK C, compile, run with timing. Returns (avg_us, plan_description)."""
+                  use_r4: bool = False, profile: str = "conservative") -> tuple[float, str]:
+    """Generate TRZK C, compile, run with timing. Returns (avg_us, plan_description).
+
+    v3.17.0 N317.8: `profile` threads through to compile_c for flag parity with Plonky3.
+    """
     n = 1 << log_n
     p = get_field(field_name).p
 
@@ -155,15 +160,161 @@ int main(void) {{
     with open(src, "w") as f:
         f.write(timing_code)
 
-    comp = subprocess.run(["cc", "-O2", "-o", bin_path, src],
-                          capture_output=True, text=True)
-    if comp.returncode != 0:
-        raise RuntimeError(f"Compilation failed: {comp.stderr[:200]}")
+    # v3.17.0 N317.8: use compile_c from compiler.py (profile-aware) instead of
+    # hardcoded cc -O2. field_k lets compile_c emit -Wno-implicitly-unsigned-literal
+    # for Goldilocks (k=64) where p > INT64_MAX.
+    field_k = get_field(field_name).k
+    cr = compile_c(Path(src), Path(bin_path), hardware="arm-scalar",
+                   field_k=field_k, profile=profile)
+    if not cr.success:
+        raise RuntimeError(f"Compilation failed ({profile}): {cr.error[:200]}")
 
     run = subprocess.run([bin_path], capture_output=True, text=True, timeout=300)
     if run.returncode != 0:
         raise RuntimeError(f"Execution failed (exit {run.returncode})")
 
+    us = float(run.stdout.strip())
+    plan_desc = "R4+R2 mixed DIT" if use_r4 else "R2 uniform Harvey"
+    return us, plan_desc
+
+
+def trzk_rust_timing(project_root: Path, field_name: str, log_n: int, iters: int,
+                     use_r4: bool = False, profile: str = "conservative") -> tuple[float, str]:
+    """Generate TRZK Rust, compile, run with timing. Returns (avg_us, plan_description).
+
+    v3.17.0 B5.5: Rust-vs-Rust comparison to eliminate compiler variable (clang vs rustc)
+    from TRZK-vs-Plonky3 gap measurements.
+    """
+    n = 1 << log_n
+    fd = get_field(field_name)
+    p = fd.p
+    g = fd.generator
+
+    # Generate Rust via emit_standard_rust.lean (emits NTT function + preambles only)
+    cmd = ["lake", "env", "lean", "--run", "Tests/benchmark/emit_standard_rust.lean",
+           field_name, str(log_n)]
+    if use_r4:
+        cmd.append("--r4")
+    gen = subprocess.run(cmd, capture_output=True, text=True, timeout=120,
+                         cwd=str(project_root))
+    if gen.returncode != 0:
+        raise RuntimeError(f"Rust generation failed: {gen.stderr[:200]}")
+    ntt_rust = gen.stdout
+    func_name = f"{field_name}_ntt_standard"
+
+    # Rust type widths per field (mirrors emitRustFromPlanStandard conventions)
+    if field_name == "goldilocks":
+        elem_type = "u64"   # data array
+        wide_type = "u128"  # products / p_val
+    else:
+        # BabyBear/KoalaBear use u32 data + u64 wide; but emitRustFromPlanStandard
+        # emits i32/i64 for these. Conservative: let Lean-generated code define types,
+        # use u64 at harness level for portability (the NTT function signature uses u32
+        # for 32-bit fields per the emitter).
+        elem_type = "u32"
+        wide_type = "u64"
+
+    # Emitted fn signature (verified against emitRustFromPlanStandard):
+    #   Goldilocks:    fn <name>(data: &mut [u64], twiddles: &[u64])
+    #   BabyBear/K/M31: fn <name>(data: &mut [u32], twiddles: &[u32])
+    if field_name == "goldilocks":
+        data_elem = "u64"
+    else:
+        data_elem = "u32"
+
+    # Montgomery R for twiddle conversion (BabyBear uses Montgomery, Goldilocks doesn't)
+    # For Goldilocks: standard twiddles (no Montgomery). For BabyBear: R = 2^32.
+    p_lit = f"{p}_{wide_type}"
+
+    # Build Rust timing harness
+    harness = f"""
+use std::time::Instant;
+
+fn mod_pow(mut base: {wide_type}, mut exp: {wide_type}, m: {wide_type}) -> {wide_type} {{
+    let mut result: {wide_type} = 1;
+    base %= m;
+    while exp > 0 {{
+        if exp & 1 == 1 {{
+            result = ((result as u128 * base as u128) % m as u128) as {wide_type};
+        }}
+        base = ((base as u128 * base as u128) % m as u128) as {wide_type};
+        exp >>= 1;
+    }}
+    result
+}}
+
+fn main() {{
+    let n: usize = {n};
+    let logn: usize = {log_n};
+    let iters: usize = {iters};
+    let p: {wide_type} = {p_lit};
+    let omega_n = mod_pow({g} as {wide_type}, (p - 1) / (n as {wide_type}), p);
+    let tw_sz = n * logn;
+    let mut tw: Vec<{data_elem}> = vec![0; tw_sz];
+    for st in 0..logn {{
+        let h = 1usize << (logn - 1 - st);
+        for grp in 0..(1usize << st) {{
+            for pp in 0..h {{
+                let exp = (pp * (1usize << st)) as {wide_type};
+                tw[st * (n / 2) + grp * h + pp] = mod_pow(omega_n, exp, p) as {data_elem};
+            }}
+        }}
+    }}
+"""
+    if field_name == "goldilocks":
+        # Goldilocks: standard twiddles (no Montgomery)
+        harness += f"""
+    let tw_ntt: Vec<{data_elem}> = tw.clone();
+"""
+    else:
+        # BabyBear: Montgomery twiddles (R = 2^32)
+        harness += f"""
+    let r_val: {wide_type} = 4294967296_{wide_type};
+    let tw_mont: Vec<{data_elem}> = tw.iter()
+        .map(|&t| ((t as {wide_type} * r_val) % p) as {data_elem})
+        .collect();
+    let tw_ntt: Vec<{data_elem}> = tw_mont;
+"""
+    # Direct call — both Goldilocks and BabyBear use unsigned types in Rust emitter
+    # (signature: `&mut [u64]`/`&[u64]` for Goldilocks, `&mut [u32]`/`&[u32]` for BabyBear).
+    call_block = f"{func_name}(&mut d, &tw_ntt);"
+
+    harness += f"""
+    let orig: Vec<{data_elem}> = (0..n)
+        .map(|i| ((i as u128 * 1000000007u128) % p as u128) as {data_elem}).collect();
+    let mut d: Vec<{data_elem}> = orig.clone();
+
+    // Warmup
+    {{
+        {call_block}
+    }}
+
+    // Timed iterations — min of iters
+    let mut min_us = f64::MAX;
+    for _ in 0..iters {{
+        d.copy_from_slice(&orig);
+        let t0 = Instant::now();
+        {{
+            {call_block}
+        }}
+        let us = t0.elapsed().as_secs_f64() * 1e6;
+        if us < min_us {{ min_us = us; }}
+    }}
+    println!("{{:.1}}", min_us);
+}}
+"""
+    rust_source = ntt_rust + "\n" + harness
+
+    # Write, compile with profile, run
+    src = Path(f"/tmp/trzk_bench_{field_name}_{log_n}.rs")
+    bin_path = Path(f"/tmp/trzk_bench_{field_name}_{log_n}")
+    src.write_text(rust_source)
+    cr = compile_rust(src, bin_path, profile=profile)
+    if not cr.success:
+        raise RuntimeError(f"Rust compile failed ({profile}): {cr.error[:400]}")
+    run = subprocess.run([str(bin_path)], capture_output=True, text=True, timeout=300)
+    if run.returncode != 0:
+        raise RuntimeError(f"Rust execution failed (exit {run.returncode}): {run.stderr[:200]}")
     us = float(run.stdout.strip())
     plan_desc = "R4+R2 mixed DIT" if use_r4 else "R2 uniform Harvey"
     return us, plan_desc
@@ -175,6 +326,14 @@ def main():
     parser.add_argument("--sizes", default="14")
     parser.add_argument("--iters", type=int, default=10)
     parser.add_argument("--project-root", default=None)
+    parser.add_argument("--profile", default="conservative",
+                        choices=["conservative", "match-plonky3"],
+                        help="Compilation profile. conservative = cc -O2 (historical). "
+                             "match-plonky3 = -O3 -flto + CPU target (fair comparison).")
+    parser.add_argument("--lang", default="c",
+                        choices=["c", "rust", "both"],
+                        help="Which TRZK backend to benchmark. "
+                             "rust eliminates compiler variable vs Plonky3 (both rustc).")
     args = parser.parse_args()
 
     script_dir = Path(__file__).resolve().parent
@@ -195,8 +354,23 @@ def main():
     print(f"  Date:     {timestamp}")
     print(f"  Git:      {git_hash}")
     print(f"  Hardware: {hw_info}, {platform.system()}")
-    print(f"  C:        cc -O2")
-    print(f"  Plonky3:  Rust --release (via FFI), p3-field from GitHub main")
+    print(f"  Profile:  {args.profile}")
+    print(f"  Lang:     {args.lang}")
+    if args.lang in ("c", "both"):
+        print(f"  TRZK C:   {describe_profile_c(args.profile)}")
+    if args.lang in ("rust", "both"):
+        print(f"  TRZK Rs:  {describe_profile_rust(args.profile)}")
+        print(f"  NOTE:     Rust-vs-Rust comparison eliminates compiler variable (both rustc+LLVM).")
+    print(f"  Plonky3:  {PLONKY3_PROFILE_DESCRIPTION}")
+    if args.profile == "conservative" and args.lang != "rust":
+        print(f"  NOTE:     Asymmetric — TRZK uses -O2, Plonky3 uses -O3+LTO.")
+        print(f"            For fair comparison, re-run with --profile match-plonky3.")
+    # SIMD mode asymmetry note (v3.17.0 N317.8)
+    for f in fields:
+        if f in ("babybear", "koalabear"):
+            print(f"  WARN:     {f} TRZK runs SCALAR, Plonky3 may use NEON (p3-{f} packing).")
+            print(f"            BabyBear NEON-vs-NEON comparison requires v3.18 SIMD migration.")
+            break
     print(f"  Iters:    {args.iters}")
     print(f"  Fields:   {fields}")
     print(f"  Sizes:    {['2^'+str(s) for s in sizes]}")
@@ -204,19 +378,41 @@ def main():
 
     lib = load_plonky3_shim(project_root)
 
-    print(f"  {'Field':<12} {'N':<8} {'TRZK C (us)':<14} {'P3 Rust (us)':<14} {'Ratio':<8} {'Note'}")
-    print(f"  {'─'*12} {'─'*8} {'─'*14} {'─'*14} {'─'*8} {'─'*20}")
+    # Column layout depends on --lang
+    if args.lang == "c":
+        header = f"  {'Field':<12} {'N':<8} {'TRZK C (us)':<14} {'P3 Rust (us)':<14} {'Ratio':<8} {'Note'}"
+    elif args.lang == "rust":
+        header = f"  {'Field':<12} {'N':<8} {'TRZK Rs (us)':<14} {'P3 Rust (us)':<14} {'Ratio':<8} {'Note'}"
+    else:  # both
+        header = f"  {'Field':<12} {'N':<8} {'TRZK C (us)':<13} {'TRZK Rs (us)':<14} {'P3 (us)':<12} {'C/P3':<7} {'Rs/P3':<7} {'Note'}"
+    print(header)
+    print(f"  {'─'*(len(header)-2)}")
 
     for field_name in fields:
         for log_n in sizes:
             n = 1 << log_n
             tag = f"{get_field(field_name).display:<12} 2^{log_n:<5}"
 
-            try:
-                trzk_us, plan = trzk_c_timing(project_root, field_name, log_n, args.iters)
-            except Exception as e:
-                print(f"  {tag} TRZK FAIL: {e}")
-                continue
+            trzk_c_us = trzk_rs_us = None
+            plan = ""
+
+            if args.lang in ("c", "both"):
+                try:
+                    trzk_c_us, plan = trzk_c_timing(project_root, field_name, log_n,
+                                                    args.iters, profile=args.profile)
+                except Exception as e:
+                    print(f"  {tag} TRZK C FAIL: {str(e)[:80]}")
+                    if args.lang == "c":
+                        continue
+
+            if args.lang in ("rust", "both"):
+                try:
+                    trzk_rs_us, plan = trzk_rust_timing(project_root, field_name, log_n,
+                                                        args.iters, profile=args.profile)
+                except Exception as e:
+                    print(f"  {tag} TRZK Rust FAIL: {str(e)[:80]}")
+                    if args.lang == "rust":
+                        continue
 
             try:
                 p3_us = plonky3_timing(lib, field_name, log_n, args.iters)
@@ -224,14 +420,28 @@ def main():
                 print(f"  {tag} P3 FAIL: {e}")
                 continue
 
-            ratio = trzk_us / p3_us
-            note = plan
-            print(f"  {tag} {trzk_us:>10.1f}    {p3_us:>10.1f}    {ratio:>5.2f}x  {note}")
+            if args.lang == "c":
+                ratio = trzk_c_us / p3_us
+                print(f"  {tag} {trzk_c_us:>10.1f}    {p3_us:>10.1f}    {ratio:>5.2f}x  {plan}")
+            elif args.lang == "rust":
+                ratio = trzk_rs_us / p3_us
+                print(f"  {tag} {trzk_rs_us:>10.1f}    {p3_us:>10.1f}    {ratio:>5.2f}x  {plan}")
+            else:  # both
+                c_us_str = f"{trzk_c_us:>9.1f}" if trzk_c_us is not None else "     FAIL"
+                rs_us_str = f"{trzk_rs_us:>10.1f}" if trzk_rs_us is not None else "      FAIL"
+                c_ratio = f"{trzk_c_us/p3_us:>5.2f}x" if trzk_c_us is not None else "  n/a"
+                rs_ratio = f"{trzk_rs_us/p3_us:>5.2f}x" if trzk_rs_us is not None else "  n/a"
+                print(f"  {tag} {c_us_str}    {rs_us_str}    {p3_us:>8.1f}    {c_ratio}  {rs_ratio}  {plan}")
 
     print()
     print("  Ratio < 1.0 = TRZK faster. Ratio > 1.0 = Plonky3 faster.")
-    print("  TRZK: C scalar generated by emitCFromPlanStandard, cc -O2")
-    print("  P3:   Rust Radix2Dit::dft_batch, --release LTO, via FFI")
+    if args.lang in ("c", "both"):
+        print(f"  TRZK C:   emitCFromPlanStandard, {describe_profile_c(args.profile)}")
+    if args.lang in ("rust", "both"):
+        print(f"  TRZK Rs:  emitRustFromPlanStandard, {describe_profile_rust(args.profile)}")
+    print(f"  P3:       Rust Radix2Dit::dft_batch via FFI — {PLONKY3_PROFILE_DESCRIPTION}")
+    if args.lang == "both":
+        print(f"  Rust-vs-Rust (Rs/P3) eliminates compiler variable — isolates algorithm/design gap.")
     print("=" * 65)
 
 

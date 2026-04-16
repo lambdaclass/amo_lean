@@ -1,5 +1,158 @@
 # TRZK: Architecture
 
+## Next Version: 3.17.0
+
+### sbb Trick + Benchmark Fairness v3.17.0
+
+**Contents**: Cerrar el gap Goldilocks con Plonky3 vía truco `sbb` localizado en
+`goldi_butterfly` + compiler flag parity + fairness del framework de benchmarking.
+NO features algorítmicas nuevas. Detalle completo en `research/TRZK_SBB.md` §11
+(plan v4, líneas 515-976).
+
+**Vision**: Bajar Goldilocks 1.28x → ~1.05x vs Plonky3 scalar (~18% ganancia total
+= flags 3.5% + Opción B 12.4% + branch hints 1-2%). Dejar el framework de
+benchmarks honesto (no hay más "0.45x" engañoso escondiendo scalar vs NEON).
+Preparar comparabilidad fair para v3.18 (SIMD migration).
+
+**State post-v3.16.0**: Benchmarks reales vs Plonky3 FFI (24/24 oracle PASS).
+Rust Goldilocks compila. Gap medido: BabyBear 0.45x, Goldilocks 1.18x (cifra
+engañosa — asimetría de compiler flags + SIMD).
+
+**Mandatory constraints**:
+- Fase 2 Opción B tiene blast radius = `goldi_butterfly` ÚNICAMENTE. NO tocar
+  `goldi_add`, `goldi_sub`, `goldi_reduce128` original, `goldi_butterfly_shift`,
+  `goldi_butterfly4`, `goldi_butterfly4_inverted`.
+- NO migrar SIMD (diferida a v3.18 con scope 100-120 LOC).
+- NO integrar four-step NTT. NO-GO confirmado empíricamente (6-32% SLOWER a
+  m=64 N≤2^18). Re-open conditions en `research/TRZK_SBB.md` §11.8 (requiere
+  m ∈ {8,16,32} + malloc + ILP2 + N≥2^20 para reconsiderar).
+- M5 (`--profile`) default debe quedar `conservative` para no romper histórico.
+- M7 (Plonky3 shim scalar-only) es OPCIONAL — no ejecutar en v3.17.
+- Duplicación preambles reduce128 (4 sitios) NO se refactora — technical debt.
+
+#### DAG (3.17.0)
+
+| Nodo | Tipo | Deps | Files | LOC | Status |
+|------|------|------|-------|-----|--------|
+| N317.1 Fase 0.5: flags permanentes (-O3 -mcpu=apple-m1 -flto) | HOJA | — | Tests/benchmark/compiler.py, Tests/benchmark/benchmark_plonky3.py | ~15 Py | done |
+| N317.2 Fase 1: Opción A en paths activos (__builtin_expect + branchless carry) | PAR | — | AmoLean/EGraph/Verified/Bitwise/VerifiedPlanCodeGen.lean (L1104-1114 C, L1214-1230 Rust) | ~20 | done |
+| N317.3 Fase 2: Opción B localizada (goldi_reduce128_from_product en goldi_butterfly) | CRIT | N317.2 | AmoLean/EGraph/Verified/Bitwise/VerifiedPlanCodeGen.lean (goldi_butterfly only) | ~35 | rejected (no-op) |
+| N317.4 M1: fix stale comment L1101-1103 (R4 DIT añadido en v3.15.0 B3.5) | HOJA | — | AmoLean/EGraph/Verified/Bitwise/VerifiedPlanCodeGen.lean | 3 | done |
+| N317.5 M2: dead code shift preambles gated por hasShift | HOJA | — | AmoLean/EGraph/Verified/Bitwise/VerifiedPlanCodeGen.lean | 4 | done |
+| N317.6 M3: stdPlan dedup en UltraPipeline (extraer una vez, usar 2 veces) | HOJA | — | AmoLean/EGraph/Verified/Bitwise/UltraPipeline.lean (L268-290) | 5 | done |
+| N317.7 M4: __builtin_expect en butterflies (add/sub/mul_tw) | HOJA | N317.3 | AmoLean/EGraph/Verified/Bitwise/VerifiedPlanCodeGen.lean | 10 | done |
+| N317.8 M5: benchmark fairness (--profile conservative/match-plonky3 + metadata) | HOJA | — | Tests/benchmark/compiler.py, Tests/benchmark/benchmark_plonky3.py | ~30 Py | done |
+| N317.9 M6: commit four-step bench script como evidencia empírica | HOJA | — | Tests/benchmark/bench_four_step_isolated.py | ~100 Py | done |
+
+#### Formal Properties (3.17.0)
+
+| Nodo | Propiedad | Tipo | Prioridad |
+|------|-----------|------|-----------|
+| N317.1 | Goldilocks timing con -O3 -mcpu=apple-m1 -flto ≤ baseline -O2 × 0.965 | OPTIMIZATION | P0 |
+| N317.1 | benchmark_plonky3.py usa flags del --profile, no hardcoded | PRESERVATION | P0 |
+| N317.2 | Output numérico igual a baseline (oracle validation 24/24 PASS) | PRESERVATION | P0 |
+| N317.2 | Si assembly diff muestra 0 cambio → documentar no-op | COMPLETENESS | P1 |
+| N317.3 | `goldi_reduce128_from_product(a*b)` con a,b < P produce r ∈ [0, P+NEG_ORDER) | SOUNDNESS | P0 |
+| N317.3 | `(r >= P) ? r - P : r` canoniza correctamente (bound proof empírico, 200K/0 fails) | SOUNDNESS | P0 |
+| N317.3 | goldi_butterfly output element-by-element igual a baseline | EQUIVALENCE | P0 |
+| N317.3 | Speedup Goldilocks ≥ 10% end-to-end (esperado 12.4%) | OPTIMIZATION | P0 |
+| N317.4 | Comentario L1101-1103 coincide con preambles realmente emitidos | PRESERVATION | P1 |
+| N317.5 | Shift preambles emitidos solo si ∃ stage con useShift=true | PRESERVATION | P1 |
+| N317.6 | stdPlan idéntico en C path y Rust path post-dedup | PRESERVATION | P0 |
+| N317.7 | __builtin_expect aplicado sin cambio semántico (oracle 24/24 PASS) | PRESERVATION | P0 |
+| N317.8 | Default profile = "conservative" (no rompe histórico BENCHMARKS.md) | PRESERVATION | P0 |
+| N317.8 | Output reporta flags TRZK + Plonky3 + hw mode explícitamente | COMPLETENESS | P0 |
+| N317.9 | Bench script reproducible: `python3 bench_four_step_isolated.py` corre end-to-end | COMPLETENESS | P1 |
+
+> **Nota**: Propiedades en lenguaje natural (intención de diseño).
+> Verificación ejecutable en `research/RUBRICS.md` § v3.17.
+
+#### Bloques
+
+- [x] **B1 — Warmup cosméticos (N317.4 + N317.5 + N317.6 + N317.9)**: 4 nodos HOJA paralelos. M1: stale comment L1101-1103 actualizado. M2: `goldi_mul_tw` + `goldi_butterfly_shift` gated por `hasShift`. M3: `stdPlan` extraído una vez en UltraPipeline. M6: `bench_four_step_isolated.py` committed (351 LOC, reproduce NO-GO: +60.7%/+70.6%/+33.9% SLOWER a N=2^14/2^16/2^18). Gate: `lake build` 3136 jobs PASS + oracle 14/14. **DONE 2026-04-16.**
+
+- [x] **B2 — Benchmark fairness (N317.8 + absorbed)**: Añadido `--profile conservative\|match-plonky3` a `compile_c`/`compile_rust`. Hardcode `cc -O2` en `benchmark_plonky3.py:158` reemplazado. Metadata completa (flags TRZK + Plonky3 + SIMD asymmetry warning). Absorbido fix pre-existente: `use_standard` default flip False→True en validator.py/lean_driver.py/benchmark.py + `--use-legacy` escape hatch. **Hallazgo emergente**: con flags match-plonky3 el gap Goldilocks EMPEORA a 1.67x porque Plonky3 gana ~41% con -O3+LTO mientras TRZK C gana solo ~17%. **DONE 2026-04-16.**
+
+- [x] **B3 — Flags + Opción A (N317.1 + N317.2)**: N317.1 se redujo a 2 LOC CI cleanup (infra ya instalada en B2). N317.2: `__builtin_expect(borrow,0)` + branchless carry linearization en C preamble L1104-1114 + Rust L1214-1230. Gate: assembly diff **−61 ARM instr (−4.1% static)**, oracle 14/14 PASS, timing median pre/post 552→428μs = −22.6% mejor caso en misma sesión (rango −10 a −22%). **DONE 2026-04-16.**
+
+- [x] **B4 — Opción B localizada (N317.3) — EVALUADO Y DESCARTADO**: aplicado `goldi_reduce128_from_product` (non-canonical 11 instr) + `goldi_butterfly` canonicalize explícito. **Oracle 14/14 PASS + 8/8 edge cases PASS (bound proof validado empíricamente: max r = P+1)**. PERO assembly **idéntico** a post-B3 (1434 → 1434 instr) + timing median −1.2% (dentro varianza 20%). Clang `-O2` inlina ambas formas al mismo código. **Revertido**; comentario in-code documenta el experimento + bound proof preservado en `research/TRZK_SBB.md §11.1`. **DONE 2026-04-16.**
+
+- [x] **B5 — `goldi_add` linearización (N317.7)**: aplicado mismo patrón de N317.2 a goldi_add (flag-merge linearization). `goldi_sub` no tocado (ya lineal). `goldi_mul_tw` gated por hasShift (no emitido en default). Gate: **−31 ARM instr incremental** (1434 → 1403, total acumulado −92 instr −6.2%), oracle 14/14 PASS, timing median pre/post 507→467μs = **−8% Goldilocks match-plonky3**. **DONE 2026-04-16.**
+
+- [x] **B5.5 — Rust-vs-Rust benchmark (nuevo, post-B5)**: creado `emit_standard_rust.lean` (37 LOC) + `trzk_rust_timing()` en benchmark_plonky3.py (~100 LOC) + flag `--lang c\|rust\|both` (~40 LOC). **HALLAZGO CRÍTICO**: TRZK Rust vs Plonky3 Rust Goldilocks ratio = **1.07x** (no 1.69x). El 62 puntos porcentuales del gap era COMPILADOR (clang vs rustc+LTO+codegen-units=1), no algoritmo. Regresión guard: TRZK Rust output == TRZK C output byte-idéntico (32/32 PASS, Goldilocks+BabyBear × N=16..16384). **DONE 2026-04-16.**
+
+- [x] **B6 — BENCHMARKS.md rewrite + PR**: Reescrito BENCHMARKS.md con **Rust-vs-Rust como headline primary**: Goldilocks 1.07x, BabyBear 1.27x (parcialmente fair: TRZK scalar vs Plonky3 NEON). C-vs-Rust como secondary tabla. Fair Comparison Matrix completa. Interpretación honesta: el gap era ~11% compiler + ~7% algoritmo, no 18% todo algorítmico. **DONE 2026-04-16.**
+
+#### Orden Topológico
+
+```
+B1 → B2 → B3 → B4 → B5 → B6
+```
+
+B1/B2/B3 son paralelos en principio (sin deps), pero el prompt de ejecución
+prefiere secuencial para simplificar checkpoint + build confidence. B4 depende
+de B3 (N317.3 deps N317.2). B5 depende de B4 (N317.7 deps N317.3).
+
+#### Expectations vs Results (medidos en B6)
+
+```
+                              Planificado           Real (B6 final)
+Goldilocks (baseline 1.28x) → Target: ~1.05x     →  C-vs-Rust: 1.69x
+                                                    **Rust-vs-Rust: 1.07x** ✓
+BabyBear (baseline 0.45x)   → N/A (unchanged)    →  C-vs-Rust: 0.97x
+                                                    Rust-vs-Rust: 1.27x (NEON asymmetry)
+```
+
+**Impacto real de cada bloque**:
+
+```
+B1 (cosméticos):            sin cambio perf
+B2 (M5 fairness):           REVELA gap real; B2→1.67x match-plonky3 (Plonky3 gana +41% con -O3+LTO
+                            vs TRZK +17%). Honestidad incrementada.
+B3 (Opción A):              −61 ARM instr, −10-22% Goldilocks C (medición noise 20%).
+B4 (Opción B localizada):   EVALUADO Y DESCARTADO. Clang inline ambas formas al mismo assembly
+                            (1434 → 1434 instr idéntico). No-op, documentado in-code.
+B5 (goldi_add linearización): −31 ARM instr incremental (acumulado −92), −8% Goldilocks C.
+B5.5 (Rust-vs-Rust):        HALLAZGO CRÍTICO: el 62% del gap aparente era clang vs rustc+LTO,
+                            no algoritmo. Fair gap real = ~7% Goldilocks, ~27% BabyBear (con
+                            Plonky3 NEON advantage).
+B6 (docs):                  BENCHMARKS.md headline = Rust-vs-Rust fair comparison.
+```
+
+**Conclusión**: target original ~1.05x no alcanzado en C-vs-Rust (incorrectly framed). En
+Rust-vs-Rust el gap real es 1.07x Goldilocks — **7% de gap algorítmico real**, dentro del rango
+razonable. Para cerrar: v3.18 investiga migración SIMD en Rust + `core::hint::unlikely` branch
+hints.
+
+#### Re-open conditions four-step (preservadas de `research/TRZK_SBB.md` §11.8)
+
+<!-- Four-step NO-GO con condiciones explícitas. NO ejecutar en v3.17.
+     Re-open SOLO si hay caso de uso real para N ≥ 2^20 (e.g., recursive
+     proof composition). Requisitos acumulativos para re-abrir:
+     1. Fix VLA → malloc en emitFourStepC:L862 (1 línea).
+     2. Parametrizar m en emitFourStepC para probar m ∈ {8, 16, 32, 64}.
+        Análisis de stride: m=64 → 12.5%, m=32 → 25%, m=16 → 50%, m=8 → 100%
+        cache line utilization.
+     3. Aplicar ILP2 a Phase 4 (rows) para paridad con flat pipeline.
+     4. Benchmark con --profile match-plonky3 (M5 de v3.17).
+     5. Testear N ∈ {2^18, 2^20, 2^22}.
+     Si con TODAS las correcciones four-step sigue SLOWER en N=2^20 →
+     cerrar definitivamente. Evidencia empírica baseline commiteada en
+     Tests/benchmark/bench_four_step_isolated.py (N317.9). Gaps arquitectónicos
+     pendientes: Plan type no representa four-step, planTotalCostWith sin
+     branch four-step, planCacheCost asume flat, generateCandidates no lo
+     produce, goldi_butterfly_dif_shift falta en emitCFromPlanStandard,
+     emitFourStepC viola [Verified codegen only] (string emission pura). -->
+
+#### Fair Comparison Matrix (ref. `research/TRZK_SBB.md` §11.10)
+
+Post-v3.17 los benchmarks reportados son comparaciones fair **solo para
+Goldilocks scalar-vs-scalar**. BabyBear NEON-vs-NEON requiere v3.18. BabyBear
+scalar-vs-scalar fair requiere M7 opcional (Plonky3 shim scalar-only, no
+ejecutar en v3.17).
+
+---
+
 ## Next Version: 3.13.0
 
 ### SPIRAL + Compiler Driver + Path A Migration v3.13.0

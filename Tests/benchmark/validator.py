@@ -33,7 +33,7 @@ def validate(
     timeout: int = 120,
     scalar_program: "GeneratedProgram | None" = None,
     rust_simd: bool = False,
-    use_standard: bool = False,
+    use_standard: bool = True,  # v3.17.0 N317.8: aligned with generator default
 ) -> ValidationResult:
     """Full validation pipeline:
     1. Build validation program (prints NTT output elements)

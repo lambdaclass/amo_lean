@@ -251,43 +251,36 @@ def ultraPipeline (g : MixedEGraph)
   -- goldilocksButterfly4Stmt (v3.9.0 N39.9) provides 64-bit NEON infrastructure
   -- but full integration requires neonTempDecls64 + fold wiring (future work).
   let simdTarget := if cfg.hw.simdLanes == 8 then SIMDTarget.avx2 else SIMDTarget.neon
+  -- v3.17.0 N317.6: stdPlan computed once, used by both C and Rust paths.
+  -- Previously duplicated identically in each branch. Refactor preserves semantics.
+  -- v3.15.0 B3.5: Use competition winner if compatible with standard DFT.
+  -- Compatible = all stages are (R2 or R4) DIT, no lazy reduction.
+  -- R4 stages use inverted butterfly (lowerStageR4_Inverted). R2 stages unchanged.
+  -- Fallback to uniform R2 Harvey if winner is incompatible (DIF, lazy).
+  -- v3.16.0 B4: R4 only benefits at large N (cache effects dominate).
+  -- At N ≤ 2^14, R4 inverted overhead > 25% butterfly savings.
+  -- Force R2 for small N; allow R4 winner only when N > 16384.
+  let stdPlan :=
+    let isCompatible := plan.stages.toList.all fun s =>
+      (s.radix == .r2 || s.radix == .r4) && s.direction == .DIT && s.reduction != .lazy
+    let hasR4 := plan.stages.toList.any fun s => s.radix == .r4
+    let useWinner := isCompatible && (!hasR4 || n > 16384)
+    let base := if useWinner then plan
+      else NTTPlan.mkUniformPlan plan.field plan.size .r2 .harvey
+    -- ILP2 for Goldilocks R2 stages (same as legacy path L240-243)
+    if cfg.k > 32 && !cfg.hw.isSimd then
+      let hasR2 := base.stages.toList.any fun s => s.radix == .r2
+      if hasR2 then base.withILP 2 else base
+    else base
   let code := if cfg.hw.isSimd && cfg.k ≤ 32 then
     emitSIMDNTTC plan simdTarget cfg.k cfg.c cfg.mu funcName cfg.useSqdmulh cfg.useVerifiedSIMD cfg.profiled
   else if cfg.useStandardDFT then
-    -- v3.15.0 B3.5: Use competition winner if compatible with standard DFT.
-    -- Compatible = all stages are (R2 or R4) DIT, no lazy reduction.
-    -- R4 stages use inverted butterfly (lowerStageR4_Inverted). R2 stages unchanged.
-    -- Fallback to uniform R2 Harvey if winner is incompatible (DIF, lazy).
-    let isCompatible := plan.stages.toList.all fun s =>
-      (s.radix == .r2 || s.radix == .r4) && s.direction == .DIT && s.reduction != .lazy
-    -- v3.16.0 B4: R4 only benefits at large N (cache effects dominate).
-    -- At N ≤ 2^14, R4 inverted overhead > 25% butterfly savings.
-    -- Force R2 for small N; allow R4 winner only when N > 16384.
-    let hasR4 := plan.stages.toList.any fun s => s.radix == .r4
-    let useWinner := isCompatible && (!hasR4 || n > 16384)
-    let stdPlan := if useWinner then plan
-      else NTTPlan.mkUniformPlan plan.field plan.size .r2 .harvey
-    -- ILP2 for Goldilocks R2 stages (same as legacy path L240-243)
-    let stdPlan := if cfg.k > 32 && !cfg.hw.isSimd then
-        let hasR2 := stdPlan.stages.toList.any fun s => s.radix == .r2
-        if hasR2 then stdPlan.withILP 2 else stdPlan
-      else stdPlan
     emitCFromPlanStandard stdPlan cfg.k cfg.c cfg.mu funcName
   else
     emitCFromPlanVerified plan cfg.k cfg.c cfg.mu funcName
   let rustCode := if cfg.rustSIMD && cfg.hw.isSimd && cfg.k ≤ 32 then
     emitSIMDNTTRust plan simdTarget cfg.k cfg.c cfg.mu (funcName ++ "_rs") cfg.useSqdmulh
   else if cfg.useStandardDFT then
-    let isCompatible := plan.stages.toList.all fun s =>
-      (s.radix == .r2 || s.radix == .r4) && s.direction == .DIT && s.reduction != .lazy
-    let hasR4 := plan.stages.toList.any fun s => s.radix == .r4
-    let useWinner := isCompatible && (!hasR4 || n > 16384)
-    let stdPlan := if useWinner then plan
-      else NTTPlan.mkUniformPlan plan.field plan.size .r2 .harvey
-    let stdPlan := if cfg.k > 32 && !cfg.hw.isSimd then
-        let hasR2 := stdPlan.stages.toList.any fun s => s.radix == .r2
-        if hasR2 then stdPlan.withILP 2 else stdPlan
-      else stdPlan
     emitRustFromPlanStandard stdPlan cfg.k cfg.c cfg.mu (funcName ++ "_rs")
   else
     emitRustFromPlanVerified plan cfg.k cfg.c cfg.mu (funcName ++ "_rs")
