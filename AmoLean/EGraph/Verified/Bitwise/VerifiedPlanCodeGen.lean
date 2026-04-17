@@ -1098,32 +1098,55 @@ def emitCFromPlanStandard (plan : Plan) (k c mu : Nat)
     let bodyC := bodyC.replace "((int32_t)" "((uint64_t)"
     bodyC
   else bodyC
-  -- Preambles: R2 DIT core (Goldilocks) + bitrev.
-  -- R4/DIF preambles intentionally omitted — standard path is R2-only.
-  -- Missing R4 preamble → C compile error = compile-time guard against misuse.
+  -- Preambles: R2 + R4 DIT core (Goldilocks) + bitrev.
+  -- R4 inverted butterfly added in v3.15.0 B3.5 (goldi_butterfly4_inverted).
+  -- DIF preambles omitted (four-step deferred — see ARCHITECTURE.md v3.17.0 re-open conditions).
+  -- Missing DIF preamble → C compile error = compile-time guard against misuse.
+  -- v3.17.0 N317.5: goldi_mul_tw + goldi_butterfly_shift gated by hasShift
+  -- (shift variants emitted only when ∃ stage with useShift=true).
+  let hasShift := plan.stages.toList.any fun s => s.useShift
   let goldiPreamble := if k == 64 then
     let pStr := toString plan.field
+    -- v3.17.0 N317.2: Opción A — __builtin_expect (borrow rare) + branchless carry adjust.
+    -- Assembly diff gate verifies whether clang -O2 benefits from the hints.
     s!"static inline uint64_t goldi_reduce128(__uint128_t x) \{\n" ++
     s!"  uint64_t lo=(uint64_t)x, hi=(uint64_t)(x>>64);\n" ++
     s!"  uint64_t hh=hi>>32, hl=hi&0xFFFFFFFFULL;\n" ++
     s!"  uint64_t t0; int borrow=__builtin_sub_overflow(lo,hh,&t0);\n" ++
-    s!"  if(borrow) t0-=0xFFFFFFFFULL;\n" ++
+    s!"  if(__builtin_expect(borrow,0)) t0-=0xFFFFFFFFULL;\n" ++
     s!"  uint64_t t1=hl*0xFFFFFFFFULL;\n" ++
     s!"  uint64_t r; int carry=__builtin_add_overflow(t0,t1,&r);\n" ++
-    s!"  if(carry||r>={pStr}ULL) r-={pStr}ULL;\n" ++
+    s!"  r += (uint64_t)carry * 0xFFFFFFFFULL;\n" ++
+    s!"  if(r>={pStr}ULL) r-={pStr}ULL;\n" ++
     s!"  return r;\n}\n\n" ++
+    -- v3.17.0 N317.7: goldi_add flag-merge linearized (same technique as N317.2 on reduce128).
+    -- Old: `if(carry||r>=P) r-=P` — flag-merge of carry+cmp creates diamond dep in OoO pipeline.
+    -- New: `r += carry*NEG_ORDER; if(r>=P) r-=P` — linear chain, scheduler-friendly.
+    -- r - P ≡ r + NEG_ORDER (mod 2^64) because P = 2^64 - NEG_ORDER.
+    -- Matches Plonky3's Add impl (goldilocks.rs: `if over { sum += NEG_ORDER }; if sum >= ORDER ...`).
     s!"static inline uint64_t goldi_add(uint64_t a, uint64_t b) \{\n" ++
     s!"  uint64_t r; int carry=__builtin_add_overflow(a,b,&r);\n" ++
-    s!"  if(carry||r>={pStr}ULL) r-={pStr}ULL;\n" ++
+    s!"  r += (uint64_t)carry * 0xFFFFFFFFULL;\n" ++
+    s!"  if(r>={pStr}ULL) r-={pStr}ULL;\n" ++
     s!"  return r;\n}\n\n" ++
     s!"static inline uint64_t goldi_sub(uint64_t a, uint64_t b) \{\n" ++
     s!"  uint64_t r; int borrow=__builtin_sub_overflow(a,b,&r);\n" ++
     s!"  if(borrow) r+={pStr}ULL;\n" ++
     s!"  return r;\n}\n\n" ++
-    s!"static inline uint64_t goldi_mul_tw(uint64_t val, uint64_t tw) \{\n" ++
-    s!"  if (__builtin_popcountll(tw)==1)\n" ++
-    s!"    return goldi_reduce128((__uint128_t)val << __builtin_ctzll(tw));\n" ++
-    s!"  return goldi_reduce128((__uint128_t)tw*(__uint128_t)val);\n}\n\n" ++
+    -- v3.17.0 N317.3 (Opción B localizada): EVALUATED AND REJECTED.
+    -- Hypothesis: non-canonical reduce128_from_product + caller canonicalize saves
+    -- instructions vs canonical reduce128. Bound proof verified (200K + 8 edge cases,
+    -- max r = P+1 < P+NEG_ORDER, single subtract always canonicalizes).
+    -- Empirical result (B4): assembly IDENTICAL to post-N317.2 (1434 instr both).
+    -- clang -O2 inlines both forms to the same code. Opción A already linearized
+    -- the flag-merge serialization that was Opción B's purported mechanism.
+    -- Reverted to keep code simple. Bound proof preserved in research/TRZK_SBB.md §11.1.
+    (if hasShift then
+      s!"static inline uint64_t goldi_mul_tw(uint64_t val, uint64_t tw) \{\n" ++
+      s!"  if (__builtin_popcountll(tw)==1)\n" ++
+      s!"    return goldi_reduce128((__uint128_t)val << __builtin_ctzll(tw));\n" ++
+      s!"  return goldi_reduce128((__uint128_t)tw*(__uint128_t)val);\n}\n\n"
+     else "") ++
     s!"static inline uint64_t goldi_butterfly(\n" ++
     s!"    uint64_t *data, const uint64_t *twiddles,\n" ++
     s!"    uint64_t i, uint64_t j, uint64_t tw_idx) \{\n" ++
@@ -1132,14 +1155,16 @@ def emitCFromPlanStandard (plan : Plan) (k c mu : Nat)
     s!"  data[i]=goldi_add(a,wb);\n" ++
     s!"  data[j]=goldi_sub(a,wb);\n" ++
     s!"  return 0;\n}\n\n" ++
-    s!"static inline uint64_t goldi_butterfly_shift(\n" ++
-    s!"    uint64_t *data, const uint64_t *twiddles,\n" ++
-    s!"    uint64_t i, uint64_t j, uint64_t tw_idx) \{\n" ++
-    s!"  uint64_t a=data[i], b=data[j], w=twiddles[tw_idx];\n" ++
-    s!"  uint64_t wb=goldi_mul_tw(b,w);\n" ++
-    s!"  data[i]=goldi_add(a,wb);\n" ++
-    s!"  data[j]=goldi_sub(a,wb);\n" ++
-    s!"  return 0;\n}\n\n" ++
+    (if hasShift then
+      s!"static inline uint64_t goldi_butterfly_shift(\n" ++
+      s!"    uint64_t *data, const uint64_t *twiddles,\n" ++
+      s!"    uint64_t i, uint64_t j, uint64_t tw_idx) \{\n" ++
+      s!"  uint64_t a=data[i], b=data[j], w=twiddles[tw_idx];\n" ++
+      s!"  uint64_t wb=goldi_mul_tw(b,w);\n" ++
+      s!"  data[i]=goldi_add(a,wb);\n" ++
+      s!"  data[j]=goldi_sub(a,wb);\n" ++
+      s!"  return 0;\n}\n\n"
+     else "") ++
     -- v3.15.0 B3.5: R4 inverted butterfly for standard DFT
     -- Same 10 params as goldi_butterfly4, but inner=L+1(w1,w1p) / outer=L(w2,w3)
     -- and natural store order (out0,out1,out2,out3 instead of out0,out2,out1,out3)
@@ -1211,12 +1236,15 @@ def emitRustFromPlanStandard (plan : Plan) (k c mu : Nat)
     let bodyRust := bodyRust.replace twoPStr s!"({pStr}_u128 + {pStr}_u128)"
     bodyRust
   else bodyRust
+  -- v3.17.0 N317.5: gate shift-related Rust preambles by hasShift
+  let hasShift := plan.stages.toList.any fun s => s.useShift
   let goldiPreambleRust := if k == 64 then
     let pStr := toString plan.field
     s!"#[inline(always)]\n" ++
     -- v3.16.0 B2: All preambles return u128 (wideType) so Stmt.call assignments type-check.
     -- Internal computation stays u64; only the final return is cast with `as u128`.
     -- goldi_reduce128/add/sub/mul_tw: `r as u128`. Butterflies: `0u128`.
+    -- v3.17.0 N317.2: Opción A — branchless carry adjust (r += carry*NEG_ORDER).
     s!"fn goldi_reduce128(x: u128) -> u128 \{\n" ++
     s!"  let lo = x as u64;\n" ++
     s!"  let hi = (x >> 64) as u64;\n" ++
@@ -1225,26 +1253,32 @@ def emitRustFromPlanStandard (plan : Plan) (k c mu : Nat)
     s!"  let (mut t0, borrow) = lo.overflowing_sub(hh);\n" ++
     s!"  if borrow \{ t0 = t0.wrapping_sub(0xFFFFFFFF_u64); }\n" ++
     s!"  let t1 = hl.wrapping_mul(0xFFFFFFFF_u64);\n" ++
-    s!"  let (mut r, carry) = t0.overflowing_add(t1);\n" ++
-    s!"  if carry || r >= {pStr}_u64 \{ r = r.wrapping_sub({pStr}_u64); }\n" ++
+    s!"  let (r0, carry) = t0.overflowing_add(t1);\n" ++
+    s!"  let mut r = r0.wrapping_add((carry as u64).wrapping_mul(0xFFFFFFFF_u64));\n" ++
+    s!"  if r >= {pStr}_u64 \{ r = r.wrapping_sub({pStr}_u64); }\n" ++
     s!"  r as u128\n}\n\n" ++
+    -- v3.17.0 N317.7: goldi_add flag-merge linearized (Rust mirror of C change).
     s!"#[inline(always)]\n" ++
     s!"fn goldi_add(a: u64, b: u64) -> u128 \{\n" ++
-    s!"  let (mut r, carry) = a.overflowing_add(b);\n" ++
-    s!"  if carry || r >= {pStr}_u64 \{ r = r.wrapping_sub({pStr}_u64); }\n" ++
+    s!"  let (r0, carry) = a.overflowing_add(b);\n" ++
+    s!"  let mut r = r0.wrapping_add((carry as u64).wrapping_mul(0xFFFFFFFF_u64));\n" ++
+    s!"  if r >= {pStr}_u64 \{ r = r.wrapping_sub({pStr}_u64); }\n" ++
     s!"  r as u128\n}\n\n" ++
     s!"#[inline(always)]\n" ++
     s!"fn goldi_sub(a: u64, b: u64) -> u128 \{\n" ++
     s!"  let (mut r, borrow) = a.overflowing_sub(b);\n" ++
     s!"  if borrow \{ r = r.wrapping_add({pStr}_u64); }\n" ++
     s!"  r as u128\n}\n\n" ++
-    s!"#[inline(always)]\n" ++
-    s!"fn goldi_mul_tw(val: u64, tw: u64) -> u128 \{\n" ++
-    s!"  if tw.count_ones() == 1 \{\n" ++
-    s!"    goldi_reduce128((val as u128) << tw.trailing_zeros())\n" ++
-    s!"  } else \{\n" ++
-    s!"    goldi_reduce128((tw as u128) * (val as u128))\n" ++
-    s!"  }\n}\n\n" ++
+    -- v3.17.0 N317.3: Opción B localizada evaluada y descartada (ver C preamble comment).
+    (if hasShift then
+      s!"#[inline(always)]\n" ++
+      s!"fn goldi_mul_tw(val: u64, tw: u64) -> u128 \{\n" ++
+      s!"  if tw.count_ones() == 1 \{\n" ++
+      s!"    goldi_reduce128((val as u128) << tw.trailing_zeros())\n" ++
+      s!"  } else \{\n" ++
+      s!"    goldi_reduce128((tw as u128) * (val as u128))\n" ++
+      s!"  }\n}\n\n"
+     else "") ++
     s!"#[inline(always)]\n" ++
     s!"fn goldi_butterfly(data: &mut [u64], twiddles: &[u64], i: u128, j: u128, tw_idx: u128) -> u128 \{\n" ++
     s!"  let (i,j,tw_idx) = (i as usize, j as usize, tw_idx as usize);\n" ++
@@ -1253,14 +1287,16 @@ def emitRustFromPlanStandard (plan : Plan) (k c mu : Nat)
     s!"  data[i] = goldi_add(a, wb) as u64;\n" ++
     s!"  data[j] = goldi_sub(a, wb) as u64;\n" ++
     s!"  0u128\n}\n\n" ++
-    s!"#[inline(always)]\n" ++
-    s!"fn goldi_butterfly_shift(data: &mut [u64], twiddles: &[u64], i: u128, j: u128, tw_idx: u128) -> u128 \{\n" ++
-    s!"  let (i,j,tw_idx) = (i as usize, j as usize, tw_idx as usize);\n" ++
-    s!"  let a = data[i]; let b = data[j]; let w = twiddles[tw_idx];\n" ++
-    s!"  let wb = goldi_mul_tw(b, w) as u64;\n" ++
-    s!"  data[i] = goldi_add(a, wb) as u64;\n" ++
-    s!"  data[j] = goldi_sub(a, wb) as u64;\n" ++
-    s!"  0u128\n}\n\n" ++
+    (if hasShift then
+      s!"#[inline(always)]\n" ++
+      s!"fn goldi_butterfly_shift(data: &mut [u64], twiddles: &[u64], i: u128, j: u128, tw_idx: u128) -> u128 \{\n" ++
+      s!"  let (i,j,tw_idx) = (i as usize, j as usize, tw_idx as usize);\n" ++
+      s!"  let a = data[i]; let b = data[j]; let w = twiddles[tw_idx];\n" ++
+      s!"  let wb = goldi_mul_tw(b, w) as u64;\n" ++
+      s!"  data[i] = goldi_add(a, wb) as u64;\n" ++
+      s!"  data[j] = goldi_sub(a, wb) as u64;\n" ++
+      s!"  0u128\n}\n\n"
+     else "") ++
     -- v3.15.0 B3.5: R4 inverted butterfly (Rust) — v3.16.0 B2: returns u128
     s!"#[inline(always)]\n" ++
     s!"fn goldi_butterfly4_inverted(data: &mut [u64], twiddles: &[u64],\n" ++
@@ -1284,6 +1320,10 @@ def emitRustFromPlanStandard (plan : Plan) (k c mu : Nat)
   -- v3.16.0 B2: retType=wideType, indexType=wideType for Goldilocks (Rust has no implicit widening)
   -- elemType (not uElemType) because BabyBear transmutes data to &mut [i32] before Stmt.call
   let indexType := if k == 64 then "u128" else "usize"
+  -- v3.17.0 post-B6: silence 300+ warnings that are all unused_parens / dead_code artifacts
+  -- of the mechanical codegen (stmtToRust emits conservative parens; some t0/t1 temps are
+  -- assigned but not read in all branches of the dispatch). None are correctness-indicative.
+  "#![allow(unused_parens, unused_variables, unused_assignments, unused_mut, dead_code)]\n" ++
   goldiPreambleRust ++ bitRevPermutePreambleRust elemType wideType indexType ++
   s!"fn {funcName}(data: &mut [{uElemType}], twiddles: &[{uElemType}]) \{\n{tempDecls}{loopDecls}{loadDecls}{r4LoadDecls}{ilp2Decls}{transmute}{bodyRust}\n}"
 
@@ -1455,6 +1495,8 @@ def emitRustFromPlanVerified (plan : Plan) (k c mu : Nat)
     s!"  data[i2] = goldi_add(d0,d1); data[i3] = goldi_mul_tw(goldi_sub(d0,d1), w1p);\n" ++
     s!"  0\n}\n\n"
   else ""
+  -- v3.17.0 post-B6: crate-level allow for mechanical codegen artifacts (see Standard).
+  "#![allow(unused_parens, unused_variables, unused_assignments, unused_mut, dead_code)]\n" ++
   goldiPreambleRust ++
   s!"fn {funcName}(data: &mut [{uElemType}], twiddles: &[{uElemType}]) \{\n{tempDecls}{loopDecls}{loadDecls}{r4LoadDecls}{transmute}{bodyRust}\n}"
 

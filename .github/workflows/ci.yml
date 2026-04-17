@@ -269,8 +269,9 @@ jobs:
     - name: C scalar validation (standard DFT)
       run: |
         echo "=== C Scalar Validation: Standard DFT ==="
+        # v3.17.0 N317.1: --use-standard removed (default=True since N317.8).
         python3 Tests/benchmark/benchmark.py \
-          --validation-only --use-standard --fields babybear,goldilocks --sizes 14
+          --validation-only --fields babybear,goldilocks --sizes 14
         echo "C scalar validation PASS"
 
     - name: Oracle validation (TRZK vs Plonky3 real)

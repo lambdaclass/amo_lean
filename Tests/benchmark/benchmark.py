@@ -46,8 +46,15 @@ def main():
                         help="Use verified SIMD path (Stmt.call + simdStmtToC, v3.7.0)")
     parser.add_argument("--rust-simd", action="store_true",
                         help="Use Rust SIMD path (core::arch::aarch64, v3.8.0)")
-    parser.add_argument("--use-standard", action="store_true",
-                        help="v3.15.0: Standard DFT (bitrev + DIT small→large, matches Plonky3)")
+    # v3.17.0 N317.8 (absorbed): use_standard default flipped to True.
+    # Since v3.15.0 the TRZK generator emits standard DFT by default. The validator
+    # was still comparing against the legacy ref_dit Python reference, producing
+    # confusing FAILs out of the box. Align validator with generator default.
+    parser.add_argument("--use-standard", dest="use_standard",
+                        action="store_true", default=True,
+                        help="Standard DFT validator (default since v3.17.0, matches Plonky3)")
+    parser.add_argument("--use-legacy", dest="use_standard", action="store_false",
+                        help="Legacy ref_dit validator (pre-v3.15.0 path). Only useful for archaeology.")
     args = parser.parse_args()
 
     # Resolve paths
@@ -78,8 +85,7 @@ def main():
     print(f"  Langs:    {langs}")
     print(f"  Hardware: {hardware}")
     print(f"  Pipeline: {args.pipeline}")
-    if args.use_standard:
-        print(f"  DFT:      standard (v3.15.0, bitrev + DIT small→large)")
+    print(f"  DFT:      {'standard' if args.use_standard else 'legacy ref_dit'}")
     print(f"  Project:  {project_root}")
     print()
 

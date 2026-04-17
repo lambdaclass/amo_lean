@@ -29,7 +29,7 @@ def generate_program(
     timeout: int = 300,
     verified_simd: bool = False,
     rust_simd: bool = False,
-    use_standard: bool = False,
+    use_standard: bool = True,  # v3.17.0 N317.8: aligned with generator default
 ) -> GeneratedProgram:
     """Invoke emit_code.lean to generate raw C/Rust source code."""
     cmd = [
