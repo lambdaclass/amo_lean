@@ -1,6 +1,83 @@
 # TRZK: Architecture
 
-## Next Version: 3.17.0
+## Next Version: 3.18.0
+
+### Differential Fuzzing v3.18.0
+
+**Contents**: Triangular differential fuzzing — TRZK vs Plonky3 vs Python naive —
+para validación exhaustiva de correctness. Reemplaza el oracle de 14-24 test points
+por ~10,000 inputs (random + edge cases). Detalle completo en `research/TRZK_SBB.md`
+§12 (líneas 980-1454).
+
+**Vision**: Cobertura estadística de ~10K inputs vs 14-24 actuales. Detección de
+bugs históricos (L-732/L-733/L-739) si reaparecen. Onboarding protegido para colega
+nuevo que no tiene intuición sobre gotchas del codegen.
+
+**State post-v3.17.0**: v3.17 merged en spiral (PR #21 pendiente de merge a main).
+Working tree `feat/v3.18-fuzzing` tiene commit pre-fuzzing `44bff09` (canonical sizes
+14/18/20 + batch NTT caveat). Oracle actual: 14/14 PASS (single input per size).
+
+**Mandatory constraints**:
+- Exclusivamente differential fuzzing. SIMD migration, anomalía BabyBear, cleanup
+  de warnings at source → v3.19 (§13).
+- Triangular (TRZK + Plonky3 + Python naive) para N ≤ 1024;
+  2-way (TRZK + Plonky3) para N > 1024 (Python O(N²) inviable a N grande).
+- NO tocar código Lean. v3.18 es 100% Python + YAML + Markdown.
+- Reutilizar ~70% de infraestructura existente: `oracle_validate.py` functions,
+  `plonky3_shim` FFI, `reference_ntt.py` / `test_four_step.py` naive DFT, `field_defs`.
+- NO modificar `oracle_validate.py` existente (coexisten: oracle como smoke, fuzz como deep).
+- Sizing canónico fuzz: triangular {8, 64, 256, 1024} + 2-way {2^14}.
+  NO confundir con sizes de benchmark performance (14/18/20, commit 44bff09).
+
+#### DAG (3.18.0)
+
+| Nodo | Tipo | Deps | Files | LOC | Status |
+|------|------|------|-------|-----|--------|
+| N318.1 Skeleton differential_fuzz.py (imports + argparse + structure) | HOJA | — | Tests/benchmark/differential_fuzz.py | ~30 Py | pending |
+| N318.2 trzk_ntt_with_input (stdin-driven harness, binary cache) | CRIT | N318.1 | Tests/benchmark/differential_fuzz.py | ~50 Py | pending |
+| N318.3 edge_cases (~15 patterns: all-zero/all-max/boundary/etc) | HOJA | N318.1 | Tests/benchmark/differential_fuzz.py | ~25 Py | pending |
+| N318.4 fuzz_one (3-way N≤1024 / 2-way N>1024) + main orchestration | PAR | N318.2, N318.3 | Tests/benchmark/differential_fuzz.py | ~40 Py | pending |
+| N318.5 Validation gate: --mode fast passes against v3.17 baseline | GATE | N318.4 | Tests/benchmark/ | 0 | pending |
+| N318.6 CI job differential-fuzzing (fast en push) | HOJA | N318.5 | .github/workflows/ci.yml | ~15 YAML | pending |
+| N318.7 BENCHMARKS.md §0 Correctness update con fuzz coverage | HOJA | N318.5 | BENCHMARKS.md | ~10 MD | pending |
+
+#### Formal Properties (3.18.0)
+
+| Nodo | Propiedad | Tipo | Prioridad |
+|------|-----------|------|-----------|
+| N318.1 | differential_fuzz.py imports clean, no circular deps | COMPLETENESS | P1 |
+| N318.2 | trzk_ntt_with_input produces same output as direct emit_standard.lean for same input | EQUIVALENCE | P0 |
+| N318.2 | Binary cache avoids re-compilation per iteration | OPTIMIZATION | P0 |
+| N318.3 | edge_cases covers ≥15 distinct patterns per field | COMPLETENESS | P0 |
+| N318.3 | edge_cases output is deterministic | PRESERVATION | P0 |
+| N318.4 | fuzz_one(N≤1024): TRZK == Plonky3 == Python naive element-by-element | EQUIVALENCE | P0 |
+| N318.4 | fuzz_one(N>1024): TRZK == Plonky3 element-by-element | EQUIVALENCE | P0 |
+| N318.4 | Seed-reproducibility: same seed → same test sequence | PRESERVATION | P0 |
+| N318.5 | --mode fast against v3.17 code: 100% PASS | SOUNDNESS | P0 |
+| N318.5 | --mode fast runtime ≤ 60s | OPTIMIZATION | P1 |
+| N318.6 | CI job differential-fuzzing passes on PR push | SOUNDNESS | P0 |
+| N318.7 | BENCHMARKS.md §0 Correctness documents fuzz coverage | COMPLETENESS | P1 |
+
+#### Blocks (3.18.0)
+
+- [ ] B1 — Foundation (N318.1 + N318.3): skeleton + edge_cases en paralelo. Gate: imports clean, edge_cases() ≥15 tuplas.
+- [ ] B2 — Pain point (N318.2, CRIT): trzk_ntt_with_input. Gate: binary cache (1 compile, N runs), output = emit_standard.lean.
+- [ ] B3 — Main logic (N318.4): fuzz_one + main. Gate: --help OK, --mode fast N=8 × 10 iters PASS.
+- [ ] B4 — Validation gate (N318.5, GATE): --mode fast 100%. Si falla → REVERT.
+- [ ] B5 — CI integration (N318.6): job differential-fuzzing en ci.yml. Gate: CI verde.
+- [ ] B6 — Docs (N318.7): BENCHMARKS.md §0 Correctness agrega capa fuzz. Gate: markdown válido.
+
+Order: `B1 → B2 → B3 → B4 → B5 → B6`
+
+#### Expectations (3.18.0)
+
+Sin cambios de performance (es correctness pura). Valor: cobertura de ~10K inputs
+vs 14-24 actuales. Triangular trust en N ≤ 1024, 2-way en N > 1024. ~150 LOC Python
++ 15 YAML + 10 markdown. ~3h de trabajo total estimado.
+
+---
+
+## Previous Version: 3.17.0
 
 ### sbb Trick + Benchmark Fairness v3.17.0
 

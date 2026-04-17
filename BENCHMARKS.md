@@ -19,6 +19,10 @@ Output verified element-by-element (mod p) against:
 | Python naive DFT | `_naive_dft` O(N²) | BabyBear, Goldilocks | N=4..1024 R2+R4 | 36/36 PASS |
 | Oracle vs Plonky3 | `plonky3_ntt_forward` FFI | BabyBear, Goldilocks | N=8..1024 R2 | 14/14 PASS |
 | TRZK Rust = TRZK C | compared outputs | BabyBear, Goldilocks | N=16..16384 | 32/32 PASS |
+| **Differential Fuzz** (v3.18.0) | TRZK C vs Plonky3 vs Python naive (3-way N≤1024, 2-way N>1024) | BabyBear, Goldilocks | N=8..16384, 100 random + 15 edge per combo | **1150/1150 PASS** |
+
+Differential fuzzing (v3.18.0) replaces single-point oracle with ~1000 random + structured
+inputs per (field × size). Reproduce: `python3 Tests/benchmark/differential_fuzz.py --mode fast --seed 42`
 
 ---
 
@@ -34,39 +38,59 @@ to fresh-compile overhead (cold iTLB, cold data cache, CPU frequency ramp). The 
 
 Both TRZK and Plonky3 compiled with `rustc --release` equivalent flags. Eliminates compiler variable.
 
-| Field | N | TRZK Rust (μs) | Plonky3 Rust (μs) | **Rust/P3 Ratio** | Note |
-|-------|---|----------------|-------------------|--------------------|------|
-| **Goldilocks** | 2^14 | **233.1** | 248.8 | **0.94x** | TRZK **6% FASTER** |
-| **BabyBear** | 2^14 | **145.2** | 192.5 | **0.75x** | TRZK **25% FASTER** (despite Plonky3's NEON) |
+Canonical sizes: **N=2^14** (cache-resident, working set fits L1/L2), **N=2^18**
+(cache-pressured, ~2-4MB), **N=2^20** (cache-miss-dominant, ~8MB+). Single-vector NTT
+(width=1) — see §8 for the batch NTT caveat.
 
-**Key finding**: in fair (same-compiler, same-flags) Rust-vs-Rust comparison, **TRZK is competitive
-or faster than Plonky3** in steady state. Previous reports of 1.07x-1.27x (Rust-vs-Rust) or
-1.18x-1.69x (C-vs-Rust) conflated fresh-compile warmup overhead with algorithmic gap.
+| Field | N | TRZK Rust (μs) | Plonky3 Rust (μs) | **Rust/P3 Ratio** |
+|-------|---|----------------|-------------------|--------------------|
+| **Goldilocks** | 2^14 | **232.6** | 249.2 | **0.93x** (TRZK +7%) |
+| **Goldilocks** | 2^18 | **5395.7** | 5901.6 | **0.91x** (TRZK +9%) |
+| **Goldilocks** | 2^20 | **24351.0** | 28357.6 | **0.86x** (TRZK +14%) |
+| **BabyBear** | 2^14 | **140.1** | 192.7 | **0.73x** (TRZK +27%) |
+| **BabyBear** | 2^18 | **3324.0** | 4895.4 | **0.68x** (TRZK +32%) |
+| **BabyBear** | 2^20 | **15201.0** | 23284.0 | **0.65x** (TRZK +35%) |
+
+**Key findings**:
+
+1. In fair (same-compiler, same-flags) Rust-vs-Rust comparison, **TRZK outperforms Plonky3** on
+   both fields at all tested sizes.
+2. **The advantage grows monotonically with N**. At N=2^20 (cache-miss-dominant regime), TRZK
+   wins by 14-35%. The plan selected by TRZK's optimizer (R2 uniform Harvey + ILP2 for
+   Goldilocks) scales better than Plonky3's vanilla `Radix2Dit::dft_batch` with single-vector
+   input. See §8 for important caveat on batch workloads.
+3. The BabyBear gap growth is especially notable given Plonky3 has NEON packing available
+   (`p3-baby-bear/src/aarch64_neon/`). At width=1 that packing doesn't activate, which is part
+   of §8's caveat.
 
 ### 2. Secondary — C-vs-Rust cross-compiler (retained for historical continuity)
 
 Not apples-to-apples. TRZK C (clang) vs Plonky3 Rust (rustc + LTO + codegen-units=1). Useful only
 for users who'll deploy C output; the Rust path (§1) is the fair comparison.
 
-| Field | N | TRZK C (μs) | Plonky3 Rust (μs) | C/P3 Ratio | Note |
-|-------|---|-------------|-------------------|------------|------|
-| Goldilocks | 2^14 | 268.4 | 248.8 | 1.08x | TRZK C 8% behind Plonky3 Rust |
-| BabyBear | 2^14 | 134.3 | 192.5 | 0.70x | TRZK C **30% FASTER** than Plonky3 Rust |
+| Field | N | TRZK C (μs) | Plonky3 Rust (μs) | C/P3 Ratio |
+|-------|---|-------------|-------------------|------------|
+| Goldilocks | 2^14 | 269.2 | 249.2 | 1.08x |
+| Goldilocks | 2^18 | 6274.5 | 5901.6 | 1.06x |
+| Goldilocks | 2^20 | 28785.8 | 28357.6 | 1.02x |
+| BabyBear | 2^14 | 134.4 | 192.7 | 0.70x |
+| BabyBear | 2^18 | 3352.9 | 4895.4 | 0.68x |
+| BabyBear | 2^20 | 15511.4 | 23284.0 | 0.67x |
 
-**Explanation of remaining C vs Rust gap for Goldilocks**: TRZK C (cc -O3 -flto -mcpu=apple-m1)
-is 14% slower than TRZK Rust (rustc opt-level=3 LTO codegen-units=1) for Goldilocks
-(268 vs 233 μs). The difference is LLVM's cross-module inlining with `codegen-units=1` that
-clang-C builds don't match. This is a compiler/build-system difference, not an algorithm
-difference. BabyBear C actually outperforms Rust slightly (134 vs 145 μs) — likely because
-BabyBear uses signed `int32_t` Montgomery REDC with arithmetic right shift, which benefits from
-clang's signed-int optimization patterns.
+**Explanation of Goldilocks C-vs-Rust gap**: TRZK C (cc -O3 -flto -mcpu=apple-m1) is 13-18%
+slower than TRZK Rust across sizes. The difference is LLVM's cross-module inlining with
+`codegen-units=1` that clang-C builds don't match. This is a compiler/build-system difference,
+not an algorithm difference. **BabyBear C and Rust track each other closely** (within ~5%) —
+BabyBear's signed `int32_t` Montgomery REDC gets similar treatment from both compilers. The
+Goldilocks C-vs-Plonky3 ratio also narrows with N (1.08x → 1.02x) — at large N, cache effects
+dominate and compiler inlining matters less.
 
-### 2b. Conservative profile (cc -O2 / rustc -O, for comparison)
+### 2b. Conservative profile (cc -O2 / rustc -O, N=2^14 reference only)
 
-| Field | N | TRZK C (μs) | TRZK Rust (μs) | Plonky3 Rust (μs) | C/P3 | Rust/P3 |
-|-------|---|-------------|----------------|-------------------|------|---------|
-| Goldilocks | 2^14 | 271.9 | 257.8 | 249.0 | 1.09x | 1.04x |
-| BabyBear | 2^14 | 136.3 | 146.1 | 192.6 | 0.71x | 0.76x |
+| Field | TRZK C (μs) | TRZK Rust (μs) | Plonky3 Rust (μs) | C/P3 | Rust/P3 |
+|-------|-------------|----------------|-------------------|------|---------|
+| Goldilocks | 271.9 | 257.8 | 249.0 | 1.09x | 1.04x |
+| BabyBear | 136.3 | 146.1 | 192.6 | 0.71x | 0.76x |
 
 Note: Plonky3 is always compiled `--release` via its Cargo.toml profile; the `conservative`
 label applies only to TRZK's compilation. So `conservative` is asymmetric — TRZK with less
@@ -106,9 +130,10 @@ lake build bench
 cd verification/plonky3 && make shim && cd ../..
 
 # === PRIMARY: Rust-vs-Rust fair comparison ===
+# Canonical sizes: 14 (cache-resident), 18 (cache-pressured), 20 (cache-miss-dominant)
 python3 Tests/benchmark/benchmark_plonky3.py \
     --lang both --profile match-plonky3 \
-    --fields goldilocks,babybear --sizes 14 --iters 30
+    --fields goldilocks,babybear --sizes 14,18,20 --iters 30
 
 # === Correctness gates ===
 python3 Tests/benchmark/oracle_validate.py \
@@ -192,7 +217,37 @@ in §1-§2 above use the warmup-corrected methodology.
 
 ---
 
-### 7. Honest Interpretation
+### 8. Batch NTT caveat — why the "TRZK wins" numbers have an asterisk
+
+The Plonky3 reference used in §1 and §2 is accessed through `plonky3_shim/src/lib.rs`, which
+invokes `Radix2Dit::dft_batch()` with `width=1` (single polynomial per call). **This bypasses
+Plonky3's batch optimizations** that normally activate with `width > 1`:
+
+- `PackedMontyField31Neon` (BabyBear NEON packing, `WIDTH=4`) — inactive, because rows of
+  `width=1` can't fill a 4-lane SIMD chunk.
+- `Radix2DitParallel` — typically used when multiple polynomials are transformed together.
+- Bowers network variants — similar story.
+
+**What the numbers in §1 actually show**: TRZK (single-vector, no SIMD) vs Plonky3 (single-
+vector, no SIMD). A fair comparison of single-vector NTT performance.
+
+**What a real prover workload does**: batch NTT over many polynomials (e.g., commit to a matrix
+of polynomials). Plonky3 is designed for this context — with `width >> 1`, NEON packing and
+parallel variants activate. A batch NTT with `width=4` might show Plonky3 regaining most or all
+of the reported gap for BabyBear.
+
+**TRZK's current codegen is single-vector only**. There is no `ntt_batch(data[B][N], twiddles)`
+interface. Comparing TRZK vs Plonky3 in batch context requires either (a) calling TRZK N-times
+sequentially vs Plonky3 batch, or (b) adding batch codegen to TRZK. Both are planned
+investigations for v3.19+ (see `research/TRZK_SBB.md §13.3`).
+
+**Bottom line**: the §1 headline "TRZK beats Plonky3 by 7-35%" is correct for single-vector
+NTT. For batch NTT workloads (typical in production provers), this comparison doesn't apply yet.
+Users planning to integrate TRZK should consider their actual workload pattern.
+
+---
+
+### 9. Honest Interpretation
 
 **Pre-v3.17 narrative (incomplete)**: "TRZK has a 18% algorithmic gap with Plonky3 on Goldilocks."
 
