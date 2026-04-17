@@ -19,6 +19,10 @@ Output verified element-by-element (mod p) against:
 | Python naive DFT | `_naive_dft` O(N²) | BabyBear, Goldilocks | N=4..1024 R2+R4 | 36/36 PASS |
 | Oracle vs Plonky3 | `plonky3_ntt_forward` FFI | BabyBear, Goldilocks | N=8..1024 R2 | 14/14 PASS |
 | TRZK Rust = TRZK C | compared outputs | BabyBear, Goldilocks | N=16..16384 | 32/32 PASS |
+| **Differential Fuzz** (v3.18.0) | TRZK C vs Plonky3 vs Python naive (3-way N≤1024, 2-way N>1024) | BabyBear, Goldilocks | N=8..16384, 100 random + 15 edge per combo | **1150/1150 PASS** |
+
+Differential fuzzing (v3.18.0) replaces single-point oracle with ~1000 random + structured
+inputs per (field × size). Reproduce: `python3 Tests/benchmark/differential_fuzz.py --mode fast --seed 42`
 
 ---
 

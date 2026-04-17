@@ -282,6 +282,14 @@ jobs:
           --fields babybear,goldilocks --sizes 3,6,10
         echo "Oracle validation PASS"
 
+    - name: Differential fuzzing (v3.18.0)
+      run: |
+        echo "=== Differential Fuzzing: TRZK vs Plonky3 vs Python naive ==="
+        python3 Tests/benchmark/differential_fuzz.py \
+          --mode fast --seed 42 \
+          --fields goldilocks,babybear --sizes 3,6,8,10,14
+        echo "Differential fuzzing PASS"
+
   summary:
     name: CI Summary
     runs-on: ubuntu-latest
