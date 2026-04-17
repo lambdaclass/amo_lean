@@ -8,7 +8,7 @@ Reports with 6 requirements: correctness ref, P3 version, TRZK strategy,
 artefacts dir, reproduction instructions, metadata.
 
 Usage:
-    python3 benchmark_plonky3.py [--fields babybear,goldilocks] [--sizes 14,16] [--iters 10]
+    python3 benchmark_plonky3.py [--fields babybear,goldilocks] [--sizes 14,18,20] [--iters 10]
 """
 
 import argparse
@@ -345,7 +345,9 @@ fn main() {{
 def main():
     parser = argparse.ArgumentParser(description="TRZK vs Plonky3 Real Timing")
     parser.add_argument("--fields", default="babybear,goldilocks")
-    parser.add_argument("--sizes", default="14")
+    parser.add_argument("--sizes", default="14,18,20",
+                        help="Comma-separated log2(N). Canonical: small/medium/large = "
+                             "14 (cache-resident), 18 (cache-pressured), 20 (cache-miss-dominant).")
     parser.add_argument("--iters", type=int, default=10)
     parser.add_argument("--project-root", default=None)
     parser.add_argument("--profile", default="conservative",
