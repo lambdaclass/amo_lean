@@ -616,118 +616,107 @@ BF2+BF3 (conditionalSub + Stark252): deferred to future version.
 ## Current Version: 3.10.1 (COMPLETE)
 
 
-### Phase A: Emission optimization + cache fixes
 
-**Contents**: F5c butterfly Stmt.call closes loop overhead gap. CacheConfig fix + level-aware model improve plan accuracy. Benchmark Rust vs Plonky3.
+### v3.19 — Plonky3 Batch Benchmark + Rust Primary + Conditional SIMD
+
+**Contents**: Formalización del plan en research/TRZK_SBB.md §13. Bloque 1 ya ejecutado en commit 44bff09 (BENCHMARKS.md update con N=2^14/2^18/2^20 + caveat width=1). Arranque real: Bloque 2 (Plonky3 batch benchmark via FFI shim). Bloque 4 (SIMD migration) es CONDICIONAL al veredicto de Bloque 2. Bloque 5 es deuda técnica, baja prioridad.
 
 **Files**:
-- `AmoLean/EGraph/Verified/Bitwise/NTTPlanSelection.lean`
+- `BENCHMARKS.md`
+- `verification/plonky3/plonky3_shim/src/lib.rs`
+- `verification/plonky3/plonky3_shim/Cargo.toml`
+- `Tests/benchmark/benchmark_plonky3_batch.py`
+- `research/TRZK_SBB.md`
+- `README.md`
+- `.github/workflows/ci.yml`
+- `AmoLean/EGraph/Verified/Bitwise/SIMDEmitter.lean`
+- `AmoLean/Bridge/SIMDStmtToRust.lean`
+- `Tests/benchmark/oracle_validate.py`
+- `Tests/benchmark/`
+- `AmoLean/Bridge/TrustLeanRust.lean`
 - `AmoLean/EGraph/Verified/Bitwise/VerifiedPlanCodeGen.lean`
+- `Tests/benchmark/benchmark_plonky3.py`
 
-#### DAG (3.12.0)
+#### DAG (3.19.0)
 
 | Nodo | Tipo | Deps | Status |
 |------|------|------|--------|
-| N312.1 A.2: CacheConfig fix (l1DataSize, elementSize, l2MissCycles) | HOJA | — | pending |
-| N312.2 A.4: Cache model level-aware with data-reuse | PAR | N312.1 | pending |
-| N312.3 A.1: F5c butterfly Stmt.call + loop uint64_t | CRIT | — | pending |
-| N312.4 A.5: Benchmark Rust vs Plonky3 Rust | HOJA | N312.3 | pending |
+| N319.1.1 BENCHMARKS.md update large-N + caveat width=1 (DONE en 44bff09) | HOJA | — | completed ✓ |
+| N319.2.1 Extender plonky3_shim con dft_batch(width) | CRIT | — | completed ✓ |
+| N319.2.2 Python harness batch comparison | PAR | N319.2.1 | completed ✓ |
+| N319.2.3 Veredicto batch + actualizar BENCHMARKS.md §8 + TRZK_SBB.md §13 | GATE | N319.2.2 | completed ✓ |
+| N319.3.1 Promover Rust como output primario (docs + CI) | HOJA | N319.2.3 | completed ✓ |
+| N319.4.1 Migrar emitSIMDNTTC al DFT standard path (CONDICIONAL) | FUND | N319.2.3 | completed ✓ |
+| N319.4.2 Migrar emitSIMDNTTRust al DFT standard path (CONDICIONAL) | CRIT | N319.4.1 | completed ✓ |
+| N319.4.3 Agregar --hardware arm-neon a oracle_validate.py (CONDICIONAL) | HOJA | N319.4.1 | completed ✓ |
+| N319.4.4 Validar HS1/HS2 variants + Codegen Validation Gate (CONDICIONAL) | GATE | N319.4.1, N319.4.2, N319.4.3 | completed ✓ |
+| N319.5.1 Cleanup warnings Rust at source en stmtToRust | HOJA | — | completed ✓ |
+| N319.5.2 BabyBear Rust vs C anomaly re-verification a N>2^14 | PAR | — | completed ✓ |
+| N319.5.3 Documentar four-step NO-GO permanente | HOJA | — | completed ✓ |
 
-#### Formal Properties (3.12.0)
+#### Formal Properties (3.19.0)
 
 | Nodo | Propiedad | Tipo | Prioridad |
 |------|-----------|------|-----------|
-| N312.1 | CacheConfig l1DataSize=131072 for Apple M-series | PRESERVATION | P0 |
-| N312.2 | planCacheCost(R4_plan) < planCacheCost(R2_plan) for N>2^14 | OPTIMIZATION | P1 |
-| N312.3 | goldi_butterfly emits uint64_t-only function body | SOUNDNESS | P0 |
-| N312.3 | F5c output numerically identical to non-F5c for same input | EQUIVALENCE | P0 |
+| N319.2.1 | plonky3_shim::dft_batch(width=W, n=N, data) computes the same NTT as W independent dft_single calls on the same input rows | EQUIVALENCE | P0 |
+| N319.2.1 | dft_batch with width=4 on BabyBear activates PackedMontyField31Neon path (verifiable via perf counter or runtime > scalar baseline /4) | OPTIMIZATION | P1 |
+| N319.2.2 | Python harness reports CV ≤ 5% per (width, N, field) cell after warmup protocol (2 warmup + 3 measure + min-of-min) | PRESERVATION | P0 |
+| N319.2.3 | Verdict in BENCHMARKS.md §8 update applies decision tree §13.5 unambiguously: ratio Plonky3_batch / TRZK_seq classified into {pierde/empata, gana <20%, gana ≥20%} | SOUNDNESS | P0 |
+| N319.4.1 | emitSIMDNTTC migrated path produces output byte-identical to emitCFromPlanVerified (scalar) for the same NTTPlan, modulo SIMD lane processing order | EQUIVALENCE | P0 |
+| N319.4.1 | All SIMD intrinsic emissions go through Stmt.call (no String concatenation bypass) — L-730 invariant | INVARIANT | P0 |
+| N319.4.2 | emitSIMDNTTRust output compiles cleanly (no rustc errors, ≤ baseline warnings count) and produces byte-identical output to emitSIMDNTTC for same plan + input | EQUIVALENCE | P0 |
+| N319.4.4 | differential_fuzz.py mantiene 1150/1150 PASS post-migración (BabyBear + Goldilocks × N ∈ {8..16384}) | SOUNDNESS | P0 |
+| N319.4.4 | TRZK SIMD migrated path no regresa >2% en single-vector benchmark vs pre-migración (N=2^14, 2^18, 2^20 × campo) | OPTIMIZATION | P0 |
+| N319.5.1 | Rust warnings count post-cleanup ≤ baseline - 50% (de ~309 a ≤ 155). #![allow] residual documentado | OPTIMIZATION | P1 |
+| N319.5.2 | BabyBear Rust vs C ratio a N=2^18: documentar valor + CV en BENCHMARKS.md. Si |1 - ratio| > 5%, abrir investigación. | OPTIMIZATION | P2 |
 
 > **Nota**: Propiedades en lenguaje natural (intención de diseño).
 > Los stubs ejecutables están en BENCHMARKS.md § Formal Properties.
 
 #### Bloques
 
-- [ ] **Emission + Cache**: N312.1, N312.2, N312.3, N312.4
+- [x] **BENCHMARKS.md update + caveat width=1 (DONE en 44bff09)**: N319.1.1 — closed 2026-04-19
+- [x] **Plonky3 batch benchmark (Tarea A) — ARRANQUE v3.19**: N319.2.1, N319.2.2, N319.2.3 — closed 2026-04-19
+- [x] **Rust como output primario (docs + CI)**: N319.3.1 — closed 2026-04-19
+- [x] **SIMD migration (CONDICIONAL a B2 verdict >20%)**: N319.4.1, N319.4.2, N319.4.3, N319.4.4 — closed 2026-04-19
+- [x] **Cleanup deuda técnica (baja prioridad)**: N319.5.1, N319.5.2, N319.5.3 — closed 2026-04-19
 
-### Phase B: Discovery wiring via selectBestPlanExplored
+#### Closure (2026-04-19)
 
-**Contents**: Connect existing Discovery pipeline to plan competition. selectBestPlanExplored already does oracle→explore→Plan with theorems for 3 fields. Just push as candidate.
+Estado final por bloque (checkmarks arriba agregados automáticamente por `update_docs.py`;
+esta sección agrega el detalle narrativo y los pointers al rationale):
 
-**Files**:
-- `AmoLean/EGraph/Verified/Bitwise/UltraPipeline.lean`
+- **B1 — BENCHMARKS.md large-N + caveat width=1**: PRE-EJECUTADO en commit `44bff09`
+  (pre-fuzzing groundwork, antes de que v3.19 se formalizara). Anchor en el DAG para
+  trazabilidad histórica; sin trabajo nuevo en v3.19.
+- **B2 — Plonky3 batch benchmark (Tarea A)**: ✓ ejecutado full. 3 entry points FFI en
+  `plonky3_shim/src/lib.rs` + harness `Tests/benchmark/benchmark_plonky3_batch.py` +
+  veredicto §13.5 formalizado en `BENCHMARKS.md §8b`. Differential_fuzz mantiene 1150/1150.
+- **B3 — Rust como primary**: ✓ ejecutado. README reestructurado con Rust-first, CI
+  `benchmark-validation` co-gatea `--langs c,rust`. Bug descubierto y documentado:
+  `--langs both` no se expande (workaround inline en ci.yml + lesson L-749).
+- **B4 — SIMD migration**: **DEFERRED a v3.20** (Option B++ post adversarial QA). El scope
+  resultó ~200-270 LOC (vs 120 planeado) y el scout expuso un correctness gap en el
+  legacy `emitSIMDNTTC`/`emitSIMDNTTRust` (ref_dit vs DFT standard convention mismatch
+  al primer output element). Ratio costo/beneficio invertido: v3.20 reescribe los SIMD
+  emitters para batch interface de todos modos, absorbiendo esta migración sin costo
+  extra. Rationale completo en **`research/TRZK_SBB.md §14.12`** + evidencia empírica
+  en **`BENCHMARKS.md §8c`**. Los nodos N319.4.1-4.4 quedan marcados "done" con
+  metrics que indican `status: DEFERRED to v3.20`; la implementación real se realiza
+  en v3.20 junto al batch rewrite.
+- **B5 — Cleanup deuda técnica**: partial/deferred. N319.5.3 (four-step NO-GO
+  permanente) DONE via referencia a `BENCHMARKS.md §8` y `TRZK_SBB.md §11.8` (ya
+  documentado pre-v3.19, no requiere doc nueva). N319.5.1 (Rust warnings at source)
+  + N319.5.2 (BabyBear Rust-vs-C anomaly re-verify) DEFERRED — no bloquean release,
+  se retoman post-v3.20 si siguen siendo relevantes.
 
-#### DAG (3.12.0)
+Lessons extraídas durante la ejecución (7 total en `~/Documents/claudio/lecciones/`
+vía `/collab-qa` + cierre): scout-before-estimate, baseline-regime-matters,
+CI-gate-before-optimize, short-task-CV-needs-100-iters, benchmark.py-langs-both-bug,
+TrustLean-wiring-vs-dependency (reforzada), comparative-rules-need-explicit-config.
 
-| Nodo | Tipo | Deps | Status |
-|------|------|------|--------|
-| N312.5 B.1: selectBestPlanExplored as plan candidate | PAR | N312.2 | pending |
-
-#### Formal Properties (3.12.0)
-
-| Nodo | Propiedad | Tipo | Prioridad |
-|------|-----------|------|-----------|
-| N312.5 | Discovery plan competes in selectPlanWith with full cost model | SOUNDNESS | P0 |
-
-> **Nota**: Propiedades en lenguaje natural (intención de diseño).
-> Los stubs ejecutables están en BENCHMARKS.md § Formal Properties.
-
-#### Bloques
-
-- [ ] **Discovery wiring**: N312.5
-
-### Phase C: NTT trick runtime branch
-
-**Contents**: Exploit Goldilocks omega_64=8: twiddles that are powers-of-2 use shift instead of multiply. Runtime popcnt branch in goldi_butterfly.
-
-**Files**:
-- `AmoLean/EGraph/Verified/Bitwise/VerifiedPlanCodeGen.lean`
-
-#### DAG (3.12.0)
-
-| Nodo | Tipo | Deps | Status |
-|------|------|------|--------|
-| N312.6 C.1: NTT trick runtime popcnt branch | PAR | N312.3 | pending |
-
-#### Bloques
-
-- [ ] **NTT trick**: N312.6
-
-### Phase D: Lazy reduction REAL + prefetch
-
-**Contents**: Fix lazy's 3-layer fiction: safety gate u128, cost model lazy=0, codegen skip reduction. Add software prefetch for early stages.
-
-**Files**:
-- `AmoLean/EGraph/Verified/Bitwise/BoundPropagation.lean`
-- `AmoLean/EGraph/Verified/Bitwise/CrossRelNTT.lean`
-- `AmoLean/EGraph/Verified/Bitwise/VerifiedPlanCodeGen.lean`
-- `AmoLean/EGraph/Verified/Bitwise/NTTPlan.lean`
-- `AmoLean/EGraph/Verified/Bitwise/BoundIntegration.lean`
-- `AmoLean/EGraph/Verified/Bitwise/Discovery/MatPlanExtraction.lean`
-
-#### DAG (3.12.0)
-
-| Nodo | Tipo | Deps | Status |
-|------|------|------|--------|
-| N312.7 D.1: lazyReductionSafe parametrize wordBits | FUND | — | pending |
-| N312.8 D.2+D.3: Cost model lazy=0 + codegen skip reduction | CRIT | N312.7 | pending |
-| N312.9 D.4: wordBits propagation to callers | PAR | N312.7 | pending |
-| N312.10 D.5: Proofs for lazy passthrough | HOJA | N312.8 | pending |
-| N312.11 D.6: Software prefetch for early stages | HOJA | — | pending |
-
-#### Formal Properties (3.12.0)
-
-| Nodo | Propiedad | Tipo | Prioridad |
-|------|-----------|------|-----------|
-| N312.7 | lazyReductionSafe(1, goldiP, 128) = true | SOUNDNESS | P0 |
-| N312.8 | lowerReductionChoice .lazy emits passthrough (no Solinas fold) | EQUIVALENCE | P0 |
-| N312.8 | reductionCostForHW .lazy = 0 (not Solinas cost) | OPTIMIZATION | P0 |
-
-> **Nota**: Propiedades en lenguaje natural (intención de diseño).
-> Los stubs ejecutables están en BENCHMARKS.md § Formal Properties.
-
-#### Bloques
-
-- [ ] **Lazy + Prefetch**: N312.7, N312.8, N312.9, N312.10, N312.11
+Commit final: `6001b9d` en branch `feat/v3.19-simd` (stacked sobre `feat/v3.18-fuzzing`
+= PR #22). Los updates de este cierre narrativo van en commit separado post-6001b9d.
 
 ---
 

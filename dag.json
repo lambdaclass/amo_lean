@@ -1,236 +1,23 @@
 {
-  "version": "3.12.0",
+  "version": "3.19.0",
   "project": "TRZK",
   "phases": [
     {
-      "id": "emission-cache",
-      "name": "Phase A: Emission optimization + cache fixes",
-      "status": "pending",
+      "id": "v3-19",
+      "name": "v3.19 — Plonky3 Batch Benchmark + Rust Primary + Conditional SIMD",
+      "status": "completed",
       "nodes": [
         {
-          "id": "N312.1",
-          "name": "A.2: CacheConfig fix (l1DataSize, elementSize, l2MissCycles)",
+          "id": "N319.1.1",
+          "name": "BENCHMARKS.md update large-N + caveat width=1 (DONE en 44bff09)",
           "type": "HOJA",
-          "status": "pending",
+          "status": "completed",
           "files": [
-            "AmoLean/EGraph/Verified/Bitwise/NTTPlanSelection.lean"
+            "BENCHMARKS.md"
           ],
           "deps": [],
           "blocks": [
-            "BA"
-          ],
-          "metrics": {
-            "loc": 0,
-            "theorems": 0,
-            "lemmas": 0,
-            "defs": 0,
-            "sorry": 0
-          },
-          "properties": {
-            "total": 1,
-            "passing": 0,
-            "failing": 0,
-            "not_runnable": 0
-          },
-          "study": {
-            "papers": [],
-            "lessons": [
-              "L-740",
-              "L-743"
-            ],
-            "libraries": [],
-            "notes": "NTTPlanSelection.lean:39 l1DataSize:=32768→131072, :41 elementSize:=4→8 for Goldilocks, :43 l2MissCycles:=12→16. Apple M-series: 128KB L1D, 16cy L2. Affects plan accuracy for N≥2^14."
-          }
-        },
-        {
-          "id": "N312.2",
-          "name": "A.4: Cache model level-aware with data-reuse",
-          "type": "PAR",
-          "status": "pending",
-          "files": [
-            "AmoLean/EGraph/Verified/Bitwise/NTTPlanSelection.lean"
-          ],
-          "deps": [
-            "N312.1"
-          ],
-          "blocks": [
-            "BA"
-          ],
-          "metrics": {
-            "loc": 0,
-            "theorems": 0,
-            "lemmas": 0,
-            "defs": 0,
-            "sorry": 0
-          },
-          "properties": {
-            "total": 1,
-            "passing": 0,
-            "failing": 0,
-            "not_runnable": 0
-          },
-          "study": {
-            "papers": [],
-            "lessons": [],
-            "libraries": [],
-            "notes": "planCacheCost (NTTPlanSelection:67-71): change stageIdx-based to level-aware. R4 stage covers 2 levels in 1 pass → second level data-reuse (free). Verified: R4 saves 31.6% cache vs R2 at N=2^20. Changes bowersAdjustment automatically (L75-78). Smoke tests N=1024 unaffected (cache=0)."
-          }
-        },
-        {
-          "id": "N312.3",
-          "name": "A.1: F5c butterfly Stmt.call + loop uint64_t",
-          "type": "CRIT",
-          "status": "pending",
-          "files": [
-            "AmoLean/EGraph/Verified/Bitwise/VerifiedPlanCodeGen.lean"
-          ],
-          "deps": [],
-          "blocks": [
-            "BA"
-          ],
-          "metrics": {
-            "loc": 0,
-            "theorems": 0,
-            "lemmas": 0,
-            "defs": 0,
-            "sorry": 0
-          },
-          "properties": {
-            "total": 2,
-            "passing": 0,
-            "failing": 0,
-            "not_runnable": 0
-          },
-          "study": {
-            "papers": [],
-            "lessons": [
-              "L-740",
-              "L-741",
-              "L-743",
-              "L-745"
-            ],
-            "libraries": [],
-            "notes": "goldi_butterfly preamble C+Rust (~30 LOC). lowerStageVerified_GoldiCall (~40 LOC): if k>32 && boundK>0 && boundK≤2 → Stmt.call void 'goldi_butterfly' with addrOf for data/twiddles + uint64_t indices. Loop counters group/pair change to uint64_t (the F5 attempt 3 bug disappears because butterfly body is 1 Stmt.call, no __uint128_t mixing). Precedent: neonCallVoid SIMDStmtToC:104-127."
-          }
-        },
-        {
-          "id": "N312.4",
-          "name": "A.5: Benchmark Rust vs Plonky3 Rust",
-          "type": "HOJA",
-          "status": "pending",
-          "files": [],
-          "deps": [
-            "N312.3"
-          ],
-          "blocks": [
-            "BA"
-          ],
-          "metrics": {
-            "loc": 0,
-            "theorems": 0,
-            "lemmas": 0,
-            "defs": 0,
-            "sorry": 0
-          },
-          "properties": {
-            "total": 0,
-            "passing": 0,
-            "failing": 0,
-            "not_runnable": 0
-          },
-          "study": {
-            "papers": [],
-            "lessons": [],
-            "libraries": [],
-            "notes": "Rust preamble already exists for goldi_reduce128/add/sub (VerifiedPlanCodeGen:716-728). Run benchmark.py --fields goldilocks --hardware arm-scalar --langs rust --sizes 14,20. Fair comparison: same compiler (rustc→LLVM), same patterns (overflowing_sub/add). Expected gap <1.10x."
-          }
-        }
-      ],
-      "blocks": [
-        {
-          "id": "BA",
-          "name": "Emission + Cache",
-          "nodes": [
-            "N312.1",
-            "N312.2",
-            "N312.3",
-            "N312.4"
-          ],
-          "status": "pending",
-          "closed_at": null
-        }
-      ]
-    },
-    {
-      "id": "discovery-wiring",
-      "name": "Phase B: Discovery wiring via selectBestPlanExplored",
-      "status": "pending",
-      "nodes": [
-        {
-          "id": "N312.5",
-          "name": "B.1: selectBestPlanExplored as plan candidate",
-          "type": "PAR",
-          "status": "pending",
-          "files": [
-            "AmoLean/EGraph/Verified/Bitwise/UltraPipeline.lean"
-          ],
-          "deps": [
-            "N312.2"
-          ],
-          "blocks": [
-            "BB"
-          ],
-          "metrics": {
-            "loc": 0,
-            "theorems": 0,
-            "lemmas": 0,
-            "defs": 0,
-            "sorry": 0
-          },
-          "properties": {
-            "total": 1,
-            "passing": 0,
-            "failing": 0,
-            "not_runnable": 0
-          },
-          "study": {
-            "papers": [],
-            "lessons": [],
-            "libraries": [],
-            "notes": "Import MatPlanExtraction + open selectBestPlanExplored. Call if n≤jointThreshold, push to allCandidates before selectPlanWith. Raise jointThreshold to 16384. Gate double exploration: if exploredPlan active, jointOptimize still runs for report only. Add report line if Discovery won. ~14 LOC. NO reordering needed (Approach 1)."
-          }
-        }
-      ],
-      "blocks": [
-        {
-          "id": "BB",
-          "name": "Discovery wiring",
-          "nodes": [
-            "N312.5"
-          ],
-          "status": "pending",
-          "closed_at": null
-        }
-      ]
-    },
-    {
-      "id": "ntt-trick",
-      "name": "Phase C: NTT trick runtime branch",
-      "status": "pending",
-      "nodes": [
-        {
-          "id": "N312.6",
-          "name": "C.1: NTT trick runtime popcnt branch",
-          "type": "PAR",
-          "status": "pending",
-          "files": [
-            "AmoLean/EGraph/Verified/Bitwise/VerifiedPlanCodeGen.lean"
-          ],
-          "deps": [
-            "N312.3"
-          ],
-          "blocks": [
-            "BC"
+            "B1"
           ],
           "metrics": {
             "loc": 0,
@@ -247,42 +34,350 @@
           },
           "study": {
             "papers": [
-              "Ingonyama goldilocks_ntt_trick.pdf"
+              "Gregg-Systems-Performance-2020"
             ],
             "lessons": [],
             "libraries": [],
-            "notes": "In goldi_butterfly preamble: if(__builtin_popcountll(w)==1) → wb = goldi_reduce128((__uint128_t)b << __builtin_ctzll(w)) instead of w*b. Verified: omega_64=8, stages 0-4 are 100% power-of-2 twiddles, stage 5 is 69% pow2 + 31% not-pow2. Branch predictor handles well (consistent per-stage). ~30 LOC in C+Rust preamble. Impact: ~5% with CT standard, ~12-20% with NTT trick decomposition (v3.13.0)."
+            "notes": "Bloque 1 ya ejecutado pre-fuzzing en commit 44bff09. Anclado para trazabilidad histórica."
           }
-        }
-      ],
-      "blocks": [
+        },
         {
-          "id": "BC",
-          "name": "NTT trick",
-          "nodes": [
-            "N312.6"
-          ],
-          "status": "pending",
-          "closed_at": null
-        }
-      ]
-    },
-    {
-      "id": "lazy-prefetch",
-      "name": "Phase D: Lazy reduction REAL + prefetch",
-      "status": "pending",
-      "nodes": [
-        {
-          "id": "N312.7",
-          "name": "D.1: lazyReductionSafe parametrize wordBits",
-          "type": "FUND",
-          "status": "pending",
+          "id": "N319.2.1",
+          "name": "Extender plonky3_shim con dft_batch(width)",
+          "type": "CRITICO",
+          "status": "completed",
           "files": [
-            "AmoLean/EGraph/Verified/Bitwise/BoundPropagation.lean"
+            "verification/plonky3/plonky3_shim/src/lib.rs",
+            "verification/plonky3/plonky3_shim/Cargo.toml"
           ],
           "deps": [],
           "blocks": [
-            "BD"
+            "B2"
+          ],
+          "metrics": {
+            "loc": 251,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 2,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 2
+          },
+          "study": {
+            "papers": [
+              "Hoeven-Lecerf-NTT-2024",
+              "PackedMontyField31Neon-source"
+            ],
+            "lessons": [
+              "L-309",
+              "L-739"
+            ],
+            "libraries": [
+              "p3-dft:Radix2Dit",
+              "p3-dft:Radix2DitParallel",
+              "p3-baby-bear:PackedMontyField31Neon"
+            ],
+            "notes": "Exponer dft_batch(data, width, n) para BabyBear y Goldilocks. NO toca codegen TRZK. PackedMontyField31Neon BabyBear (WIDTH=4) se activa solo con width>=4. Goldilocks NO vectoriza (no u64 NEON nativo)."
+          }
+        },
+        {
+          "id": "N319.2.2",
+          "name": "Python harness batch comparison",
+          "type": "PARALELO",
+          "status": "completed",
+          "files": [
+            "Tests/benchmark/benchmark_plonky3_batch.py"
+          ],
+          "deps": [
+            "N319.2.1"
+          ],
+          "blocks": [
+            "B2"
+          ],
+          "metrics": {
+            "loc": 215,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 1,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 1
+          },
+          "study": {
+            "papers": [
+              "Gregg-Systems-Performance-2020"
+            ],
+            "lessons": [],
+            "libraries": [
+              "Tests/benchmark/benchmark_plonky3.py:plonky3_timing",
+              "Tests/benchmark/benchmark_plonky3.py:trzk_rust_timing"
+            ],
+            "notes": "Reusar warmup protocol existente (2 warmup + 3 measure + min-of-min, CV reportado). Matriz: width ∈ {1,2,4,8} × N ∈ {2^14, 2^18} × campo ∈ {babybear, goldilocks}. TRZK comparison = N-llamadas-secuenciales (no batch nativo)."
+          }
+        },
+        {
+          "id": "N319.2.3",
+          "name": "Veredicto batch + actualizar BENCHMARKS.md §8 + TRZK_SBB.md §13",
+          "type": "GATE",
+          "status": "completed",
+          "files": [
+            "BENCHMARKS.md",
+            "research/TRZK_SBB.md"
+          ],
+          "deps": [
+            "N319.2.2"
+          ],
+          "blocks": [
+            "B2"
+          ],
+          "metrics": {
+            "loc": 0,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 1,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 1
+          },
+          "study": {
+            "papers": [],
+            "lessons": [],
+            "libraries": [],
+            "notes": "Aplicar decision tree §13.5: si Plonky3 batch pierde/empata → Bloque 4 baja prioridad, skip. Si gana >20% → Bloque 4 prioritario. Documentar tabla width × N × campo en BENCHMARKS.md §8 update."
+          }
+        },
+        {
+          "id": "N319.3.1",
+          "name": "Promover Rust como output primario (docs + CI)",
+          "type": "HOJA",
+          "status": "completed",
+          "files": [
+            "README.md",
+            ".github/workflows/ci.yml",
+            "BENCHMARKS.md"
+          ],
+          "deps": [
+            "N319.2.3"
+          ],
+          "blocks": [
+            "B3"
+          ],
+          "metrics": {
+            "loc": 40,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 0,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 0
+          },
+          "study": {
+            "papers": [],
+            "lessons": [],
+            "libraries": [],
+            "notes": "Riesgo 0. Solo docs. README ejemplos con Rust default, CI agrega --lang rust en validation jobs, nota cuándo usar cada lang. Independiente de B2 una vez emitido el veredicto."
+          }
+        },
+        {
+          "id": "N319.4.1",
+          "name": "Migrar emitSIMDNTTC al DFT standard path (CONDICIONAL)",
+          "type": "FUNDACIONAL",
+          "status": "completed",
+          "files": [
+            "AmoLean/EGraph/Verified/Bitwise/SIMDEmitter.lean"
+          ],
+          "deps": [
+            "N319.2.3"
+          ],
+          "blocks": [
+            "B4-conditional"
+          ],
+          "metrics": {
+            "loc": 0,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 2,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 1
+          },
+          "study": {
+            "papers": [
+              "Hoeven-Lecerf-NTT-2024",
+              "Polubelova-HACLxN-2020"
+            ],
+            "lessons": [
+              "L-730",
+              "L-739",
+              "L-734",
+              "L-733",
+              "L-308"
+            ],
+            "libraries": [
+              "AmoLean/Bridge/SIMDStmtToC.lean:simdStmtToC",
+              "AmoLean/EGraph/Verified/Bitwise/VerifiedSIMDButterfly.lean",
+              "AmoLean/EGraph/Verified/Bitwise/VerifiedPlanCodeGen.lean:emitCFromPlanVerified"
+            ],
+            "notes": "SOLO si veredicto B2 es Plonky3 batch >20%. Migrar emitSIMDNTTC para usar DFT standard path de v3.15 (bitrev + .reverse stages). NUNCA string emission (L-730). Consultar TRZK_rust_insights.md."
+          }
+        },
+        {
+          "id": "N319.4.2",
+          "name": "Migrar emitSIMDNTTRust al DFT standard path (CONDICIONAL)",
+          "type": "CRITICO",
+          "status": "completed",
+          "files": [
+            "AmoLean/EGraph/Verified/Bitwise/SIMDEmitter.lean",
+            "AmoLean/Bridge/SIMDStmtToRust.lean"
+          ],
+          "deps": [
+            "N319.4.1"
+          ],
+          "blocks": [
+            "B4-conditional"
+          ],
+          "metrics": {
+            "loc": 0,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 1,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 1
+          },
+          "study": {
+            "papers": [],
+            "lessons": [
+              "L-730",
+              "L-309",
+              "L-734"
+            ],
+            "libraries": [
+              "AmoLean/Bridge/SIMDStmtToRust.lean (si existe v3.17)",
+              "AmoLean/Bridge/TrustLeanRust.lean"
+            ],
+            "notes": "Mirror de N319.4.1 pero Rust. Reusar simdStmtToRust si existe (creado en v3.17). Diferencias C/Rust: unsafe blocks, transmute, raw pointers (.add()), &mut for addrOf — ya documentadas en TRZK_rust_insights.md."
+          }
+        },
+        {
+          "id": "N319.4.3",
+          "name": "Agregar --hardware arm-neon a oracle_validate.py (CONDICIONAL)",
+          "type": "HOJA",
+          "status": "completed",
+          "files": [
+            "Tests/benchmark/oracle_validate.py"
+          ],
+          "deps": [
+            "N319.4.1"
+          ],
+          "blocks": [
+            "B4-conditional"
+          ],
+          "metrics": {
+            "loc": 12,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 0,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 0
+          },
+          "study": {
+            "papers": [],
+            "lessons": [
+              "L-739"
+            ],
+            "libraries": [
+              "Tests/benchmark/oracle_validate.py",
+              "Tests/benchmark/benchmark.py"
+            ],
+            "notes": "Habilitar oracle validation contra Plonky3 con --hardware arm-neon. Sin esto, el SIMD path migrado nunca se valida en CI gate."
+          }
+        },
+        {
+          "id": "N319.4.4",
+          "name": "Validar HS1/HS2 variants + Codegen Validation Gate (CONDICIONAL)",
+          "type": "GATE",
+          "status": "completed",
+          "files": [
+            "Tests/benchmark/",
+            "BENCHMARKS.md"
+          ],
+          "deps": [
+            "N319.4.1",
+            "N319.4.2",
+            "N319.4.3"
+          ],
+          "blocks": [
+            "B4-conditional"
+          ],
+          "metrics": {
+            "loc": 0,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 2,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 1
+          },
+          "study": {
+            "papers": [],
+            "lessons": [
+              "L-739",
+              "L-734",
+              "L-733"
+            ],
+            "libraries": [
+              "Tests/benchmark/differential_fuzz.py",
+              "Tests/benchmark/benchmark.py:--validation-only"
+            ],
+            "notes": "GATE BLOCKER. Ejecutar benchmark.py --validation-only --hardware arm-neon × campos × sizes 14. Re-correr differential_fuzz.py --mode fast — debe mantener 1150/1150. CLAUDE.md proyecto §Codegen Validation Gate aplica."
+          }
+        },
+        {
+          "id": "N319.5.1",
+          "name": "Cleanup warnings Rust at source en stmtToRust",
+          "type": "HOJA",
+          "status": "completed",
+          "files": [
+            "AmoLean/Bridge/TrustLeanRust.lean",
+            "AmoLean/EGraph/Verified/Bitwise/VerifiedPlanCodeGen.lean"
+          ],
+          "deps": [],
+          "blocks": [
+            "B5"
           ],
           "metrics": {
             "loc": 0,
@@ -299,128 +394,60 @@
           },
           "study": {
             "papers": [],
-            "lessons": [],
-            "libraries": [],
-            "notes": "BoundPropagation.lean:160-161: def lazyReductionSafe (currentK p : Nat) (wordBits : Nat := 64). For Goldilocks (wideType=__uint128_t): pass wordBits:=128. For BabyBear: default 64 (no change). 14 callers across 8 files — most use default, only Goldilocks paths need explicit 128."
+            "lessons": [
+              "L-309"
+            ],
+            "libraries": [
+              "AmoLean/Bridge/TrustLeanRust.lean:stmtToRust"
+            ],
+            "notes": "v3.17 silenció ~309 warnings rustc con #![allow] band-aid. Vale solo si Bloque 3 promueve Rust como primary. ~30-50 LOC."
           }
         },
         {
-          "id": "N312.8",
-          "name": "D.2+D.3: Cost model lazy=0 + codegen skip reduction",
-          "type": "CRIT",
-          "status": "pending",
+          "id": "N319.5.2",
+          "name": "BabyBear Rust vs C anomaly re-verification a N>2^14",
+          "type": "PARALELO",
+          "status": "completed",
           "files": [
-            "AmoLean/EGraph/Verified/Bitwise/CrossRelNTT.lean",
-            "AmoLean/EGraph/Verified/Bitwise/VerifiedPlanCodeGen.lean"
-          ],
-          "deps": [
-            "N312.7"
-          ],
-          "blocks": [
-            "BD"
-          ],
-          "metrics": {
-            "loc": 0,
-            "theorems": 0,
-            "lemmas": 0,
-            "defs": 0,
-            "sorry": 0
-          },
-          "properties": {
-            "total": 2,
-            "passing": 0,
-            "failing": 0,
-            "not_runnable": 0
-          },
-          "study": {
-            "papers": [],
-            "lessons": [],
-            "libraries": [],
-            "notes": "3 changes TOGETHER (never partial): 1) CrossRelNTT:94 reductionCostForHW .lazy→0 (not Solinas cost). 2) CrossRelNTT:60-79 costAwareReductionForBound: add .lazy to candidates when lazyReductionSafe. 3) VerifiedPlanCodeGen:103-106 lowerReductionChoice .lazy→passthrough (Stmt.assign passVar xExpr, no Solinas fold). BREAKS lazy_eq_solinas_cost:=rfl (NTTPlan:305) — delete it (0 callers, smoke test only)."
-          }
-        },
-        {
-          "id": "N312.9",
-          "name": "D.4: wordBits propagation to callers",
-          "type": "PAR",
-          "status": "pending",
-          "files": [
-            "AmoLean/EGraph/Verified/Bitwise/NTTPlan.lean",
-            "AmoLean/EGraph/Verified/Bitwise/BoundIntegration.lean",
-            "AmoLean/EGraph/Verified/Bitwise/Discovery/MatPlanExtraction.lean"
-          ],
-          "deps": [
-            "N312.7"
-          ],
-          "blocks": [
-            "BD"
-          ],
-          "metrics": {
-            "loc": 0,
-            "theorems": 0,
-            "lemmas": 0,
-            "defs": 0,
-            "sorry": 0
-          },
-          "properties": {
-            "total": 0,
-            "passing": 0,
-            "failing": 0,
-            "not_runnable": 0
-          },
-          "study": {
-            "papers": [],
-            "lessons": [],
-            "libraries": [],
-            "notes": "buildBoundAwareStages (NTTPlan:133) + buildStagesFromAssignment (MatPlanExtraction:49) + optimizeNTTWithBounds (BoundIntegration:223): add wordBits param, pass 128 when p > 2^32. mkBoundAwarePlan passes wordBits:= if p > 2^32 then 128 else 64. ~10 LOC across 3 files."
-          }
-        },
-        {
-          "id": "N312.10",
-          "name": "D.5: Proofs for lazy passthrough",
-          "type": "HOJA",
-          "status": "pending",
-          "files": [
-            "AmoLean/EGraph/Verified/Bitwise/VerifiedPlanCodeGen.lean",
-            "AmoLean/EGraph/Verified/Bitwise/NTTPlan.lean"
-          ],
-          "deps": [
-            "N312.8"
-          ],
-          "blocks": [
-            "BD"
-          ],
-          "metrics": {
-            "loc": 0,
-            "theorems": 0,
-            "lemmas": 0,
-            "defs": 0,
-            "sorry": 0
-          },
-          "properties": {
-            "total": 0,
-            "passing": 0,
-            "failing": 0,
-            "not_runnable": 0
-          },
-          "study": {
-            "papers": [],
-            "lessons": [],
-            "libraries": [],
-            "notes": "lowerReductionChoice_sound needs new .lazy case: assign passVar xExpr preserves value (trivial: x=x). Delete lazy_eq_solinas_cost (NTTPlan:305, 0 callers). computeStageBounds smoke tests (BoundPropagation:394) may need update. ~20 LOC."
-          }
-        },
-        {
-          "id": "N312.11",
-          "name": "D.6: Software prefetch for early stages",
-          "type": "HOJA",
-          "status": "pending",
-          "files": [
-            "AmoLean/EGraph/Verified/Bitwise/VerifiedPlanCodeGen.lean"
+            "Tests/benchmark/benchmark_plonky3.py",
+            "BENCHMARKS.md"
           ],
           "deps": [],
           "blocks": [
-            "BD"
+            "B5"
+          ],
+          "metrics": {
+            "loc": 0,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 1,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 1
+          },
+          "study": {
+            "papers": [],
+            "lessons": [],
+            "libraries": [],
+            "notes": "Open question de v3.17: post-warmup convergen (~145 vs ~134 μs a N=2^14) pero no re-verificado a N=2^18/2^20. ~4h investigación, 0 LOC producción."
+          }
+        },
+        {
+          "id": "N319.5.3",
+          "name": "Documentar four-step NO-GO permanente",
+          "type": "HOJA",
+          "status": "completed",
+          "files": [
+            "BENCHMARKS.md",
+            "research/TRZK_SBB.md"
+          ],
+          "deps": [],
+          "blocks": [
+            "B5"
           ],
           "metrics": {
             "loc": 0,
@@ -439,31 +466,70 @@
             "papers": [],
             "lessons": [],
             "libraries": [],
-            "notes": "String emission in emitCFromPlanVerified: __builtin_prefetch(&data[i+dist],0,3) for stages where stride*elemSize > l1DataSize. ~15 LOC. Flag prefetch:Bool in NTTStage (default false, set true for early stages by plan generation). Rust: core::arch::aarch64::_prefetch. Impact: ~3-8% for N≥2^16."
+            "notes": "Mantener NO-GO §11.8. Re-abrir solo si caso de uso N≥2^20 recursive proof composition aparece. Benchmark N=2^22 muestra que R2 ya escala bien — sin motivación empírica."
           }
         }
       ],
       "blocks": [
         {
-          "id": "BD",
-          "name": "Lazy + Prefetch",
+          "id": "B1",
+          "name": "BENCHMARKS.md update + caveat width=1 (DONE en 44bff09)",
           "nodes": [
-            "N312.7",
-            "N312.8",
-            "N312.9",
-            "N312.10",
-            "N312.11"
+            "N319.1.1"
           ],
-          "status": "pending",
-          "closed_at": null
+          "status": "completed",
+          "closed_at": "2026-04-19"
+        },
+        {
+          "id": "B2",
+          "name": "Plonky3 batch benchmark (Tarea A) — ARRANQUE v3.19",
+          "nodes": [
+            "N319.2.1",
+            "N319.2.2",
+            "N319.2.3"
+          ],
+          "status": "completed",
+          "closed_at": "2026-04-19"
+        },
+        {
+          "id": "B3",
+          "name": "Rust como output primario (docs + CI)",
+          "nodes": [
+            "N319.3.1"
+          ],
+          "status": "completed",
+          "closed_at": "2026-04-19"
+        },
+        {
+          "id": "B4-conditional",
+          "name": "SIMD migration (CONDICIONAL a B2 verdict >20%)",
+          "nodes": [
+            "N319.4.1",
+            "N319.4.2",
+            "N319.4.3",
+            "N319.4.4"
+          ],
+          "status": "completed",
+          "closed_at": "2026-04-19"
+        },
+        {
+          "id": "B5",
+          "name": "Cleanup deuda técnica (baja prioridad)",
+          "nodes": [
+            "N319.5.1",
+            "N319.5.2",
+            "N319.5.3"
+          ],
+          "status": "completed",
+          "closed_at": "2026-04-19"
         }
       ]
     }
   ],
   "meta": {
     "created": "2026-04-07T15:52:54Z",
-    "updated": "2026-04-12T15:42:57Z",
-    "total_nodes": 11,
-    "completed_nodes": 0
+    "updated": "2026-04-19T22:17:50Z",
+    "total_nodes": 12,
+    "completed_nodes": 12
   }
 }

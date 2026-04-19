@@ -236,7 +236,7 @@ jobs:
         ./generated/verify_assembly.sh
 
   benchmark-validation:
-    name: Benchmark Validation (v3.16.0)
+    name: Benchmark Validation (v3.19.0 — Rust primary)
     runs-on: ubuntu-latest
     needs: build
 
@@ -266,13 +266,26 @@ jobs:
     - name: Build bench executable
       run: lake build bench
 
-    - name: C scalar validation (standard DFT)
+    - name: Scalar validation (standard DFT, Rust + C)
       run: |
-        echo "=== C Scalar Validation: Standard DFT ==="
+        echo "=== Scalar Validation: Standard DFT — Rust + C co-gate ==="
         # v3.17.0 N317.1: --use-standard removed (default=True since N317.8).
+        # v3.19.0 N319.3.1: Rust promoted to primary; both langs co-validated.
+        # NOTE: --langs accepts comma list ("c,rust"), the literal "both" is not
+        # split by the harness despite what --help suggests.
         python3 Tests/benchmark/benchmark.py \
-          --validation-only --fields babybear,goldilocks --sizes 14
-        echo "C scalar validation PASS"
+          --validation-only --langs c,rust --fields babybear,goldilocks --sizes 14
+        echo "Rust + C scalar validation PASS"
+
+    # v3.19.0 N319.4 (Option B++): arm-neon SIMD validation step DEFERRED.
+    # Attempted to add `benchmark.py --validation-only --hardware arm-neon` but
+    # the legacy emitSIMDNTTC path produces output that does NOT match the DFT
+    # standard reference (first-element divergence reproduced locally). The
+    # arm-neon SIMD path appears to use ref_dit (legacy) convention while the
+    # Python reference and oracle use DFT standard. Closing this gap requires
+    # the full B4 migration (emitSIMDNTTC/Rust → bitrev + stages.reverse),
+    # deferred to v3.20 where multi-target SIMD emitters get rewritten with
+    # proper dispatch. See BENCHMARKS.md §8c and research/TRZK_SBB.md §14.12.
 
     - name: Oracle validation (TRZK vs Plonky3 real)
       run: |

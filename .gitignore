@@ -23,6 +23,7 @@ Cargo.lock
 # Benchmark output (reproducible artifacts, not committed)
 Tests/benchmark/output/latest/
 Tests/benchmark/output/history/
+Tests/benchmark/output/v3.19_*.json
 
 # Research & design documents (local only, not for remote)
 research/
