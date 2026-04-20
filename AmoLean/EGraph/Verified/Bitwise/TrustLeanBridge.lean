@@ -111,6 +111,18 @@ def lowerOp (op : MixedNodeOp) (v : EClassId → LowLevelExpr) : LowLevelExpr :=
   | .barrettReduce a _p _m => v a
   | .harveyReduce a _p => v a
   | .conditionalSub a _p => v a  -- lowered to lowerConditionalSub in codegen
+  -- v3.20.b B2 (§14.13.2) — SIMD pack ops. These are backend constructs: the
+  -- real lowering goes through `Stmt.call` in the SIMD emitter (B3), not
+  -- through this `lowerOp` → `LowLevelExpr` path. The LowLevelExpr we return
+  -- here is a structural placeholder matching `evalMixedOp`'s simplified
+  -- semantics to keep the `CodeGenerable.denote = evalMixedOp` contract
+  -- consistent. The real WIDTH=4 NEON semantics live outside Trust-Lean's
+  -- verified surface per §14.13.4 trust boundary (intrinsics are untrusted).
+  | .packedLoadNeon addr            => v addr
+  | .packedStoreNeon values _addr   => v values
+  | .packedButterflyNeonDIT a b _tw =>
+    -- Structural match to evalMixedOp: (v a + v b) / 2, encoded as shift right by 1.
+    .binOp .bshr (.binOp .add (v a) (v b)) (.litInt 1)
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 3: CodeGenerable instance for MixedNodeOp

@@ -32,6 +32,11 @@ private theorem list_length_one {α : Type} {l : List α} (h : l.length = 1) :
   match l, h with
   | [x], _ => exact ⟨x, rfl⟩
 
+private theorem list_length_three {α : Type} {l : List α} (h : l.length = 3) :
+    ∃ x y z, l = [x, y, z] := by
+  match l, h with
+  | [x, y, z], _ => exact ⟨x, y, z, rfl⟩
+
 /-! ## MixedExpr: Expression Type for Mixed Extraction -/
 
 /-- Extracted expression tree for mixed (algebraic + bitwise) operations.
@@ -59,6 +64,10 @@ inductive MixedExpr where
   | barrettReduceE (a : MixedExpr) (p : Nat) (m : Nat)
   | harveyReduceE (a : MixedExpr) (p : Nat)
   | conditionalSubE (a : MixedExpr) (p : Nat)
+  -- v3.20.b B2 (§14.13.2) — SIMD pack op expression variants
+  | packedLoadNeonE    (addr : MixedExpr)
+  | packedStoreNeonE   (values : MixedExpr) (addr : MixedExpr)
+  | packedButterflyNeonDITE (a : MixedExpr) (b : MixedExpr) (tw : MixedExpr)
 
 /-! ## Extractable Instance -/
 
@@ -88,6 +97,10 @@ inductive MixedExpr where
   | .barrettReduce _ p m, [a] => some (.barrettReduceE a p m)
   | .harveyReduce _ p, [a] => some (.harveyReduceE a p)
   | .conditionalSub _ p, [a] => some (.conditionalSubE a p)
+  -- v3.20.b B2 (§14.13.2)
+  | .packedLoadNeon _, [addr]                      => some (.packedLoadNeonE addr)
+  | .packedStoreNeon _ _, [values, addr]           => some (.packedStoreNeonE values addr)
+  | .packedButterflyNeonDIT _ _ _, [a, b, tw]      => some (.packedButterflyNeonDITE a b tw)
   | _, _                   => none
 
 instance : Extractable MixedNodeOp MixedExpr where
@@ -121,6 +134,10 @@ instance : Extractable MixedNodeOp MixedExpr where
   | .harveyReduceE a p => a.eval env % p
   | .conditionalSubE a p =>
     let va := a.eval env; if va ≥ p then va - p else va
+  -- v3.20.b B2 (§14.13.2) — matches evalMixedOp simplified semantics
+  | .packedLoadNeonE addr           => addr.eval env
+  | .packedStoreNeonE values _addr  => values.eval env
+  | .packedButterflyNeonDITE a b _tw => (a.eval env + b.eval env) / 2
 
 instance : EvalExpr MixedExpr MixedEnv Nat where
   evalExpr e env := e.eval env
@@ -329,5 +346,37 @@ theorem mixed_extractable_sound :
     have h0 : x.eval env = v a :=
       hchildren 0 (by omega) (by simp [NodeOps.children, mixedChildren])
     rw [h0]
+  -- v3.20.b B2 (§14.13.2) — SIMD pack op extractability proofs. Mirror the
+  -- single-child (packedLoadNeon), two-child (packedStoreNeon), and three-child
+  -- (packedButterflyNeonDIT) patterns from algebraic ops above.
+  | packedLoadNeon addr =>
+    simp [NodeOps.children, mixedChildren] at hlen
+    obtain ⟨x, rfl⟩ := list_length_one hlen
+    simp [Extractable.reconstruct, mixedReconstruct] at hrec
+    subst hrec
+    simp only [EvalExpr.evalExpr, MixedExpr.eval, NodeSemantics.evalOp, evalMixedOp]
+    have h0 : x.eval env = v addr :=
+      hchildren 0 (by omega) (by simp [NodeOps.children, mixedChildren])
+    rw [h0]
+  | packedStoreNeon values addr =>
+    simp [NodeOps.children, mixedChildren] at hlen
+    obtain ⟨x, y, rfl⟩ := list_length_two hlen
+    simp [Extractable.reconstruct, mixedReconstruct] at hrec
+    subst hrec
+    simp only [EvalExpr.evalExpr, MixedExpr.eval, NodeSemantics.evalOp, evalMixedOp]
+    have h0 : x.eval env = v values :=
+      hchildren 0 (by omega) (by simp [NodeOps.children, mixedChildren])
+    rw [h0]
+  | packedButterflyNeonDIT a b tw =>
+    simp [NodeOps.children, mixedChildren] at hlen
+    obtain ⟨x, y, z, rfl⟩ := list_length_three hlen
+    simp [Extractable.reconstruct, mixedReconstruct] at hrec
+    subst hrec
+    simp only [EvalExpr.evalExpr, MixedExpr.eval, NodeSemantics.evalOp, evalMixedOp]
+    have h0 : x.eval env = v a :=
+      hchildren 0 (by omega) (by simp [NodeOps.children, mixedChildren])
+    have h1 : y.eval env = v b :=
+      hchildren 1 (by omega) (by simp [NodeOps.children, mixedChildren])
+    rw [h0, h1]
 
 end AmoLean.EGraph.Verified.Bitwise.MixedExtract

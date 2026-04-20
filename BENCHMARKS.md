@@ -812,3 +812,31 @@ Nodes covered: N20.1.1 NTTPlan.batchWidth field + Plan.withBatch helper + batchP
 |------|----------|-------|----------------|------------|
 | (none) | — | — | — | — |
 
+### MixedNodeOp Extensions (3 constructores + 4 intrinsics + 15 lemmas) (3.20.0)
+
+**Closed**: 2026-04-20 | **Status**: PASS
+
+#### 1. What is tested and why
+
+Nodes covered: N20.2.1 3 constructores MixedNodeOp: packedLoadNeon + packedStoreNeon + packedButterflyNeonDIT, N20.2.2 4 NeonIntrinsic variants + toCName/fromCName mappings, N20.2.3 15 lemmas NodeOps/NodeSemantics instances (cases op sistemático).
+
+#### 2. Performance
+
+| Metric | Target | Actual | Status |
+|--------|--------|--------|--------|
+| LOC | — | 310 | — |
+| Theorems | — | 0 | — |
+| Lemmas | — | 0 | — |
+| Defs | — | 0 | — |
+| Sorry count | 0 | 0 | PASS |
+
+#### 3. Acceptability Analysis
+
+- **Acceptable**: Meets minimum criteria (zero sorry, compiles)
+
+#### 4. Bugs, Warnings, Sorries
+
+| Item | Location | Cause | Affected Nodes | Mitigation |
+|------|----------|-------|----------------|------------|
+| (none) | — | — | — | — |
+

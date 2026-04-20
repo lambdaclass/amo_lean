@@ -78,6 +78,13 @@ def lowerMixedExprToLLE (e : MixedExpr) : LowLevelExpr :=
   | .barrettReduceE a _p _m => lowerMixedExprToLLE a  -- identity (use lowerMixedExprFull)
   | .harveyReduceE a _p => lowerMixedExprToLLE a      -- identity (use lowerMixedExprFull)
   | .conditionalSubE a _p => lowerMixedExprToLLE a   -- identity (use lowerMixedExprFull)
+  -- v3.20.b B2 (§14.13.2) — SIMD pack ops match evalMixedOp simplified semantics
+  -- at the LLE layer (real WIDTH=4 NEON semantics live in Stmt.call per §14.13.4).
+  | .packedLoadNeonE addr             => lowerMixedExprToLLE addr
+  | .packedStoreNeonE values _addr    => lowerMixedExprToLLE values
+  | .packedButterflyNeonDITE a b _tw  =>
+    -- Match evalMixedOp: (v a + v b) / 2 → encoded as shift right by 1
+    .binOp .bshr (.binOp .add (lowerMixedExprToLLE a) (lowerMixedExprToLLE b)) (.litInt 1)
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 2: MixedExpr → Trust-Lean Stmt (with temporaries)
@@ -389,6 +396,20 @@ theorem lowerMixedExprToLLE_evaluates (e : MixedExpr) (llEnv : LowLevelEnv)
     obtain ⟨va, ha⟩ := iha; exact ⟨va, ha⟩
   | conditionalSubE a _p iha =>
     obtain ⟨va, ha⟩ := iha; exact ⟨va, ha⟩
+  -- v3.20.b B2 (§14.13.2) — SIMD pack ops. packedLoadNeon/packedStoreNeon are
+  -- passthroughs at the LLE layer (lowerMixedExprToLLE returns child's lowering
+  -- unchanged), so the evaluator just returns the child's value. butterflies
+  -- compute (va + vb) / 2 at the simplified Nat layer (real semantics are in
+  -- Stmt.call, §14.13.4); encoded as bshr 1.
+  | packedLoadNeonE addr iha =>
+    obtain ⟨va, ha⟩ := iha; exact ⟨va, ha⟩
+  | packedStoreNeonE values _addr ihv _ =>
+    obtain ⟨vv, hv⟩ := ihv; exact ⟨vv, hv⟩
+  | packedButterflyNeonDITE a b _tw iha ihb _ =>
+    obtain ⟨va, ha⟩ := iha
+    obtain ⟨vb, hb⟩ := ihb
+    exact ⟨Int.shiftRight (va + vb) 1, by
+      simp [lowerMixedExprToLLE, evalExpr, ha, hb, evalBinOp]⟩
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 6: Smoke tests
@@ -728,6 +749,27 @@ theorem lowerMixedExprFull_evaluates (e : MixedExpr) (llEnv : LowLevelEnv)
       obtain ⟨iv, hiv⟩ := hcv
       simp only [evalExpr, hiv, LowLevelEnv.update_same, evalBinOp]
       exact ⟨iv - ↑p, _, rfl, LowLevelEnv.update_same ..⟩
+  -- v3.20.b B2 (§14.13.2) — SIMD pack ops follow the primitive-constructor
+  -- template: lowerMixedExprFull delegates through the `| other =>` catch-all
+  -- (line 141) to lowerMixedExprToLLE + fresh-var assign, so the evaluator
+  -- structure matches addE/mulE exactly. Each case destructures the LLE-level
+  -- evaluation via `lowerMixedExprToLLE_evaluates` and threads through the
+  -- Stmt.assign.
+  | packedLoadNeonE addr _ =>
+    obtain ⟨v, hv⟩ := lowerMixedExprToLLE_evaluates (.packedLoadNeonE addr) llEnv mEnv henv
+    exact ⟨v, llEnv.update (.temp cgs.nextVar) (.int v),
+      by simp only [lowerMixedExprFull, CodeGenState.freshVar, evalStmt, hv],
+      by simp only [LowLevelEnv.update_same]⟩
+  | packedStoreNeonE values addr _ _ =>
+    obtain ⟨v, hv⟩ := lowerMixedExprToLLE_evaluates (.packedStoreNeonE values addr) llEnv mEnv henv
+    exact ⟨v, llEnv.update (.temp cgs.nextVar) (.int v),
+      by simp only [lowerMixedExprFull, CodeGenState.freshVar, evalStmt, hv],
+      by simp only [LowLevelEnv.update_same]⟩
+  | packedButterflyNeonDITE a b tw _ _ _ =>
+    obtain ⟨v, hv⟩ := lowerMixedExprToLLE_evaluates (.packedButterflyNeonDITE a b tw) llEnv mEnv henv
+    exact ⟨v, llEnv.update (.temp cgs.nextVar) (.int v),
+      by simp only [lowerMixedExprFull, CodeGenState.freshVar, evalStmt, hv],
+      by simp only [LowLevelEnv.update_same]⟩
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 8: C code emission (connecting to Trust-Lean CBackend)

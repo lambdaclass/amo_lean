@@ -200,6 +200,16 @@ def mixedOpCost (hw : HardwareCost) : MixedNodeOp → Nat
       -- Harvey: 3 ops, u32 conditional subs → no widening
   | .conditionalSub _ _  => hw.condSub
       -- Conditional subtract: 1 compare + 1 sub (selected when boundK ≤ 2)
+  -- v3.20.b B2 (§14.13.2) — SIMD pack ops. packedLoad/Store are single NEON
+  -- memory ops (vld1q_s32/vst1q_s32), 1 cycle on M1. Model uniformly as
+  -- `hw.add` magnitude (conservative, ALU-comparable; cache pressure lives
+  -- in u64Penalty/cacheThreshold, not per-op). packedButterflyNeonDIT amortizes
+  -- 4 scalar butterflies into one NEON latency chain: ~1 mul32 + 1 add in
+  -- latency terms (throughput is 4×). This keeps extraction preferring packed
+  -- over 4-scalar sequences in cache-aware regimes without over-weighting.
+  | .packedLoadNeon _              => hw.add
+  | .packedStoreNeon _ _           => hw.add
+  | .packedButterflyNeonDIT _ _ _  => hw.mul32 + hw.add
 
 /-! ## Combined mul+add cost (branch-aware selection)
 

@@ -89,6 +89,17 @@ def toCodegenExpr (e : MixedExpr) (constLookup : Nat → Int) : CodegenExpr :=
   | .barrettReduceE a _p _m => toCodegenExpr a constLookup
   | .harveyReduceE a _p => toCodegenExpr a constLookup
   | .conditionalSubE a _p => toCodegenExpr a constLookup
+  -- v3.20.b B2 (§14.13.2) — SIMD pack ops. Like reductions above, these defer
+  -- to the backend (Stmt.call with NEON intrinsics, §14.13.4 trust boundary).
+  -- At the CodegenExpr layer we pass through to the first child to keep the
+  -- type functional; the real NEON emission lives in SIMDEmitter.lean.
+  | .packedLoadNeonE addr            => toCodegenExpr addr constLookup
+  | .packedStoreNeonE values _addr   => toCodegenExpr values constLookup
+  | .packedButterflyNeonDITE a b _tw =>
+    -- (v a + v b) / 2 via shift right by 1 (matches evalMixedOp semantics)
+    .binOp .bshr
+      (.binOp .add (toCodegenExpr a constLookup) (toCodegenExpr b constLookup))
+      (.litInt 1)
 
 /-! ## Evaluation of CodegenExpr on Int -/
 
