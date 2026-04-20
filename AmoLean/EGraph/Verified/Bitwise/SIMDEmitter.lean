@@ -603,17 +603,32 @@ unsafe fn neon_interleave_store(ptr: *mut i32, a: int32x4_t, b: int32x4_t) {
 }
 "
 
-/-- Rust NEON temp variable declarations (v3.8.0).
-    Uses MaybeUninit to avoid requiring initialization for SIMD types.
+/-- Rust NEON temp variable declarations (v3.8.0; v3.20 B0 zero-init).
+    Initializes with vdupq_n_*(0) / vdup_n_s32(0) instead of `MaybeUninit::assume_init()`:
+    the NEON types (int32x4_t, uint32x4_t, int32x2_t) do not permit being left
+    uninitialized (future Rust hard error), so we broadcast zero as a safe default.
+    The init value is overwritten by the first `nvX = intrinsic(...)` assignment; the
+    zero fill is dead code that the compiler elides under `-O`.
     Same variable naming convention as C (nv*, nu*, nh*). -/
 def neonTempDeclsRust (numSignedVars : Nat := 30) (numUnsignedVars : Nat := 10)
     (numHalfVars : Nat := 12) : String :=
-  let mkDecl (ty tag : String) (n : Nat) : String :=
+  let mkDecl (ty zeroInit tag : String) (n : Nat) : String :=
     String.join (List.range n |>.map fun i =>
-      s!"    let mut {tag}{i}: {ty} = unsafe \{ core::mem::MaybeUninit::uninit().assume_init() };\n")
-  mkDecl "int32x4_t" "nv" numSignedVars ++
-  mkDecl "uint32x4_t" "nu" numUnsignedVars ++
-  mkDecl "int32x2_t" "nh" numHalfVars
+      s!"    let mut {tag}{i}: {ty} = unsafe \{ {zeroInit} };\n")
+  mkDecl "int32x4_t"  "vdupq_n_s32(0)" "nv" numSignedVars ++
+  mkDecl "uint32x4_t" "vdupq_n_u32(0)" "nu" numUnsignedVars ++
+  mkDecl "int32x2_t"  "vdup_n_s32(0)"  "nh" numHalfVars
+
+/-- v3.20 B0: find max index `N` such that `{tag}{N}` appears in `code`, return N+1.
+    Returns 0 if no match in `[0, upperBound)`. Used by `emitSIMDNTTRust` to
+    emit only the NEON temps actually referenced by the stage code (no unused
+    variable warnings from pre-declared but uncalled temps).
+    O(upperBound × |code|) via String.splitOn; upperBound ≤ 30 keeps this trivial. -/
+private def neonMaxCount (code : String) (tag : String) (upperBound : Nat) : Nat :=
+  match (List.range upperBound).reverse.find? (fun i =>
+    (code.splitOn s!"{tag}{i}").length > 1) with
+  | some i => i + 1
+  | none => 0
 
 /-- Emit a complete SIMD NTT function from a Plan.
     1. Normalize plan (stageIdx = NTT level)
@@ -809,28 +824,45 @@ def emitSIMDNTTRust (plan : Plan) (target : SIMDTarget) (k c mu : Nat)
   let n := plan.size
   let lanes := simdLanes target
   let stages := plan.stages.toList
-  -- Use statement + helpers
+  -- v3.20 B0: use statement + helpers WITHOUT crate-wide #![allow(...)] band-aid.
+  -- Warnings are addressed at source (neonTempDeclsRust zero-init, exact temp count
+  -- via neonMaxCount below) plus a per-function #[allow(...)] on the generated SIMD
+  -- function. See §14.14 for the cleanup rationale.
   let header :=
-    "#![allow(unused_imports, unused_variables, unused_mut, unused_unsafe)]\n" ++
-    "#![allow(non_snake_case, non_camel_case_types)]\n" ++
     "use std::arch::aarch64::*;\n\n" ++
     deinterleaveHelperRust ++ "\n" ++
     interleaveStoreHelperRust ++ "\n"
-  -- Temp declarations (MaybeUninit for NEON types)
-  let neonDecls := neonTempDeclsRust 30 10 12
-  -- Constant broadcasts (unsafe for NEON intrinsics)
-  let constDecls :=
-    s!"    let p_vec: uint32x4_t = unsafe \{ vdupq_n_u32({p}u32) };\n" ++
-    s!"    let p_vec_s: int32x4_t = unsafe \{ vdupq_n_s32({p}i32) };\n"
-  -- Stage code
+  -- Stage code first (v3.20 B0): need to scan it to size temp declarations.
   let stageCode := stages.foldl (fun acc stage =>
     acc ++ emitStageRust stage n p lanes
   ) ""
-  -- Function: unsafe fn with raw pointer params
+  -- Size NEON temp declarations to actual usage in stageCode. Upper bounds 30/10/12
+  -- are conservative safety nets; `neonMaxCount` returns 0 if nothing matches so the
+  -- block compiles clean for plans that don't need any temps.
+  let nNv := neonMaxCount stageCode "nv" 30
+  let nNu := neonMaxCount stageCode "nu" 10
+  let nNh := neonMaxCount stageCode "nh" 12
+  let neonDecls := neonTempDeclsRust nNv nNu nNh
+  -- Constant broadcasts (unsafe for NEON intrinsics even inside unsafe fn — explicit).
+  let constDecls :=
+    s!"    let p_vec: uint32x4_t = unsafe \{ vdupq_n_u32({p}u32) };\n" ++
+    s!"    let p_vec_s: int32x4_t = unsafe \{ vdupq_n_s32({p}i32) };\n"
+  -- Function: unsafe fn with raw pointer params. Scoped allow documents residual
+  -- warnings (1) `non_snake_case` / `non_camel_case_types` for NEON types like
+  -- int32x4_t; (2) `unused_unsafe` from nested unsafe blocks in simdStmtToRust
+  -- emissions — each intrinsic call is wrapped in `unsafe { ... }` for readability
+  -- even when the outer fn is already unsafe (upstream fix tracked for v3.20.b
+  -- simdStmtToRust refactor); (3) `unused_assignments` from the zero-init values
+  -- in neonTempDeclsRust — the `vdupq_n_*(0)` initializer is overwritten by the
+  -- first `nvX = intrinsic(...)` assignment, so the zero itself is never read.
+  -- The zero is kept (instead of leaving the var uninitialized) because NEON
+  -- types don't permit MaybeUninit under newer rustc.
+  let attrs :=
+    "#[allow(non_snake_case, non_camel_case_types, unused_unsafe, unused_assignments)]\n"
   let sig :=
     s!"pub unsafe fn {funcName}(data: *mut i32, twiddles: *const i32, mu_tw: *const i32) \{"
   -- Assemble
-  header ++ sig ++ "\n" ++ neonDecls ++ constDecls ++ stageCode ++ "}\n"
+  header ++ attrs ++ sig ++ "\n" ++ neonDecls ++ constDecls ++ stageCode ++ "}\n"
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 8: Smoke Tests

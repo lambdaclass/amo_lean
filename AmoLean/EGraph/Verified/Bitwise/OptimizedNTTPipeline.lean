@@ -880,7 +880,7 @@ fn main() \{
     }
     /* Montgomery twiddles for AMO ultra: tw_mont = tw * R mod p */
     let tw_mont: Vec<{et}> = tw.iter().map(|&t| ((t as {wt} * {rVal}) % p) as {et}).collect();
-    let mu_tw: Vec<{et}> = tw_mont.iter().map(|&t| ((t as {wt} * {ucfg.mu}{wt}) & 0xFFFFFFFF) as {et}).collect();
+    {if rustSIMD then s!"let mu_tw: Vec<{et}> = tw_mont.iter().map(|&t| ((t as {wt} * {ucfg.mu}{wt}) & 0xFFFFFFFF) as {et}).collect();" else "/* mu_tw elided — not consumed by scalar path (v3.20 B0) */"}
     let orig: Vec<{et}> = (0..n).map(|i| ((i as {wt} * 1000000007) % p) as {et}).collect();
 
     /* v3.16.0 B5: Internal correctness check REMOVED (Rust path).

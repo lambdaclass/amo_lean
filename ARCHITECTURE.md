@@ -617,106 +617,92 @@ BF2+BF3 (conditionalSub + Stark252): deferred to future version.
 
 
 
-### v3.19 — Plonky3 Batch Benchmark + Rust Primary + Conditional SIMD
 
-**Contents**: Formalización del plan en research/TRZK_SBB.md §13. Bloque 1 ya ejecutado en commit 44bff09 (BENCHMARKS.md update con N=2^14/2^18/2^20 + caveat width=1). Arranque real: Bloque 2 (Plonky3 batch benchmark via FFI shim). Bloque 4 (SIMD migration) es CONDICIONAL al veredicto de Bloque 2. Bloque 5 es deuda técnica, baja prioridad.
+### v3.20 — Batch NTT Interface (cleanup + SIMD migration + batch emitters + proofs)
+
+**Contents**: Formalización del plan de TRZK_SBB.md §14.13 + research/TRZK_batch_design.md. 8 bloques secuenciales: B0 (v3.19 B5 cleanup debt) → v3.20.a (SIMD legacy → DFT standard + Gate H8) → B1-B6 de v3.20.b (batch interface). Total ~1378 LOC Lean + ~180 otros, estimado 11-15 días. Phase 2 firewall proofs diferido a ronda dedicada post-merge. Plan y decisiones (4 gaps) ya cerrados en pre-coding investigation 2026-04-20; /plan-project invocado en modo formalizador, sin replanificar.
 
 **Files**:
-- `BENCHMARKS.md`
-- `verification/plonky3/plonky3_shim/src/lib.rs`
-- `verification/plonky3/plonky3_shim/Cargo.toml`
-- `Tests/benchmark/benchmark_plonky3_batch.py`
-- `research/TRZK_SBB.md`
-- `README.md`
-- `.github/workflows/ci.yml`
 - `AmoLean/EGraph/Verified/Bitwise/SIMDEmitter.lean`
-- `AmoLean/Bridge/SIMDStmtToRust.lean`
-- `Tests/benchmark/oracle_validate.py`
-- `Tests/benchmark/`
-- `AmoLean/Bridge/TrustLeanRust.lean`
 - `AmoLean/EGraph/Verified/Bitwise/VerifiedPlanCodeGen.lean`
-- `Tests/benchmark/benchmark_plonky3.py`
+- `Tests/benchmark/oracle_validate.py`
+- `.github/workflows/ci.yml`
+- `AmoLean/EGraph/Verified/Bitwise/NTTPlan.lean`
+- `CLAUDE.md`
+- `AmoLean/EGraph/Verified/Bitwise/MixedNodeOp.lean`
+- `AmoLean/Bridge/SIMDStmtToC.lean`
+- `AmoLean/EGraph/Verified/Bitwise/MemLayout.lean`
+- `Tests/batch_golden_test.lean`
+- `AmoLean/EGraph/Verified/Bitwise/CostModelDef.lean`
+- `Tests/NonVacuity.lean`
+- `Tests/batch_offset_tests.lean`
+- `Tests/batch_equivalence_tests.lean`
+- `Tests/benchmark/benchmark_batch.py`
+- `Tests/benchmark/differential_fuzz.py`
+- `ARCHITECTURE.md`
+- `BENCHMARKS.md`
 
-#### DAG (3.19.0)
+#### DAG (3.20.0)
 
 | Nodo | Tipo | Deps | Status |
 |------|------|------|--------|
-| N319.1.1 BENCHMARKS.md update large-N + caveat width=1 (DONE en 44bff09) | HOJA | — | completed ✓ |
-| N319.2.1 Extender plonky3_shim con dft_batch(width) | CRIT | — | completed ✓ |
-| N319.2.2 Python harness batch comparison | PAR | N319.2.1 | completed ✓ |
-| N319.2.3 Veredicto batch + actualizar BENCHMARKS.md §8 + TRZK_SBB.md §13 | GATE | N319.2.2 | completed ✓ |
-| N319.3.1 Promover Rust como output primario (docs + CI) | HOJA | N319.2.3 | completed ✓ |
-| N319.4.1 Migrar emitSIMDNTTC al DFT standard path (CONDICIONAL) | FUND | N319.2.3 | completed ✓ |
-| N319.4.2 Migrar emitSIMDNTTRust al DFT standard path (CONDICIONAL) | CRIT | N319.4.1 | completed ✓ |
-| N319.4.3 Agregar --hardware arm-neon a oracle_validate.py (CONDICIONAL) | HOJA | N319.4.1 | completed ✓ |
-| N319.4.4 Validar HS1/HS2 variants + Codegen Validation Gate (CONDICIONAL) | GATE | N319.4.1, N319.4.2, N319.4.3 | completed ✓ |
-| N319.5.1 Cleanup warnings Rust at source en stmtToRust | HOJA | — | completed ✓ |
-| N319.5.2 BabyBear Rust vs C anomaly re-verification a N>2^14 | PAR | — | completed ✓ |
-| N319.5.3 Documentar four-step NO-GO permanente | HOJA | — | completed ✓ |
+| N20.0.1 Eliminar 3 #![allow(...)] band-aids + fix warnings al origen en stmtToRust | HOJA | — | completed ✓ |
+| N20.a.1 SIMD migration: stages.reverse + bitRevPermutePreamble en emitCFromPlanStandard + emitRustFromPlanStandard | CRIT | N20.0.1 | pending |
+| N20.a.2 Oracle validator --hardware arm-neon + CI arm-neon-validation job | HOJA | N20.a.1 | pending |
+| N20.a.3 Gate H8 pre-merge PR v3.20.a (5 runs, mean ≤ 820 μs @ N=2^18 BabyBear) | GATE | N20.a.1, N20.a.2 | pending |
+| N20.1.1 NTTPlan.batchWidth field + Plan.withBatch helper + batchPolyOffset + soundness lemma | FUND | N20.a.3 | pending |
+| N20.1.2 Trust Boundary Documentation template en CLAUDE.md | HOJA | — | pending |
+| N20.2.1 3 constructores MixedNodeOp: packedLoadNeon + packedStoreNeon + packedButterflyNeonDIT | FUND | N20.1.1 | pending |
+| N20.2.2 4 NeonIntrinsic variants + toCName/fromCName mappings | HOJA | N20.2.1 | pending |
+| N20.2.3 15 lemmas NodeOps/NodeSemantics instances (cases op sistemático) | CRIT | N20.2.1 | pending |
+| N20.3.1 MemLayout.lean NUEVO módulo con transposeForBatch + untransposeFromBatch + invertibility theorem | FUND | N20.2.3 | pending |
+| N20.3.2 emitPackedButterflyNeonDIT_C kernel + isPackedButterflyApplicable dispatch | CRIT | N20.3.1, N20.2.1 | pending |
+| N20.3.3 Golden test batch==scalar (invertibility + codegen validation) | GATE | N20.3.1, N20.3.2 | pending |
+| N20.4.1 lowerStageVerified_OffsetAware con substitution (+batchPolyOffset substitutor) | FUND | N20.1.1 | pending |
+| N20.4.2 lowerNTTFromPlanBatch outer Stmt.for_ + stage composition (B=1 delega a single-vector) | CRIT | N20.4.1 | pending |
+| N20.4.3 emitCFromPlanBatch + emitRustFromPlanBatch wrappers con transpose preamble | CRIT | N20.4.2, N20.3.1 | pending |
+| N20.4.4 Cost model extension: batchWidthFactor + batchWidthCost + planTotalCostBatch | PAR | N20.1.1 | pending |
+| N20.4.5 Gate B4: benchmark.py --batch-width 16 BabyBear N=18 dentro ±5% modelo lineal | GATE | N20.4.3, N20.4.4 | pending |
+| N20.5.1 Theorem signatures: lowerNTTFromPlanBatch_correct + auxiliares + emitCFromPlanBatch_sound | FUND | N20.4.3 | pending |
+| N20.5.2 Base case B=1 collapse NON-DEFERRABLE (proof by rfl) | CRIT | N20.5.1 | pending |
+| N20.5.3 Inductive step _step + main theorem composición | CRIT | N20.5.2 | pending |
+| N20.5.4 Firewall _aux lemmas con sorry + TODO Phase 2 (lowerDIFButterflyByReduction_batch_indexing_aux, lowerBitReverseStmt_batch_aux) | FUND | N20.5.1 | pending |
+| N20.5.5 3 non-vacuity examples (B=1 babybear, B=4 goldilocks, B=2 mixed reduction) | HOJA | N20.5.3 | pending |
+| N20.6.1 Tests Lean: offset soundness + B=1 equivalence + invertibility | HOJA | N20.5.3 | pending |
+| N20.6.2 Python benchmark harness benchmark_batch.py (NUEVO archivo) | HOJA | N20.4.3 | pending |
+| N20.6.3 Differential fuzzer batch inputs (≥1000 PASS target) | HOJA | N20.6.2 | pending |
+| N20.6.4 ARCHITECTURE.md + BENCHMARKS.md §10 Batch performance + Batch Roadmap Phase 2 | HOJA | — | pending |
+| N20.6.5 CI batch-validation job | HOJA | N20.6.3 | pending |
+| N20.6.6 Gate B6: H8 preservado + batch B=16 N=2^18 ±5% modelo lineal | GATE | N20.6.3, N20.6.5 | pending |
 
-#### Formal Properties (3.19.0)
+#### Formal Properties (3.20.0)
 
 | Nodo | Propiedad | Tipo | Prioridad |
 |------|-----------|------|-----------|
-| N319.2.1 | plonky3_shim::dft_batch(width=W, n=N, data) computes the same NTT as W independent dft_single calls on the same input rows | EQUIVALENCE | P0 |
-| N319.2.1 | dft_batch with width=4 on BabyBear activates PackedMontyField31Neon path (verifiable via perf counter or runtime > scalar baseline /4) | OPTIMIZATION | P1 |
-| N319.2.2 | Python harness reports CV ≤ 5% per (width, N, field) cell after warmup protocol (2 warmup + 3 measure + min-of-min) | PRESERVATION | P0 |
-| N319.2.3 | Verdict in BENCHMARKS.md §8 update applies decision tree §13.5 unambiguously: ratio Plonky3_batch / TRZK_seq classified into {pierde/empata, gana <20%, gana ≥20%} | SOUNDNESS | P0 |
-| N319.4.1 | emitSIMDNTTC migrated path produces output byte-identical to emitCFromPlanVerified (scalar) for the same NTTPlan, modulo SIMD lane processing order | EQUIVALENCE | P0 |
-| N319.4.1 | All SIMD intrinsic emissions go through Stmt.call (no String concatenation bypass) — L-730 invariant | INVARIANT | P0 |
-| N319.4.2 | emitSIMDNTTRust output compiles cleanly (no rustc errors, ≤ baseline warnings count) and produces byte-identical output to emitSIMDNTTC for same plan + input | EQUIVALENCE | P0 |
-| N319.4.4 | differential_fuzz.py mantiene 1150/1150 PASS post-migración (BabyBear + Goldilocks × N ∈ {8..16384}) | SOUNDNESS | P0 |
-| N319.4.4 | TRZK SIMD migrated path no regresa >2% en single-vector benchmark vs pre-migración (N=2^14, 2^18, 2^20 × campo) | OPTIMIZATION | P0 |
-| N319.5.1 | Rust warnings count post-cleanup ≤ baseline - 50% (de ~309 a ≤ 155). #![allow] residual documentado | OPTIMIZATION | P1 |
-| N319.5.2 | BabyBear Rust vs C ratio a N=2^18: documentar valor + CV en BENCHMARKS.md. Si |1 - ratio| > 5%, abrir investigación. | OPTIMIZATION | P2 |
+| N20.1.1 | Plan.batchWidth=1 por default preserva comportamiento single-vector existente (backward compat) | PRESERVATION | P0 |
+| N20.1.1 | batchPolyOffset es inyectiva y soundness lemma cubre todos los (polyVar, N, i) | SOUNDNESS | P0 |
+| N20.2.1 | Nuevos MixedNodeOp constructores son no-island: packedButterflyNeonDIT tiene consumer explícito en B3 (emitPackedButterflyNeonDIT_C) antes del cierre | INVARIANT | P0 |
+| N20.2.1 | evalMixedOp .packedButterflyNeonDIT simplifica a (v a + v b) / 2 (DIT butterfly semántica) | EQUIVALENCE | P1 |
+| N20.3.1 | transposeForBatch_inv: transpose ∘ untranspose = id para toda input ≤ N*W elements | INVARIANT | P0 |
+| N20.5.2 | lowerNTTFromPlanBatch_B1_collapse: B=1 exactamente equivalente al single-vector path | EQUIVALENCE | P0 |
+| N20.5.3 | lowerNTTFromPlanBatch_correct: ∀ B > 0 batch output correcto elemento por elemento | SOUNDNESS | P0 |
+| N20.5.4 | Firewall _aux lemmas (stride indexing + bitrev strided) DOCUMENTADAS con TODO Phase 2 + referencia CLAUDE.md § Batch Roadmap Phase 2 | INVARIANT | P0 |
+| N20.6.3 | Differential fuzz batch: 100% match TRZK-batch vs P3-batch element-wise para ≥1000 inputs random (N ∈ {2^8, 2^10, 2^14}, B ∈ {4, 8, 16}) | SOUNDNESS | P0 |
+| N20.6.6 | Gate H8 preservado: TRZK arm-neon single-vector N=2^18 mean ≤ 820 μs post-batch infra (no regresión vs v3.20.a) | PRESERVATION | P0 |
 
 > **Nota**: Propiedades en lenguaje natural (intención de diseño).
 > Los stubs ejecutables están en BENCHMARKS.md § Formal Properties.
 
 #### Bloques
 
-- [x] **BENCHMARKS.md update + caveat width=1 (DONE en 44bff09)**: N319.1.1 — closed 2026-04-19
-- [x] **Plonky3 batch benchmark (Tarea A) — ARRANQUE v3.19**: N319.2.1, N319.2.2, N319.2.3 — closed 2026-04-19
-- [x] **Rust como output primario (docs + CI)**: N319.3.1 — closed 2026-04-19
-- [x] **SIMD migration (CONDICIONAL a B2 verdict >20%)**: N319.4.1, N319.4.2, N319.4.3, N319.4.4 — closed 2026-04-19
-- [x] **Cleanup deuda técnica (baja prioridad)**: N319.5.1, N319.5.2, N319.5.3 — closed 2026-04-19
-
-#### Closure (2026-04-19)
-
-Estado final por bloque (checkmarks arriba agregados automáticamente por `update_docs.py`;
-esta sección agrega el detalle narrativo y los pointers al rationale):
-
-- **B1 — BENCHMARKS.md large-N + caveat width=1**: PRE-EJECUTADO en commit `44bff09`
-  (pre-fuzzing groundwork, antes de que v3.19 se formalizara). Anchor en el DAG para
-  trazabilidad histórica; sin trabajo nuevo en v3.19.
-- **B2 — Plonky3 batch benchmark (Tarea A)**: ✓ ejecutado full. 3 entry points FFI en
-  `plonky3_shim/src/lib.rs` + harness `Tests/benchmark/benchmark_plonky3_batch.py` +
-  veredicto §13.5 formalizado en `BENCHMARKS.md §8b`. Differential_fuzz mantiene 1150/1150.
-- **B3 — Rust como primary**: ✓ ejecutado. README reestructurado con Rust-first, CI
-  `benchmark-validation` co-gatea `--langs c,rust`. Bug descubierto y documentado:
-  `--langs both` no se expande (workaround inline en ci.yml + lesson L-749).
-- **B4 — SIMD migration**: **DEFERRED a v3.20** (Option B++ post adversarial QA). El scope
-  resultó ~200-270 LOC (vs 120 planeado) y el scout expuso un correctness gap en el
-  legacy `emitSIMDNTTC`/`emitSIMDNTTRust` (ref_dit vs DFT standard convention mismatch
-  al primer output element). Ratio costo/beneficio invertido: v3.20 reescribe los SIMD
-  emitters para batch interface de todos modos, absorbiendo esta migración sin costo
-  extra. Rationale completo en **`research/TRZK_SBB.md §14.12`** + evidencia empírica
-  en **`BENCHMARKS.md §8c`**. Los nodos N319.4.1-4.4 quedan marcados "done" con
-  metrics que indican `status: DEFERRED to v3.20`; la implementación real se realiza
-  en v3.20 junto al batch rewrite.
-- **B5 — Cleanup deuda técnica**: partial/deferred. N319.5.3 (four-step NO-GO
-  permanente) DONE via referencia a `BENCHMARKS.md §8` y `TRZK_SBB.md §11.8` (ya
-  documentado pre-v3.19, no requiere doc nueva). N319.5.1 (Rust warnings at source)
-  + N319.5.2 (BabyBear Rust-vs-C anomaly re-verify) DEFERRED — no bloquean release,
-  se retoman post-v3.20 si siguen siendo relevantes.
-
-Lessons extraídas durante la ejecución (7 total en `~/Documents/claudio/lecciones/`
-vía `/collab-qa` + cierre): scout-before-estimate, baseline-regime-matters,
-CI-gate-before-optimize, short-task-CV-needs-100-iters, benchmark.py-langs-both-bug,
-TrustLean-wiring-vs-dependency (reforzada), comparative-rules-need-explicit-config.
-
-Commit final: `6001b9d` en branch `feat/v3.19-simd` (stacked sobre `feat/v3.18-fuzzing`
-= PR #22). Los updates de este cierre narrativo van en commit separado post-6001b9d.
+- [x] **v3.19 cleanup debt (eliminar #![allow] band-aids)**: N20.0.1 — closed 2026-04-20
+- [ ] **v3.20.a — SIMD legacy → DFT standard migration + Gate H8**: N20.a.1, N20.a.2, N20.a.3
+- [ ] **Foundations (NTTPlan.batchWidth + Trust Boundary docs)**: N20.1.1, N20.1.2
+- [ ] **MixedNodeOp Extensions (3 constructores + 4 intrinsics + 15 lemmas)**: N20.2.1, N20.2.2, N20.2.3
+- [ ] **MemLayout + SIMDEmitter (nuevo módulo + packed butterfly kernel)**: N20.3.1, N20.3.2, N20.3.3
+- [ ] **Outer Loop Wiring (lowerNTTFromPlanBatch + emitCFromPlanBatch)**: N20.4.1, N20.4.2, N20.4.3, N20.4.4, N20.4.5
+- [ ] **Correctness Proofs Phase 1 (bridge theorem + firewall _aux con sorry)**: N20.5.1, N20.5.2, N20.5.3, N20.5.4, N20.5.5
+- [ ] **Tests + Bench + Docs (benchmark_batch.py + fuzzer + ARCHITECTURE update)**: N20.6.1, N20.6.2, N20.6.3, N20.6.4, N20.6.5, N20.6.6
 
 ---
 

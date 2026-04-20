@@ -643,3 +643,31 @@ Nodes covered: N319.5.1 Cleanup warnings Rust at source en stmtToRust, N319.5.2 
 |------|----------|-------|----------------|------------|
 | (none) | — | — | — | — |
 
+### v3.19 cleanup debt (eliminar #![allow] band-aids) (3.20.0)
+
+**Closed**: 2026-04-20 | **Status**: PASS
+
+#### 1. What is tested and why
+
+Nodes covered: N20.0.1 Eliminar 3 #![allow(...)] band-aids + fix warnings al origen en stmtToRust.
+
+#### 2. Performance
+
+| Metric | Target | Actual | Status |
+|--------|--------|--------|--------|
+| LOC | — | 62 | — |
+| Theorems | — | 0 | — |
+| Lemmas | — | 0 | — |
+| Defs | — | 0 | — |
+| Sorry count | 0 | 0 | PASS |
+
+#### 3. Acceptability Analysis
+
+- **Acceptable**: Meets minimum criteria (zero sorry, compiles)
+
+#### 4. Bugs, Warnings, Sorries
+
+| Item | Location | Cause | Affected Nodes | Mitigation |
+|------|----------|-------|----------------|------------|
+| (none) | — | — | — | — |
+

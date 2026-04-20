@@ -1320,11 +1320,22 @@ def emitRustFromPlanStandard (plan : Plan) (k c mu : Nat)
   -- v3.16.0 B2: retType=wideType, indexType=wideType for Goldilocks (Rust has no implicit widening)
   -- elemType (not uElemType) because BabyBear transmutes data to &mut [i32] before Stmt.call
   let indexType := if k == 64 then "u128" else "usize"
-  -- v3.17.0 post-B6: silence 300+ warnings that are all unused_parens / dead_code artifacts
-  -- of the mechanical codegen (stmtToRust emits conservative parens; some t0/t1 temps are
-  -- assigned but not read in all branches of the dispatch). None are correctness-indicative.
-  "#![allow(unused_parens, unused_variables, unused_assignments, unused_mut, dead_code)]\n" ++
+  -- v3.20 B0: scoped #[allow(...)] on the generated NTT function (not crate-wide #![...]).
+  -- Root cause of `unused_parens` lives upstream in TrustLean/Backend/RustBackend.lean
+  -- `exprToRust`: `.unaryOp .widen32to64 e` and `.binOp` always wrap in `(...)` for
+  -- precedence safety (line 68-70). When the expression is a full RHS of an assignment
+  -- like `a = (x as i64);`, the parens are redundant for Rust but required by the
+  -- precedence-safe emission. `unused_variables` / `unused_assignments` / `unused_mut`
+  -- / `dead_code` come from conservative temp allocation in maxTempsInPlan — not all
+  -- branches of the plan dispatch consume every temp. Fixing these at source requires
+  -- either an upstream TrustLean patch or a more precise temp-liveness analysis in
+  -- `maxTempsInPlan`; scoped allow keeps signal for other warnings (e.g. bugs in new
+  -- emitters) while preserving v3.19 output semantics. Upstream fix tracked for v3.20.b
+  -- or later; see `research/TRZK_SBB.md §14.14.2` step 4 for the escape hatch rationale.
+  let rustAttrs :=
+    "#[allow(unused_parens, unused_variables, unused_assignments, unused_mut, dead_code)]\n"
   goldiPreambleRust ++ bitRevPermutePreambleRust elemType wideType indexType ++
+  rustAttrs ++
   s!"fn {funcName}(data: &mut [{uElemType}], twiddles: &[{uElemType}]) \{\n{tempDecls}{loopDecls}{loadDecls}{r4LoadDecls}{ilp2Decls}{transmute}{bodyRust}\n}"
 
 /-- Emit verified Rust function from Plan.
@@ -1495,9 +1506,14 @@ def emitRustFromPlanVerified (plan : Plan) (k c mu : Nat)
     s!"  data[i2] = goldi_add(d0,d1); data[i3] = goldi_mul_tw(goldi_sub(d0,d1), w1p);\n" ++
     s!"  0\n}\n\n"
   else ""
-  -- v3.17.0 post-B6: crate-level allow for mechanical codegen artifacts (see Standard).
-  "#![allow(unused_parens, unused_variables, unused_assignments, unused_mut, dead_code)]\n" ++
+  -- v3.20 B0: scoped #[allow] per function instead of crate-wide #![allow] band-aid.
+  -- Root cause of `unused_parens` is TrustLean upstream `exprToRust` (precedence-safe
+  -- wrap); see detailed note in `emitRustFromPlanStandard` above. Same rationale here
+  -- for the legacy ref_dit (`emitRustFromPlanVerified`) path. Upstream fix tracked.
+  let rustAttrs :=
+    "#[allow(unused_parens, unused_variables, unused_assignments, unused_mut, dead_code)]\n"
   goldiPreambleRust ++
+  rustAttrs ++
   s!"fn {funcName}(data: &mut [{uElemType}], twiddles: &[{uElemType}]) \{\n{tempDecls}{loopDecls}{loadDecls}{r4LoadDecls}{transmute}{bodyRust}\n}"
 
 -- ══════════════════════════════════════════════════════════════════

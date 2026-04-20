@@ -1,19 +1,221 @@
 {
-  "version": "3.19.0",
+  "version": "3.20.0",
   "project": "TRZK",
   "phases": [
     {
-      "id": "v3-19",
-      "name": "v3.19 — Plonky3 Batch Benchmark + Rust Primary + Conditional SIMD",
-      "status": "completed",
+      "id": "v3-20",
+      "name": "v3.20 — Batch NTT Interface (cleanup + SIMD migration + batch emitters + proofs)",
+      "status": "in_progress",
       "nodes": [
         {
-          "id": "N319.1.1",
-          "name": "BENCHMARKS.md update large-N + caveat width=1 (DONE en 44bff09)",
+          "id": "N20.0.1",
+          "name": "Eliminar 3 #![allow(...)] band-aids + fix warnings al origen en stmtToRust",
           "type": "HOJA",
           "status": "completed",
           "files": [
-            "BENCHMARKS.md"
+            "AmoLean/EGraph/Verified/Bitwise/SIMDEmitter.lean",
+            "AmoLean/EGraph/Verified/Bitwise/VerifiedPlanCodeGen.lean"
+          ],
+          "deps": [],
+          "blocks": [
+            "B0"
+          ],
+          "metrics": {
+            "loc": 62,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 0,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 0
+          },
+          "study": {
+            "papers": [
+              "research/TRZK_SBB.md §14.14 B0 scope"
+            ],
+            "lessons": [
+              "L-751",
+              "L-746",
+              "L-309"
+            ],
+            "libraries": [],
+            "notes": "Tocar stmtToRust al origen: prefix _, emitir let sin mut cuando no se reasigna, omitir unsafe{} redundantes. Si un warning resiste fix estructural, scoped #[allow] por-función con comentario. Validar con cargo build 2>&1 | grep -c warning decreciente."
+          }
+        },
+        {
+          "id": "N20.a.1",
+          "name": "SIMD migration: stages.reverse + bitRevPermutePreamble en emitCFromPlanStandard + emitRustFromPlanStandard",
+          "type": "CRITICO",
+          "status": "pending",
+          "files": [
+            "AmoLean/EGraph/Verified/Bitwise/SIMDEmitter.lean"
+          ],
+          "deps": [
+            "N20.0.1"
+          ],
+          "blocks": [
+            "BA"
+          ],
+          "metrics": {
+            "loc": 0,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 0,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 0
+          },
+          "study": {
+            "papers": [
+              "research/TRZK_SBB.md §14.4.a",
+              "§14.11.a Gate H8"
+            ],
+            "lessons": [
+              "L-733",
+              "L-175",
+              "L-308"
+            ],
+            "libraries": [],
+            "notes": "~10 LOC core. stages.reverse.foldl + inject bitRevPermutePreambleC/Rust en headers/body. Smoke tests actualizados (~5 LOC). Cuida DIT/DIF consistency (L-733): todos los stages del path migrado deben permanecer DIT."
+          }
+        },
+        {
+          "id": "N20.a.2",
+          "name": "Oracle validator --hardware arm-neon + CI arm-neon-validation job",
+          "type": "HOJA",
+          "status": "pending",
+          "files": [
+            "Tests/benchmark/oracle_validate.py",
+            ".github/workflows/ci.yml"
+          ],
+          "deps": [
+            "N20.a.1"
+          ],
+          "blocks": [
+            "BA"
+          ],
+          "metrics": {
+            "loc": 0,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 0,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 0
+          },
+          "study": {
+            "papers": [
+              "research/TRZK_SBB.md §14.4.a"
+            ],
+            "lessons": [
+              "L-739",
+              "L-734"
+            ],
+            "libraries": [],
+            "notes": "Oracle acepta --hardware arm-neon (~10 LOC). CI job arm-neon-validation (~15 YAML) cerrando gap identificado en v3.19 B4 (v3.19 había placeholder comentado apuntando a BENCHMARKS.md §8c)."
+          }
+        },
+        {
+          "id": "N20.a.3",
+          "name": "Gate H8 pre-merge PR v3.20.a (5 runs, mean ≤ 820 μs @ N=2^18 BabyBear)",
+          "type": "GATE",
+          "status": "pending",
+          "files": [],
+          "deps": [
+            "N20.a.1",
+            "N20.a.2"
+          ],
+          "blocks": [
+            "BA"
+          ],
+          "metrics": {
+            "loc": 0,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 0,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 0
+          },
+          "study": {
+            "papers": [
+              "research/TRZK_SBB.md §14.11.a",
+              "research/TRZK_beat_plonky3_report1.md §VII"
+            ],
+            "lessons": [
+              "L-747"
+            ],
+            "libraries": [],
+            "notes": "Baseline pre-migration: 784.88μs (CV 0.47%, 5 runs). Threshold +5%: 820μs. Performance gate además de correctness gate. Si falla ≤820 pero >786: decisión a/b/c en §14.11.a (implementar bitrev blocked, documentar §8d, o abortar)."
+          }
+        },
+        {
+          "id": "N20.1.1",
+          "name": "NTTPlan.batchWidth field + Plan.withBatch helper + batchPolyOffset + soundness lemma",
+          "type": "FUNDACIONAL",
+          "status": "pending",
+          "files": [
+            "AmoLean/EGraph/Verified/Bitwise/NTTPlan.lean",
+            "AmoLean/EGraph/Verified/Bitwise/VerifiedPlanCodeGen.lean"
+          ],
+          "deps": [
+            "N20.a.3"
+          ],
+          "blocks": [
+            "B1"
+          ],
+          "metrics": {
+            "loc": 0,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 2,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 0
+          },
+          "study": {
+            "papers": [
+              "research/TRZK_SBB.md §14.13.1 Gap 1 decisión",
+              "research/TRZK_batch_design.md §2"
+            ],
+            "lessons": [
+              "L-736",
+              "L-279",
+              "L-138"
+            ],
+            "libraries": [
+              "ProofKit"
+            ],
+            "notes": "batchWidth : Nat := 1 default preserva comportamiento. batchPolyOffset calcula polyVar*N+i. Soundness lemma aislado (evalStmt_offset). Evitar sobre-ingeniería FUNDACIONAL (L-279, L-138) — keep batchWidth simple, no anadir helpers no usados."
+          }
+        },
+        {
+          "id": "N20.1.2",
+          "name": "Trust Boundary Documentation template en CLAUDE.md",
+          "type": "HOJA",
+          "status": "pending",
+          "files": [
+            "CLAUDE.md"
           ],
           "deps": [],
           "blocks": [
@@ -34,106 +236,25 @@
           },
           "study": {
             "papers": [
-              "Gregg-Systems-Performance-2020"
-            ],
-            "lessons": [],
-            "libraries": [],
-            "notes": "Bloque 1 ya ejecutado pre-fuzzing en commit 44bff09. Anclado para trazabilidad histórica."
-          }
-        },
-        {
-          "id": "N319.2.1",
-          "name": "Extender plonky3_shim con dft_batch(width)",
-          "type": "CRITICO",
-          "status": "completed",
-          "files": [
-            "verification/plonky3/plonky3_shim/src/lib.rs",
-            "verification/plonky3/plonky3_shim/Cargo.toml"
-          ],
-          "deps": [],
-          "blocks": [
-            "B2"
-          ],
-          "metrics": {
-            "loc": 251,
-            "theorems": 0,
-            "lemmas": 0,
-            "defs": 0,
-            "sorry": 0
-          },
-          "properties": {
-            "total": 2,
-            "passing": 0,
-            "failing": 0,
-            "not_runnable": 2
-          },
-          "study": {
-            "papers": [
-              "Hoeven-Lecerf-NTT-2024",
-              "PackedMontyField31Neon-source"
+              "research/TRZK_SBB.md §14.13.4 Gap 4 decisión"
             ],
             "lessons": [
-              "L-309",
-              "L-739"
+              "L-730"
             ],
-            "libraries": [
-              "p3-dft:Radix2Dit",
-              "p3-dft:Radix2DitParallel",
-              "p3-baby-bear:PackedMontyField31Neon"
-            ],
-            "notes": "Exponer dft_batch(data, width, n) para BabyBear y Goldilocks. NO toca codegen TRZK. PackedMontyField31Neon BabyBear (WIDTH=4) se activa solo con width>=4. Goldilocks NO vectoriza (no u64 NEON nativo)."
+            "libraries": [],
+            "notes": "Template copy-paste ready en §14.13.4. Incluye goldi_reduce128_batch_4 + goldi_butterfly4_batch como ejemplos. Documenta qué SÍ verificado (Stmt.call dispatch, structure, intrinsic names) y qué NO (ARM NEON semantics). L-730 crítica: TrustLean dependency ≠ usage."
           }
         },
         {
-          "id": "N319.2.2",
-          "name": "Python harness batch comparison",
-          "type": "PARALELO",
-          "status": "completed",
+          "id": "N20.2.1",
+          "name": "3 constructores MixedNodeOp: packedLoadNeon + packedStoreNeon + packedButterflyNeonDIT",
+          "type": "FUNDACIONAL",
+          "status": "pending",
           "files": [
-            "Tests/benchmark/benchmark_plonky3_batch.py"
+            "AmoLean/EGraph/Verified/Bitwise/MixedNodeOp.lean"
           ],
           "deps": [
-            "N319.2.1"
-          ],
-          "blocks": [
-            "B2"
-          ],
-          "metrics": {
-            "loc": 215,
-            "theorems": 0,
-            "lemmas": 0,
-            "defs": 0,
-            "sorry": 0
-          },
-          "properties": {
-            "total": 1,
-            "passing": 0,
-            "failing": 0,
-            "not_runnable": 1
-          },
-          "study": {
-            "papers": [
-              "Gregg-Systems-Performance-2020"
-            ],
-            "lessons": [],
-            "libraries": [
-              "Tests/benchmark/benchmark_plonky3.py:plonky3_timing",
-              "Tests/benchmark/benchmark_plonky3.py:trzk_rust_timing"
-            ],
-            "notes": "Reusar warmup protocol existente (2 warmup + 3 measure + min-of-min, CV reportado). Matriz: width ∈ {1,2,4,8} × N ∈ {2^14, 2^18} × campo ∈ {babybear, goldilocks}. TRZK comparison = N-llamadas-secuenciales (no batch nativo)."
-          }
-        },
-        {
-          "id": "N319.2.3",
-          "name": "Veredicto batch + actualizar BENCHMARKS.md §8 + TRZK_SBB.md §13",
-          "type": "GATE",
-          "status": "completed",
-          "files": [
-            "BENCHMARKS.md",
-            "research/TRZK_SBB.md"
-          ],
-          "deps": [
-            "N319.2.2"
+            "N20.1.1"
           ],
           "blocks": [
             "B2"
@@ -146,36 +267,170 @@
             "sorry": 0
           },
           "properties": {
-            "total": 1,
+            "total": 2,
             "passing": 0,
             "failing": 0,
-            "not_runnable": 1
+            "not_runnable": 0
           },
           "study": {
-            "papers": [],
-            "lessons": [],
-            "libraries": [],
-            "notes": "Aplicar decision tree §13.5: si Plonky3 batch pierde/empata → Bloque 4 baja prioridad, skip. Si gana >20% → Bloque 4 prioritario. Documentar tabla width × N × campo en BENCHMARKS.md §8 update."
+            "papers": [
+              "research/TRZK_SBB.md §14.13.2 Gap 2 decisión"
+            ],
+            "lessons": [
+              "L-733",
+              "L-724",
+              "L-308",
+              "L-742"
+            ],
+            "libraries": [
+              "VerifiedExtraction:NodeOps",
+              "OptiSat:EGraph"
+            ],
+            "notes": "+60 LOC. Extender mixedChildren, mixedMapChildren, mixedReplaceChildren. evalMixedOp semántica simplificada (3 cases). mixedLocalCost packedButterflyNeonDIT=4 (work-equivalent a 4 scalar). Patrón v3.14 NodeOps."
           }
         },
         {
-          "id": "N319.3.1",
-          "name": "Promover Rust como output primario (docs + CI)",
+          "id": "N20.2.2",
+          "name": "4 NeonIntrinsic variants + toCName/fromCName mappings",
           "type": "HOJA",
-          "status": "completed",
+          "status": "pending",
           "files": [
-            "README.md",
-            ".github/workflows/ci.yml",
-            "BENCHMARKS.md"
+            "AmoLean/Bridge/SIMDStmtToC.lean"
           ],
           "deps": [
-            "N319.2.3"
+            "N20.2.1"
+          ],
+          "blocks": [
+            "B2"
+          ],
+          "metrics": {
+            "loc": 0,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 0,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 0
+          },
+          "study": {
+            "papers": [
+              "research/TRZK_SBB.md §14.13.2"
+            ],
+            "lessons": [
+              "L-309",
+              "L-730"
+            ],
+            "libraries": [],
+            "notes": "+40 LOC. vld2q_s32 + vst2q_s32 + vget_low_u32 + vget_high_u32. isVoid: store2x4_s32=true, otros=false. Reusa 35+ intrinsics existentes como template."
+          }
+        },
+        {
+          "id": "N20.2.3",
+          "name": "15 lemmas NodeOps/NodeSemantics instances (cases op sistemático)",
+          "type": "CRITICO",
+          "status": "pending",
+          "files": [
+            "AmoLean/EGraph/Verified/Bitwise/MixedNodeOp.lean"
+          ],
+          "deps": [
+            "N20.2.1"
+          ],
+          "blocks": [
+            "B2"
+          ],
+          "metrics": {
+            "loc": 0,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 0,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 0
+          },
+          "study": {
+            "papers": [
+              "research/TRZK_SBB.md §14.13.2"
+            ],
+            "lessons": [
+              "L-736",
+              "L-297",
+              "L-393"
+            ],
+            "libraries": [
+              "VerifiedExtraction:NodeOps"
+            ],
+            "notes": "~30 LOC via cases op. Reusar list_length_one/two helpers existentes. Lemmas: mapChildren_packedLoad, mapChildren_packedStore, mapChildren_packedButterfly, evalMixedOp_packedLoadNeon + otros 12 por simetría."
+          }
+        },
+        {
+          "id": "N20.3.1",
+          "name": "MemLayout.lean NUEVO módulo con transposeForBatch + untransposeFromBatch + invertibility theorem",
+          "type": "FUNDACIONAL",
+          "status": "pending",
+          "files": [
+            "AmoLean/EGraph/Verified/Bitwise/MemLayout.lean"
+          ],
+          "deps": [
+            "N20.2.3"
           ],
           "blocks": [
             "B3"
           ],
           "metrics": {
-            "loc": 40,
+            "loc": 0,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 1,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 0
+          },
+          "study": {
+            "papers": [
+              "research/TRZK_SBB.md §14.13.2",
+              "research/TRZK_batch_design.md §5 R2"
+            ],
+            "lessons": [
+              "L-548",
+              "L-308",
+              "L-309",
+              "L-730"
+            ],
+            "libraries": [
+              "ProofKit:List"
+            ],
+            "notes": "+80 LOC. transpose_inv theorem via permutation algebra. Layout: input linear [p0_0..p0_{N-1}, p1_0..p3_{N-1}] → interleaved [p0_0, p1_0, p2_0, p3_0, p0_1, p1_1, ...]. Golden test: batch output element-wise = 4 scalar executions."
+          }
+        },
+        {
+          "id": "N20.3.2",
+          "name": "emitPackedButterflyNeonDIT_C kernel + isPackedButterflyApplicable dispatch",
+          "type": "CRITICO",
+          "status": "pending",
+          "files": [
+            "AmoLean/EGraph/Verified/Bitwise/SIMDEmitter.lean"
+          ],
+          "deps": [
+            "N20.3.1",
+            "N20.2.1"
+          ],
+          "blocks": [
+            "B3"
+          ],
+          "metrics": {
+            "loc": 0,
             "theorems": 0,
             "lemmas": 0,
             "defs": 0,
@@ -188,25 +443,35 @@
             "not_runnable": 0
           },
           "study": {
-            "papers": [],
-            "lessons": [],
+            "papers": [
+              "research/TRZK_SBB.md §14.13.2",
+              "research/TRZK_batch_design.md §3 B3"
+            ],
+            "lessons": [
+              "L-730",
+              "L-751",
+              "L-308",
+              "L-744",
+              "L-740"
+            ],
             "libraries": [],
-            "notes": "Riesgo 0. Solo docs. README ejemplos con Rust default, CI agrega --lang rust en validation jobs, nota cuándo usar cada lang. Independiente de B2 una vez emitido el veredicto."
+            "notes": "+250 LOC. Mirror de emitNeonButterflyDIT_C:108-120 vectorizado WIDTH=4. vld1q_s32 + vmull_u32 split + Solinas fold + vst1q_s32. Todo via Stmt.call (L-730): NO string emission bypass. MVP escape si >400 LOC: BabyBear-only."
           }
         },
         {
-          "id": "N319.4.1",
-          "name": "Migrar emitSIMDNTTC al DFT standard path (CONDICIONAL)",
-          "type": "FUNDACIONAL",
-          "status": "completed",
+          "id": "N20.3.3",
+          "name": "Golden test batch==scalar (invertibility + codegen validation)",
+          "type": "GATE",
+          "status": "pending",
           "files": [
-            "AmoLean/EGraph/Verified/Bitwise/SIMDEmitter.lean"
+            "Tests/batch_golden_test.lean"
           ],
           "deps": [
-            "N319.2.3"
+            "N20.3.1",
+            "N20.3.2"
           ],
           "blocks": [
-            "B4-conditional"
+            "B3"
           ],
           "metrics": {
             "loc": 0,
@@ -216,89 +481,587 @@
             "sorry": 0
           },
           "properties": {
-            "total": 2,
+            "total": 0,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 0
+          },
+          "study": {
+            "papers": [
+              "research/TRZK_SBB.md §14.13.2 riesgo B"
+            ],
+            "lessons": [
+              "L-739",
+              "L-734"
+            ],
+            "libraries": [],
+            "notes": "+20 LOC test. Gate: lake build PASS + benchmark.py --hardware arm-neon --fields babybear --sizes 14 numerical validation. 4 scalar NTTs agrupadas y batch NTT 4-way producen MISMO output element-wise."
+          }
+        },
+        {
+          "id": "N20.4.1",
+          "name": "lowerStageVerified_OffsetAware con substitution (+batchPolyOffset substitutor)",
+          "type": "FUNDACIONAL",
+          "status": "pending",
+          "files": [
+            "AmoLean/EGraph/Verified/Bitwise/VerifiedPlanCodeGen.lean"
+          ],
+          "deps": [
+            "N20.1.1"
+          ],
+          "blocks": [
+            "B4"
+          ],
+          "metrics": {
+            "loc": 0,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 0,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 0
+          },
+          "study": {
+            "papers": [
+              "research/TRZK_SBB.md §14.13.1 Gap 1"
+            ],
+            "lessons": [
+              "L-175",
+              "L-152",
+              "L-373",
+              "L-736"
+            ],
+            "libraries": [],
+            "notes": "+90 LOC. Mirror de lowerStageVerified:459-531 pero substituye data[i] por data[polyVar*N+i]. 80% reuse via helpers. Riesgo HIGH (R1): proof complexity offset substitution. Mitigación: aislar evalStmt_offset como lemma firewall _aux."
+          }
+        },
+        {
+          "id": "N20.4.2",
+          "name": "lowerNTTFromPlanBatch outer Stmt.for_ + stage composition (B=1 delega a single-vector)",
+          "type": "CRITICO",
+          "status": "pending",
+          "files": [
+            "AmoLean/EGraph/Verified/Bitwise/VerifiedPlanCodeGen.lean"
+          ],
+          "deps": [
+            "N20.4.1"
+          ],
+          "blocks": [
+            "B4"
+          ],
+          "metrics": {
+            "loc": 0,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 0,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 0
+          },
+          "study": {
+            "papers": [
+              "research/TRZK_SBB.md §14.13.1"
+            ],
+            "lessons": [
+              "L-736",
+              "L-513"
+            ],
+            "libraries": [],
+            "notes": "+35 LOC. if batchWidth <= 1 → delega a lowerNTTFromPlanVerified:676-684. else: Stmt.for_ externo sobre polyVar invocando lowerStageVerified_OffsetAware. Define la estructura para base case rfl proof en B5."
+          }
+        },
+        {
+          "id": "N20.4.3",
+          "name": "emitCFromPlanBatch + emitRustFromPlanBatch wrappers con transpose preamble",
+          "type": "CRITICO",
+          "status": "pending",
+          "files": [
+            "AmoLean/EGraph/Verified/Bitwise/VerifiedPlanCodeGen.lean"
+          ],
+          "deps": [
+            "N20.4.2",
+            "N20.3.1"
+          ],
+          "blocks": [
+            "B4"
+          ],
+          "metrics": {
+            "loc": 0,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 0,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 0
+          },
+          "study": {
+            "papers": [
+              "research/TRZK_SBB.md §14.13.1",
+              "§14.13.2"
+            ],
+            "lessons": [
+              "L-308",
+              "L-309",
+              "L-730"
+            ],
+            "libraries": [],
+            "notes": "+60 LOC total. Prepend MemLayout.transposeForBatch call si primer packed stage aplica. Emitir declaración del buffer batched. Append untransposeFromBatch si es necesario para compat con callers single-vector."
+          }
+        },
+        {
+          "id": "N20.4.4",
+          "name": "Cost model extension: batchWidthFactor + batchWidthCost + planTotalCostBatch",
+          "type": "PARALELO",
+          "status": "pending",
+          "files": [
+            "AmoLean/EGraph/Verified/Bitwise/CostModelDef.lean"
+          ],
+          "deps": [
+            "N20.1.1"
+          ],
+          "blocks": [
+            "B4"
+          ],
+          "metrics": {
+            "loc": 0,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 0,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 0
+          },
+          "study": {
+            "papers": [
+              "research/TRZK_SBB.md §14.4.b",
+              "§14.13.1"
+            ],
+            "lessons": [],
+            "libraries": [],
+            "notes": "+45 LOC. HardwareCost.batchWidthFactor parametriza B óptimo por target (M1 128KB L1 vs x86 32KB L1). planTotalCostBatch amortiza overhead. En M1 conservador: peso uniforme, no penalty adicional hasta validación Phase D v3.21."
+          }
+        },
+        {
+          "id": "N20.4.5",
+          "name": "Gate B4: benchmark.py --batch-width 16 BabyBear N=18 dentro ±5% modelo lineal",
+          "type": "GATE",
+          "status": "pending",
+          "files": [],
+          "deps": [
+            "N20.4.3",
+            "N20.4.4"
+          ],
+          "blocks": [
+            "B4"
+          ],
+          "metrics": {
+            "loc": 0,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 0,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 0
+          },
+          "study": {
+            "papers": [
+              "research/TRZK_SBB.md §14.13.6 B4 gate"
+            ],
+            "lessons": [
+              "L-747"
+            ],
+            "libraries": [],
+            "notes": "Modelo lineal: TRZK_loop(B) = TRZK_single × B. Gate permite ±5% overhead. Si falla >5%: investigar transpose cost o cache pressure. Si falla >20%: MVP escape (C-string generation directa sin Stmt integration)."
+          }
+        },
+        {
+          "id": "N20.5.1",
+          "name": "Theorem signatures: lowerNTTFromPlanBatch_correct + auxiliares + emitCFromPlanBatch_sound",
+          "type": "FUNDACIONAL",
+          "status": "pending",
+          "files": [
+            "AmoLean/EGraph/Verified/Bitwise/VerifiedPlanCodeGen.lean"
+          ],
+          "deps": [
+            "N20.4.3"
+          ],
+          "blocks": [
+            "B5"
+          ],
+          "metrics": {
+            "loc": 0,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 0,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 0
+          },
+          "study": {
+            "papers": [
+              "research/TRZK_SBB.md §14.13.3 Gap 3"
+            ],
+            "lessons": [
+              "L-736",
+              "L-337",
+              "L-279"
+            ],
+            "libraries": [
+              "ProofKit"
+            ],
+            "notes": "+50 LOC signatures. Mirror de §14.13.3 dependency DAG: batchStageBoundFactor → lowerNTTFromPlanBatch → B1_collapse → step → correct → emitCFromPlanBatch_sound. Firewall _aux lemmas con signatures abiertas (FUNDACIONAL MUY_ALTA)."
+          }
+        },
+        {
+          "id": "N20.5.2",
+          "name": "Base case B=1 collapse NON-DEFERRABLE (proof by rfl)",
+          "type": "CRITICO",
+          "status": "pending",
+          "files": [
+            "AmoLean/EGraph/Verified/Bitwise/VerifiedPlanCodeGen.lean"
+          ],
+          "deps": [
+            "N20.5.1"
+          ],
+          "blocks": [
+            "B5"
+          ],
+          "metrics": {
+            "loc": 0,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 1,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 0
+          },
+          "study": {
+            "papers": [
+              "research/TRZK_SBB.md §14.13.3"
+            ],
+            "lessons": [
+              "L-736"
+            ],
+            "libraries": [],
+            "notes": "+30 LOC. NON-DEFERRABLE. Si lowerNTTFromPlanBatch se define como wrapper bien, proof es rfl. Este theorem es garantía Gate H8: B=1 path NO regresa vs single-vector."
+          }
+        },
+        {
+          "id": "N20.5.3",
+          "name": "Inductive step _step + main theorem composición",
+          "type": "CRITICO",
+          "status": "pending",
+          "files": [
+            "AmoLean/EGraph/Verified/Bitwise/VerifiedPlanCodeGen.lean"
+          ],
+          "deps": [
+            "N20.5.2"
+          ],
+          "blocks": [
+            "B5"
+          ],
+          "metrics": {
+            "loc": 0,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 1,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 0
+          },
+          "study": {
+            "papers": [
+              "research/TRZK_SBB.md §14.13.3"
+            ],
+            "lessons": [
+              "L-736",
+              "L-337",
+              "L-022"
+            ],
+            "libraries": [
+              "ProofKit"
+            ],
+            "notes": "+90 LOC (40 step + 50 composición). Structural induction on B. Step assume firewall _aux lemmas y prueba B → B+1. Main theorem compone step + B=1 collapse via Nat.rec."
+          }
+        },
+        {
+          "id": "N20.5.4",
+          "name": "Firewall _aux lemmas con sorry + TODO Phase 2 (lowerDIFButterflyByReduction_batch_indexing_aux, lowerBitReverseStmt_batch_aux)",
+          "type": "FUNDACIONAL",
+          "status": "pending",
+          "files": [
+            "AmoLean/EGraph/Verified/Bitwise/VerifiedPlanCodeGen.lean",
+            "CLAUDE.md"
+          ],
+          "deps": [
+            "N20.5.1"
+          ],
+          "blocks": [
+            "B5"
+          ],
+          "metrics": {
+            "loc": 0,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 1,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 0
+          },
+          "study": {
+            "papers": [
+              "research/TRZK_SBB.md §14.13.3 firewall"
+            ],
+            "lessons": [
+              "L-138",
+              "L-279",
+              "L-736",
+              "L-659"
+            ],
+            "libraries": [],
+            "notes": "+80 LOC signatures + sorry + TODO. Documentar en CLAUDE.md § Batch Roadmap Phase 2 explícito con lista. Dificultad MUY_ALTA + FUNDACIONAL — deferir bien documentado es estrategia aceptada (§14.13.3). L-138 anti-pattern: NO dejar sorry sin plan de cierre."
+          }
+        },
+        {
+          "id": "N20.5.5",
+          "name": "3 non-vacuity examples (B=1 babybear, B=4 goldilocks, B=2 mixed reduction)",
+          "type": "HOJA",
+          "status": "pending",
+          "files": [
+            "Tests/NonVacuity.lean"
+          ],
+          "deps": [
+            "N20.5.3"
+          ],
+          "blocks": [
+            "B5"
+          ],
+          "metrics": {
+            "loc": 0,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 0,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 0
+          },
+          "study": {
+            "papers": [
+              "research/TRZK_SBB.md §14.13.3 non-vacuity"
+            ],
+            "lessons": [],
+            "libraries": [],
+            "notes": "+40 LOC. Obligatorios por CLAUDE.md higiene de specs. Ejemplo 1: rfl collapse. Ejemplo 2: apply correct theorem. Ejemplo 3: induction tactic con ih."
+          }
+        },
+        {
+          "id": "N20.6.1",
+          "name": "Tests Lean: offset soundness + B=1 equivalence + invertibility",
+          "type": "HOJA",
+          "status": "pending",
+          "files": [
+            "Tests/batch_offset_tests.lean",
+            "Tests/batch_equivalence_tests.lean"
+          ],
+          "deps": [
+            "N20.5.3"
+          ],
+          "blocks": [
+            "B6"
+          ],
+          "metrics": {
+            "loc": 0,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 0,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 0
+          },
+          "study": {
+            "papers": [
+              "research/TRZK_SBB.md §14.13.6 B6"
+            ],
+            "lessons": [
+              "L-119"
+            ],
+            "libraries": [],
+            "notes": "+100 LOC. #eval smoke tests + slim_check para offset_evalStmt + batch_single_equivalence + transpose_inv. Complementa non-vacuity examples."
+          }
+        },
+        {
+          "id": "N20.6.2",
+          "name": "Python benchmark harness benchmark_batch.py (NUEVO archivo)",
+          "type": "HOJA",
+          "status": "pending",
+          "files": [
+            "Tests/benchmark/benchmark_batch.py"
+          ],
+          "deps": [
+            "N20.4.3"
+          ],
+          "blocks": [
+            "B6"
+          ],
+          "metrics": {
+            "loc": 0,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 0,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 0
+          },
+          "study": {
+            "papers": [
+              "research/TRZK_SBB.md §14.11.b"
+            ],
+            "lessons": [
+              "L-746",
+              "L-747"
+            ],
+            "libraries": [],
+            "notes": "+100 LOC. Mirror de benchmark_plonky3_batch.py (v3.19). TRZK side via emit_code.lean --hardware arm-neon + batch args. Output: tabla por width × N × campo + JSON. Warmup --iters 100 para short tasks (lesson L-746)."
+          }
+        },
+        {
+          "id": "N20.6.3",
+          "name": "Differential fuzzer batch inputs (≥1000 PASS target)",
+          "type": "HOJA",
+          "status": "pending",
+          "files": [
+            "Tests/benchmark/differential_fuzz.py"
+          ],
+          "deps": [
+            "N20.6.2"
+          ],
+          "blocks": [
+            "B6"
+          ],
+          "metrics": {
+            "loc": 0,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 1,
             "passing": 0,
             "failing": 0,
             "not_runnable": 1
           },
           "study": {
             "papers": [
-              "Hoeven-Lecerf-NTT-2024",
-              "Polubelova-HACLxN-2020"
+              "research/TRZK_SBB.md §14.11.b"
             ],
             "lessons": [
-              "L-730",
               "L-739",
-              "L-734",
-              "L-733",
-              "L-308"
-            ],
-            "libraries": [
-              "AmoLean/Bridge/SIMDStmtToC.lean:simdStmtToC",
-              "AmoLean/EGraph/Verified/Bitwise/VerifiedSIMDButterfly.lean",
-              "AmoLean/EGraph/Verified/Bitwise/VerifiedPlanCodeGen.lean:emitCFromPlanVerified"
-            ],
-            "notes": "SOLO si veredicto B2 es Plonky3 batch >20%. Migrar emitSIMDNTTC para usar DFT standard path de v3.15 (bitrev + .reverse stages). NUNCA string emission (L-730). Consultar TRZK_rust_insights.md."
-          }
-        },
-        {
-          "id": "N319.4.2",
-          "name": "Migrar emitSIMDNTTRust al DFT standard path (CONDICIONAL)",
-          "type": "CRITICO",
-          "status": "completed",
-          "files": [
-            "AmoLean/EGraph/Verified/Bitwise/SIMDEmitter.lean",
-            "AmoLean/Bridge/SIMDStmtToRust.lean"
-          ],
-          "deps": [
-            "N319.4.1"
-          ],
-          "blocks": [
-            "B4-conditional"
-          ],
-          "metrics": {
-            "loc": 0,
-            "theorems": 0,
-            "lemmas": 0,
-            "defs": 0,
-            "sorry": 0
-          },
-          "properties": {
-            "total": 1,
-            "passing": 0,
-            "failing": 0,
-            "not_runnable": 1
-          },
-          "study": {
-            "papers": [],
-            "lessons": [
-              "L-730",
-              "L-309",
               "L-734"
             ],
-            "libraries": [
-              "AmoLean/Bridge/SIMDStmtToRust.lean (si existe v3.17)",
-              "AmoLean/Bridge/TrustLeanRust.lean"
-            ],
-            "notes": "Mirror de N319.4.1 pero Rust. Reusar simdStmtToRust si existe (creado en v3.17). Diferencias C/Rust: unsafe blocks, transmute, raw pointers (.add()), &mut for addrOf — ya documentadas en TRZK_rust_insights.md."
+            "libraries": [],
+            "notes": "+50 LOC. Extender fuzz_one para batch: generate B random polys + invoke TRZK-batch + invoke Plonky3-batch + compare per-row. Target: 100% match 1000+ casos. Tipo de bug: batch convention error, stride bug."
           }
         },
         {
-          "id": "N319.4.3",
-          "name": "Agregar --hardware arm-neon a oracle_validate.py (CONDICIONAL)",
+          "id": "N20.6.4",
+          "name": "ARCHITECTURE.md + BENCHMARKS.md §10 Batch performance + Batch Roadmap Phase 2",
           "type": "HOJA",
-          "status": "completed",
+          "status": "pending",
           "files": [
-            "Tests/benchmark/oracle_validate.py"
+            "ARCHITECTURE.md",
+            "BENCHMARKS.md"
           ],
-          "deps": [
-            "N319.4.1"
-          ],
+          "deps": [],
           "blocks": [
-            "B4-conditional"
+            "B6"
           ],
           "metrics": {
-            "loc": 12,
+            "loc": 0,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 0,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 0
+          },
+          "study": {
+            "papers": [
+              "research/TRZK_SBB.md §14"
+            ],
+            "lessons": [],
+            "libraries": [],
+            "notes": "+30 LOC docs. ARCHITECTURE: entry v3.20 closure + pointers §14.12/§14.13 (como v3.19). BENCHMARKS §10: TRZK-batch vs P3-batch table fairness. § Batch Roadmap Phase 2 explícito con firewall lemmas pendientes."
+          }
+        },
+        {
+          "id": "N20.6.5",
+          "name": "CI batch-validation job",
+          "type": "HOJA",
+          "status": "pending",
+          "files": [
+            ".github/workflows/ci.yml"
+          ],
+          "deps": [
+            "N20.6.3"
+          ],
+          "blocks": [
+            "B6"
+          ],
+          "metrics": {
+            "loc": 0,
             "theorems": 0,
             "lemmas": 0,
             "defs": 0,
@@ -312,72 +1075,23 @@
           },
           "study": {
             "papers": [],
-            "lessons": [
-              "L-739"
-            ],
-            "libraries": [
-              "Tests/benchmark/oracle_validate.py",
-              "Tests/benchmark/benchmark.py"
-            ],
-            "notes": "Habilitar oracle validation contra Plonky3 con --hardware arm-neon. Sin esto, el SIMD path migrado nunca se valida en CI gate."
+            "lessons": [],
+            "libraries": [],
+            "notes": "+15 YAML. Post-B3/B4 PR hay que gate en CI: benchmark.py --batch-width 16 --fields babybear --sizes 14 --validation-only + differential_fuzz --mode fast batch. Build time overhead <60s."
           }
         },
         {
-          "id": "N319.4.4",
-          "name": "Validar HS1/HS2 variants + Codegen Validation Gate (CONDICIONAL)",
+          "id": "N20.6.6",
+          "name": "Gate B6: H8 preservado + batch B=16 N=2^18 ±5% modelo lineal",
           "type": "GATE",
-          "status": "completed",
-          "files": [
-            "Tests/benchmark/",
-            "BENCHMARKS.md"
-          ],
+          "status": "pending",
+          "files": [],
           "deps": [
-            "N319.4.1",
-            "N319.4.2",
-            "N319.4.3"
+            "N20.6.3",
+            "N20.6.5"
           ],
           "blocks": [
-            "B4-conditional"
-          ],
-          "metrics": {
-            "loc": 0,
-            "theorems": 0,
-            "lemmas": 0,
-            "defs": 0,
-            "sorry": 0
-          },
-          "properties": {
-            "total": 2,
-            "passing": 0,
-            "failing": 0,
-            "not_runnable": 1
-          },
-          "study": {
-            "papers": [],
-            "lessons": [
-              "L-739",
-              "L-734",
-              "L-733"
-            ],
-            "libraries": [
-              "Tests/benchmark/differential_fuzz.py",
-              "Tests/benchmark/benchmark.py:--validation-only"
-            ],
-            "notes": "GATE BLOCKER. Ejecutar benchmark.py --validation-only --hardware arm-neon × campos × sizes 14. Re-correr differential_fuzz.py --mode fast — debe mantener 1150/1150. CLAUDE.md proyecto §Codegen Validation Gate aplica."
-          }
-        },
-        {
-          "id": "N319.5.1",
-          "name": "Cleanup warnings Rust at source en stmtToRust",
-          "type": "HOJA",
-          "status": "completed",
-          "files": [
-            "AmoLean/Bridge/TrustLeanRust.lean",
-            "AmoLean/EGraph/Verified/Bitwise/VerifiedPlanCodeGen.lean"
-          ],
-          "deps": [],
-          "blocks": [
-            "B5"
+            "B6"
           ],
           "metrics": {
             "loc": 0,
@@ -393,143 +1107,117 @@
             "not_runnable": 0
           },
           "study": {
-            "papers": [],
+            "papers": [
+              "research/TRZK_SBB.md §14.11.b performance criterion"
+            ],
             "lessons": [
-              "L-309"
+              "L-747"
             ],
-            "libraries": [
-              "AmoLean/Bridge/TrustLeanRust.lean:stmtToRust"
-            ],
-            "notes": "v3.17 silenció ~309 warnings rustc con #![allow] band-aid. Vale solo si Bloque 3 promueve Rust como primary. ~30-50 LOC."
-          }
-        },
-        {
-          "id": "N319.5.2",
-          "name": "BabyBear Rust vs C anomaly re-verification a N>2^14",
-          "type": "PARALELO",
-          "status": "completed",
-          "files": [
-            "Tests/benchmark/benchmark_plonky3.py",
-            "BENCHMARKS.md"
-          ],
-          "deps": [],
-          "blocks": [
-            "B5"
-          ],
-          "metrics": {
-            "loc": 0,
-            "theorems": 0,
-            "lemmas": 0,
-            "defs": 0,
-            "sorry": 0
-          },
-          "properties": {
-            "total": 1,
-            "passing": 0,
-            "failing": 0,
-            "not_runnable": 1
-          },
-          "study": {
-            "papers": [],
-            "lessons": [],
             "libraries": [],
-            "notes": "Open question de v3.17: post-warmup convergen (~145 vs ~134 μs a N=2^14) pero no re-verificado a N=2^18/2^20. ~4h investigación, 0 LOC producción."
-          }
-        },
-        {
-          "id": "N319.5.3",
-          "name": "Documentar four-step NO-GO permanente",
-          "type": "HOJA",
-          "status": "completed",
-          "files": [
-            "BENCHMARKS.md",
-            "research/TRZK_SBB.md"
-          ],
-          "deps": [],
-          "blocks": [
-            "B5"
-          ],
-          "metrics": {
-            "loc": 0,
-            "theorems": 0,
-            "lemmas": 0,
-            "defs": 0,
-            "sorry": 0
-          },
-          "properties": {
-            "total": 0,
-            "passing": 0,
-            "failing": 0,
-            "not_runnable": 0
-          },
-          "study": {
-            "papers": [],
-            "lessons": [],
-            "libraries": [],
-            "notes": "Mantener NO-GO §11.8. Re-abrir solo si caso de uso N≥2^20 recursive proof composition aparece. Benchmark N=2^22 muestra que R2 ya escala bien — sin motivación empírica."
+            "notes": "Dual gate. (1) Single-vector N=2^18 mean ≤ 820μs (Gate H8 preservado). (2) Batch B=16 N=2^18 dentro ±5% modelo lineal TRZK_loop = TRZK_single × 16. Criterio success infra (§14.11.b): TRZK-batch ≤ 1.10× P3-batch + amortización ≥ 1.05× vs TRZK-loop."
           }
         }
       ],
       "blocks": [
         {
-          "id": "B1",
-          "name": "BENCHMARKS.md update + caveat width=1 (DONE en 44bff09)",
+          "id": "B0",
+          "name": "v3.19 cleanup debt (eliminar #![allow] band-aids)",
           "nodes": [
-            "N319.1.1"
+            "N20.0.1"
           ],
           "status": "completed",
-          "closed_at": "2026-04-19"
+          "closed_at": "2026-04-20"
+        },
+        {
+          "id": "BA",
+          "name": "v3.20.a — SIMD legacy → DFT standard migration + Gate H8",
+          "nodes": [
+            "N20.a.1",
+            "N20.a.2",
+            "N20.a.3"
+          ],
+          "status": "pending",
+          "closed_at": null
+        },
+        {
+          "id": "B1",
+          "name": "Foundations (NTTPlan.batchWidth + Trust Boundary docs)",
+          "nodes": [
+            "N20.1.1",
+            "N20.1.2"
+          ],
+          "status": "pending",
+          "closed_at": null
         },
         {
           "id": "B2",
-          "name": "Plonky3 batch benchmark (Tarea A) — ARRANQUE v3.19",
+          "name": "MixedNodeOp Extensions (3 constructores + 4 intrinsics + 15 lemmas)",
           "nodes": [
-            "N319.2.1",
-            "N319.2.2",
-            "N319.2.3"
+            "N20.2.1",
+            "N20.2.2",
+            "N20.2.3"
           ],
-          "status": "completed",
-          "closed_at": "2026-04-19"
+          "status": "pending",
+          "closed_at": null
         },
         {
           "id": "B3",
-          "name": "Rust como output primario (docs + CI)",
+          "name": "MemLayout + SIMDEmitter (nuevo módulo + packed butterfly kernel)",
           "nodes": [
-            "N319.3.1"
+            "N20.3.1",
+            "N20.3.2",
+            "N20.3.3"
           ],
-          "status": "completed",
-          "closed_at": "2026-04-19"
+          "status": "pending",
+          "closed_at": null
         },
         {
-          "id": "B4-conditional",
-          "name": "SIMD migration (CONDICIONAL a B2 verdict >20%)",
+          "id": "B4",
+          "name": "Outer Loop Wiring (lowerNTTFromPlanBatch + emitCFromPlanBatch)",
           "nodes": [
-            "N319.4.1",
-            "N319.4.2",
-            "N319.4.3",
-            "N319.4.4"
+            "N20.4.1",
+            "N20.4.2",
+            "N20.4.3",
+            "N20.4.4",
+            "N20.4.5"
           ],
-          "status": "completed",
-          "closed_at": "2026-04-19"
+          "status": "pending",
+          "closed_at": null
         },
         {
           "id": "B5",
-          "name": "Cleanup deuda técnica (baja prioridad)",
+          "name": "Correctness Proofs Phase 1 (bridge theorem + firewall _aux con sorry)",
           "nodes": [
-            "N319.5.1",
-            "N319.5.2",
-            "N319.5.3"
+            "N20.5.1",
+            "N20.5.2",
+            "N20.5.3",
+            "N20.5.4",
+            "N20.5.5"
           ],
-          "status": "completed",
-          "closed_at": "2026-04-19"
+          "status": "pending",
+          "closed_at": null
+        },
+        {
+          "id": "B6",
+          "name": "Tests + Bench + Docs (benchmark_batch.py + fuzzer + ARCHITECTURE update)",
+          "nodes": [
+            "N20.6.1",
+            "N20.6.2",
+            "N20.6.3",
+            "N20.6.4",
+            "N20.6.5",
+            "N20.6.6"
+          ],
+          "status": "pending",
+          "closed_at": null
         }
       ]
     }
   ],
   "meta": {
     "created": "2026-04-07T15:52:54Z",
-    "updated": "2026-04-19T22:17:50Z",
-    "total_nodes": 12,
-    "completed_nodes": 12
+    "updated": "2026-04-20T16:10:26Z",
+    "total_nodes": 28,
+    "completed_nodes": 1
   }
 }
