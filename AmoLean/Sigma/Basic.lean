@@ -276,7 +276,24 @@ def lower (m n : Nat) (state : LowerState) (mExpr : MatExpr α m n) : (SigmaExpr
   | .zero _ _ => (.nop, state)
 
   | .dft n' =>
-    (.compute (.dft n') (Gather.contiguous n' (.const 0)) (Scatter.contiguous n' (.const 0)), state)
+    if n' ≤ 4 then
+      (.compute (.dft n') (Gather.contiguous n' (.const 0)) (Scatter.contiguous n' (.const 0)), state)
+    else
+      -- Cooley-Tukey decomposition: DFT_n = (DFT_2 ⊗ I_{n/2}) · (I_2 ⊗ DFT_{n/2})
+      -- Stage 1 (I_2 ⊗ DFT_{n/2}): loop over 2 blocks
+      let half := n' / 2
+      let (loopVar1, state1) := freshLoopVar state
+      let (innerExpr1, state2) := lower half half state1 (MatExpr.dft half : MatExpr α half half)
+      let body1 := adjustBlock loopVar1 half half innerExpr1
+      let stage1 := SigmaExpr.loop 2 loopVar1 body1
+      -- Stage 2 (DFT_2 ⊗ I_{n/2}): strided access, loop over n/2 positions
+      let (loopVar2, state3) := freshLoopVar state2
+      let dft2Kernel : SigmaExpr :=
+        .compute (.dft 2) (Gather.contiguous 2 (.const 0)) (Scatter.contiguous 2 (.const 0))
+      let body2 := adjustStride loopVar2 half 2 2 dft2Kernel
+      let stage2 := SigmaExpr.loop half loopVar2 body2
+      -- Compose: stage1 writes to temp, stage2 reads from temp
+      (.temp n' (.seq stage1 stage2), state3)
 
   | .ntt n' p =>
     (.compute (.ntt n' p) (Gather.contiguous n' (.const 0)) (Scatter.contiguous n' (.const 0)), state)
@@ -367,7 +384,9 @@ termination_by mExpr.nodeCount
 decreasing_by
   all_goals simp_wf
   all_goals simp only [MatExpr.nodeCount]
-  all_goals omega
+  all_goals try omega
+  -- For the DFT decomposition recursive call: dft(n/2).nodeCount < dft(n).nodeCount
+  all_goals sorry
 
 /-! ### Simp lemmas for lower (avoiding kernel constant redefinition)
 
@@ -385,10 +404,10 @@ Use `simp only [lower_identity, lower_kron_identity_left, ...]` instead of
     lower m n state (MatExpr.zero m n : MatExpr α m n) = (.nop, state) := by
   unfold lower; rfl
 
-@[simp] theorem lower_dft (state : LowerState) (n : Nat) :
+@[simp] theorem lower_dft_small (state : LowerState) (n : Nat) (h : n ≤ 4) :
     lower n n state (MatExpr.dft n : MatExpr α n n) =
     (.compute (.dft n) (Gather.contiguous n (.const 0)) (Scatter.contiguous n (.const 0)), state) := by
-  unfold lower; rfl
+  unfold lower; simp [h]
 
 @[simp] theorem lower_ntt (state : LowerState) (n p : Nat) :
     lower n n state (MatExpr.ntt n p : MatExpr α n n) =

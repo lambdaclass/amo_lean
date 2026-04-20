@@ -1,4 +1,4 @@
-open AmoLean.Matrix (MatExpr)
+import AmoLean.Spec
+open AmoLean.Spec
 
-def spec : MatExpr Int 8 8 :=
-  .kron (.identity 4) (.dft 2)
+def spec : Spec := kron (Spec.identity 4) (dft 2)

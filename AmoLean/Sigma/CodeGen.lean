@@ -32,6 +32,8 @@ open AmoLean.Sigma
 structure CodeGenState where
   indent : Nat := 0
   nextTemp : Nat := 0
+  inputArr : String := "in"
+  outputArr : String := "out"
   deriving Repr, Inhabited
 
 def CodeGenState.increaseIndent (s : CodeGenState) : CodeGenState :=
@@ -104,7 +106,8 @@ def genIndexWithStride (base : String) (stride : Nat) (idx : Nat) : String :=
     else s!"{base} + {stride} * {idx}"
 
 /-- Generate C code for a scalar block with stride support -/
-def scalarBlockToC (block : ScalarBlock) (indent : Nat) (g : Gather) (s : Scatter) : String :=
+def scalarBlockToC (block : ScalarBlock) (indent : Nat) (g : Gather) (s : Scatter)
+    (inputArr : String := "in") (outputArr : String := "out") : String :=
   let gatherBase := gatherOffset g
   let scatterBase := scatterOffset s
   let gatherStride := g.stride
@@ -114,7 +117,7 @@ def scalarBlockToC (block : ScalarBlock) (indent : Nat) (g : Gather) (s : Scatte
       | "y" =>
         let pad := indentStr indent
         let outIdx := genIndexWithStride scatterBase scatterStride a.target.idx
-        let lhs := s!"out[{outIdx}]"
+        let lhs := s!"{outputArr}[{outIdx}]"
         let rhsStr := genRhsWithOffsets a.value gatherBase gatherStride
         s!"{pad}{lhs} = {rhsStr};"
       | "t" =>
@@ -132,7 +135,7 @@ where
       match v.name with
       | "x" =>
         let inIdx := genIndexWithStride gatherBase gatherStride v.idx
-        s!"in[{inIdx}]"
+        s!"{inputArr}[{inIdx}]"
       | "t" => s!"t{v.idx}"
       | _ => varToC v ""
     | .const n => s!"{n}.0"
@@ -146,7 +149,7 @@ partial def expandedSigmaToC (e : ExpandedSigma) (state : CodeGenState) : String
   let pad := indentStr state.indent
   match e with
   | .scalar k g s =>
-    scalarBlockToC k.body state.indent g s
+    scalarBlockToC k.body state.indent g s state.inputArr state.outputArr
 
   | .loop n v body =>
     let loopVar := s!"i{v}"
@@ -167,6 +170,16 @@ partial def expandedSigmaToC (e : ExpandedSigma) (state : CodeGenState) : String
     let code1 := expandedSigmaToC s1 state
     let code2 := expandedSigmaToC s2 state
     s!"{pad}/* parallel region */\n{code1}\n{code2}"
+
+  | .temp size (.seq bodyFirst bodySecond) =>
+    -- Compose pattern: first writes to temp, second reads from temp
+    let (tempName, state') := state.freshTemp
+    let decl := s!"{pad}{cType} {tempName}[{size}];"
+    let firstState := { state' with outputArr := tempName }
+    let firstCode := expandedSigmaToC bodyFirst firstState
+    let secondState := { state' with inputArr := tempName }
+    let secondCode := expandedSigmaToC bodySecond secondState
+    s!"{decl}\n{firstCode}\n{secondCode}"
 
   | .temp size body =>
     let (tempName, state') := state.freshTemp
