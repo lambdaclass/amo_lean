@@ -169,7 +169,7 @@
           "id": "N20.1.1",
           "name": "NTTPlan.batchWidth field + Plan.withBatch helper + batchPolyOffset + soundness lemma",
           "type": "FUNDACIONAL",
-          "status": "pending",
+          "status": "completed",
           "files": [
             "AmoLean/EGraph/Verified/Bitwise/NTTPlan.lean",
             "AmoLean/EGraph/Verified/Bitwise/VerifiedPlanCodeGen.lean"
@@ -181,7 +181,7 @@
             "B1"
           ],
           "metrics": {
-            "loc": 0,
+            "loc": 52,
             "theorems": 0,
             "lemmas": 0,
             "defs": 0,
@@ -213,7 +213,7 @@
           "id": "N20.1.2",
           "name": "Trust Boundary Documentation template en CLAUDE.md",
           "type": "HOJA",
-          "status": "pending",
+          "status": "completed",
           "files": [
             "CLAUDE.md"
           ],
@@ -222,7 +222,7 @@
             "B1"
           ],
           "metrics": {
-            "loc": 0,
+            "loc": 35,
             "theorems": 0,
             "lemmas": 0,
             "defs": 0,
@@ -1146,8 +1146,8 @@
             "N20.1.1",
             "N20.1.2"
           ],
-          "status": "pending",
-          "closed_at": null
+          "status": "completed",
+          "closed_at": "2026-04-20"
         },
         {
           "id": "B2",
@@ -1216,8 +1216,8 @@
   ],
   "meta": {
     "created": "2026-04-07T15:52:54Z",
-    "updated": "2026-04-20T17:12:05Z",
+    "updated": "2026-04-20T22:12:55Z",
     "total_nodes": 28,
-    "completed_nodes": 4
+    "completed_nodes": 6
   }
 }

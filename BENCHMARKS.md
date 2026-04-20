@@ -784,3 +784,31 @@ Nodes covered: N20.a.1 SIMD migration: stages.reverse + bitRevPermutePreamble en
 |------|----------|-------|----------------|------------|
 | (none) | — | — | — | — |
 
+### Foundations (NTTPlan.batchWidth + Trust Boundary docs) (3.20.0)
+
+**Closed**: 2026-04-20 | **Status**: PASS
+
+#### 1. What is tested and why
+
+Nodes covered: N20.1.1 NTTPlan.batchWidth field + Plan.withBatch helper + batchPolyOffset + soundness lemma, N20.1.2 Trust Boundary Documentation template en CLAUDE.md.
+
+#### 2. Performance
+
+| Metric | Target | Actual | Status |
+|--------|--------|--------|--------|
+| LOC | — | 87 | — |
+| Theorems | — | 0 | — |
+| Lemmas | — | 0 | — |
+| Defs | — | 0 | — |
+| Sorry count | 0 | 0 | PASS |
+
+#### 3. Acceptability Analysis
+
+- **Acceptable**: Meets minimum criteria (zero sorry, compiles)
+
+#### 4. Bugs, Warnings, Sorries
+
+| Item | Location | Cause | Affected Nodes | Mitigation |
+|------|----------|-------|----------------|------------|
+| (none) | — | — | — | — |
+

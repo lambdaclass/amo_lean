@@ -531,6 +531,58 @@ def lowerStageVerified (stage : NTTStage) (n p k c mu : Nat) : Stmt :=
       bfBody)
 
 -- ══════════════════════════════════════════════════════════════════
+-- Block 2.5a: Batch offset utilities (v3.20.b B1, N20.1.1)
+-- ══════════════════════════════════════════════════════════════════
+
+/-- v3.20.b B1: compute the linear offset for a row in a batched NTT layout.
+    Given a batch of B polynomials laid out row-major (`data[0..N-1]` = poly 0,
+    `data[N..2N-1]` = poly 1, ..., `data[(B-1)*N..B*N-1]` = poly B-1) the offset
+    of element `i` within polynomial `polyVar` is `polyVar * N + i`.
+
+    B=1 case: callers pass a plan with `Plan.batchWidth = 1` and the outer loop
+    reduces to a single iteration with `polyVar = 0`, so `batchPolyOffset` returns
+    `0 * N + i = i` — byte-equivalent to the pre-v3.20.b single-vector layout.
+    This is the property that `lowerNTTFromPlanBatch_B1_collapse` (B5 theorem)
+    relies on for `rfl`-level equivalence with `lowerNTTFromPlanVerified`.
+
+    Emits `.binOp .add (.binOp .mul (.varRef polyVar) (.litInt n)) (.litInt i)`.
+    The shape is stable so `lowerStageVerified_OffsetAware` (B4 N20.4.1) can do
+    a mechanical substitution `data[i]` → `data[batchPolyOffset polyVar N i]`. -/
+def batchPolyOffset (polyVar : VarName) (n : Nat) (i : Nat) : LowLevelExpr :=
+  .binOp .add
+    (.binOp .mul (.varRef polyVar) (.litInt ↑n))
+    (.litInt ↑i)
+
+/-- v3.20.b B1 soundness: `batchPolyOffset` evaluates to the arithmetic offset
+    `poly * n + i` when `polyVar` is bound to an integer value in the environment.
+    This is the atomic soundness fact that `lowerStageVerified_OffsetAware` (B4)
+    and the bridge theorem `lowerNTTFromPlanBatch_correct` (B5) lift to per-stage
+    and per-plan correctness via induction on the batch dimension.
+
+    Isolated as an independent lemma per §14.13.7 R1 mitigation (the full offset
+    substitution proof in B4 lives downstream of this fact; keeping it atomic
+    lets that proof be a mechanical `simp` + `batchPolyOffset_eval` rewrite
+    rather than re-deriving the arithmetic). -/
+theorem batchPolyOffset_eval
+    (polyVar : VarName) (n i : Nat) (env : _root_.TrustLean.LowLevelEnv)
+    (poly : Int) (h : env polyVar = .int poly) :
+    _root_.TrustLean.evalExpr env (batchPolyOffset polyVar n i)
+      = some (.int (poly * (n : Int) + (i : Int))) := by
+  unfold batchPolyOffset
+  simp [_root_.TrustLean.evalExpr, h]
+
+/-- v3.20.b B1 non-vacuity: instantiates `batchPolyOffset_eval` with a concrete
+    environment to prove the hypothesis set is jointly satisfiable (per global
+    CLAUDE.md higiene rules for lemmas with Prop hypotheses). B=2, N=8, i=3 gives
+    offset `poly * 8 + 3`. -/
+example :
+    _root_.TrustLean.evalExpr
+      (fun _ => _root_.TrustLean.Value.int 1)
+      (batchPolyOffset (.user "polyVar") 8 3)
+      = some (.int 11) := by
+  simp [batchPolyOffset, _root_.TrustLean.evalExpr]
+
+-- ══════════════════════════════════════════════════════════════════
 -- Block 2.5b: ILP2 — Process 2 butterflies per loop iteration (v3.10.0 TD)
 -- ══════════════════════════════════════════════════════════════════
 
