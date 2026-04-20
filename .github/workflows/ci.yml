@@ -308,6 +308,19 @@ jobs:
     # specific correctness gate introduced by v3.20.a (§14.11.a addendum:
     # correctness gap §8c closed, gate re-defined; 820 μs perf target deferred
     # to v3.20.b B3.5, see BENCHMARKS.md §8d).
+    #
+    # SCOPE INTENCIONAL: esta job corre SOLO el `benchmark.py --validation-only
+    # --hardware arm-neon` step (BabyBear N=14 byte-equivalence vs DFT standard).
+    # `differential_fuzz.py` NO corre aquí — ya se ejecuta en el job
+    # `benchmark-validation` (x86, ubuntu-latest) con 1150/1150 PASS cubriendo
+    # TRZK-C vs Plonky3 vs Python naive. La semántica cross-platform queda
+    # validada por ese fuzz triangular; el ARM job solo necesita certificar que
+    # el codegen NEON produce output byte-igual al scalar DFT standard para el
+    # mismo input. Correr fuzz también en ARM sería redundante y duplicaría
+    # ~15 min de CI sin nueva cobertura (la dif entre arm-neon y Plonky3/naive
+    # es exactamente lo que `--validation-only --hardware arm-neon` ya chequea
+    # contra la referencia Python). NO "arreglar" la ausencia agregando fuzz
+    # aquí sin revisar este comentario primero.
     runs-on: ubuntu-24.04-arm
     needs: build
 
