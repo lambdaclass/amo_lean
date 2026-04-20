@@ -755,19 +755,41 @@ def maxTempsInPlan (plan : Plan) (k c mu : Nat) : Nat :=
 
 -- ── v3.15.0: Standard DFT preambles ──────────────────────────────────────
 
-/-- C preamble for bit-reversal permutation. Pattern: ntt_skeleton.c:42-67.
+/-- C preamble for bit-reversal permutation.
+    v3.20.a Fase 1 (blocked bitrev): inner O(logN) shift loop replaced with
+    `__builtin_bitreverse32` (clang) which lowers to a single ARM64 `RBIT`
+    instruction + `LSR`. Same output (idempotent under shift mask), but the
+    bit-reversal itself is now O(1) per index instead of O(logN). For N=2^18
+    this cuts ~4.7M shift/AND operations to ~262K single-cycle RBIT calls.
+    Memory access pattern (scatter on swap target) is unchanged — cache cost
+    of the swaps stays roughly the same; the win is purely from the bit
+    computation. Falls back to the portable shift-loop on non-clang / non-ARM.
     Emitted as trusted string (same pattern as goldi_reduce128 et al.).
     Returns dummy 0 for Stmt.call compatibility (same pattern as goldi_butterfly).
     stmtToC always emits `result = fname(args);` — no void handling in scalar path. -/
 def bitRevPermutePreambleC (elemType : String) : String :=
   s!"static inline {elemType} bit_reverse_permute({elemType} *data, size_t n, size_t logn) \{\n" ++
+  s!"#if defined(__clang__) && (defined(__aarch64__) || defined(__ARM_ARCH_ISA_A64))\n" ++
+  s!"  const unsigned _br_shift = 32u - (unsigned)logn;\n" ++
+  s!"  for (size_t i = 0; i < n; i++) \{\n" ++
+  s!"    size_t j = (size_t)(__builtin_bitreverse32((uint32_t)i) >> _br_shift);\n" ++
+  s!"    if (i < j) \{ {elemType} t = data[i]; data[i] = data[j]; data[j] = t; }\n" ++
+  s!"  }\n" ++
+  s!"#else\n" ++
   s!"  for (size_t i = 0; i < n; i++) \{\n" ++
   s!"    size_t j = 0, tmp = i;\n" ++
   s!"    for (size_t b = 0; b < logn; b++) \{ j = (j << 1) | (tmp & 1); tmp >>= 1; }\n" ++
   s!"    if (i < j) \{ {elemType} t = data[i]; data[i] = data[j]; data[j] = t; }\n" ++
-  s!"  }\n  return 0;\n}\n\n"
+  s!"  }\n" ++
+  s!"#endif\n" ++
+  s!"  return 0;\n}\n\n"
 
 /-- Rust preamble for bit-reversal permutation.
+    v3.20.a Fase 1 (blocked bitrev): replaces the inner O(logN) shift loop with
+    `u32::reverse_bits()` which lowers to a single ARM64 `RBIT` instruction on
+    Apple Silicon (and the equivalent on x86). Same output but O(1) per index
+    instead of O(logN). Cut rationale and trade-off documented in the C twin
+    `bitRevPermutePreambleC` above.
     Returns dummy 0 for Stmt.call compatibility (same pattern as goldi_butterfly).
     Parameter n kept for C symmetry (Rust has data.len() but call site passes N explicitly). -/
 def bitRevPermutePreambleRust (elemType : String) (retType : String := elemType)
@@ -778,13 +800,9 @@ def bitRevPermutePreambleRust (elemType : String) (retType : String := elemType)
   s!"#[inline(always)]\n" ++
   s!"fn bit_reverse_permute(data: &mut [{elemType}], n: {indexType}, logn: {lognType}) -> {retType} \{\n" ++
   castLine ++
+  s!"  let br_shift: u32 = 32u32 - (logn as u32);\n" ++
   s!"  for i in 0..n \{\n" ++
-  s!"    let mut j: usize = 0;\n" ++
-  s!"    let mut tmp = i;\n" ++
-  s!"    for _ in 0..logn \{\n" ++
-  s!"      j = (j << 1) | (tmp & 1);\n" ++
-  s!"      tmp >>= 1;\n" ++
-  s!"    }\n" ++
+  s!"    let j: usize = ((i as u32).reverse_bits() >> br_shift) as usize;\n" ++
   s!"    if i < j \{ data.swap(i, j); }\n" ++
   s!"  }\n  0\n}\n\n"
 

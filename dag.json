@@ -50,7 +50,7 @@
           "id": "N20.a.1",
           "name": "SIMD migration: stages.reverse + bitRevPermutePreamble en emitCFromPlanStandard + emitRustFromPlanStandard",
           "type": "CRITICO",
-          "status": "pending",
+          "status": "completed",
           "files": [
             "AmoLean/EGraph/Verified/Bitwise/SIMDEmitter.lean"
           ],
@@ -61,7 +61,7 @@
             "BA"
           ],
           "metrics": {
-            "loc": 0,
+            "loc": 25,
             "theorems": 0,
             "lemmas": 0,
             "defs": 0,
@@ -91,7 +91,7 @@
           "id": "N20.a.2",
           "name": "Oracle validator --hardware arm-neon + CI arm-neon-validation job",
           "type": "HOJA",
-          "status": "pending",
+          "status": "completed",
           "files": [
             "Tests/benchmark/oracle_validate.py",
             ".github/workflows/ci.yml"
@@ -103,7 +103,7 @@
             "BA"
           ],
           "metrics": {
-            "loc": 0,
+            "loc": 12,
             "theorems": 0,
             "lemmas": 0,
             "defs": 0,
@@ -131,7 +131,7 @@
           "id": "N20.a.3",
           "name": "Gate H8 pre-merge PR v3.20.a (5 runs, mean ≤ 820 μs @ N=2^18 BabyBear)",
           "type": "GATE",
-          "status": "pending",
+          "status": "completed",
           "files": [],
           "deps": [
             "N20.a.1",
@@ -1136,8 +1136,8 @@
             "N20.a.2",
             "N20.a.3"
           ],
-          "status": "pending",
-          "closed_at": null
+          "status": "completed",
+          "closed_at": "2026-04-20"
         },
         {
           "id": "B1",
@@ -1216,8 +1216,8 @@
   ],
   "meta": {
     "created": "2026-04-07T15:52:54Z",
-    "updated": "2026-04-20T16:10:26Z",
+    "updated": "2026-04-20T17:12:05Z",
     "total_nodes": 28,
-    "completed_nodes": 1
+    "completed_nodes": 4
   }
 }

@@ -693,12 +693,23 @@ def emitSIMDNTTC (plan : Plan) (target : SIMDTarget) (k c mu : Nat)
   let verifiedHelpers := if useVerifiedSIMD && useSqdmulh then
     deinterleaveHelperC ++ "\n" ++ interleaveStoreHelperC ++ "\n"
   else ""
+  -- v3.20.a: DFT standard prelude — bit-reverse permutation preamble emitted
+  -- alongside butterfly helpers so the SIMD path matches the scalar DFT standard
+  -- output convention (same bit-reversed input, same stages.reverse execution
+  -- order below). Uses the same preamble helper as `emitCFromPlanStandard`.
   let headerSection :=
     "#include <stdint.h>\n#include <stddef.h>\n" ++
-    simdHeader target ++ "\n\n" ++ verifiedHelpers ++ bfDecls
+    simdHeader target ++ "\n\n" ++
+    _root_.AmoLean.EGraph.Verified.Bitwise.VerifiedPlanCodeGen.bitRevPermutePreambleC elemType ++
+    verifiedHelpers ++ bfDecls
   -- Build function body
   let scalarDecls := if hasScalarFallback then scalarTempDecls hasR4 else ""
   let neonDecls := if useVerifiedSIMD && useSqdmulh then neonTempDecls 30 10 12 else ""
+  -- v3.20.a: bit-reverse permutation call at function entry (DFT standard prelude).
+  -- Return value discarded — preamble returns a dummy 0 only for `Stmt.call`
+  -- compatibility in the scalar path; the SIMD path calls it as a statement.
+  let bitrevCall :=
+    s!"  bit_reverse_permute(data, (size_t){n}, (size_t){Nat.log2 n});\n"
   -- sqdmulh needs different constants: signed p_vec_s + unsigned p_vec + mu_tw table
   let constDecls := if useSqdmulh && hasSIMDStage then match target with
     | .neon =>
@@ -719,8 +730,12 @@ def emitSIMDNTTC (plan : Plan) (target : SIMDTarget) (k c mu : Nat)
   __m256i c_vec = _mm256_set1_epi32((int32_t){c}U);
   __m256i mask_k = _mm256_set1_epi32((int32_t){mask}U);
 "
-  -- Generate stage code with per-stage dispatch
-  let stageCode := stages.foldl (fun acc stage =>
+  -- Generate stage code with per-stage dispatch.
+  -- v3.20.a: stages iterated in REVERSE (matches scalar `lowerNTTFromPlanStandard`
+  -- DFT standard convention). Each `emitStageC` computes geometry from `stage.stageIdx`
+  -- which is preserved by reversal, so the emission per stage is unchanged — only the
+  -- order of concatenation in the body changes.
+  let stageCode := stages.reverse.foldl (fun acc stage =>
     acc ++ emitStageC stage n p k c mu lanes bfNameSol bfNameHar bfNameSq useSqdmulh useVerifiedSIMD profiled
   ) ""
   -- Function signature: sqdmulh needs mu_tw parameter
@@ -745,8 +760,10 @@ def emitSIMDNTTC (plan : Plan) (target : SIMDTarget) (k c mu : Nat)
     fenceFinal ++ printLoop
   else ""
   let profileInclude := if profiled then "#include <stdio.h>\n" else ""
-  -- Assemble: header + function
-  headerSection ++ profileInclude ++ sig ++ "\n" ++ profileDecl ++ scalarDecls ++ neonDecls ++ constDecls ++ stageCode ++ profileEnd ++ "}\n"
+  -- Assemble: header + function. `bitrevCall` goes at body start (after const
+  -- broadcasts, before stage code) so the permutation happens on the canonical
+  -- input before any stage touches the data.
+  headerSection ++ profileInclude ++ sig ++ "\n" ++ profileDecl ++ scalarDecls ++ neonDecls ++ constDecls ++ bitrevCall ++ stageCode ++ profileEnd ++ "}\n"
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 7: Rust SIMD NTT Generation (v3.8.0, N38.3)
@@ -833,7 +850,9 @@ def emitSIMDNTTRust (plan : Plan) (target : SIMDTarget) (k c mu : Nat)
     deinterleaveHelperRust ++ "\n" ++
     interleaveStoreHelperRust ++ "\n"
   -- Stage code first (v3.20 B0): need to scan it to size temp declarations.
-  let stageCode := stages.foldl (fun acc stage =>
+  -- v3.20.a: stages iterated in REVERSE to match scalar DFT standard execution
+  -- order (same pattern as `emitSIMDNTTC` above and `lowerNTTFromPlanStandard`).
+  let stageCode := stages.reverse.foldl (fun acc stage =>
     acc ++ emitStageRust stage n p lanes
   ) ""
   -- Size NEON temp declarations to actual usage in stageCode. Upper bounds 30/10/12
@@ -847,6 +866,24 @@ def emitSIMDNTTRust (plan : Plan) (target : SIMDTarget) (k c mu : Nat)
   let constDecls :=
     s!"    let p_vec: uint32x4_t = unsafe \{ vdupq_n_u32({p}u32) };\n" ++
     s!"    let p_vec_s: int32x4_t = unsafe \{ vdupq_n_s32({p}i32) };\n"
+  -- v3.20.a: bit-reverse permutation prelude, raw-pointer variant (the SIMD Rust
+  -- signature is `*mut i32`, not `&mut [i32]` — so the scalar
+  -- `bitRevPermutePreambleRust` helper doesn't apply directly). Inlined here to
+  -- avoid introducing a pointer-to-slice adapter; the body performs an in-place
+  -- pairwise swap matching the scalar DFT standard permutation exactly.
+  -- v3.20.a Fase 1 (blocked bitrev): inner O(logN) shift loop replaced with
+  -- `u32::reverse_bits()` → single ARM64 `RBIT` instruction. Same permutation,
+  -- O(1) bit computation per index instead of O(logN).
+  let bitrevCall :=
+    s!"    // v3.20.a: DFT standard bitrev permutation (raw-pointer variant + RBIT).\n" ++
+    s!"    \{\n" ++
+    s!"        let n_val: usize = {n};\n" ++
+    s!"        let br_shift: u32 = 32u32 - {Nat.log2 n}u32;\n" ++
+    s!"        for i in 0..n_val \{\n" ++
+    s!"            let j: usize = ((i as u32).reverse_bits() >> br_shift) as usize;\n" ++
+    s!"            if i < j \{ unsafe \{ std::ptr::swap(data.add(i), data.add(j)); } }\n" ++
+    s!"        }\n" ++
+    s!"    }\n"
   -- Function: unsafe fn with raw pointer params. Scoped allow documents residual
   -- warnings (1) `non_snake_case` / `non_camel_case_types` for NEON types like
   -- int32x4_t; (2) `unused_unsafe` from nested unsafe blocks in simdStmtToRust
@@ -861,8 +898,8 @@ def emitSIMDNTTRust (plan : Plan) (target : SIMDTarget) (k c mu : Nat)
     "#[allow(non_snake_case, non_camel_case_types, unused_unsafe, unused_assignments)]\n"
   let sig :=
     s!"pub unsafe fn {funcName}(data: *mut i32, twiddles: *const i32, mu_tw: *const i32) \{"
-  -- Assemble
-  header ++ attrs ++ sig ++ "\n" ++ neonDecls ++ constDecls ++ stageCode ++ "}\n"
+  -- Assemble: bitrev prelude runs BEFORE stage code (DFT standard convention).
+  header ++ attrs ++ sig ++ "\n" ++ neonDecls ++ constDecls ++ bitrevCall ++ stageCode ++ "}\n"
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 8: Smoke Tests

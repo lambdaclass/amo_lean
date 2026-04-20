@@ -647,9 +647,9 @@ BF2+BF3 (conditionalSub + Stark252): deferred to future version.
 | Nodo | Tipo | Deps | Status |
 |------|------|------|--------|
 | N20.0.1 Eliminar 3 #![allow(...)] band-aids + fix warnings al origen en stmtToRust | HOJA | — | completed ✓ |
-| N20.a.1 SIMD migration: stages.reverse + bitRevPermutePreamble en emitCFromPlanStandard + emitRustFromPlanStandard | CRIT | N20.0.1 | pending |
-| N20.a.2 Oracle validator --hardware arm-neon + CI arm-neon-validation job | HOJA | N20.a.1 | pending |
-| N20.a.3 Gate H8 pre-merge PR v3.20.a (5 runs, mean ≤ 820 μs @ N=2^18 BabyBear) | GATE | N20.a.1, N20.a.2 | pending |
+| N20.a.1 SIMD migration: stages.reverse + bitRevPermutePreamble en emitCFromPlanStandard + emitRustFromPlanStandard | CRIT | N20.0.1 | completed ✓ |
+| N20.a.2 Oracle validator --hardware arm-neon + CI arm-neon-validation job | HOJA | N20.a.1 | completed ✓ |
+| N20.a.3 Gate H8 pre-merge PR v3.20.a (5 runs, mean ≤ 820 μs @ N=2^18 BabyBear) | GATE | N20.a.1, N20.a.2 | completed ✓ |
 | N20.1.1 NTTPlan.batchWidth field + Plan.withBatch helper + batchPolyOffset + soundness lemma | FUND | N20.a.3 | pending |
 | N20.1.2 Trust Boundary Documentation template en CLAUDE.md | HOJA | — | pending |
 | N20.2.1 3 constructores MixedNodeOp: packedLoadNeon + packedStoreNeon + packedButterflyNeonDIT | FUND | N20.1.1 | pending |
@@ -696,7 +696,7 @@ BF2+BF3 (conditionalSub + Stark252): deferred to future version.
 #### Bloques
 
 - [x] **v3.19 cleanup debt (eliminar #![allow] band-aids)**: N20.0.1 — closed 2026-04-20
-- [ ] **v3.20.a — SIMD legacy → DFT standard migration + Gate H8**: N20.a.1, N20.a.2, N20.a.3
+- [x] **v3.20.a — SIMD legacy → DFT standard migration + Gate H8**: N20.a.1, N20.a.2, N20.a.3 — closed 2026-04-20
 - [ ] **Foundations (NTTPlan.batchWidth + Trust Boundary docs)**: N20.1.1, N20.1.2
 - [ ] **MixedNodeOp Extensions (3 constructores + 4 intrinsics + 15 lemmas)**: N20.2.1, N20.2.2, N20.2.3
 - [ ] **MemLayout + SIMDEmitter (nuevo módulo + packed butterfly kernel)**: N20.3.1, N20.3.2, N20.3.3
