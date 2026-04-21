@@ -8,9 +8,13 @@ on:
 
 jobs:
   integration-tests:
-    name: DFT_4 Integration Tests
+    name: DFT_${{ matrix.size }} Integration Tests
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        size: [2, 4]
 
     steps:
     - name: Checkout repository
@@ -43,8 +47,8 @@ jobs:
     - name: Install uv
       uses: astral-sh/setup-uv@v5
 
-    - name: Run DFT_4 integration test (fixed vectors)
-      run: bash integration_tests/run.sh
+    - name: Run DFT_${{ matrix.size }} integration test (fixed vectors)
+      run: bash integration_tests/run.sh --size ${{ matrix.size }}
 
-    - name: Run DFT_4 integration test (fuzz 100k)
-      run: bash integration_tests/run.sh --fuzz -n 100000
+    - name: Run DFT_${{ matrix.size }} integration test (fuzz 100k)
+      run: bash integration_tests/run.sh --size ${{ matrix.size }} --fuzz -n 100000

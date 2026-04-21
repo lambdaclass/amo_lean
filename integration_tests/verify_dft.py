@@ -1,31 +1,27 @@
 #!/usr/bin/env python3
-"""verify_dft4.py — Verify AMO-Lean generated DFT_4 binaries.
+"""verify_dft.py — Verify AMO-Lean generated DFT_N binaries.
 
 Reads test vectors from stdin, line by line, so infinite generators work.
 
 Usage:
-    cat test_vectors/wht4/*.txt | python3 verify_dft4.py --binary ./dft4
-    ./generators/wht4.py | python3 verify_dft4.py --binary ./dft4
+    cat test_vectors/wht4/*.txt | python3 verify_dft.py --binary ./dft4 --size 4
+    ./generators/wht.py --size 4 | python3 verify_dft.py --binary ./dft4 --size 4
 
 Fuzz mode (--fuzz): exit non-zero on the first mismatch, printing input,
 expected and actual output. Intended to pair with an infinite generator.
+
+The generated DFT_N kernel in AMO-Lean (real case, no twiddle factors)
+computes the Walsh-Hadamard Transform of size N, so expected vectors must
+come from `scipy.linalg.hadamard(N) @ x`.
 """
 
 import signal
 import subprocess
 import sys
 
-# The DFT_4 kernel in AMO-Lean (real case, no twiddle factors)
-# computes the Walsh-Hadamard Transform of size 4:
-#
-#   WHT_4 = [[1,  1,  1,  1],
-#            [1, -1,  1, -1],
-#            [1,  1, -1, -1],
-#            [1, -1, -1,  1]]
 
-
-def parse_line(line, lineno):
-    """Parse one `a b c d : e f g h` line. Returns (input, expected) or None."""
+def parse_line(line, lineno, size):
+    """Parse one `x0 .. : y0 ..` line with `size` values on each side."""
     line = line.strip()
     if not line or line.startswith('#'):
         return None
@@ -35,8 +31,11 @@ def parse_line(line, lineno):
     left, right = line.split(':', 1)
     left_parts = left.split()
     right_parts = right.split()
-    if len(left_parts) != 4 or len(right_parts) != 4:
-        print(f"WARNING: line {lineno} expected 4:4 values, skipping: {line}", file=sys.stderr)
+    if len(left_parts) != size or len(right_parts) != size:
+        print(
+            f"WARNING: line {lineno} expected {size}:{size} values, skipping: {line}",
+            file=sys.stderr,
+        )
         return None
     try:
         return [int(x) for x in left_parts], [int(x) for x in right_parts]
@@ -45,7 +44,7 @@ def parse_line(line, lineno):
         return None
 
 
-def run_one(binary, vec, expected):
+def run_one(binary, vec, expected, size):
     """Run binary on vec, compare to expected.
 
     Returns None on pass, a list[int] with the actual output on mismatch,
@@ -62,8 +61,8 @@ def run_one(binary, vec, expected):
         output = [int(x) for x in result.stdout.split()]
     except ValueError:
         return f"could not parse output: {result.stdout.strip()}"
-    if len(output) != 4:
-        return f"expected 4 values, got {len(output)}: {output}"
+    if len(output) != size:
+        return f"expected {size} values, got {len(output)}: {output}"
     if output != expected:
         return output
     return None
@@ -71,12 +70,23 @@ def run_one(binary, vec, expected):
 
 def main():
     binary = None
+    size = None
     fuzz = False
     args = sys.argv[1:]
     i = 0
     while i < len(args):
         if args[i] == "--binary" and i + 1 < len(args):
             binary = args[i + 1]
+            i += 2
+        elif args[i] == "--size" and i + 1 < len(args):
+            try:
+                size = int(args[i + 1])
+            except ValueError:
+                print(f"--size must be an integer, got {args[i + 1]}", file=sys.stderr)
+                sys.exit(2)
+            if size < 1 or size & (size - 1):
+                print(f"--size must be a power of 2, got {size}", file=sys.stderr)
+                sys.exit(2)
             i += 2
         elif args[i] == "--fuzz":
             fuzz = True
@@ -85,13 +95,14 @@ def main():
             print(f"Unknown argument: {args[i]}", file=sys.stderr)
             sys.exit(2)
 
-    if not binary:
-        print(f"Usage: {sys.argv[0]} --binary <path> [--fuzz]  (test vectors on stdin)",
-              file=sys.stderr)
-        print(f"  e.g.: cat vectors.txt | {sys.argv[0]} --binary generated/dft4", file=sys.stderr)
+    if not binary or size is None:
+        print(
+            f"Usage: {sys.argv[0]} --binary <path> --size <N> [--fuzz]  (test vectors on stdin)",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
-    print(f"\n══ Verification ({binary}) — reading stdin ═══════════")
+    print(f"\n══ Verification ({binary}, N={size}) — reading stdin ═══════════")
     stats = {"passed": 0, "failed": 0, "total": 0, "interrupted": False}
 
     def summarize_and_exit():
@@ -105,7 +116,7 @@ def main():
             sys.exit(1)
         print(f"\n  Results: {passed}/{total} passed, {failed} failed")
         if failed == 0 and not stats["interrupted"]:
-            print(f"  PASS: All {total} test vectors match WHT_4")
+            print(f"  PASS: All {total} test vectors match WHT_{size}")
         sys.exit(0 if failed == 0 and not stats["interrupted"] else 1)
 
     def on_signal(signum, _frame):
@@ -122,13 +133,13 @@ def main():
 
     try:
         for lineno, line in enumerate(sys.stdin, 1):
-            parsed = parse_line(line, lineno)
+            parsed = parse_line(line, lineno, size)
             if parsed is None:
                 continue
             vec, expected = parsed
             stats["total"] += 1
             idx = stats["total"] - 1
-            result = run_one(binary, vec, expected)
+            result = run_one(binary, vec, expected, size)
             if result is None:
                 stats["passed"] += 1
                 continue
