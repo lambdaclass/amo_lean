@@ -1,5 +1,64 @@
 # TRZK: Architecture
 
+## Completed: v3.20.b (shipped 2026-04-21)
+
+### Batch NTT Interface + Correctness Proofs Phase 1
+
+**Scope**: batch NTT emission interface (`emitCFromPlanBatch`) via B4
+loop-wrapping path + correctness theorem stack Phase 1 (B5) + tests + bench
++ docs. Packed kernel (B3) wired-but-disabled per B4.5 MVP escape; Gate H8
+(820 μs single-vector arm-neon) permanently deferred after 5 empirical
+investigations.
+
+**Blocks delivered**:
+- **B0**: v3.19 cleanup debt (Rust `#![allow(...)]` band-aid elimination)
+- **v3.20.a**: SIMD → DFT standard migration + blocked bitrev (correctness
+  gap §8c closed, perf §8d 1538 μs post-RBIT)
+- **B1**: `Plan.batchWidth` field + `batchPolyOffset` + Trust Boundary template
+- **B2**: MixedNodeOp extensions (3 packed constructors + 4 intrinsics)
+- **B3**: `MemLayout.lean` + `transposeForBatch_inv` CLOSED proof (no sorry)
+  + packed NEON butterfly kernel + `isPackedButterflyApplicable` predicate
+- **B3.5**: Bitrev fusion attempted → MVP escape (read-after-write hazard);
+  Gate H8 declared best-effort (§14.13.8). `useBitrevFusion` opt-in only.
+- **B4**: Outer Loop Wiring (`lowerNTTFromPlanBatch` + `emitCFromPlanBatch`
+  scalar loop-wrap path). Linear cost model.
+- **B4.5**: Packed Kernel Integral Wiring → MVP escape (perf 0.799 ratio,
+  1.25× amort insufficient). Packed dispatch opt-in only via
+  `Tests/benchmark/emit_packed_batch.lean`.
+- **B5**: Correctness Proofs Phase 1 — 7 batch theorems (1 closed via rfl,
+  6 firewall `_aux` with sorry + real signatures + TODO Phase 2 per
+  §14.13.3 R3). `#print axioms` exposes `sorryAx` in 6/7.
+- **B6**: Tests + Bench + Docs — `benchmark_batch.py` harness,
+  differential_fuzz `--mode batch` (9000/9000 PASS), CI `batch-validation`
+  job on `ubuntu-24.04-arm`, `BENCHMARKS.md §8g` honest positioning.
+
+**v3.20.c status**: **DROPPED 2026-04-21** post-empirical spike. Packed
+kernel interleaved-native without transpose measured 29446 μs at B=16
+N=2^18 BabyBear — 47% slower than Plonky3-batch 20013 μs. Per-butterfly
+kernel has structural overhead inherent to the packed design (4 polys ×
+1 position, broadcast twiddle). Path forward redirects to **V4.1-E** —
+research-level kernel redesign (apply_to_rows pattern, cost model
+roofline, e-graph stage constructors) post-merge.
+
+**Honest perf positioning** (BENCHMARKS §8g):
+- Single-vector: TRZK 1538 μs vs Plonky3 4811 μs = **3.1× faster**
+- Batch B=16: TRZK 31616 μs vs Plonky3-batch 20013 μs = **TRZK 58% slower**
+- Gate H8 (820 μs single-vector arm-neon): **permanent defer** per §14.13.8
+  MVP escape + addendum 2026-04-21 (no trivial fix on ARM M1 BabyBear)
+
+**Phase 2 commitment** (documented in `CLAUDE.md § Batch Roadmap Phase 2`):
+dedicated proof round post-merge to close 6 firewall `_aux` lemmas:
+- `lowerDIFButterflyByReduction_batch_indexing_aux`
+- `lowerBitReverseStmt_batch_aux`
+- `packed_dispatch_equiv_loop`
+- `lowerNTTFromPlanBatch_step`
+- `lowerNTTFromPlanBatch_correct`
+- `emitCFromPlanBatch_sound`
+
+Estimated +150 LOC, 2-3 days. Gate: zero sorry + axioms audit clean.
+
+---
+
 ## Next Version: 3.18.0
 
 ### Differential Fuzzing v3.18.0

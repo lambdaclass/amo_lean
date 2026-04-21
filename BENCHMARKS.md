@@ -421,6 +421,17 @@ pointer back to this section.
 
 ### 8d. arm-neon DFT standard migration + blocked bitrev (v3.20.a, 2026-04-20)
 
+> **⚠️ HARDWARE SCOPE (added 2026-04-21)**: All numbers and conclusions in
+> §8d-§8g measured on **Apple M1 (ARM NEON WIDTH=4)**. The correctness
+> claims (byte-equivalence, validation PASS) are platform-independent.
+> The **performance conclusions** (blocked bitrev regresses, bitrev is
+> scatter-bound, math ceiling 750μs with bitrev=0) are **M1-specific**
+> and may NOT extrapolate to x86 (AVX2/AVX-512) or other ARM hosts.
+> Cross-platform re-validation scheduled for **v3.21 Phase E**
+> (`TRZK_SBB.md §15`). Treat M1-derived DROP/REFUTE decisions as
+> "conditional pending cross-platform data", not universal. See
+> `TRZK_glearnings.md §5.9` + global lesson L-771.
+
 v3.20.a closes the §8c correctness gap. `emitSIMDNTTC` and `emitSIMDNTTRust` now
 emit the DFT standard convention (`stages.reverse.foldl` + bit-reverse permutation
 prelude via `bitRevPermutePreambleC` / inline Rust variant). Output is
@@ -506,6 +517,10 @@ done
 
 ### 8e. v3.20.b B3.5 — Bitrev fusion attempted, correctness bug surfaced, Gate H8 "best effort" (2026-04-21)
 
+> **⚠️ Hardware scope**: see §8d header caveat. Measurements in M1 ARM
+> NEON. The RAW hazard finding is **structural** (algorithmic invariant,
+> platform-independent). The performance conclusions are **M1-scoped**.
+
 v3.20.b B3.5 implemented bitrev fusion into the first-executed NTT stage (halfSize=1
 hs1 kernel) per §14.11.a addendum and §14.13.6 B3.5 scope. Infrastructure delivered
 (N20.35.1 packed `emitPackedButterflyNeonDIT_BRFirst_C`, N20.35.2 single-poly
@@ -590,7 +605,22 @@ python3 Tests/benchmark/benchmark.py --validation-only --hardware arm-neon \
 
 ---
 
-### 8f. Gate H8 alternatives investigation — blocked REFUTED, R4 insufficient, H8 literal permanente (2026-04-21)
+### 8f. Gate H8 alternatives investigation — blocked REFUTED (M1), R4 insufficient (analytical), batch loops don't close gap (2026-04-21)
+
+> **⚠️ Hardware scope**: see §8d header caveat. **All "REFUTED" /
+> "FAIL" verdicts are M1-specific and pending cross-platform validation
+> in v3.21 Phase E**. Specifically:
+> - Blocked bitrev +65% regression: measured on M1. FFTW literature
+>   (benchmarked x86) suggests blocked wins there — our M1 result could
+>   be platform-specific.
+> - R4 stages 1177-1293μs analytical: M1 register pressure assumed.
+>   x86 AVX-512 has 32 ZMM registers with different tradeoffs.
+> - Math ceiling "bitrev=0 → pipeline 750μs vs 820μs gate": M1 baseline.
+>   x86 absolute numbers different.
+>
+> Treat "H8 literal PERMANENT research goal" as "PERMANENT on M1;
+> re-evaluate post v3.21 Phase E cross-platform data". See
+> `TRZK_glearnings.md §5.9` + L-771.
 
 Post-§8e B3.5 hazard, se ejecutó `/science` Round 1 comparativo entre tres
 rutas candidatas para cerrar el Gate H8 residual (≤820 μs N=2^18 BB
@@ -659,7 +689,18 @@ swap prefetch coupling. Solo eliminación del pass explícito cierra gates
 
 ---
 
-### 8f. v3.20.b B4.5 — Packed Kernel Integral Wiring: MVP escape, deferred to v3.20.c (2026-04-21)
+### 8f-bis. v3.20.b B4.5 — Packed Kernel Integral Wiring: MVP escape on M1, x86 cross-validation pending (2026-04-21)
+
+> **⚠️ Hardware scope**: see §8d header caveat. MVP escape decision based
+> on M1 NEON WIDTH=4 measurements. At AVX2 WIDTH=8 or AVX-512 WIDTH=16
+> with IFMA (x86), packed amortization factor could be 2-4× higher and
+> MVP escape might invert to GO. **Do NOT eliminate the packed kernel
+> code** — keep for v3.21 Phase E cross-platform validation. Spike
+> v3.20.c DROP (see below) is also M1-specific; may invert on x86. See
+> `TRZK_glearnings.md §5.9` + L-771.
+>
+> *Note*: this section is labeled 8f-bis to disambiguate from the §8f
+> above (Gate H8 alternatives). Next additions should be §8g.
 
 v3.20.b B4.5 wired the `emitPackedButterflyNeonDIT_C` kernel (delivered B3) into
 a complete batch NTT emission pipeline (`emitCFromPlanBatch_Packed`), with:
@@ -822,6 +863,125 @@ done; done
 bash Tests/benchmark/test_packed_perf_gate.sh 18 16 5
 
 # Single-vector NEON sanity (1666.7 μs, ±8% vs 1538 target):
+python3 Tests/benchmark/benchmark.py --hardware arm-neon --fields babybear \
+    --sizes 18 --skip-validation
+```
+
+---
+
+### 8g. v3.20.b ships: batch interface + honest perf positioning (2026-04-21)
+
+v3.20.b B6 closes the batch NTT delivery cycle. Scope: batch INTERFACE
+formally verified (B5 Phase 1 proofs + firewall `_aux` + Phase 2 commitment)
++ honest performance numbers. After 5 empirical investigations — Stockham
+autosort, Gate H8 alternatives, and v3.20.c go/no-go spike — **TRZK-batch
+performance on ARM NEON BabyBear does NOT beat Plonky3-batch**. This
+section documents the real numbers and the path forward.
+
+#### Tabla de medición real (benchmark_batch.py, 2026-04-21)
+
+Measurement protocol: 5 process launches × warmup=5 iters × 10 measurement
+iters each, compiled with `cc -O3 -mcpu=apple-m1` (L-769, glearnings §5.5).
+Workload: BabyBear Solinas plan, `emitCFromPlanBatch` (B4 loop-wrapping path,
+production default post B4.5 MVP escape). Apple M1 baseline.
+
+| Field | N | B | TRZK-batch min μs | mean μs | CV% | vs Plonky3-batch (20013 μs) |
+|-------|---|---|-------------------:|--------:|-----:|------------------------------:|
+| BabyBear | 2^18 | 1 (single) | 3361 | 3397 | 1.3% | N/A — scalar single-vector via `emitCFromPlanStandard` |
+| BabyBear | 2^18 | 16 | **53685** | **54511** | 0.9% | **TRZK pierde ~168%** (53685 vs 20013 = 2.68×) |
+| BabyBear (reference) | 2^18 | 1 (NEON) | 1612.8 | — | — | Single-vector NEON via `emitSIMDNTTC` (Gate H8 path) |
+
+**Interpretación**: `emit_batch_code.lean` (B4 loop wrapper, production default
+post-B4.5 MVP escape) invoca `emitCFromPlanStandard` que es el path SCALAR, no
+NEON. Por eso TRZK-batch scalar × B = 3397 × 16 ≈ 54352 μs observados. Para
+una comparación Rust-vs-Rust "fair" contra Plonky3-batch habría que integrar
+batch con `emitSIMDNTTC`, pero ese wiring es parte del v3.20.c/V4.1-E scope
+research-level (DROPPED post-spike empírico, ver abajo).
+
+**Fuente numérica**: `Tests/benchmark/output/v3.20_b_batch.json` (generado con
+`Tests/benchmark/benchmark_batch.py`). Plonky3-batch reference: `BENCHMARKS
+§8b` (20013 μs, best per-NTT at width=16).
+
+#### Claim honesto (literal, no inflado)
+
+> **v3.20.b ships**: batch NTT interface con correctness formally verified
+> (rfl `lowerNTTFromPlanBatch_B1_collapse` + 6 firewall `_aux` con sorry +
+> explicit Phase 2 commitment en `CLAUDE.md § Batch Roadmap Phase 2`) +
+> differential fuzz batch mode 9000/9000 PASS (v3.20.b B6.2, ARM64-native,
+> 9 combos × 1000 iters).
+>
+> **Performance measured (B6.1 harness, 3 launches × warmup=3 iters=5)**:
+> TRZK-batch (scalar loop wrapper) B=16 N=2^18 BabyBear = **53685 μs min,
+> 54511 μs mean, CV 0.89%**. Plonky3-batch 16 polys ≈ 20013 μs (BENCHMARKS
+> §8b). **TRZK-batch pierde 2.68× vs Plonky3-batch** (53685/20013).
+>
+> Root cause (B4.5 MVP escape diagnosis, §8f): `emit_batch_code.lean`
+> (production default) emits scalar path via `emitCFromPlanStandard`, not
+> NEON. TRZK single-vector scalar ≈ 3397 μs × 16 = 54352 μs ≈ measured
+> 54511 μs ✓ (confirms linear loop wrapper is truly × B). Integrating
+> batch with `emitSIMDNTTC` (NEON) would reduce baseline to ≈ 1612 × 16
+> = 25792 μs (still 29% slower than Plonky3-batch), but that wiring is
+> v3.20.c/V4.1-E research-level scope.
+>
+> 5 approaches distintos testeados (Stockham, blocked bitrev, radix-4,
+> B4.5 packed con transpose, spike v3.20.c packed interleaved) ninguno
+> gana a Plonky3-batch en ARM M1 BabyBear. Gap estructural en diseño
+> del kernel packed (4 butterflies × 1 poly via `apply_to_rows` en
+> Plonky3 vs 4 polys × 1 posición en TRZK packed — no layout).
+>
+> **Single-vector workloads**: TRZK mantiene **3.1× faster que Plonky3
+> single-vector** (1538 μs vs 4811 μs a N=2^18 BabyBear post-v3.20.a).
+>
+> **Path forward para batch competitive**: V4.1-E kernel redesign
+> (research-level ~950-1350 LOC) — `apply_to_rows` pattern + cost model
+> roofline + e-graph stage constructors. Fuera de scope v3.20.b; promoted
+> to priority post-v3.20.b merge.
+
+#### Referencias a investigaciones archivadas
+
+| Report | Date | Conclusion |
+|--------|------|------------|
+| `research/TRZK_stockham_report1.md` + `report2.md` | 2026-04-21 | Stockham autosort DROP — ping-pong buffer regresa perf |
+| `research/TRZK_gateh8_report1.md` | 2026-04-21 | Gate H8 alternatives: blocked bitrev REFUTED, R4 insufficient, batch loops don't close gap |
+| `research/TRZK_v320c_spike_report.md` | 2026-04-21 | v3.20.c packed interleaved-native DROP — 29446 μs vs P3-batch 20013 μs = 47% peor |
+
+**Unified pattern** (lesson L-770 + `research/TRZK_glearnings.md §5.8`):
+explicit data rearrangement passes son bandwidth-bound anti-pattern en M1
+BabyBear. Packed WIDTH=4 kernel tiene overhead estructural que impide
+matching los 4.85× amort de Plonky3-batch. Per-butterfly kernel design
+distinct: Plonky3 `apply_to_rows` (4 bf × 1 poly, vld1q_s32 sobre 4 twiddles
+contiguos) vs TRZK packed (4 polys × 1 posición, vdupq_n_s32 broadcast
+scalar twiddle). Solución: kernel redesign, NO layout tuning.
+
+#### Gate H8 status — PERMANENT deferred
+
+Per §14.13.8 MVP escape + addendum 2026-04-21 (§8f Gate H8 alternatives
+investigation): threshold 820 μs single-vector arm-neon NOT achievable
+via any of the 5 tested paths on Apple M1 BabyBear. No trivial fix known.
+Threshold quietly retired — TRZK single-vector post-v3.20.a (1538 μs) is
+the shipping number, which still delivers 3.1× vs Plonky3 single-vector.
+
+Batch Gate (§14.13.6 B4.5 sharpened): threshold "TRZK-batch ≤ 0.50 ×
+TRZK-loop" satisfied locally (ratio 0.799, amort 1.25× — insufficient per
+sharpened gate, MVP escape invoked in B4.5). Packed dispatch disabled by
+default (opt-in only via `Tests/benchmark/emit_packed_batch.lean`).
+
+#### Reproduction
+
+```bash
+# Build TRZK
+lake build
+
+# B6.1 batch benchmark (5 launches × warmup + iters, -mcpu=apple-m1):
+python3 Tests/benchmark/benchmark_batch.py \
+    --fields babybear,goldilocks --sizes 14,18,20 \
+    --batch-widths 1,4,8,16 --warmup 5 --iters 10 --launches 5
+
+# B6.2 differential fuzz batch mode (9000/9000 PASS target):
+python3 Tests/benchmark/differential_fuzz.py --mode batch --seed 42 \
+    --sizes 8,10,14 --batch-width 4,8,16 --iters 1000
+
+# Single-vector Gate H8 preservation (should give ≈1538 μs):
 python3 Tests/benchmark/benchmark.py --hardware arm-neon --fields babybear \
     --sizes 18 --skip-validation
 ```

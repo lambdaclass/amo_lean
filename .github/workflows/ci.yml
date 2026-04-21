@@ -361,10 +361,70 @@ jobs:
           --fields babybear --sizes 14
         echo "arm-neon C validation PASS"
 
+  # v3.20.b B6.3 — Batch NTT correctness validation
+  batch-validation:
+    name: Batch NTT Validation (v3.20.b — emitCFromPlanBatch differential fuzz)
+    # v3.20.b B6.3 sibling job: asserts TRZK batch NTT emission
+    # (emitCFromPlanBatch, B4 loop-wrapping path — production default
+    # post-B4.5 MVP escape) produces byte-equivalent output to B independent
+    # single-vector invocations. Same C binary comparison (avoids cross-language
+    # variance). 9000/9000 PASS baseline achieved locally (9 combos × 1000 iters).
+    #
+    # SCOPE: differential_fuzz.py --mode batch — C-level comparison of
+    # batch_fn(data_base, tw, B) vs B × single_fn(data_base + b*N, tw). Tests
+    # offset arithmetic in batchOffsetAssign + outer for-loop semantics in
+    # lowerNTTFromPlanBatch (B4 delivery). Does NOT test packed dispatch
+    # (B4.5 MVP escape — packed path is opt-in only, not wired in production).
+    #
+    # BRANCH FILTER: inherits from push/pull_request triggers at workflow root.
+    # NOTE: feat/v3.19-simd (current v3.20.b stack) may not match the filter
+    # at root; that's a separate config issue (branch coverage for feature
+    # stacks) and not blocking for this job's semantic correctness. When the
+    # branch lands on main/master via PR#23, this job activates automatically.
+    runs-on: ubuntu-24.04-arm
+    needs: build
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Install elan
+      run: |
+        curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh -s -- -y --default-toolchain none
+        echo "$HOME/.elan/bin" >> $GITHUB_PATH
+
+    - name: Cache Lake packages
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.elan
+          .lake
+        key: ${{ runner.os }}-arm64-lake-${{ hashFiles('lean-toolchain', 'lakefile.lean', 'lake-manifest.json') }}
+        restore-keys: |
+          ${{ runner.os }}-arm64-lake-
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update && sudo apt-get install -y clang python3
+
+    - name: Build bench executable
+      run: lake build bench
+
+    - name: Differential fuzz batch mode (9000/9000 target)
+      run: |
+        echo "=== Batch Validation: TRZK batch = B × single-vector ==="
+        # v3.20.b B6.2 gate: 1000 iter × 3 sizes × 3 widths = 9000 iters.
+        # Compile flag: -mcpu=apple-m1 (actually emit_code harness compiles
+        # on target ARM64; runner is ubuntu-24.04-arm so native is OK).
+        python3 Tests/benchmark/differential_fuzz.py \
+          --mode batch --seed 42 \
+          --sizes 8,10,14 --batch-width 4,8,16 --iters 1000
+        echo "Batch validation PASS"
+
   summary:
     name: CI Summary
     runs-on: ubuntu-latest
-    needs: [build, phase0-tests, goldilocks-tests, sanitizers, avx2-tests, avx2-qa, benchmark-validation, arm-neon-validation]
+    needs: [build, phase0-tests, goldilocks-tests, sanitizers, avx2-tests, avx2-qa, benchmark-validation, arm-neon-validation, batch-validation]
     if: always()
 
     steps:
@@ -382,6 +442,7 @@ jobs:
         echo "AVX2 QA Suite:    ${{ needs.avx2-qa.result }}"
         echo "Bench Validation: ${{ needs.benchmark-validation.result }}"
         echo "arm-neon Val:     ${{ needs.arm-neon-validation.result }}"
+        echo "Batch Val:        ${{ needs.batch-validation.result }}"
         echo ""
         if [ "${{ needs.build.result }}" == "success" ] && \
            [ "${{ needs.phase0-tests.result }}" == "success" ] && \
