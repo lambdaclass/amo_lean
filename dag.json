@@ -499,6 +499,122 @@
           }
         },
         {
+          "id": "N20.35.1",
+          "name": "Fusion bitrev con primer NEON load en emitPackedButterflyNeonDIT_C",
+          "type": "CRITICO",
+          "status": "pending",
+          "files": [
+            "AmoLean/EGraph/Verified/Bitwise/SIMDEmitter.lean"
+          ],
+          "deps": [
+            "N20.3.2"
+          ],
+          "blocks": [
+            "B3.5"
+          ],
+          "metrics": {
+            "loc": 0,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 0,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 0
+          },
+          "study": {
+            "papers": [
+              "research/TRZK_SBB.md §14.13.6 B3.5",
+              "§14.11.a Addendum 2026-04-20 Gate H8 deferral"
+            ],
+            "lessons": [
+              "L-730",
+              "L-744"
+            ],
+            "libraries": [],
+            "notes": "~60-100 LOC. Integrar blocked bitrev de v3.20.a dentro del packed butterfly kernel: cargar datos desde posiciones bit-reversed en el primer vld1q_s32 del stage (en vez de ejecutar bitrev como preamble separado). Elimina una pasada completa de memoria (~250μs esperados). Correctness preservada via byte-equivalence con scalar path."
+          }
+        },
+        {
+          "id": "N20.35.2",
+          "name": "Batch-aware bitrev (bitrev_strided = B bitrevs independientes con stride)",
+          "type": "CRITICO",
+          "status": "pending",
+          "files": [
+            "AmoLean/EGraph/Verified/Bitwise/SIMDEmitter.lean",
+            "AmoLean/EGraph/Verified/Bitwise/MemLayout.lean"
+          ],
+          "deps": [
+            "N20.35.1",
+            "N20.3.1"
+          ],
+          "blocks": [
+            "B3.5"
+          ],
+          "metrics": {
+            "loc": 0,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 0,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 0
+          },
+          "study": {
+            "papers": [
+              "research/TRZK_SBB.md §14.13.6 B3.5 scope"
+            ],
+            "lessons": [
+              "L-744",
+              "L-739"
+            ],
+            "libraries": [],
+            "notes": "Extender blocked bitrev a batch-aware. Para B polinomios con layout row-major interleaved, bitrev_strided(B,N) = B bitrevs independientes con stride. Reutiliza invariant transposeForBatch_inv (MemLayout.lean, B3). Esto habilita B=1 collapse path + B>1 linear scaling."
+          }
+        },
+        {
+          "id": "N20.35.3",
+          "name": "Gate H8 final validation (5 runs mean ≤820μs + CV<1% + validation preserved)",
+          "type": "GATE",
+          "status": "pending",
+          "files": [],
+          "deps": [
+            "N20.35.2"
+          ],
+          "blocks": [
+            "B3.5"
+          ],
+          "metrics": {
+            "loc": 0,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 0,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 0
+          },
+          "study": {
+            "papers": [
+              "research/TRZK_SBB.md §14.11.a Gate H8 threshold",
+              "§14.13.8 MVP escape route"
+            ],
+            "lessons": [],
+            "libraries": [],
+            "notes": "5 iteraciones de benchmark.py --hardware arm-neon --fields babybear --sizes 18 --skip-validation. Criterios: mean ≤820μs + CV<1% + arm-neon validation N=14,18,20 3/3 PASS + differential_fuzz 1150/1150 preservado + rust-simd validation 1/1 PASS. Si no cierra en 2 días: MVP escape per §14.13.8 — aceptar mean alcanzado, documentar §8e en BENCHMARKS.md, Gate H8 redefinido como best effort."
+          }
+        },
+        {
           "id": "N20.4.1",
           "name": "lowerStageVerified_OffsetAware con substitution (+batchPolyOffset substitutor)",
           "type": "FUNDACIONAL",
@@ -692,6 +808,203 @@
             ],
             "libraries": [],
             "notes": "Modelo lineal: TRZK_loop(B) = TRZK_single × B. Gate permite ±5% overhead. Si falla >5%: investigar transpose cost o cache pressure. Si falla >20%: MVP escape (C-string generation directa sin Stmt integration)."
+          }
+        },
+        {
+          "id": "N20.45.1",
+          "name": "lowerStageVerified_OffsetAware con substitution (data[i] → data[batchPolyOffset polyVar N i])",
+          "type": "FUNDACIONAL",
+          "status": "pending",
+          "files": [
+            "AmoLean/EGraph/Verified/Bitwise/VerifiedPlanCodeGen.lean"
+          ],
+          "deps": [
+            "N20.4.1",
+            "N20.1.1"
+          ],
+          "blocks": [
+            "B4.5"
+          ],
+          "metrics": {
+            "loc": 0,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 0,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 0
+          },
+          "study": {
+            "papers": [
+              "research/TRZK_SBB.md §14.13.1 Gap 1",
+              "§14.13.2 Gap 2 (connection to packed kernel)"
+            ],
+            "lessons": [
+              "L-175",
+              "L-373",
+              "L-736"
+            ],
+            "libraries": [],
+            "notes": "Mirror de lowerStageVerified:459-531 pero con substitution indexing. NO es rewrite del single-vector: es hermana paralela. Preserva B=1 collapse por construcción: si polyVar=0 siempre, batchPolyOffset polyVar N i = i, reduce a single-vector."
+          }
+        },
+        {
+          "id": "N20.45.2",
+          "name": "Dispatch a emitPackedButterflyNeonDIT_C via isPackedButterflyApplicable + transposeForBatch preamble/postamble",
+          "type": "CRITICO",
+          "status": "pending",
+          "files": [
+            "AmoLean/EGraph/Verified/Bitwise/VerifiedPlanCodeGen.lean",
+            "AmoLean/EGraph/Verified/Bitwise/SIMDEmitter.lean"
+          ],
+          "deps": [
+            "N20.45.1",
+            "N20.3.2",
+            "N20.3.1"
+          ],
+          "blocks": [
+            "B4.5"
+          ],
+          "metrics": {
+            "loc": 0,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 0,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 0
+          },
+          "study": {
+            "papers": [
+              "research/TRZK_SBB.md §14.13.2 Gap 2",
+              "§14.13.5 Reconciliación cross-gap"
+            ],
+            "lessons": [
+              "L-730",
+              "L-744",
+              "L-739"
+            ],
+            "libraries": [],
+            "notes": "emitCFromPlanBatch/emitRustFromPlanBatch consume MemLayout.transposeForBatch como preamble en C + untransposeFromBatch postamble. Dispatch: si isPackedButterflyApplicable ∧ batchWidth ≥ 4, usa packed kernel lane-paralelo. Si B<4 o stage no aplicable: fallback a offset-aware scalar (aún amortiza twiddles vs loop). Wiring también en SIMDEmitter por path arm-neon."
+          }
+        },
+        {
+          "id": "N20.45.3",
+          "name": "Proof extension: B=1 collapse preservado + packed dispatch soundness",
+          "type": "CRITICO",
+          "status": "pending",
+          "files": [
+            "AmoLean/EGraph/Verified/Bitwise/VerifiedPlanCodeGen.lean"
+          ],
+          "deps": [
+            "N20.45.2"
+          ],
+          "blocks": [
+            "B4.5"
+          ],
+          "metrics": {
+            "loc": 0,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 0,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 0
+          },
+          "study": {
+            "papers": [
+              "research/TRZK_SBB.md §14.13.3 Gap 3"
+            ],
+            "lessons": [
+              "L-373"
+            ],
+            "libraries": [],
+            "notes": "Extender lowerNTTFromPlanBatch_B1_collapse (B4) para path packed: si B=1, dispatch NO activa packed (isPackedButterflyApplicable retorna false por batchWidth<4), sigue siendo rfl-collapse a single-vector existente. Theorem de soundness del packed wiring: dispatch produce output byte-equivalente a loop wrapping single-vector (golden-test-backed invariant)."
+          }
+        },
+        {
+          "id": "N20.45.4",
+          "name": "Cost model sub-linear: batchWidthFactor con amortización empírica",
+          "type": "PARALELO",
+          "status": "pending",
+          "files": [
+            "AmoLean/EGraph/Verified/Bitwise/NTTPlanSelection.lean"
+          ],
+          "deps": [
+            "N20.45.2"
+          ],
+          "blocks": [
+            "B4.5"
+          ],
+          "metrics": {
+            "loc": 0,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 0,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 0
+          },
+          "study": {
+            "papers": [
+              "research/TRZK_SBB.md §14.13.1 cost model extension"
+            ],
+            "lessons": [
+              "L-747"
+            ],
+            "libraries": [],
+            "notes": "Reemplazar planTotalCostBatch linear (B4) con factor de amortización cuando dispatch usa packed: planTotalCostBatch(plan, B) ≈ planTotalCost × B × (1 / amort_factor). amort_factor empírico calibrado en N20.45.5 (e.g. 2.0 si packed logra 2× amort vs loop). Mantiene linearity para B<4 fallback."
+          }
+        },
+        {
+          "id": "N20.45.5",
+          "name": "Gate B4.5: TRZK-batch B=16 N=2^18 BabyBear beats TRZK-loop ≥50% + ≤ P3-batch",
+          "type": "GATE",
+          "status": "pending",
+          "files": [],
+          "deps": [
+            "N20.45.2",
+            "N20.45.3"
+          ],
+          "blocks": [
+            "B4.5"
+          ],
+          "metrics": {
+            "loc": 0,
+            "theorems": 0,
+            "lemmas": 0,
+            "defs": 0,
+            "sorry": 0
+          },
+          "properties": {
+            "total": 0,
+            "passing": 0,
+            "failing": 0,
+            "not_runnable": 0
+          },
+          "study": {
+            "papers": [
+              "research/TRZK_SBB.md §14.13.6 B4.5 gate"
+            ],
+            "lessons": [],
+            "libraries": [],
+            "notes": "Gate sharpened (lesson learned from B4 gate flaw): testea INTENT (amortización) no solo estructura. TRZK-batch B=16 N=2^18 BabyBear debe beat TRZK-loop B=16 N=2^18 por ≥50% (2× amort minimum). Threshold floor: TRZK-batch ≤ P3-batch 20013μs. Si falla: diagnose si transpose cost domina o si packed dispatch no fires. Si persiste >20% bajo TRZK-loop: MVP escape (aceptar batch sin packed, documentar §8f)."
           }
         },
         {
@@ -1172,6 +1485,17 @@
           "closed_at": null
         },
         {
+          "id": "B3.5",
+          "name": "Bitrev final optimization + batch-aware integration (Gate H8 closure)",
+          "nodes": [
+            "N20.35.1",
+            "N20.35.2",
+            "N20.35.3"
+          ],
+          "status": "pending",
+          "closed_at": null
+        },
+        {
           "id": "B4",
           "name": "Outer Loop Wiring (lowerNTTFromPlanBatch + emitCFromPlanBatch)",
           "nodes": [
@@ -1180,6 +1504,19 @@
             "N20.4.3",
             "N20.4.4",
             "N20.4.5"
+          ],
+          "status": "pending",
+          "closed_at": null
+        },
+        {
+          "id": "B4.5",
+          "name": "Packed Kernel Integral Wiring (offset-aware + transpose + dispatch + amortization gate)",
+          "nodes": [
+            "N20.45.1",
+            "N20.45.2",
+            "N20.45.3",
+            "N20.45.4",
+            "N20.45.5"
           ],
           "status": "pending",
           "closed_at": null

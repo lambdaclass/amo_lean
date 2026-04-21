@@ -658,11 +658,19 @@ BF2+BF3 (conditionalSub + Stark252): deferred to future version.
 | N20.3.1 MemLayout.lean NUEVO módulo con transposeForBatch + untransposeFromBatch + invertibility theorem | FUND | N20.2.3 | pending |
 | N20.3.2 emitPackedButterflyNeonDIT_C kernel + isPackedButterflyApplicable dispatch | CRIT | N20.3.1, N20.2.1 | pending |
 | N20.3.3 Golden test batch==scalar (invertibility + codegen validation) | GATE | N20.3.1, N20.3.2 | pending |
+| N20.35.1 Fusion bitrev con primer NEON load en emitPackedButterflyNeonDIT_C (Gate H8 closure) | CRIT | N20.3.2 | pending |
+| N20.35.2 Batch-aware bitrev (bitrev_strided = B bitrevs independientes con stride) | CRIT | N20.35.1, N20.3.1 | pending |
+| N20.35.3 Gate H8 final validation (5 runs mean ≤ 820μs + CV<1% + validation preserved) | GATE | N20.35.2 | pending |
 | N20.4.1 lowerStageVerified_OffsetAware con substitution (+batchPolyOffset substitutor) | FUND | N20.1.1 | pending |
 | N20.4.2 lowerNTTFromPlanBatch outer Stmt.for_ + stage composition (B=1 delega a single-vector) | CRIT | N20.4.1 | pending |
 | N20.4.3 emitCFromPlanBatch + emitRustFromPlanBatch wrappers con transpose preamble | CRIT | N20.4.2, N20.3.1 | pending |
 | N20.4.4 Cost model extension: batchWidthFactor + batchWidthCost + planTotalCostBatch | PAR | N20.1.1 | pending |
 | N20.4.5 Gate B4: benchmark.py --batch-width 16 BabyBear N=18 dentro ±5% modelo lineal | GATE | N20.4.3, N20.4.4 | pending |
+| N20.45.1 lowerStageVerified_OffsetAware con substitution (data[i] → data[batchPolyOffset polyVar N i]) | FUND | N20.4.1, N20.1.1 | pending |
+| N20.45.2 Dispatch a emitPackedButterflyNeonDIT_C via isPackedButterflyApplicable + transposeForBatch preamble/postamble | CRIT | N20.45.1, N20.3.2, N20.3.1 | pending |
+| N20.45.3 Proof extension: B=1 collapse preservado + packed dispatch soundness | CRIT | N20.45.2 | pending |
+| N20.45.4 Cost model sub-linear: batchWidthFactor con amortización empírica | PAR | N20.45.2 | pending |
+| N20.45.5 Gate B4.5: TRZK-batch B=16 N=2^18 BabyBear beats TRZK-loop ≥50% + ≤ P3-batch | GATE | N20.45.2, N20.45.3 | pending |
 | N20.5.1 Theorem signatures: lowerNTTFromPlanBatch_correct + auxiliares + emitCFromPlanBatch_sound | FUND | N20.4.3 | pending |
 | N20.5.2 Base case B=1 collapse NON-DEFERRABLE (proof by rfl) | CRIT | N20.5.1 | pending |
 | N20.5.3 Inductive step _step + main theorem composición | CRIT | N20.5.2 | pending |
@@ -684,6 +692,12 @@ BF2+BF3 (conditionalSub + Stark252): deferred to future version.
 | N20.2.1 | Nuevos MixedNodeOp constructores son no-island: packedButterflyNeonDIT tiene consumer explícito en B3 (emitPackedButterflyNeonDIT_C) antes del cierre | INVARIANT | P0 |
 | N20.2.1 | evalMixedOp .packedButterflyNeonDIT simplifica a (v a + v b) / 2 (DIT butterfly semántica) | EQUIVALENCE | P1 |
 | N20.3.1 | transposeForBatch_inv: transpose ∘ untranspose = id para toda input ≤ N*W elements | INVARIANT | P0 |
+| N20.35.1 | Bitrev fusionado preserva byte-equivalence con scalar path (correctness gate) | PRESERVATION | P0 |
+| N20.35.2 | bitrev_strided(B,N) = B bitrevs independientes con stride, reutiliza transposeForBatch_inv | EQUIVALENCE | P0 |
+| N20.35.3 | Gate H8 final: 5 runs mean ≤ 820μs N=2^18 BabyBear single-vector (B=1 collapse) | PERFORMANCE | P0 |
+| N20.45.2 | Packed dispatch fires cuando isPackedButterflyApplicable ∧ batchWidth≥4; fallback a offset-aware scalar en otros casos (no-island invariant) | INVARIANT | P0 |
+| N20.45.3 | packedDispatch_B1_collapse: B=1 preserva equivalencia con single-vector (packed no dispara por batchWidth<4) | PRESERVATION | P0 |
+| N20.45.5 | TRZK-batch B=16 beats TRZK-loop B=16 por ≥50% + TRZK-batch ≤ P3-batch floor | PERFORMANCE | P0 |
 | N20.5.2 | lowerNTTFromPlanBatch_B1_collapse: B=1 exactamente equivalente al single-vector path | EQUIVALENCE | P0 |
 | N20.5.3 | lowerNTTFromPlanBatch_correct: ∀ B > 0 batch output correcto elemento por elemento | SOUNDNESS | P0 |
 | N20.5.4 | Firewall _aux lemmas (stride indexing + bitrev strided) DOCUMENTADAS con TODO Phase 2 + referencia CLAUDE.md § Batch Roadmap Phase 2 | INVARIANT | P0 |
@@ -700,7 +714,9 @@ BF2+BF3 (conditionalSub + Stark252): deferred to future version.
 - [x] **Foundations (NTTPlan.batchWidth + Trust Boundary docs)**: N20.1.1, N20.1.2 — closed 2026-04-20
 - [x] **MixedNodeOp Extensions (3 constructores + 4 intrinsics + 15 lemmas)**: N20.2.1, N20.2.2, N20.2.3 — closed 2026-04-20
 - [ ] **MemLayout + SIMDEmitter (nuevo módulo + packed butterfly kernel)**: N20.3.1, N20.3.2, N20.3.3
+- [ ] **Bitrev final optimization + batch-aware integration (Gate H8 closure)**: N20.35.1, N20.35.2, N20.35.3
 - [ ] **Outer Loop Wiring (lowerNTTFromPlanBatch + emitCFromPlanBatch)**: N20.4.1, N20.4.2, N20.4.3, N20.4.4, N20.4.5
+- [ ] **Packed Kernel Integral Wiring (offset-aware + transpose + dispatch + amortization gate)**: N20.45.1, N20.45.2, N20.45.3, N20.45.4, N20.45.5
 - [ ] **Correctness Proofs Phase 1 (bridge theorem + firewall _aux con sorry)**: N20.5.1, N20.5.2, N20.5.3, N20.5.4, N20.5.5
 - [ ] **Tests + Bench + Docs (benchmark_batch.py + fuzzer + ARCHITECTURE update)**: N20.6.1, N20.6.2, N20.6.3, N20.6.4, N20.6.5, N20.6.6
 
