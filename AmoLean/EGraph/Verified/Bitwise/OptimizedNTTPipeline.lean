@@ -513,9 +513,10 @@ private def fieldConfigToUltraConfig (fc : FieldConfig) (hw : HardwareCost) : Ul
     CRITICAL: does NOT modify the legacy optimizedNTTC path. -/
 def optimizedNTTC_ultra (fc : FieldConfig) (hw : HardwareCost) (logN iters : Nat)
     (useVerifiedSIMD : Bool := false) (rustSIMD : Bool := false)
-    (useStandardDFT : Bool := false) : String :=
+    (useStandardDFT : Bool := false) (useBitrevFusion : Bool := false) : String :=
   let n := 2^logN
-  let ucfg := { fieldConfigToUltraConfig fc hw with useVerifiedSIMD, rustSIMD, useStandardDFT }
+  let ucfg := { fieldConfigToUltraConfig fc hw with
+                useVerifiedSIMD, rustSIMD, useStandardDFT, useBitrevFusion }
   -- NTT call expression: includes mu_tw parameter when sqdmulh is active.
   -- v3.15.0 B5: Goldilocks (k>32) with standard DFT uses STANDARD twiddles (tw),
   -- not Montgomery (tw_mont). goldi_reduce128 is PZT mod p, NOT Montgomery REDC —
@@ -627,12 +628,14 @@ int main(void) \{
     return 0;
 }"
 
-/-- Ultra benchmark C generator (drop-in alternative to genOptimizedBenchC). -/
+/-- Ultra benchmark C generator (drop-in alternative to genOptimizedBenchC).
+    v3.20.b B3.5: `useBitrevFusion` activates the bitrev-fused first-stage
+    kernel path in `emitSIMDNTTC` (skips `bit_reverse_permute` preamble call). -/
 def genOptimizedBenchC_ultra (fc : FieldConfig) (logN iters : Nat)
     (hw : HardwareCost := arm_cortex_a76)
     (useVerifiedSIMD : Bool := false) (rustSIMD : Bool := false)
-    (useStandardDFT : Bool := false) : String :=
-  optimizedNTTC_ultra fc hw logN iters useVerifiedSIMD rustSIMD useStandardDFT
+    (useStandardDFT : Bool := false) (useBitrevFusion : Bool := false) : String :=
+  optimizedNTTC_ultra fc hw logN iters useVerifiedSIMD rustSIMD useStandardDFT useBitrevFusion
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 5b: Rust Code Emission Helpers

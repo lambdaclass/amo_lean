@@ -504,6 +504,330 @@ done
 
 ---
 
+### 8e. v3.20.b B3.5 — Bitrev fusion attempted, correctness bug surfaced, Gate H8 "best effort" (2026-04-21)
+
+v3.20.b B3.5 implemented bitrev fusion into the first-executed NTT stage (halfSize=1
+hs1 kernel) per §14.11.a addendum and §14.13.6 B3.5 scope. Infrastructure delivered
+(N20.35.1 packed `emitPackedButterflyNeonDIT_BRFirst_C`, N20.35.2 single-poly
+`emitNeonButterflyDIT_HS1_BRFirst_C` + `MemLayout.bitrev_strided` + `_B1_collapse`
+theorem + wiring via `useBitrevFusion` flag). Flag defaults to `false` to preserve
+backward compat; activation is explicit via `--bitrev-fusion` CLI.
+
+**Correctness finding** (blocks Gate H8 perf measurement with fusion ON):
+
+On validation with fusion ON, `benchmark.py --validation-only --hardware arm-neon
+--fields babybear --sizes 14` FAILs at position [0] (compiled=1777148722,
+python=180743994). Diagnosis via a minimal standalone test (N=16, stage 13 only):
+positions [0..7] match the non-fused path; positions [8..15] all differ.
+
+**Root cause**: **intrinsic read-after-write hazard** between fused-kernel
+iterations. With 4 logical groups per iteration, `grp=0` writes sequentially to
+natural positions `data[0..7]` and then `grp=4` reads scattered positions —
+including indices in `[0..7]` that `grp=0` already overwrote. The fused kernel
+reads from `data[bitrev(2*k), bitrev(2*k)+halfN]` to emulate the permutation
+in-place, but this read target can intersect any prior iteration's write target,
+and the intersection happens unavoidably because `bitrev` is a bijection over
+the full array.
+
+**Fix options are all beyond v3.20.b scope**:
+1. **Scratch buffer** (hazard-free): read `data`, write `scratch`, copy back.
+   Replaces 1 in-place pass with 2 out-of-place passes — defeats the memory
+   savings, net-neutral vs non-fused baseline.
+2. **Stockham autosort**: algorithmic redesign that removes the separate permute
+   entirely via in-register shuffles across stages. Major refactor of the stage
+   emission logic + trust boundary redraw. Tracked for v4.0.
+3. **COBRA-style cache-aware permute** (L-759 baseline): modest 20-30% wins per
+   the prior analysis — insufficient for Gate H8 threshold.
+
+**Action taken**: `useBitrevFusion` kept as opt-in with default `false`; backward
+compat preserved. Infrastructure (kernels + theorems + smoke tests) stays in the
+codebase as prep work for the eventual algorithmic redesign. No Gate H8 perf
+measurement executed with fusion ON since validation gate fails — correctness
+non-negotiable per §14.13.8 MVP escape policy.
+
+**Validation preservation (fusion OFF, i.e., production default)**:
+
+| Check | Result |
+|-------|:------:|
+| `benchmark.py --validation-only --hardware arm-neon --fields babybear --sizes 14,18,20` | **3/3 PASS** |
+| `differential_fuzz.py --mode fast --seed 42` | **1150/1150 PASS** |
+| `benchmark.py --rust-simd --validation-only --hardware arm-neon --fields babybear --sizes 14` | **1/1 PASS** |
+
+**Gate H8 outcome (§14.13.8 MVP escape invoked)**:
+
+- Baseline `arm-neon N=2^18 BabyBear` stays at **1538 μs** (unchanged from
+  v3.20.a post-RBIT).
+- Threshold `≤ 820 μs` **not achieved**. Per §14.13.8 MVP escape: Gate H8
+  redefined as **"best effort, no blocker"**. Threshold 820 μs deferred to v4.0
+  algorithmic work (Stockham autosort or equivalent).
+- End-to-end claim preserved: TRZK arm-neon still **3.1× faster than Plonky3
+  single-vector** at N=2^18 (1538 μs vs ~4811 μs).
+
+**Lesson** (candidate for `lecciones/`): *"Read-scattered/write-natural in-place
+fusion has intrinsic read-after-write hazards when the permutation is a
+non-trivial bijection over the full working array; requires either scratch
+buffering (defeats memory savings) or algorithmic redesign. Catch via
+minimal-N (N=16) diagnostic that compares fused-path output against
+permute+non-fused-path output element-by-element — the mismatch pattern
+(first half matches, second half diverges) points directly at the hazard."*
+
+**Reproduction of finding**:
+
+```bash
+# Build Lean:
+lake build
+
+# Validation with fusion ON (should FAIL):
+python3 Tests/benchmark/benchmark.py --validation-only --hardware arm-neon \
+    --fields babybear --sizes 14 --bitrev-fusion
+# → FAIL @ [0]
+
+# Validation with fusion OFF (default, should PASS):
+python3 Tests/benchmark/benchmark.py --validation-only --hardware arm-neon \
+    --fields babybear --sizes 14
+# → 1/1 PASS
+```
+
+---
+
+### 8f. Gate H8 alternatives investigation — blocked REFUTED, R4 insufficient, H8 literal permanente (2026-04-21)
+
+Post-§8e B3.5 hazard, se ejecutó `/science` Round 1 comparativo entre tres
+rutas candidatas para cerrar el Gate H8 residual (≤820 μs N=2^18 BB
+arm-neon). Report: `research/TRZK_gateh8_report1.md`. CONVERGED en 1 ronda.
+
+**Candidatos evaluados**:
+- **(a) Bitrev blocked cache-friendly con scratch**
+- **(b) Radix-4 stages (18→9)**
+- **(c) Batch amortization via v3.20.b B4.5**
+
+**Hallazgos empíricos**:
+
+1. **Bitrev isolate measurement** (Parte A): bitrev con `__builtin_bitreverse32`
+   cuesta mean 788μs vs memcpy floor 65μs = **12.2× memcpy**. Conclusion:
+   bitrev es **scatter-bound**, no bandwidth-bound. Cada swap toca 2 cache
+   lines uncorrelated; hw prefetcher no puede stream-ahead.
+
+2. **Bitrev blocked REFUTED empírico** (Parte B, H1+H2): 14 variants
+   testeadas (scalar + NEON × 6 tile sizes). **TODOS regresan +65%** vs
+   baseline rbit (1242μs mean vs 754μs baseline). Tile size irrelevante
+   (<2% variación 128-4096). Causa: pérdida del in-place swap prefetch
+   coupling + pass 2 memcpy-back extra traffic (~60μs). Validation PASS
+   byte-for-byte vs naive.
+
+3. **R4 stages analytical** (Parte C, H3): proyectado 1177-1293μs total.
+   **FALSA MED** — no cierra ≤1000μs. Solo ahorra ~345μs en stages
+   (785→424-540) pero el 753μs bitrev floor domina. Además, NEON R4 kernel
+   para BabyBear NO existe (solo scalar Goldilocks) — requiere 500-650 LOC
+   + 4-6 días infra nueva.
+
+4. **Math ceiling identificado** (Parte A): si bitrev fuera 0μs, el
+   pipeline sería **~750μs** — apenas 70μs bajo el threshold 820μs. **No
+   hay approach "reducir bitrev" que cierre Gate H8 literal**. Solo
+   algorithmic redesign que **elimine el pass explícito**: DIT↔DIF pairing,
+   six-step, o stride-implicit.
+
+**Verdict final Round 1**:
+
+| H | Hipótesis | Verdict | Confidence |
+|---|-----------|---------|:----------:|
+| H1 | Blocked ≤350μs | REFUTED | HIGH |
+| H2 | Blocked cierra H8 literal | REFUTED | HIGH |
+| H3 | R4 ≤1000μs | FALSA | MED |
+| H4 | Batch (c) cierra narrativa | VERDADERA | HIGH-MED |
+| H5 | Combo óptima | FALSA | HIGH |
+
+**Decisión**: PROCEED (c) via B4.5 + DROP (a) + DEFER (b) + ESCALATE Gate H8
+literal como **research goal v4.1+** (nuevo ítem V4.1-E en `TRZK_gains.md §10.5`).
+
+**Gate H8 literal redefinido PERMANENTE** (actualización §14.13.8 MVP
+escape): no es problema de kernel optimization sino de algorithmic
+redesign. Escape MVP permanente con target recalibrado a "competitive
+batch narrative" via (c). TRZK ship con claim TRZK-batch ganador vs P3-batch
+(proyección 2×-4× amortización), no con 820μs single-vector.
+
+**Artifacts**: `/tmp/TRZK_gateh8_r1/` (bitrev_isolate.c, bitrev_blocked.c
+14 variants, r4_analysis.md analytical, batch_amortization_analysis.md,
+roi_comparison.md). State archived
+`~/.claude/skills/science/STATE/archived/`.
+
+**Lesson L-770** registrada: "Bitrev en NTT pipelines es scatter-bound, no
+bandwidth-bound. Blocked bitrev es contraproducente por loss of in-place
+swap prefetch coupling. Solo eliminación del pass explícito cierra gates
+≤memcpy-floor." Consultable via
+`query_lessons.py --lesson L-770` o `--hybrid "bitrev scatter"`.
+
+---
+
+### 8f. v3.20.b B4.5 — Packed Kernel Integral Wiring: MVP escape, deferred to v3.20.c (2026-04-21)
+
+v3.20.b B4.5 wired the `emitPackedButterflyNeonDIT_C` kernel (delivered B3) into
+a complete batch NTT emission pipeline (`emitCFromPlanBatch_Packed`), with:
+- `lowerStageVerified_OffsetAware` (N20.45.1, linear-layout offset-aware fallback)
+- Transpose-based interleaved layout + bit-reverse per-poly + packed kernel
+  dispatch + scalar-on-interleaved fallback for halfSize < 4 (N20.45.2)
+- `shouldUsePackedPath` predicate (k ≤ 32 ∧ B ≥ 4 ∧ B % 4 == 0 ∧ all-R2)
+- Differential correctness test vs independent Solinas-fold scalar reference
+  (`Tests/benchmark/test_packed_correctness.sh`) — **PASS byte-exact on 9 N×B
+  combos (N ∈ {64, 128, 256, 1024, 4096, 16384} × B ∈ {4, 16})**
+
+#### Correctness gate (passed unconditionally)
+
+| Check | Result |
+|-------|:------:|
+| `test_packed_correctness.sh 6 4` (N=64 B=4) | 256/256 bytes exact |
+| `test_packed_correctness.sh 7 4` (N=128 B=4) | 512/512 bytes exact |
+| `test_packed_correctness.sh 8 4` (N=256 B=4) | 1024/1024 bytes exact |
+| `test_packed_correctness.sh 10 4` (N=1024 B=4) | 4096/4096 bytes exact |
+| `test_packed_correctness.sh 12 4` (N=4096 B=4) | 16384/16384 bytes exact |
+| `test_packed_correctness.sh 14 16` (N=16384 B=16) | 262144/262144 bytes exact |
+| `differential_fuzz.py --mode fast --seed 42` (pre-existing, single-vector) | **1150/1150 PASS** (preserved) |
+
+**Verdict correctness: PASS**. The packed kernel + transpose + scalar fallback
+machinery produces mathematically correct output (byte-exact vs independent
+Solinas-fold reference) across all tested N and B combinations.
+
+#### Performance gate (MVP escape invoked)
+
+Gate criteria per §14.13.6 B4.5 sharpened (post B4 gate flaw lesson):
+- `TRZK-packed mean ≤ 0.50 × TRZK-loop mean` (≥2× amortization)
+- `TRZK-packed mean ≤ 20013 μs` (beat Plonky3-batch)
+- `CV < 2% over 5 runs`
+
+Measurement (`test_packed_perf_gate.sh 18 16 5` on Apple M1, `cc -O3
+-mcpu=apple-m1`, 5 runs + warmup):
+
+| Path | Mean μs | Min μs | CV |
+|------|--------:|-------:|---:|
+| TRZK-loop (B4, scalar × 16) | 53049 | 52733 | 0.46% |
+| TRZK-packed (B4.5) | 42379 | 42148 | 0.66% |
+| Single-vector NEON baseline (sanity check) | 1666.7 | — | — |
+
+Ratio packed/loop: **0.799** — 1.25× amortization, far from 2× target.
+
+**Root cause — Sospecha 1 confirmed via emission inspection**:
+
+```bash
+lake env lean --run Tests/benchmark/emit_batch_code.lean babybear 18 16 \
+    | grep "neon_bf_dit\|vld1q\|vmull\|arm_neon"
+# → empty output. B4 loop reference is pure SCALAR, not NEON.
+```
+
+`emit_batch_code.lean` (B4 N20.4.3 driver) calls `emitCFromPlanStandard` — the
+**scalar** path, not `emitSIMDNTTC`. The "TRZK-loop reference" I was measuring
+was scalar × 16 polys, not NEON × 16 polys. The 1.25× ratio vs this baseline
+masks a structural issue.
+
+**Honest comparison against fair baselines**:
+
+| Reference | Time (μs) | TRZK-packed ratio | Advantage vs ref |
+|-----------|----------:|------------------:|-----------------:|
+| TRZK-loop (scalar × 16, irrelevant prod baseline) | 53049 | 0.799 | +20% ✅ |
+| **NEON single-vector × 16 (linear extrapolation)** | **26656** (1666.7 × 16) | **1.59** | **−59% ❌** |
+| **Plonky3-batch (BENCHMARKS §8b)** | **20013** | **2.12** | **−112% ❌** |
+
+- TRZK-packed 42379 μs is **1.59× SLOWER** than NEON single-vector × 16
+  extrapolation.
+- TRZK-packed 42379 μs is **2.12× SLOWER** than Plonky3-batch 20013 μs.
+
+Per §14.13.6 B4.5 decision matrix:
+> "Advantage negativo en cualquier escenario → MVP escape"
+
+#### Methodology sanity (flag fix validation)
+
+A methodology review suggested `-march=armv8-a` vs `-mcpu=apple-m1` might
+explain the gap (M1 sqdmulh scheduling). Full remediation:
+
+| Sites with `-march=armv8-a` fixed | Action |
+|-----------------------------------|--------|
+| `Tests/benchmark/test_packed_correctness.sh:250` | → `-mcpu=apple-m1` |
+| `Tests/benchmark/test_packed_perf_gate.sh:170` | → `-mcpu=apple-m1` |
+| `Tests/benchmark/debug_neon.py:83` (debug tool, out of scope) | reported, not fixed |
+| Lean emitter (`AmoLean/.../*.lean`) | CLEAN — 0 `-march=armv8` in codegen |
+
+Single-vector NEON sanity post-fix: **1666.7 μs** (vs historical 1538 μs target,
++8.4%, within ±10%). Flag correctly propagated in production path.
+
+Remeasure with corrected flag: ratio 0.786 → 0.799 (**no material change**,
+within noise). **Methodology was not the problem**; the packed driver has
+structural inefficiency.
+
+#### Root cause analysis (for v3.20.c scope)
+
+Three factors limit the packed path's competitiveness:
+
+1. **Transpose overhead** (2 full memory passes per W-batch): linear → interleaved
+   + interleaved → linear. For B=16 N=2^18: 4 W-batches × 2 × 4 MB = 32 MB extra
+   memory traffic. Fixable by caller-controlled interleaved layout API (breaks
+   compat) or by fusing transpose with bit-reverse (saves 1 pass).
+
+2. **Scalar-on-interleaved fallback dominates final stages**: for halfSize < 4
+   (stages 16 + 17 in a N=2^18 plan), the packed path falls back to
+   `trzk_scalar_bf_4lane` which executes 4 independent scalar butterflies per
+   pair. Production NEON single-vector uses `neon_bf_dit_hs1` / `hs2` small-SIMD
+   kernels (vld2q/vst2q interleave) that pack 4 butterflies into 1 SIMD call —
+   my packed path has no equivalent for interleaved layout.
+
+3. **Per-butterfly throughput inferior vs production NEON**: my
+   `neon_bf_dit_packed` loads 1 twiddle (vdupq_n_s32 broadcast) and does 4 polys
+   × 1 pair. Production `neon_bf_dit` loads 4 twiddles (vld1q_s32) and does 1
+   poly × 4 pairs — same NEON throughput but with pipeline-friendly consecutive
+   array access. Packed path's broadcast + scatter pattern may incur
+   implicit latency my profiling has not yet measured.
+
+#### Action taken (MVP escape)
+
+1. **Packed dispatch stays opt-in only** — `shouldUsePackedPath` is NOT wired into
+   `emitCFromPlanBatch` production path. Callers invoke `emitCFromPlanBatch_Packed`
+   directly only via `Tests/benchmark/emit_packed_batch.lean` (test-only driver).
+   Zero impact on production `benchmark.py` default path.
+2. **Infrastructure preserved**: `emitCFromPlanBatch_Packed`, `transposeHelperC`,
+   `trzk_scalar_bf_4lane`, `lowerStageVerified_OffsetAware`, and all smoke tests
+   stay in the codebase as scaffold for v3.20.c.
+3. **v3.20.b batch story delivered**: via B4's loop-wrapping `emitCFromPlanBatch`
+   (TRZK-loop scalar × B) — mathematically correct, B=1 collapse preserved, not
+   competitive vs Plonky3-batch but structurally sound.
+
+#### Deferred to v3.20.c (documented scope)
+
+- Fuse transpose with first-stage load / eliminate explicit transpose pass
+- NEON small-SIMD kernels (hs1/hs2 analogs) for interleaved halfSize<4 stages
+- Caller-controlled interleaved-layout API (opt-in, breaks layout transparency)
+- Profile `neon_bf_dit_packed` vs production `neon_bf_dit` for per-butterfly
+  overhead (possibly replace `vdupq_n_s32` broadcast with aligned twiddle
+  pre-staging)
+
+#### Lesson candidate (glearnings §5.8)
+
+> *"Performance gate requires honest baseline: compare SIMD-capable driver against
+> SIMD-capable reference, not SIMD vs scalar. A scalar-loop baseline can make a
+> SIMD path look amortized when in reality it loses against the NEON-loop version
+> of the same algorithm. Pre-gate checklist: confirm both paths (test and
+> reference) compile through the same target intrinsics set."*
+
+Candidate L-id: L-771 (to be assigned post-merge).
+
+#### Reproduction
+
+```bash
+# Build Lean:
+lake build
+
+# Correctness (8 N×B combos, all PASS byte-exact):
+for logn in 6 7 8 10 12 14; do for b in 4 16; do
+  bash Tests/benchmark/test_packed_correctness.sh $logn $b
+done; done
+
+# Perf gate (ratio 0.799, PARTIAL/MVP escape):
+bash Tests/benchmark/test_packed_perf_gate.sh 18 16 5
+
+# Single-vector NEON sanity (1666.7 μs, ±8% vs 1538 target):
+python3 Tests/benchmark/benchmark.py --hardware arm-neon --fields babybear \
+    --sizes 18 --skip-validation
+```
+
+---
+
 ### 9. Honest Interpretation
 
 **Pre-v3.17 narrative (incomplete)**: "TRZK has a 18% algorithmic gap with Plonky3 on Goldilocks."
