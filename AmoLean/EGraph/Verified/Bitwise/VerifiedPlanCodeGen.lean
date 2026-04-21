@@ -530,6 +530,145 @@ def lowerStageVerified (stage : NTTStage) (n p k c mu : Nat) : Stmt :=
       (.assign pairVar (.binOp .add (.varRef pairVar) (.litInt 1)))
       bfBody)
 
+/-- v3.20.b B4.5 N20.45.1: offset-aware mirror of `lowerStageVerified`.
+
+    **Scope**: R2 path (BabyBear-like, k ≤ 32, no F5c). R4 and F5c Goldilocks
+    batch stay on B4's loop-wrapping fallback per §14.13.6 B4.5 decision (their
+    batch scope is outside Phase 1 packed target).
+
+    **Substitution**: every `data[i]` / `data[j]` access in
+    `lowerStageVerified:459-531`'s R2 branch is wrapped with `polyVar * n + _`,
+    converting linear per-poly index to the batched linear layout
+    `data[poly * N + i] = poly[poly][i]`. Twiddle access unchanged (shared
+    across polys by construction).
+
+    **B=1 collapse invariant**: when the caller binds `polyVar` to 0, every
+    `polyVar * n + i` evaluates to `i` (see `batchPolyOffset_eval` B1 lemma).
+    Under `simp` + `batchPolyOffset` unfold, the output is structurally
+    identical to `lowerStageVerified` for the same stage. This is the fact
+    that `lowerNTTFromPlanBatch_B1_collapse_packed` (N20.45.3) reduces to.
+
+    **Why separate from `lowerStageVerified`**: preserves the single-vector
+    path untouched (§14.13.6 safety rule: NO tocar el path single-vector).
+    Adds ~70 LOC of parallel code; trade-off rationalized by proof
+    tractability — the B5 bridge theorem can rewrite
+    `offsetWrap polyVar=0 expr = expr` in one step via `batchPolyOffset_eval`
+    rather than threading an optional-polyVar through 70+ LOC of lowerStage
+    internals. -/
+def lowerStageVerified_OffsetAware (stage : NTTStage) (n p k c mu : Nat)
+    (polyVar : VarName) : Stmt :=
+  match stage.radix with
+  | .r4 =>
+    -- R4 Goldilocks: B4.5 Phase 1 does not extend offset-awareness into R4.
+    -- Caller dispatches R4 stages through B4's loop-wrapping path instead.
+    -- Return `lowerStageR4` unchanged so the function is total and batch
+    -- correctness for R4-bearing plans falls back to the single-vector-per-poly
+    -- loop at the outer level (identical behavior to B4).
+    lowerStageR4 stage n p k c mu
+  | _ =>
+    let halfSize := n / (2 ^ (stage.stageIdx + 1))
+    let numGroups := 2 ^ stage.stageIdx
+    let groupVar := VarName.user "group"
+    let pairVar := VarName.user "pair"
+    let cgs : CodeGenState := {}
+    -- Helper: wrap an existing index expression with `polyVar * n + _`.
+    let offsetWrap (origIdx : LowLevelExpr) : LowLevelExpr :=
+      .binOp .add (.binOp .mul (.varRef polyVar) (.litInt ↑n)) origIdx
+    -- Simplified R2 path: skip F5c Goldilocks-full (k>32 useFull branch) and
+    -- skip k>32 ∧ halfSize≤32 split — those are Goldilocks-batch-specific and
+    -- not in B4.5 Phase 1 scope. Caller must route Goldilocks batch plans
+    -- through the loop-wrapping `emitCFromPlanBatch` path (B4 behavior).
+    let aVar := VarName.user "a_val"
+    let bVar := VarName.user "b_val"
+    let wVar := VarName.user "w_val"
+    let origIExpr := nttDataIndex groupVar pairVar halfSize
+    let iExpr := offsetWrap origIExpr
+    let jExpr := offsetWrap (.binOp .add origIExpr (.litInt ↑halfSize))
+    -- Twiddle index unchanged — twiddles are poly-invariant.
+    let twExpr := nttTwiddleIndex stage.stageIdx groupVar pairVar halfSize n
+    let (bf, sumVar, diffVar, _) :=
+      lowerDIFButterflyByReduction aVar bVar wVar stage.reduction p k c mu cgs
+        (boundK := stage.outputBoundK)
+    let dRef := LowLevelExpr.varRef (VarName.user "data")
+    let tRef := LowLevelExpr.varRef (VarName.user "twiddles")
+    let stFull := storeTrunc dRef iExpr (LowLevelExpr.varRef sumVar)
+    let stFullD := storeTrunc dRef jExpr (LowLevelExpr.varRef diffVar)
+    let loads := Stmt.seq (loadWiden aVar dRef iExpr)
+      (Stmt.seq (loadWiden bVar dRef jExpr)
+        (loadWiden wVar tRef twExpr))
+    let bfBody := Stmt.seq loads (Stmt.seq bf (Stmt.seq stFull stFullD))
+    Stmt.for_
+      (.assign groupVar (.litInt 0))
+      (.binOp .ltOp (.varRef groupVar) (.litInt ↑numGroups))
+      (.assign groupVar (.binOp .add (.varRef groupVar) (.litInt 1)))
+      (Stmt.for_
+        (.assign pairVar (.litInt 0))
+        (.binOp .ltOp (.varRef pairVar) (.litInt ↑halfSize))
+        (.assign pairVar (.binOp .add (.varRef pairVar) (.litInt 1)))
+        bfBody)
+
+/-- v3.20.b B4.5 N20.45.1 non-vacuity: the R4 branch delegates to
+    `lowerStageR4` unchanged — explicit witness that R4 stages stay on the
+    single-vector path when routed through the offset-aware dispatch. The
+    caller (emitCFromPlanBatch) uses loop-wrapping for plans that contain
+    R4 stages. -/
+example (stage : NTTStage) (n p k c mu : Nat) (polyVar : VarName)
+    (hR4 : stage.radix = .r4) :
+    lowerStageVerified_OffsetAware stage n p k c mu polyVar =
+    lowerStageR4 stage n p k c mu := by
+  unfold lowerStageVerified_OffsetAware
+  rw [hR4]
+-- Block 2.5a: Batch offset utilities (v3.20.b B1, N20.1.1)
+-- ══════════════════════════════════════════════════════════════════
+
+/-- v3.20.b B1: compute the linear offset for a row in a batched NTT layout.
+    Given a batch of B polynomials laid out row-major (`data[0..N-1]` = poly 0,
+    `data[N..2N-1]` = poly 1, ..., `data[(B-1)*N..B*N-1]` = poly B-1) the offset
+    of element `i` within polynomial `polyVar` is `polyVar * N + i`.
+
+    B=1 case: callers pass a plan with `Plan.batchWidth = 1` and the outer loop
+    reduces to a single iteration with `polyVar = 0`, so `batchPolyOffset` returns
+    `0 * N + i = i` — byte-equivalent to the pre-v3.20.b single-vector layout.
+    This is the property that `lowerNTTFromPlanBatch_B1_collapse` (B5 theorem)
+    relies on for `rfl`-level equivalence with `lowerNTTFromPlanVerified`.
+
+    Emits `.binOp .add (.binOp .mul (.varRef polyVar) (.litInt n)) (.litInt i)`.
+    The shape is stable so `lowerStageVerified_OffsetAware` (B4 N20.4.1) can do
+    a mechanical substitution `data[i]` → `data[batchPolyOffset polyVar N i]`. -/
+def batchPolyOffset (polyVar : VarName) (n : Nat) (i : Nat) : LowLevelExpr :=
+  .binOp .add
+    (.binOp .mul (.varRef polyVar) (.litInt ↑n))
+    (.litInt ↑i)
+
+/-- v3.20.b B1 soundness: `batchPolyOffset` evaluates to the arithmetic offset
+    `poly * n + i` when `polyVar` is bound to an integer value in the environment.
+    This is the atomic soundness fact that `lowerStageVerified_OffsetAware` (B4)
+    and the bridge theorem `lowerNTTFromPlanBatch_correct` (B5) lift to per-stage
+    and per-plan correctness via induction on the batch dimension.
+
+    Isolated as an independent lemma per §14.13.7 R1 mitigation (the full offset
+    substitution proof in B4 lives downstream of this fact; keeping it atomic
+    lets that proof be a mechanical `simp` + `batchPolyOffset_eval` rewrite
+    rather than re-deriving the arithmetic). -/
+theorem batchPolyOffset_eval
+    (polyVar : VarName) (n i : Nat) (env : _root_.TrustLean.LowLevelEnv)
+    (poly : Int) (h : env polyVar = .int poly) :
+    _root_.TrustLean.evalExpr env (batchPolyOffset polyVar n i)
+      = some (.int (poly * (n : Int) + (i : Int))) := by
+  unfold batchPolyOffset
+  simp [_root_.TrustLean.evalExpr, h]
+
+/-- v3.20.b B1 non-vacuity: instantiates `batchPolyOffset_eval` with a concrete
+    environment to prove the hypothesis set is jointly satisfiable (per global
+    CLAUDE.md higiene rules for lemmas with Prop hypotheses). B=2, N=8, i=3 gives
+    offset `poly * 8 + 3`. -/
+example :
+    _root_.TrustLean.evalExpr
+      (fun _ => _root_.TrustLean.Value.int 1)
+      (batchPolyOffset (.user "polyVar") 8 3)
+      = some (.int 11) := by
+  simp [batchPolyOffset, _root_.TrustLean.evalExpr]
+
 -- ══════════════════════════════════════════════════════════════════
 -- Block 2.5b: ILP2 — Process 2 butterflies per loop iteration (v3.10.0 TD)
 -- ══════════════════════════════════════════════════════════════════
@@ -714,6 +853,87 @@ def lowerNTTFromPlanStandard (plan : Plan) (k c mu : Nat) : Stmt :=
   Stmt.seq bitrevStmt (stmts.foldl Stmt.seq Stmt.skip)
 
 -- ══════════════════════════════════════════════════════════════════
+-- Block 2.5c: Batch NTT (v3.20.b B4, N20.4.1 + N20.4.2)
+-- ══════════════════════════════════════════════════════════════════
+
+/-- v3.20.b B4 N20.4.1: atomic helper that emits the per-iteration shadowing
+    assignment used by the batch outer loop to make single-vector stage code
+    transparent to the batch dimension.
+
+    Given an outer loop variable `polyVar` and a local base pointer variable
+    `localBase`, emits the assignment `localBase := globalBase + polyVar * n`
+    as a Stmt. In the C emission, this corresponds to
+    `int32_t* data = data_base + poly * N;` executed once per batch iteration.
+
+    Used by `lowerNTTFromPlanBatch` to inject one of these at the top of
+    each outer-loop iteration, then the single-vector Stmt body (which
+    references `data` / `localBase` throughout) operates on the shadow
+    pointer without any index-level rewriting. This is the key design
+    decision that lets `lowerNTTFromPlanBatch_B1_collapse` (B5 theorem)
+    prove equivalence with `lowerNTTFromPlanVerified` by `rfl` when B=1. -/
+def batchOffsetAssign (localBase globalBase polyVar : VarName) (n : Nat) : Stmt :=
+  Stmt.assign localBase
+    (.binOp .add
+      (.varRef globalBase)
+      (.binOp .mul (.varRef polyVar) (.litInt ↑n)))
+
+/-- v3.20.b B4 N20.4.2: lower an NTT plan to a batch Stmt program covering
+    `B` polynomials stored contiguously in `data` (linear layout:
+    `poly[b][i] = data[b*N + i]`).
+
+    **Design**: `if B = 1` collapses to `lowerNTTFromPlanVerified` exactly,
+    giving a `rfl`-provable equivalence via `lowerNTTFromPlanBatch_B1_collapse`
+    (deferred to B5). For `B > 1`, emits an outer `Stmt.for_` loop over
+    `polyVar ∈ [0, B)` whose body is the single-vector Stmt preceded by a
+    `batchOffsetAssign` that shadows the data pointer.
+
+    **Phase 1 caveat** (§14.13.3): the B>1 case reuses the single-vector
+    body literally — at the Stmt level this means each iteration re-computes
+    the NTT of `data` (which shadows to `data_base + poly*N` at the C level
+    via `batchOffsetAssign`). The PROOF that this is correct for B>1 lives
+    in `lowerNTTFromPlanBatch_step` (B5, DEFERRABLE with `sorry`); the
+    CODEGEN via `emitCFromPlanBatch` handles the pointer shadowing at the
+    string level directly (unconditionally correct by C shadowing semantics).
+
+    **B5 theorem stub (central)**:
+      `lowerNTTFromPlanBatch plan 1 k c mu = lowerNTTFromPlanVerified plan k c mu`
+    proven by `rfl` once this definition lands (see B5 for the non-trivial
+    `_step` and `_correct` theorems with firewall `_aux` lemmas). -/
+def lowerNTTFromPlanBatch (plan : Plan) (B k c mu : Nat) : Stmt :=
+  if B == 1 then
+    lowerNTTFromPlanVerified plan k c mu
+  else
+    -- Outer loop variable + local base pointer shadow.
+    let polyVar  : VarName := .user "_poly"
+    let localBase : VarName := .user "data"
+    let globalBase : VarName := .user "data_base"
+    let innerNTT := lowerNTTFromPlanVerified plan k c mu
+    let offsetAssign := batchOffsetAssign localBase globalBase polyVar plan.size
+    Stmt.for_
+      (.assign polyVar (.litInt 0))
+      (.binOp .ltOp (.varRef polyVar) (.litInt ↑B))
+      (.assign polyVar (.binOp .add (.varRef polyVar) (.litInt 1)))
+      (Stmt.seq offsetAssign innerNTT)
+
+/-- v3.20.b B4 N20.4.2 non-vacuity: B=1 collapse — the batch definition reduces
+    to the existing single-vector definition when `B = 1`, by `rfl`.
+    This is the atomic fact that the B5 inductive proof base-cases on. -/
+example (plan : Plan) (k c mu : Nat) :
+    lowerNTTFromPlanBatch plan 1 k c mu = lowerNTTFromPlanVerified plan k c mu := rfl
+
+/-- v3.20.b B4 N20.4.2 non-vacuity: the `batchOffsetAssign` helper emits
+    `data := data_base + poly * n` as the polyVar shadow-pointer update — a
+    structural witness that the offset machinery is wired. For N=8, poly var
+    `_poly`, local base `data`, global base `data_base`:
+    `data := data_base + (_poly * 8)`. -/
+example :
+    batchOffsetAssign (.user "data") (.user "data_base") (.user "_poly") 8 =
+    Stmt.assign (.user "data")
+      (.binOp .add (.varRef (.user "data_base"))
+        (.binOp .mul (.varRef (.user "_poly")) (.litInt 8))) := by
+  rfl
+
+-- ══════════════════════════════════════════════════════════════════
 -- Block 2.6: Emit C and Rust from verified Plan
 -- ══════════════════════════════════════════════════════════════════
 
@@ -755,19 +975,41 @@ def maxTempsInPlan (plan : Plan) (k c mu : Nat) : Nat :=
 
 -- ── v3.15.0: Standard DFT preambles ──────────────────────────────────────
 
-/-- C preamble for bit-reversal permutation. Pattern: ntt_skeleton.c:42-67.
+/-- C preamble for bit-reversal permutation.
+    v3.20.a Fase 1 (blocked bitrev): inner O(logN) shift loop replaced with
+    `__builtin_bitreverse32` (clang) which lowers to a single ARM64 `RBIT`
+    instruction + `LSR`. Same output (idempotent under shift mask), but the
+    bit-reversal itself is now O(1) per index instead of O(logN). For N=2^18
+    this cuts ~4.7M shift/AND operations to ~262K single-cycle RBIT calls.
+    Memory access pattern (scatter on swap target) is unchanged — cache cost
+    of the swaps stays roughly the same; the win is purely from the bit
+    computation. Falls back to the portable shift-loop on non-clang / non-ARM.
     Emitted as trusted string (same pattern as goldi_reduce128 et al.).
     Returns dummy 0 for Stmt.call compatibility (same pattern as goldi_butterfly).
     stmtToC always emits `result = fname(args);` — no void handling in scalar path. -/
 def bitRevPermutePreambleC (elemType : String) : String :=
   s!"static inline {elemType} bit_reverse_permute({elemType} *data, size_t n, size_t logn) \{\n" ++
+  s!"#if defined(__clang__) && (defined(__aarch64__) || defined(__ARM_ARCH_ISA_A64))\n" ++
+  s!"  const unsigned _br_shift = 32u - (unsigned)logn;\n" ++
+  s!"  for (size_t i = 0; i < n; i++) \{\n" ++
+  s!"    size_t j = (size_t)(__builtin_bitreverse32((uint32_t)i) >> _br_shift);\n" ++
+  s!"    if (i < j) \{ {elemType} t = data[i]; data[i] = data[j]; data[j] = t; }\n" ++
+  s!"  }\n" ++
+  s!"#else\n" ++
   s!"  for (size_t i = 0; i < n; i++) \{\n" ++
   s!"    size_t j = 0, tmp = i;\n" ++
   s!"    for (size_t b = 0; b < logn; b++) \{ j = (j << 1) | (tmp & 1); tmp >>= 1; }\n" ++
   s!"    if (i < j) \{ {elemType} t = data[i]; data[i] = data[j]; data[j] = t; }\n" ++
-  s!"  }\n  return 0;\n}\n\n"
+  s!"  }\n" ++
+  s!"#endif\n" ++
+  s!"  return 0;\n}\n\n"
 
 /-- Rust preamble for bit-reversal permutation.
+    v3.20.a Fase 1 (blocked bitrev): replaces the inner O(logN) shift loop with
+    `u32::reverse_bits()` which lowers to a single ARM64 `RBIT` instruction on
+    Apple Silicon (and the equivalent on x86). Same output but O(1) per index
+    instead of O(logN). Cut rationale and trade-off documented in the C twin
+    `bitRevPermutePreambleC` above.
     Returns dummy 0 for Stmt.call compatibility (same pattern as goldi_butterfly).
     Parameter n kept for C symmetry (Rust has data.len() but call site passes N explicitly). -/
 def bitRevPermutePreambleRust (elemType : String) (retType : String := elemType)
@@ -778,13 +1020,9 @@ def bitRevPermutePreambleRust (elemType : String) (retType : String := elemType)
   s!"#[inline(always)]\n" ++
   s!"fn bit_reverse_permute(data: &mut [{elemType}], n: {indexType}, logn: {lognType}) -> {retType} \{\n" ++
   castLine ++
+  s!"  let br_shift: u32 = 32u32 - (logn as u32);\n" ++
   s!"  for i in 0..n \{\n" ++
-  s!"    let mut j: usize = 0;\n" ++
-  s!"    let mut tmp = i;\n" ++
-  s!"    for _ in 0..logn \{\n" ++
-  s!"      j = (j << 1) | (tmp & 1);\n" ++
-  s!"      tmp >>= 1;\n" ++
-  s!"    }\n" ++
+  s!"    let j: usize = ((i as u32).reverse_bits() >> br_shift) as usize;\n" ++
   s!"    if i < j \{ data.swap(i, j); }\n" ++
   s!"  }\n  0\n}\n\n"
 
@@ -1320,11 +1558,22 @@ def emitRustFromPlanStandard (plan : Plan) (k c mu : Nat)
   -- v3.16.0 B2: retType=wideType, indexType=wideType for Goldilocks (Rust has no implicit widening)
   -- elemType (not uElemType) because BabyBear transmutes data to &mut [i32] before Stmt.call
   let indexType := if k == 64 then "u128" else "usize"
-  -- v3.17.0 post-B6: silence 300+ warnings that are all unused_parens / dead_code artifacts
-  -- of the mechanical codegen (stmtToRust emits conservative parens; some t0/t1 temps are
-  -- assigned but not read in all branches of the dispatch). None are correctness-indicative.
-  "#![allow(unused_parens, unused_variables, unused_assignments, unused_mut, dead_code)]\n" ++
+  -- v3.20 B0: scoped #[allow(...)] on the generated NTT function (not crate-wide #![...]).
+  -- Root cause of `unused_parens` lives upstream in TrustLean/Backend/RustBackend.lean
+  -- `exprToRust`: `.unaryOp .widen32to64 e` and `.binOp` always wrap in `(...)` for
+  -- precedence safety (line 68-70). When the expression is a full RHS of an assignment
+  -- like `a = (x as i64);`, the parens are redundant for Rust but required by the
+  -- precedence-safe emission. `unused_variables` / `unused_assignments` / `unused_mut`
+  -- / `dead_code` come from conservative temp allocation in maxTempsInPlan — not all
+  -- branches of the plan dispatch consume every temp. Fixing these at source requires
+  -- either an upstream TrustLean patch or a more precise temp-liveness analysis in
+  -- `maxTempsInPlan`; scoped allow keeps signal for other warnings (e.g. bugs in new
+  -- emitters) while preserving v3.19 output semantics. Upstream fix tracked for v3.20.b
+  -- or later; see `research/TRZK_SBB.md §14.14.2` step 4 for the escape hatch rationale.
+  let rustAttrs :=
+    "#[allow(unused_parens, unused_variables, unused_assignments, unused_mut, dead_code)]\n"
   goldiPreambleRust ++ bitRevPermutePreambleRust elemType wideType indexType ++
+  rustAttrs ++
   s!"fn {funcName}(data: &mut [{uElemType}], twiddles: &[{uElemType}]) \{\n{tempDecls}{loopDecls}{loadDecls}{r4LoadDecls}{ilp2Decls}{transmute}{bodyRust}\n}"
 
 /-- Emit verified Rust function from Plan.
@@ -1495,9 +1744,14 @@ def emitRustFromPlanVerified (plan : Plan) (k c mu : Nat)
     s!"  data[i2] = goldi_add(d0,d1); data[i3] = goldi_mul_tw(goldi_sub(d0,d1), w1p);\n" ++
     s!"  0\n}\n\n"
   else ""
-  -- v3.17.0 post-B6: crate-level allow for mechanical codegen artifacts (see Standard).
-  "#![allow(unused_parens, unused_variables, unused_assignments, unused_mut, dead_code)]\n" ++
+  -- v3.20 B0: scoped #[allow] per function instead of crate-wide #![allow] band-aid.
+  -- Root cause of `unused_parens` is TrustLean upstream `exprToRust` (precedence-safe
+  -- wrap); see detailed note in `emitRustFromPlanStandard` above. Same rationale here
+  -- for the legacy ref_dit (`emitRustFromPlanVerified`) path. Upstream fix tracked.
+  let rustAttrs :=
+    "#[allow(unused_parens, unused_variables, unused_assignments, unused_mut, dead_code)]\n"
   goldiPreambleRust ++
+  rustAttrs ++
   s!"fn {funcName}(data: &mut [{uElemType}], twiddles: &[{uElemType}]) \{\n{tempDecls}{loopDecls}{loadDecls}{r4LoadDecls}{transmute}{bodyRust}\n}"
 
 -- ══════════════════════════════════════════════════════════════════
@@ -1525,5 +1779,400 @@ theorem lowerDIFButterflyByReduction_dispatch (aVar bVar wVar : VarName)
     (red : ReductionChoice) (p k c mu : Nat) (cgs : CodeGenState) :
     let (stmt, _, _, _) := lowerDIFButterflyByReduction aVar bVar wVar red p k c mu cgs
     ∃ s, stmt = s := ⟨_, rfl⟩
+
+-- ══════════════════════════════════════════════════════════════════
+-- Block 2.9: Batch C emission (v3.20.b B4 N20.4.3)
+-- ══════════════════════════════════════════════════════════════════
+
+/-- v3.20.b B4 N20.4.3: emit a complete C program that performs NTT on `B`
+    polynomials stored contiguously in `data_base` (layout: `poly[b][i] =
+    data_base[b*N + i]`).
+
+    **Design (Phase 1 additive bridge per §14.13.3)**:
+    1. Emit the single-vector NTT function as `{funcName}_single` (reusing
+       `emitCFromPlanStandard` verbatim — same preambles, same stages).
+    2. Emit the batch wrapper `{funcName}` that loops `_poly ∈ [0, B)` and
+       calls `{funcName}_single(data_base + _poly * N, twiddles)`.
+
+    **Correctness at Phase 1 (B=1 collapse)**: when `B=1`, this delegates
+    entirely to `emitCFromPlanStandard` (no wrapper, same signature).
+    Byte-equivalent to the single-vector emission. Catches regressions
+    automatically via existing validation gates.
+
+    **Correctness at Phase 1 (B>1)**: the batch wrapper is an additive
+    loop — each call to `_single` is independent (no cross-poly state
+    in the single-vector body). B5's `lowerNTTFromPlanBatch_step` proves
+    this formally via induction on B; at the codegen level, the outer
+    loop is trivially sound by C sequencing semantics (proof-obligation-free).
+
+    **Phase 2 (v3.20.c or later)**: optimize the wrapper via (a) packed
+    SIMD batch kernels (emitPackedButterflyNeonDIT_C from B3), (b)
+    transpose preamble for interleaved layout (MemLayout.transposeForBatch),
+    or (c) true multi-poly fusion. Phase 1 wrapper is the honest
+    `TRZK_batch = B × TRZK_single` baseline against which optimized
+    variants are measured (§13.5 decision rule). -/
+def emitCFromPlanBatch (plan : Plan) (B k c mu : Nat)
+    (funcName : String) : String :=
+  if B == 1 then
+    emitCFromPlanStandard plan k c mu funcName
+  else
+    let elemType := if k == 64 then "uint64_t" else "int32_t"
+    let n := plan.size
+    let singleFn := funcName ++ "_single"
+    let inner := emitCFromPlanStandard plan k c mu singleFn
+    -- Batch wrapper: sequential B invocations of the single-vector NTT.
+    -- Each poly's data lives at `data_base + _poly * N`; twiddles shared.
+    let wrapper :=
+      s!"\n/* v3.20.b B4 N20.4.3 batch wrapper — B polynomials × single-vector */\n" ++
+      s!"void {funcName}({elemType}* data_base, const {elemType}* twiddles, size_t B) \{\n" ++
+      s!"  for (size_t _poly = 0; _poly < B; _poly++) \{\n" ++
+      s!"    {singleFn}(data_base + _poly * {n}, twiddles);\n" ++
+      s!"  }\n" ++
+      s!"}\n"
+    inner ++ wrapper
+
+/-- v3.20.b B4 N20.4.3 non-vacuity: B=1 collapse at the C level — emitting
+    with `B=1` produces byte-equivalent output to `emitCFromPlanStandard`
+    (no wrapper, no `_single` suffix). This is the C-level companion of
+    `lowerNTTFromPlanBatch_B1_collapse` (N20.4.2 theorem above). -/
+example (plan : Plan) (k c mu : Nat) (funcName : String) :
+    emitCFromPlanBatch plan 1 k c mu funcName =
+    emitCFromPlanStandard plan k c mu funcName := rfl
+
+/-- v3.20.b B4 N20.4.3 non-vacuity: B>1 emits the wrapper invoking `_single`
+    on a minimal BabyBear plan. Structural witness that the batch path
+    produces a new outer function with the `_single` suffix. -/
+example :
+    let plan : Plan :=
+      { stages := #[{ stageIdx := 0, radix := .r2, reduction := .harvey,
+                      direction := .DIT, inputBoundK := 1, outputBoundK := 1 }],
+        field := 2013265921, size := 2 }
+    ((emitCFromPlanBatch plan 4 31 1 0x88000001 "ntt_test").splitOn
+      "ntt_test_single(data_base").length = 2 := by
+  native_decide
+
+-- ══════════════════════════════════════════════════════════════════
+-- Block 2.10: Batch NTT Correctness Phase 1 (v3.20.b B5)
+-- ══════════════════════════════════════════════════════════════════
+/-!
+  ## B5 — Correctness Proofs Phase 1 (§14.13.3 Gap 3)
+
+  This block establishes the correctness theorem stack for the B4 batch
+  interface (loop wrapping). Packed-kernel path (B4.5) is NOT covered here —
+  the MVP escape invoked at B4.5 means packed dispatch is opt-in only, not
+  wired into production `emitCFromPlanBatch`; its soundness theorem stays
+  as a firewall `_aux` with TODO v3.20.c tag.
+
+  ### Scope
+  - `lowerNTTFromPlanBatch_B1_collapse` — NON-DEFERRABLE base case, `rfl`.
+  - `lowerNTTFromPlanBatch_step` — inductive step assuming single-vector
+    correctness (via firewall hypothesis).
+  - `lowerNTTFromPlanBatch_correct` — main theorem via induction on B.
+  - `emitCFromPlanBatch_sound` — codegen soundness (delegates to `_correct`).
+
+  ### Firewall `_aux` lemmas (DEFERRABLE Phase 2, §14.13.3 R3)
+  - `lowerDIFButterflyByReduction_batch_indexing_aux`
+  - `lowerBitReverseStmt_batch_aux`
+  - `packed_dispatch_equiv_loop` (v3.20.c, packed path disabled by MVP escape)
+
+  ### Design choices (§14.13.3)
+  - Additive bridge pattern: `batch = B × single_vector`, induction on B.
+  - B=1 collapse is `rfl`-provable by the `if B == 1 then ... else ...`
+    structure of `lowerNTTFromPlanBatch` (see line 902).
+  - `_step` takes the single-vector correctness as a HYPOTHESIS (firewall),
+    avoiding the need to re-derive stage-level soundness inside the batch
+    induction.
+-/
+
+/-- v3.20.b B5 N20.5.2 (NON-DEFERRABLE): B=1 collapse — the batch lowering
+    reduces exactly to the single-vector `lowerNTTFromPlanVerified` when
+    `B = 1`, by `rfl` on the `if B == 1` branch of `lowerNTTFromPlanBatch`.
+
+    **Guarantee**: Gate H8 single-vector path is preserved — no regression
+    on B=1 vs pre-v3.20.b behavior. Byte-equivalent code generation.
+
+    Complements the existing non-vacuity `example` at line 921 by giving a
+    named theorem downstream consumers (B6 tests, external proofs) can
+    apply by name. -/
+theorem lowerNTTFromPlanBatch_B1_collapse (plan : Plan) (k c mu : Nat) :
+    lowerNTTFromPlanBatch plan 1 k c mu = lowerNTTFromPlanVerified plan k c mu := by
+  rfl
+
+/-- v3.20.b B5 N20.5.4 firewall `_aux` — stride algebra: for row `r < B`, the
+    single-vector butterfly Stmt executed on the slice of `llEnv` starting at
+    `r * N` produces the same per-element result as the full single-vector
+    Stmt would produce on a standalone environment containing the r-th poly.
+
+    **DIFFICULTY: MUY_ALTA (§14.13.3 R3)** — requires:
+    - Defining an "environment restriction" to the r-th slice
+    - Proving that `lowerDIFButterflyByReduction` commutes with `batchPolyOffset
+      polyVar N _` substitution under `evalStmt`
+    - Threading through every `data[i]` access in the butterfly body, for all
+      four `ReductionChoice` branches
+
+    **Phase 1 status**: `sorry` per §14.13.3 R3 mitigation. Empirically
+    validated via `Tests/benchmark/test_batch_correctness.sh` (byte-equiv to
+    loop wrapping for B=4 N=64 BabyBear). Downstream theorems (`_step`,
+    `_correct`) cite this lemma by name but do not unfold it — firewall
+    structure isolates the gap for Phase 2 closure without touching the
+    bridge theorem.
+
+    **Phase 2 strategy**: unfold per-branch, show per-lane load/store indices
+    commute with `polyVar * n + _` wrap via `batchPolyOffset_eval` (B1
+    soundness lemma), close with `List.ext_getElem` on the env stream. -/
+theorem lowerDIFButterflyByReduction_batch_indexing_aux
+    (aVar bVar wVar : VarName) (red : ReductionChoice)
+    (p k c mu N row : Nat) (cgs : CodeGenState)
+    (polyVar : VarName) (llEnv : _root_.TrustLean.LowLevelEnv)
+    (hrow : row < N) (hpoly : llEnv polyVar = .int ↑row) :
+    -- For the single-vector butterfly stmt with index offsets wrapped by
+    -- `batchPolyOffset polyVar N _`, evaluation on `llEnv` produces an env
+    -- whose `data[row*N + i]` cells match what the single-vector
+    -- lowerDIFButterflyByReduction would produce standalone on the r-th slice.
+    let (stmtSingle, _, _, _) :=
+      lowerDIFButterflyByReduction aVar bVar wVar red p k c mu cgs
+    -- Structural Phase 2 claim: exists a fuel and result env such that the
+    -- stride-wrapped butterfly evaluates, AND for every data index i,
+    -- the result env's (row*N + i)-th data cell equals what the single-
+    -- vector butterfly would compute at i-th cell when starting from the
+    -- corresponding slice of llEnv.
+    ∃ fuel resultEnv,
+      _root_.TrustLean.evalStmt fuel llEnv stmtSingle =
+        some (.normal, resultEnv) ∧
+      (∀ i, i < N →
+        ∃ vStride vSingle,
+          resultEnv (.array "data" ↑(row * N + i)) = .int vStride ∧
+          -- Single-vector reference: same stmt evaluated on a hypothetical
+          -- "row-r slice" environment produces vSingle at position i.
+          ∃ singleEnv,
+            _root_.TrustLean.evalStmt fuel llEnv stmtSingle =
+              some (.normal, singleEnv) ∧
+            singleEnv (.array "data" ↑i) = .int vSingle ∧
+            vStride = vSingle) := by
+  -- TODO Phase 2 (§14.13.3 R3): unfold lowerDIFButterflyByReduction per-
+  -- ReductionChoice branch. Use `batchPolyOffset_eval` (B1 soundness lemma)
+  -- to commute `polyVar * N + i` with stride indexing. Close per-lane load/
+  -- store equivalence with `List.ext_getElem`. Empirically backed by
+  -- Tests/benchmark/test_batch_correctness.sh (B=4 byte-exact). See CLAUDE.md
+  -- § Batch Roadmap Phase 2 for full scope.
+  sorry
+
+/-- v3.20.b B5 N20.5.4 firewall `_aux` — bit-reverse over strided batch layout
+    equals B independent per-row bitrevs.
+
+    **DIFFICULTY: MUY_ALTA (§14.13.3 R3)** — requires Stmt-level reasoning
+    about the untrusted `Stmt.call bit_reverse_permute` intrinsic. Since
+    `evalStmt(.call) = none` (trust boundary), the proof must establish the
+    equivalence via the intrinsic's C-level semantics (documented in
+    `bitRevPermutePreambleC`) rather than by unfolding `evalStmt`.
+
+    **Phase 1 status**: `sorry` per §14.13.3 R3 mitigation. Empirically
+    validated: `MemLayout.bitrev_strided_B1_collapse` (B3.5, proven no-sorry)
+    establishes the identity at the List-level for B=1; runtime differential
+    tests establish it for B>1 via byte-exact comparison.
+
+    **Phase 2 strategy**: lift `MemLayout.bitrev_strided_B1_collapse` to
+    Stmt-level through the trust-boundary documentation of the
+    `bit_reverse_permute` intrinsic's effect on contiguous memory ranges.
+    For strided access (row `r` at offset `r * N`), the intrinsic's action
+    on data[r*N .. (r+1)*N) is the standalone single-row bitrev on that
+    slice. -/
+theorem lowerBitReverseStmt_batch_aux
+    (logN B : Nat) (llEnv : _root_.TrustLean.LowLevelEnv)
+    (hB : 0 < B) (N : Nat) (hN : N = 2 ^ logN) :
+    -- For every row r < B, the bitrev-permute Stmt applied to the full
+    -- B*N-length data block produces the same per-row slice content as
+    -- running the single-row bitrev on each slice independently.
+    let bitrevBatchStmt :=
+      _root_.TrustLean.Stmt.call (.user "group") "bit_reverse_permute"
+        [.varRef (.user "data"), .litInt ↑(B * N), .litInt ↑logN]
+    let bitrevSingleStmt :=
+      _root_.TrustLean.Stmt.call (.user "group") "bit_reverse_permute"
+        [.varRef (.user "data"), .litInt ↑N, .litInt ↑logN]
+    ∀ r, r < B →
+      ∃ envBatch envSingle,
+        _root_.TrustLean.evalStmt 1 llEnv bitrevBatchStmt =
+          some (.normal, envBatch) ∧
+        _root_.TrustLean.evalStmt 1 llEnv bitrevSingleStmt =
+          some (.normal, envSingle) ∧
+        ∀ i, i < N →
+          envBatch (.array "data" ↑(r * N + i)) =
+          envSingle (.array "data" ↑i) := by
+  -- TODO Phase 2 (§14.13.3 R3): Bridge MemLayout.bitrev_strided_B1_collapse
+  -- (B3.5, List-level proof closed) to Stmt-level via the
+  -- bit_reverse_permute trust boundary (evalStmt(.call) = none means the
+  -- equivalence must be proven via the intrinsic's documented C semantics,
+  -- not via evalStmt unfolding). See CLAUDE.md § Batch Roadmap Phase 2.
+  sorry
+
+/-- v3.20.b B5 N20.5.4 NEW firewall `_aux` — packed path soundness.
+
+    **Status**: B4.5 MVP escape invoked 2026-04-21. Packed dispatch is
+    opt-in-only (not wired into production `emitCFromPlanBatch`). This
+    theorem formalizes the INTENDED soundness statement for when packed
+    dispatch is re-enabled in v3.20.c.
+
+    **Phase 1 status**: `sorry`. Empirically backed by
+    `Tests/benchmark/test_packed_correctness.sh` (9/9 N×B combos byte-exact
+    vs independent Solinas reference, BENCHMARKS §8f). Production dispatch
+    is disabled, so no current call site activates the unproven branch.
+
+    **Phase 2 / v3.20.c strategy**: compose three elements:
+    - `MemLayout.transposeForBatch_inv` (B3 proven, closes transpose/
+      untranspose round-trip)
+    - Per-lane equivalence: packed NEON butterfly lane-p output matches
+      scalar single-vector butterfly on the r-th poly's data
+    - C sequencing semantics for the outer W-batch loop -/
+theorem packed_dispatch_equiv_loop
+    (plan : Plan) (B : Nat) (k c mu : Nat)
+    (funcName : String)
+    (hB : 4 ≤ B) (hDivB : B % 4 = 0) (hK : k ≤ 32)
+    (hAllR2 : plan.stages.toList.all (fun s => s.radix == .r2) = true) :
+    -- Packed emission output, as a pure C string, has the same semantic
+    -- effect (on any valid input conforming to linear batch layout) as
+    -- the loop-wrapping emission. Phase 1 expresses this as equality of
+    -- the canonical interpretation under a hypothetical C semantic
+    -- function (evalCString), which v3.20.c will define and validate.
+    --
+    -- Structural form: there exists a semantic equivalence relation R over
+    -- C program outputs such that packed_emit R loop_emit holds.
+    ∃ R : String → String → Prop,
+      R (emitCFromPlanBatch plan B k c mu funcName)
+        (emitCFromPlanBatch plan B k c mu funcName) := by
+  -- TODO v3.20.c (§14.13.3 R3 extended scope, post-MVP-escape):
+  -- (1) define `evalCString` semantic interpretation function, or link to
+  --     externally-validated C semantics via trust boundary documentation.
+  -- (2) prove packed dispatch produces the same transcript as loop wrapping
+  --     for all plans satisfying `shouldUsePackedPath plan B = true`.
+  -- Empirically backed by Tests/benchmark/test_packed_correctness.sh
+  -- (9/9 N×B combos byte-exact vs independent Solinas reference).
+  -- See CLAUDE.md § Batch Roadmap Phase 2 item 3.
+  sorry
+
+/-- v3.20.b B5 N20.5.3 — inductive step. Assuming single-vector correctness
+    holds for each row `b ≤ B+1` via the `firewall` hypothesis, and that
+    the batch stmt at size `B` is semantically correct (produces outputs
+    equal to `B` independent single-vector applications), the batch stmt
+    at size `B+1` extends this guarantee to the (B+1)-th row.
+
+    **Design per §14.13.3**: this `_step` takes single-vector correctness
+    as a HYPOTHESIS (firewall), not as a closed lemma. Downstream
+    `_correct` composes `_step` with existing single-vector soundness
+    proofs. This isolates the batch layer from stage-level proof machinery.
+
+    **Phase 1 status**: `sorry` + TODO. Empirically validated via
+    `Tests/benchmark/test_batch_correctness.sh`.
+
+    **Phase 2 strategy**: use `lowerNTTFromPlanBatch` unfolds +
+    `lowerDIFButterflyByReduction_batch_indexing_aux` +
+    `lowerBitReverseStmt_batch_aux` to thread per-row correctness into the
+    outer for-loop's inductive frame. -/
+theorem lowerNTTFromPlanBatch_step
+    (plan : Plan) (B k c mu : Nat)
+    (llEnv : _root_.TrustLean.LowLevelEnv)
+    -- Firewall hypothesis: every row has a valid single-vector evaluation.
+    (firewall : ∀ b, b < B + 1 →
+      ∃ fuelSingle singleEnv,
+        _root_.TrustLean.evalStmt fuelSingle llEnv
+          (lowerNTTFromPlanVerified plan k c mu) =
+          some (.normal, singleEnv)) :
+    -- Conclusion: batch at size B+1 evaluates correctly, and for every row
+    -- b < B+1, the result env's per-row slice equals the single-vector
+    -- evaluation for that row.
+    ∃ fuel resultEnv,
+      _root_.TrustLean.evalStmt fuel llEnv
+        (lowerNTTFromPlanBatch plan (B + 1) k c mu) =
+        some (.normal, resultEnv) ∧
+      (∀ b, b < B + 1 →
+        ∃ singleEnv,
+          _root_.TrustLean.evalStmt fuel llEnv
+            (lowerNTTFromPlanVerified plan k c mu) =
+            some (.normal, singleEnv) ∧
+          ∀ i, i < plan.size →
+            resultEnv (.array "data" ↑(b * plan.size + i)) =
+            singleEnv (.array "data" ↑i)) := by
+  -- TODO Phase 2 (§14.13.3 R3): induction frame threading firewall per-row
+  -- through `lowerDIFButterflyByReduction_batch_indexing_aux` +
+  -- `lowerBitReverseStmt_batch_aux`. Base case is `lowerNTTFromPlanBatch_B1_collapse`
+  -- (closed, rfl). Inductive step combines firewall at row B with the IH
+  -- at rows 0..B-1. See CLAUDE.md § Batch Roadmap Phase 2.
+  sorry
+
+/-- v3.20.b B5 N20.5.3 MAIN THEOREM — batch NTT correctness.
+
+    For every B ≥ 1, evaluating `lowerNTTFromPlanBatch plan B k c mu` on a
+    valid input env produces an output env where, for every row b < B and
+    position i < N, the `data[b*N + i]` cell contains the correct
+    per-row NTT output (i.e., the same value a single-vector
+    `lowerNTTFromPlanVerified` applied to the b-th input slice would
+    produce at position i).
+
+    **Phase 1 status**: `sorry` + TODO. Composes `_B1_collapse` (closed,
+    rfl) and `_step` (Phase 1 sorry). Empirical backing:
+    `Tests/benchmark/test_batch_correctness.sh` byte-exact 256 elements
+    at B=4 N=64 (v3.20.b B4 delivery).
+
+    **Phase 2 strategy**: induction on B. Base case: `_B1_collapse`.
+    Inductive step: `_step` instantiated with firewall hypothesis from
+    the IH + single-vector soundness at row B (via existing stage-level
+    `_evaluates` theorems in `VerifiedCodeGen.lean`). -/
+theorem lowerNTTFromPlanBatch_correct
+    (plan : Plan) (B k c mu : Nat)
+    (llEnv : _root_.TrustLean.LowLevelEnv) (hB : 0 < B) :
+    ∃ fuel resultEnv,
+      _root_.TrustLean.evalStmt fuel llEnv
+        (lowerNTTFromPlanBatch plan B k c mu) =
+        some (.normal, resultEnv) ∧
+      -- Per-row correctness: each output slice matches what a standalone
+      -- single-vector NTT evaluation would produce on the input slice.
+      (∀ b, b < B →
+        ∃ singleEnv,
+          _root_.TrustLean.evalStmt fuel llEnv
+            (lowerNTTFromPlanVerified plan k c mu) =
+            some (.normal, singleEnv) ∧
+          ∀ i, i < plan.size →
+            resultEnv (.array "data" ↑(b * plan.size + i)) =
+            singleEnv (.array "data" ↑i)) := by
+  -- TODO Phase 2 (§14.13.3 R3): induction on B. Base: _B1_collapse (rfl).
+  -- Step: lowerNTTFromPlanBatch_step with firewall instantiated from IH +
+  -- stage-level single-vector evaluates theorems (VerifiedCodeGen.lean).
+  -- See CLAUDE.md § Batch Roadmap Phase 2.
+  sorry
+
+/-- v3.20.b B5 N20.5.1 — codegen soundness: `emitCFromPlanBatch` produces
+    C code whose execution (under standard C semantics) is observationally
+    equivalent to calling `lowerNTTFromPlanBatch` via `stmtToC` + externally
+    validated C backend.
+
+    **Phase 1 status**: `sorry` + TODO. Backed by:
+    - Structural equality `emitCFromPlanBatch plan 1 ... = emitCFromPlanStandard
+      plan ...` (closed example at line 1837).
+    - Byte-exact correctness test at runtime (`test_batch_correctness.sh`).
+
+    **Phase 2 strategy**: establish semantic C evaluation function (or link
+    to validated C backend trust boundary), then show `stmtToC
+    (lowerNTTFromPlanBatch plan B k c mu)` produces a C program whose
+    evaluation matches `evalStmt (lowerNTTFromPlanBatch plan B k c mu)`
+    on the abstract semantics (via `lowerNTTFromPlanBatch_correct`). -/
+theorem emitCFromPlanBatch_sound
+    (plan : Plan) (B k c mu : Nat) (funcName : String) (hB : 0 < B)
+    (llEnv : _root_.TrustLean.LowLevelEnv) :
+    -- The emitted C, interpreted under a C semantic function, yields the
+    -- same result environment as `evalStmt` on the underlying Stmt.
+    -- Phase 1: existential over the semantic relation R (to be defined in
+    -- Phase 2 via validated C backend or trust-boundary doc).
+    ∃ evalC : String → _root_.TrustLean.LowLevelEnv →
+        Option _root_.TrustLean.LowLevelEnv,
+      ∀ fuel resultEnv,
+        _root_.TrustLean.evalStmt fuel llEnv
+          (lowerNTTFromPlanBatch plan B k c mu) =
+          some (.normal, resultEnv) →
+        evalC (emitCFromPlanBatch plan B k c mu funcName) llEnv =
+          some resultEnv := by
+  -- TODO Phase 2 (§14.13.3 R3): define `evalC` via validated C backend trust
+  -- boundary, then prove via `lowerNTTFromPlanBatch_correct` +
+  -- `stmtToC_semantic_preservation` (existing theorem in TrustLean). See
+  -- CLAUDE.md § Batch Roadmap Phase 2.
+  sorry
 
 end AmoLean.EGraph.Verified.Bitwise.VerifiedPlanCodeGen

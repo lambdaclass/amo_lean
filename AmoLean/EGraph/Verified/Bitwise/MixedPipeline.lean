@@ -57,6 +57,10 @@ instance : Hashable MixedNodeOp where
     | .barrettReduce a p m => mixHash 22 (mixHash (mixHash (hash a) (hash p)) (hash m))
     | .harveyReduce a p => mixHash 23 (mixHash (hash a) (hash p))
     | .conditionalSub a p => mixHash 25 (mixHash (hash a) (hash p))
+    -- v3.20.b B2 (§14.13.2) — mirror MixedCoreSpec/MixedEMatch tags 26/27/28
+    | .packedLoadNeon addr               => mixHash 26 (hash addr)
+    | .packedStoreNeon values addr       => mixHash 27 (mixHash (hash values) (hash addr))
+    | .packedButterflyNeonDIT a b tw     => mixHash 28 (mixHash (mixHash (hash a) (hash b)) (hash tw))
 
 /-- Alias for the generic EGraph type specialized to MixedNodeOp. -/
 abbrev MixedEGraph := EGraph MixedNodeOp

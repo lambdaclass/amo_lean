@@ -83,12 +83,20 @@ inductive NTTOrdering where
   | reversed   -- natural input, bit-reversal output (classic DIF)
   deriving Repr, BEq, Inhabited
 
-/-- A complete NTT plan: all stages with their decisions. -/
+/-- A complete NTT plan: all stages with their decisions.
+    v3.20.b B1: `batchWidth` parametrizes cross-polynomial batching. Default `1`
+    means "single polynomial" and is byte-equivalent to pre-v3.20 behaviour
+    (every existing call site that doesn't set batchWidth gets the historical
+    semantics for free). Consumers that want batch codegen set batchWidth ≥ 2
+    via `Plan.withBatch` and the emitters wrap the single-vector body in an
+    outer `Stmt.for_` over `[0, batchWidth)` with stride-parameterized offsets
+    (see `batchPolyOffset` in VerifiedPlanCodeGen.lean). -/
 structure Plan where
   stages : Array NTTStage
   field : Nat                 -- prime p
   size : Nat                  -- N (power of 2)
   ordering : NTTOrdering := .standard
+  batchWidth : Nat := 1       -- v3.20.b B1: cross-polynomial batching (default=1)
   deriving Repr, BEq, Inhabited
 
 -- ══════════════════════════════════════════════════════════════════
@@ -102,6 +110,13 @@ def Plan.numStages (plan : Plan) : Nat := plan.stages.size
     ILP-enabled plan variants. -/
 def Plan.withILP (plan : Plan) (ilp : Nat := 2) : Plan :=
   { plan with stages := plan.stages.map fun s => { s with ilpFactor := ilp } }
+
+/-- Set batchWidth on a plan. Used by generateCandidates (v3.20.b B1) to produce
+    batch plan variants (B ∈ {4, 8, 16} typical). Preserves all other fields,
+    including `stages` — the batching is a cross-polynomial wrap, not a
+    per-stage decision. -/
+def Plan.withBatch (plan : Plan) (batchWidth : Nat) : Plan :=
+  { plan with batchWidth := batchWidth }
 
 /-- Total butterflies across all stages. -/
 def Plan.totalButterflies (plan : Plan) : Nat :=

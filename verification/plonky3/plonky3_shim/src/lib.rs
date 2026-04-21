@@ -362,6 +362,141 @@ pub extern "C" fn plonky3_babybear_get_omega(log_n: usize) -> u32 {
 // Plonky3 uses Complex<Mersenne31> (quadratic extension) for NTT.
 // Direct comparison with our base-field Mersenne31 NTT is not applicable.
 // ============================================================================
+
+// ============================================================================
+// Batch NTT Functions (v3.19 N319.2.1)
+//
+// Expose `dft_batch` with parametric `width` to measure Plonky3 batch
+// optimizations (PackedMontyField31Neon for BabyBear/KoalaBear, Radix2DitParallel,
+// etc.) that are bypassed by the single-vector functions above (which hardcode
+// width=1). See research/TRZK_SBB.md §13.2 for the width=1 caveat and §13.3 for
+// the batch measurement plan.
+//
+// Layout: input is row-major [n rows × width cols]. Element (row=i, col=j)
+// lives at data[i*width + j]. Plonky3 transforms each column independently as
+// a length-n NTT.
+// ============================================================================
+
+/// Compute forward NTT on BabyBear field elements as a batch of `width` columns.
+///
+/// # Arguments
+/// * `data` - Pointer to row-major array of `n * width` u32 values
+/// * `n` - NTT size per column (must be power of 2)
+/// * `width` - Number of columns (batch size, must be > 0)
+///
+/// # Returns
+/// * 0 on success, -1 on error (null pointer, invalid n/width, overflow, panic)
+///
+/// # Safety
+/// * `data` must point to a valid array of at least `n * width` u32 values
+#[no_mangle]
+pub unsafe extern "C" fn plonky3_babybear_ntt_forward_batch(
+    data: *mut u32,
+    n: usize,
+    width: usize,
+) -> i32 {
+    if data.is_null() || n == 0 || (n & (n - 1)) != 0 || width == 0 {
+        return -1;
+    }
+    let total = match n.checked_mul(width) {
+        Some(t) => t,
+        None => return -1,
+    };
+
+    let result = catch_unwind(|| {
+        let slice = slice::from_raw_parts_mut(data, total);
+        let values: Vec<BabyBear> = slice.iter().map(|&x| BabyBear::new(x)).collect();
+        let mat = RowMajorMatrix::new(values, width);
+        let dft: Radix2Dit<BabyBear> = Radix2Dit::default();
+        let result = dft.dft_batch(mat);
+        for (i, v) in result.values.iter().enumerate() {
+            slice[i] = PrimeField32::as_canonical_u32(v);
+        }
+    });
+
+    match result {
+        Ok(_) => 0,
+        Err(_) => -1,
+    }
+}
+
+/// Compute forward NTT on KoalaBear field elements as a batch of `width` columns.
+///
+/// See `plonky3_babybear_ntt_forward_batch` for layout and semantics.
+///
+/// # Safety
+/// * `data` must point to a valid array of at least `n * width` u32 values
+#[no_mangle]
+pub unsafe extern "C" fn plonky3_koalabear_ntt_forward_batch(
+    data: *mut u32,
+    n: usize,
+    width: usize,
+) -> i32 {
+    if data.is_null() || n == 0 || (n & (n - 1)) != 0 || width == 0 {
+        return -1;
+    }
+    let total = match n.checked_mul(width) {
+        Some(t) => t,
+        None => return -1,
+    };
+
+    let result = catch_unwind(|| {
+        let slice = slice::from_raw_parts_mut(data, total);
+        let values: Vec<KoalaBear> = slice.iter().map(|&x| KoalaBear::new(x)).collect();
+        let mat = RowMajorMatrix::new(values, width);
+        let dft: Radix2Dit<KoalaBear> = Radix2Dit::default();
+        let result = dft.dft_batch(mat);
+        for (i, v) in result.values.iter().enumerate() {
+            slice[i] = PrimeField32::as_canonical_u32(v);
+        }
+    });
+
+    match result {
+        Ok(_) => 0,
+        Err(_) => -1,
+    }
+}
+
+/// Compute forward NTT on Goldilocks field elements as a batch of `width` columns.
+///
+/// See `plonky3_babybear_ntt_forward_batch` for layout and semantics. Note
+/// Goldilocks does NOT vectorize on ARM NEON (no native u64 multiply-high), so
+/// width > 1 here measures Radix2DitParallel and cache layout effects only.
+///
+/// # Safety
+/// * `data` must point to a valid array of at least `n * width` u64 values
+#[no_mangle]
+pub unsafe extern "C" fn plonky3_goldilocks_ntt_forward_batch(
+    data: *mut u64,
+    n: usize,
+    width: usize,
+) -> i32 {
+    if data.is_null() || n == 0 || (n & (n - 1)) != 0 || width == 0 {
+        return -1;
+    }
+    let total = match n.checked_mul(width) {
+        Some(t) => t,
+        None => return -1,
+    };
+
+    let result = catch_unwind(|| {
+        let slice = slice::from_raw_parts_mut(data, total);
+        let values: Vec<Goldilocks> = slice.iter().map(|&x| Goldilocks::new(x)).collect();
+        let mat = RowMajorMatrix::new(values, width);
+        let dft = Radix2Dit::default();
+        let result = dft.dft_batch(mat);
+        for (i, v) in result.values.iter().enumerate() {
+            slice[i] = v.as_canonical_u64();
+        }
+    });
+
+    match result {
+        Ok(_) => 0,
+        Err(_) => -1,
+    }
+}
+
+// ============================================================================
 // Debug/Test Functions
 // ============================================================================
 
@@ -591,6 +726,122 @@ mod tests {
 
             // Zero length
             assert_eq!(plonky3_ntt_forward(data.as_mut_ptr(), 0), -1);
+        }
+    }
+
+    // ============================================================================
+    // Batch NTT tests (v3.19 N319.2.1)
+    // ============================================================================
+
+    #[test]
+    fn test_babybear_batch_width_one_matches_single() {
+        // width=1 batch must produce the same output as the single-vector function.
+        let n = 16usize;
+        let template: Vec<u32> = (0..n as u32).map(|i| (i * 31 + 7) % BABYBEAR_PRIME).collect();
+        let mut single = template.clone();
+        let mut batch = template.clone();
+
+        unsafe {
+            assert_eq!(plonky3_babybear_ntt_forward(single.as_mut_ptr(), n), 0);
+            assert_eq!(
+                plonky3_babybear_ntt_forward_batch(batch.as_mut_ptr(), n, 1),
+                0
+            );
+        }
+        assert_eq!(single, batch, "width=1 batch must equal single-vector NTT");
+    }
+
+    #[test]
+    fn test_babybear_batch_width_two_independent_columns() {
+        // Two columns batched together must equal two independent NTTs.
+        let n = 8usize;
+        let col_a: Vec<u32> = (0..n as u32).map(|i| (i + 1) % BABYBEAR_PRIME).collect();
+        let col_b: Vec<u32> = (0..n as u32).map(|i| (i * 17 + 3) % BABYBEAR_PRIME).collect();
+
+        // Independent: NTT each column alone.
+        let mut indep_a = col_a.clone();
+        let mut indep_b = col_b.clone();
+        unsafe {
+            assert_eq!(plonky3_babybear_ntt_forward(indep_a.as_mut_ptr(), n), 0);
+            assert_eq!(plonky3_babybear_ntt_forward(indep_b.as_mut_ptr(), n), 0);
+        }
+
+        // Batched: interleave row-major [a0,b0, a1,b1, ...] with width=2.
+        let mut interleaved: Vec<u32> = Vec::with_capacity(n * 2);
+        for i in 0..n {
+            interleaved.push(col_a[i]);
+            interleaved.push(col_b[i]);
+        }
+        unsafe {
+            assert_eq!(
+                plonky3_babybear_ntt_forward_batch(interleaved.as_mut_ptr(), n, 2),
+                0
+            );
+        }
+
+        // De-interleave and compare.
+        for i in 0..n {
+            assert_eq!(
+                interleaved[i * 2],
+                indep_a[i],
+                "column 0 mismatch at row {}",
+                i
+            );
+            assert_eq!(
+                interleaved[i * 2 + 1],
+                indep_b[i],
+                "column 1 mismatch at row {}",
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn test_goldilocks_batch_width_one_matches_single() {
+        let n = 16usize;
+        let template: Vec<u64> = (0..n as u64).map(|i| i * 1000003 + 5).collect();
+        let mut single = template.clone();
+        let mut batch = template.clone();
+
+        unsafe {
+            assert_eq!(plonky3_ntt_forward(single.as_mut_ptr(), n), 0);
+            assert_eq!(
+                plonky3_goldilocks_ntt_forward_batch(batch.as_mut_ptr(), n, 1),
+                0
+            );
+        }
+        assert_eq!(single, batch, "width=1 batch must equal single-vector NTT");
+    }
+
+    #[test]
+    fn test_batch_invalid_input() {
+        unsafe {
+            // Null pointer
+            assert_eq!(
+                plonky3_babybear_ntt_forward_batch(std::ptr::null_mut(), 8, 4),
+                -1
+            );
+            // n=0
+            let mut d32 = [1u32, 2, 3, 4];
+            assert_eq!(
+                plonky3_babybear_ntt_forward_batch(d32.as_mut_ptr(), 0, 4),
+                -1
+            );
+            // non-power-of-2 n
+            assert_eq!(
+                plonky3_babybear_ntt_forward_batch(d32.as_mut_ptr(), 3, 1),
+                -1
+            );
+            // width=0
+            assert_eq!(
+                plonky3_babybear_ntt_forward_batch(d32.as_mut_ptr(), 4, 0),
+                -1
+            );
+            // n*width overflow
+            assert_eq!(
+                plonky3_babybear_ntt_forward_batch(d32.as_mut_ptr(), 1usize << 40, 1usize << 40),
+                -1
+            );
         }
     }
 }

@@ -51,6 +51,13 @@ def exprCostHW (hw : HardwareCost) : MixedExpr → Nat
   | .barrettReduceE a p m => mixedOpCost hw (.barrettReduce 0 p m) + exprCostHW hw a
   | .harveyReduceE a p  => mixedOpCost hw (.harveyReduce 0 p) + exprCostHW hw a
   | .conditionalSubE a p => mixedOpCost hw (.conditionalSub 0 p) + exprCostHW hw a
+  -- v3.20.b B2 (§14.13.2) — defer to mixedOpCost with zero-child placeholders.
+  | .packedLoadNeonE addr              => mixedOpCost hw (.packedLoadNeon 0) + exprCostHW hw addr
+  | .packedStoreNeonE values addr      =>
+    mixedOpCost hw (.packedStoreNeon 0 0) + exprCostHW hw values + exprCostHW hw addr
+  | .packedButterflyNeonDITE a b tw    =>
+    mixedOpCost hw (.packedButterflyNeonDIT 0 0 0)
+      + exprCostHW hw a + exprCostHW hw b + exprCostHW hw tw
 
 /-- Extract the reduction cost from a DiscoveryResult.
     If discovery succeeded, returns the hardware cost of the optimized expression.

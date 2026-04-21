@@ -70,6 +70,19 @@ inductive NeonIntrinsic where
   | widening_mul32   -- vmull_u32: 2×32→2×64 widening multiply
   | narrow_high32    -- vshrn_n_u64: narrow high 32 bits (shift right + narrow)
   | narrow_low32     -- vmovn_u64: narrow low 32 bits (truncate)
+  -- v3.20.b B2 (§14.13.2 Gap 2): batch interleave load/store + u32 lane extract.
+  -- Added for the packed butterfly kernel `emitPackedButterflyNeonDIT_C` (B3):
+  -- vld2q_s32/vst2q_s32 handle the interleaved layout MemLayout.transposeForBatch
+  -- produces (lane 0 of polys 0..3 at data[0..3], lane 1 at data[4..7], etc.),
+  -- and vget_low_u32/vget_high_u32 split a uint32x4_t into halves for the REDC
+  -- widening step inside the kernel. Naming mirrors the existing get_low_s32/
+  -- get_high_s32 (int32 variants) — same intrinsic, different type class.
+  | load2x4_s32      -- vld2q_s32: deinterleave + load 2×4 int32 (int32x4x2_t)
+  | store2x4_raw_s32 -- vst2q_s32: interleave + store 2×4 int32 (void; raw,
+                     --   distinct from `store4x2_s32` which wraps the project
+                     --   helper `neon_interleave_store`)
+  | get_low_u32      -- vget_low_u32: extract lower uint32x2_t from uint32x4_t
+  | get_high_u32     -- vget_high_u32: extract upper uint32x2_t from uint32x4_t
   deriving BEq, Repr, Inhabited
 
 /-- Map ADT to C intrinsic name. SINGLE SOURCE OF TRUTH for naming.
@@ -104,10 +117,16 @@ def NeonIntrinsic.toCName : NeonIntrinsic → String
   | .widening_mul32   => "vmull_u32"
   | .narrow_high32    => "vshrn_n_u64"
   | .narrow_low32     => "vmovn_u64"
+  -- v3.20.b B2 (§14.13.2)
+  | .load2x4_s32      => "vld2q_s32"
+  | .store2x4_raw_s32 => "vst2q_s32"
+  | .get_low_u32      => "vget_low_u32"
+  | .get_high_u32     => "vget_high_u32"
 
 /-- Is this a void-return intrinsic (stores, struct decomposition)? -/
 def NeonIntrinsic.isVoid : NeonIntrinsic → Bool
-  | .store4_s32 | .store4x2_s32 | .store2_s32 | .store2_u64 | .deinterleaveLoad => true
+  | .store4_s32 | .store4x2_s32 | .store2_s32 | .store2_u64 | .deinterleaveLoad
+  | .store2x4_raw_s32 => true  -- v3.20.b B2: vst2q_s32 is void like its cousins
   | _ => false
 
 -- ══════════════════════════════════════════════════════════════════
@@ -163,6 +182,11 @@ def NeonIntrinsic.fromCName : String → Option NeonIntrinsic
   | "vmull_u32"                => some .widening_mul32
   | "vshrn_n_u64"              => some .narrow_high32
   | "vmovn_u64"                => some .narrow_low32
+  -- v3.20.b B2 (§14.13.2)
+  | "vld2q_s32"               => some .load2x4_s32
+  | "vst2q_s32"               => some .store2x4_raw_s32
+  | "vget_low_u32"            => some .get_low_u32
+  | "vget_high_u32"           => some .get_high_u32
   | _                         => none
 
 /-- Emit a Stmt to C with NEON intrinsic handling.

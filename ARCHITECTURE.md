@@ -1,5 +1,64 @@
 # TRZK: Architecture
 
+## Completed: v3.20.b (shipped 2026-04-21)
+
+### Batch NTT Interface + Correctness Proofs Phase 1
+
+**Scope**: batch NTT emission interface (`emitCFromPlanBatch`) via B4
+loop-wrapping path + correctness theorem stack Phase 1 (B5) + tests + bench
++ docs. Packed kernel (B3) wired-but-disabled per B4.5 MVP escape; Gate H8
+(820 μs single-vector arm-neon) permanently deferred after 5 empirical
+investigations.
+
+**Blocks delivered**:
+- **B0**: v3.19 cleanup debt (Rust `#![allow(...)]` band-aid elimination)
+- **v3.20.a**: SIMD → DFT standard migration + blocked bitrev (correctness
+  gap §8c closed, perf §8d 1538 μs post-RBIT)
+- **B1**: `Plan.batchWidth` field + `batchPolyOffset` + Trust Boundary template
+- **B2**: MixedNodeOp extensions (3 packed constructors + 4 intrinsics)
+- **B3**: `MemLayout.lean` + `transposeForBatch_inv` CLOSED proof (no sorry)
+  + packed NEON butterfly kernel + `isPackedButterflyApplicable` predicate
+- **B3.5**: Bitrev fusion attempted → MVP escape (read-after-write hazard);
+  Gate H8 declared best-effort (§14.13.8). `useBitrevFusion` opt-in only.
+- **B4**: Outer Loop Wiring (`lowerNTTFromPlanBatch` + `emitCFromPlanBatch`
+  scalar loop-wrap path). Linear cost model.
+- **B4.5**: Packed Kernel Integral Wiring → MVP escape (perf 0.799 ratio,
+  1.25× amort insufficient). Packed dispatch opt-in only via
+  `Tests/benchmark/emit_packed_batch.lean`.
+- **B5**: Correctness Proofs Phase 1 — 7 batch theorems (1 closed via rfl,
+  6 firewall `_aux` with sorry + real signatures + TODO Phase 2 per
+  §14.13.3 R3). `#print axioms` exposes `sorryAx` in 6/7.
+- **B6**: Tests + Bench + Docs — `benchmark_batch.py` harness,
+  differential_fuzz `--mode batch` (9000/9000 PASS), CI `batch-validation`
+  job on `ubuntu-24.04-arm`, `BENCHMARKS.md §8g` honest positioning.
+
+**v3.20.c status**: **DROPPED 2026-04-21** post-empirical spike. Packed
+kernel interleaved-native without transpose measured 29446 μs at B=16
+N=2^18 BabyBear — 47% slower than Plonky3-batch 20013 μs. Per-butterfly
+kernel has structural overhead inherent to the packed design (4 polys ×
+1 position, broadcast twiddle). Path forward redirects to **V4.1-E** —
+research-level kernel redesign (apply_to_rows pattern, cost model
+roofline, e-graph stage constructors) post-merge.
+
+**Honest perf positioning** (BENCHMARKS §8g):
+- Single-vector: TRZK 1538 μs vs Plonky3 4811 μs = **3.1× faster**
+- Batch B=16: TRZK 31616 μs vs Plonky3-batch 20013 μs = **TRZK 58% slower**
+- Gate H8 (820 μs single-vector arm-neon): **permanent defer** per §14.13.8
+  MVP escape + addendum 2026-04-21 (no trivial fix on ARM M1 BabyBear)
+
+**Phase 2 commitment** (documented in `CLAUDE.md § Batch Roadmap Phase 2`):
+dedicated proof round post-merge to close 6 firewall `_aux` lemmas:
+- `lowerDIFButterflyByReduction_batch_indexing_aux`
+- `lowerBitReverseStmt_batch_aux`
+- `packed_dispatch_equiv_loop`
+- `lowerNTTFromPlanBatch_step`
+- `lowerNTTFromPlanBatch_correct`
+- `emitCFromPlanBatch_sound`
+
+Estimated +150 LOC, 2-3 days. Gate: zero sorry + axioms audit clean.
+
+---
+
 ## Next Version: 3.18.0
 
 ### Differential Fuzzing v3.18.0
@@ -616,118 +675,109 @@ BF2+BF3 (conditionalSub + Stark252): deferred to future version.
 ## Current Version: 3.10.1 (COMPLETE)
 
 
-### Phase A: Emission optimization + cache fixes
 
-**Contents**: F5c butterfly Stmt.call closes loop overhead gap. CacheConfig fix + level-aware model improve plan accuracy. Benchmark Rust vs Plonky3.
+
+### v3.20 — Batch NTT Interface (cleanup + SIMD migration + batch emitters + proofs)
+
+**Contents**: Formalización del plan de TRZK_SBB.md §14.13 + research/TRZK_batch_design.md. 8 bloques secuenciales: B0 (v3.19 B5 cleanup debt) → v3.20.a (SIMD legacy → DFT standard + Gate H8) → B1-B6 de v3.20.b (batch interface). Total ~1378 LOC Lean + ~180 otros, estimado 11-15 días. Phase 2 firewall proofs diferido a ronda dedicada post-merge. Plan y decisiones (4 gaps) ya cerrados en pre-coding investigation 2026-04-20; /plan-project invocado en modo formalizador, sin replanificar.
 
 **Files**:
-- `AmoLean/EGraph/Verified/Bitwise/NTTPlanSelection.lean`
+- `AmoLean/EGraph/Verified/Bitwise/SIMDEmitter.lean`
 - `AmoLean/EGraph/Verified/Bitwise/VerifiedPlanCodeGen.lean`
-
-#### DAG (3.12.0)
-
-| Nodo | Tipo | Deps | Status |
-|------|------|------|--------|
-| N312.1 A.2: CacheConfig fix (l1DataSize, elementSize, l2MissCycles) | HOJA | — | pending |
-| N312.2 A.4: Cache model level-aware with data-reuse | PAR | N312.1 | pending |
-| N312.3 A.1: F5c butterfly Stmt.call + loop uint64_t | CRIT | — | pending |
-| N312.4 A.5: Benchmark Rust vs Plonky3 Rust | HOJA | N312.3 | pending |
-
-#### Formal Properties (3.12.0)
-
-| Nodo | Propiedad | Tipo | Prioridad |
-|------|-----------|------|-----------|
-| N312.1 | CacheConfig l1DataSize=131072 for Apple M-series | PRESERVATION | P0 |
-| N312.2 | planCacheCost(R4_plan) < planCacheCost(R2_plan) for N>2^14 | OPTIMIZATION | P1 |
-| N312.3 | goldi_butterfly emits uint64_t-only function body | SOUNDNESS | P0 |
-| N312.3 | F5c output numerically identical to non-F5c for same input | EQUIVALENCE | P0 |
-
-> **Nota**: Propiedades en lenguaje natural (intención de diseño).
-> Los stubs ejecutables están en BENCHMARKS.md § Formal Properties.
-
-#### Bloques
-
-- [ ] **Emission + Cache**: N312.1, N312.2, N312.3, N312.4
-
-### Phase B: Discovery wiring via selectBestPlanExplored
-
-**Contents**: Connect existing Discovery pipeline to plan competition. selectBestPlanExplored already does oracle→explore→Plan with theorems for 3 fields. Just push as candidate.
-
-**Files**:
-- `AmoLean/EGraph/Verified/Bitwise/UltraPipeline.lean`
-
-#### DAG (3.12.0)
-
-| Nodo | Tipo | Deps | Status |
-|------|------|------|--------|
-| N312.5 B.1: selectBestPlanExplored as plan candidate | PAR | N312.2 | pending |
-
-#### Formal Properties (3.12.0)
-
-| Nodo | Propiedad | Tipo | Prioridad |
-|------|-----------|------|-----------|
-| N312.5 | Discovery plan competes in selectPlanWith with full cost model | SOUNDNESS | P0 |
-
-> **Nota**: Propiedades en lenguaje natural (intención de diseño).
-> Los stubs ejecutables están en BENCHMARKS.md § Formal Properties.
-
-#### Bloques
-
-- [ ] **Discovery wiring**: N312.5
-
-### Phase C: NTT trick runtime branch
-
-**Contents**: Exploit Goldilocks omega_64=8: twiddles that are powers-of-2 use shift instead of multiply. Runtime popcnt branch in goldi_butterfly.
-
-**Files**:
-- `AmoLean/EGraph/Verified/Bitwise/VerifiedPlanCodeGen.lean`
-
-#### DAG (3.12.0)
-
-| Nodo | Tipo | Deps | Status |
-|------|------|------|--------|
-| N312.6 C.1: NTT trick runtime popcnt branch | PAR | N312.3 | pending |
-
-#### Bloques
-
-- [ ] **NTT trick**: N312.6
-
-### Phase D: Lazy reduction REAL + prefetch
-
-**Contents**: Fix lazy's 3-layer fiction: safety gate u128, cost model lazy=0, codegen skip reduction. Add software prefetch for early stages.
-
-**Files**:
-- `AmoLean/EGraph/Verified/Bitwise/BoundPropagation.lean`
-- `AmoLean/EGraph/Verified/Bitwise/CrossRelNTT.lean`
-- `AmoLean/EGraph/Verified/Bitwise/VerifiedPlanCodeGen.lean`
+- `Tests/benchmark/oracle_validate.py`
+- `.github/workflows/ci.yml`
 - `AmoLean/EGraph/Verified/Bitwise/NTTPlan.lean`
-- `AmoLean/EGraph/Verified/Bitwise/BoundIntegration.lean`
-- `AmoLean/EGraph/Verified/Bitwise/Discovery/MatPlanExtraction.lean`
+- `CLAUDE.md`
+- `AmoLean/EGraph/Verified/Bitwise/MixedNodeOp.lean`
+- `AmoLean/Bridge/SIMDStmtToC.lean`
+- `AmoLean/EGraph/Verified/Bitwise/MemLayout.lean`
+- `Tests/batch_golden_test.lean`
+- `AmoLean/EGraph/Verified/Bitwise/CostModelDef.lean`
+- `Tests/NonVacuity.lean`
+- `Tests/batch_offset_tests.lean`
+- `Tests/batch_equivalence_tests.lean`
+- `Tests/benchmark/benchmark_batch.py`
+- `Tests/benchmark/differential_fuzz.py`
+- `ARCHITECTURE.md`
+- `BENCHMARKS.md`
 
-#### DAG (3.12.0)
+#### DAG (3.20.0)
 
 | Nodo | Tipo | Deps | Status |
 |------|------|------|--------|
-| N312.7 D.1: lazyReductionSafe parametrize wordBits | FUND | — | pending |
-| N312.8 D.2+D.3: Cost model lazy=0 + codegen skip reduction | CRIT | N312.7 | pending |
-| N312.9 D.4: wordBits propagation to callers | PAR | N312.7 | pending |
-| N312.10 D.5: Proofs for lazy passthrough | HOJA | N312.8 | pending |
-| N312.11 D.6: Software prefetch for early stages | HOJA | — | pending |
+| N20.0.1 Eliminar 3 #![allow(...)] band-aids + fix warnings al origen en stmtToRust | HOJA | — | completed ✓ |
+| N20.a.1 SIMD migration: stages.reverse + bitRevPermutePreamble en emitCFromPlanStandard + emitRustFromPlanStandard | CRIT | N20.0.1 | completed ✓ |
+| N20.a.2 Oracle validator --hardware arm-neon + CI arm-neon-validation job | HOJA | N20.a.1 | completed ✓ |
+| N20.a.3 Gate H8 pre-merge PR v3.20.a (5 runs, mean ≤ 820 μs @ N=2^18 BabyBear) | GATE | N20.a.1, N20.a.2 | completed ✓ |
+| N20.1.1 NTTPlan.batchWidth field + Plan.withBatch helper + batchPolyOffset + soundness lemma | FUND | N20.a.3 | completed ✓ |
+| N20.1.2 Trust Boundary Documentation template en CLAUDE.md | HOJA | — | completed ✓ |
+| N20.2.1 3 constructores MixedNodeOp: packedLoadNeon + packedStoreNeon + packedButterflyNeonDIT | FUND | N20.1.1 | completed ✓ |
+| N20.2.2 4 NeonIntrinsic variants + toCName/fromCName mappings | HOJA | N20.2.1 | completed ✓ |
+| N20.2.3 15 lemmas NodeOps/NodeSemantics instances (cases op sistemático) | CRIT | N20.2.1 | completed ✓ |
+| N20.3.1 MemLayout.lean NUEVO módulo con transposeForBatch + untransposeFromBatch + invertibility theorem | FUND | N20.2.3 | pending |
+| N20.3.2 emitPackedButterflyNeonDIT_C kernel + isPackedButterflyApplicable dispatch | CRIT | N20.3.1, N20.2.1 | pending |
+| N20.3.3 Golden test batch==scalar (invertibility + codegen validation) | GATE | N20.3.1, N20.3.2 | pending |
+| N20.35.1 Fusion bitrev con primer NEON load en emitPackedButterflyNeonDIT_C (Gate H8 closure) | CRIT | N20.3.2 | pending |
+| N20.35.2 Batch-aware bitrev (bitrev_strided = B bitrevs independientes con stride) | CRIT | N20.35.1, N20.3.1 | pending |
+| N20.35.3 Gate H8 final validation (5 runs mean ≤ 820μs + CV<1% + validation preserved) | GATE | N20.35.2 | pending |
+| N20.4.1 lowerStageVerified_OffsetAware con substitution (+batchPolyOffset substitutor) | FUND | N20.1.1 | pending |
+| N20.4.2 lowerNTTFromPlanBatch outer Stmt.for_ + stage composition (B=1 delega a single-vector) | CRIT | N20.4.1 | pending |
+| N20.4.3 emitCFromPlanBatch + emitRustFromPlanBatch wrappers con transpose preamble | CRIT | N20.4.2, N20.3.1 | pending |
+| N20.4.4 Cost model extension: batchWidthFactor + batchWidthCost + planTotalCostBatch | PAR | N20.1.1 | pending |
+| N20.4.5 Gate B4: benchmark.py --batch-width 16 BabyBear N=18 dentro ±5% modelo lineal | GATE | N20.4.3, N20.4.4 | pending |
+| N20.45.1 lowerStageVerified_OffsetAware con substitution (data[i] → data[batchPolyOffset polyVar N i]) | FUND | N20.4.1, N20.1.1 | pending |
+| N20.45.2 Dispatch a emitPackedButterflyNeonDIT_C via isPackedButterflyApplicable + transposeForBatch preamble/postamble | CRIT | N20.45.1, N20.3.2, N20.3.1 | pending |
+| N20.45.3 Proof extension: B=1 collapse preservado + packed dispatch soundness | CRIT | N20.45.2 | pending |
+| N20.45.4 Cost model sub-linear: batchWidthFactor con amortización empírica | PAR | N20.45.2 | pending |
+| N20.45.5 Gate B4.5: TRZK-batch B=16 N=2^18 BabyBear beats TRZK-loop ≥50% + ≤ P3-batch | GATE | N20.45.2, N20.45.3 | pending |
+| N20.5.1 Theorem signatures: lowerNTTFromPlanBatch_correct + auxiliares + emitCFromPlanBatch_sound | FUND | N20.4.3 | pending |
+| N20.5.2 Base case B=1 collapse NON-DEFERRABLE (proof by rfl) | CRIT | N20.5.1 | pending |
+| N20.5.3 Inductive step _step + main theorem composición | CRIT | N20.5.2 | pending |
+| N20.5.4 Firewall _aux lemmas con sorry + TODO Phase 2 (lowerDIFButterflyByReduction_batch_indexing_aux, lowerBitReverseStmt_batch_aux) | FUND | N20.5.1 | pending |
+| N20.5.5 3 non-vacuity examples (B=1 babybear, B=4 goldilocks, B=2 mixed reduction) | HOJA | N20.5.3 | pending |
+| N20.6.1 Tests Lean: offset soundness + B=1 equivalence + invertibility | HOJA | N20.5.3 | pending |
+| N20.6.2 Python benchmark harness benchmark_batch.py (NUEVO archivo) | HOJA | N20.4.3 | pending |
+| N20.6.3 Differential fuzzer batch inputs (≥1000 PASS target) | HOJA | N20.6.2 | pending |
+| N20.6.4 ARCHITECTURE.md + BENCHMARKS.md §10 Batch performance + Batch Roadmap Phase 2 | HOJA | — | pending |
+| N20.6.5 CI batch-validation job | HOJA | N20.6.3 | pending |
+| N20.6.6 Gate B6: H8 preservado + batch B=16 N=2^18 ±5% modelo lineal | GATE | N20.6.3, N20.6.5 | pending |
 
-#### Formal Properties (3.12.0)
+#### Formal Properties (3.20.0)
 
 | Nodo | Propiedad | Tipo | Prioridad |
 |------|-----------|------|-----------|
-| N312.7 | lazyReductionSafe(1, goldiP, 128) = true | SOUNDNESS | P0 |
-| N312.8 | lowerReductionChoice .lazy emits passthrough (no Solinas fold) | EQUIVALENCE | P0 |
-| N312.8 | reductionCostForHW .lazy = 0 (not Solinas cost) | OPTIMIZATION | P0 |
+| N20.1.1 | Plan.batchWidth=1 por default preserva comportamiento single-vector existente (backward compat) | PRESERVATION | P0 |
+| N20.1.1 | batchPolyOffset es inyectiva y soundness lemma cubre todos los (polyVar, N, i) | SOUNDNESS | P0 |
+| N20.2.1 | Nuevos MixedNodeOp constructores son no-island: packedButterflyNeonDIT tiene consumer explícito en B3 (emitPackedButterflyNeonDIT_C) antes del cierre | INVARIANT | P0 |
+| N20.2.1 | evalMixedOp .packedButterflyNeonDIT simplifica a (v a + v b) / 2 (DIT butterfly semántica) | EQUIVALENCE | P1 |
+| N20.3.1 | transposeForBatch_inv: transpose ∘ untranspose = id para toda input ≤ N*W elements | INVARIANT | P0 |
+| N20.35.1 | Bitrev fusionado preserva byte-equivalence con scalar path (correctness gate) | PRESERVATION | P0 |
+| N20.35.2 | bitrev_strided(B,N) = B bitrevs independientes con stride, reutiliza transposeForBatch_inv | EQUIVALENCE | P0 |
+| N20.35.3 | Gate H8 final: 5 runs mean ≤ 820μs N=2^18 BabyBear single-vector (B=1 collapse) | PERFORMANCE | P0 |
+| N20.45.2 | Packed dispatch fires cuando isPackedButterflyApplicable ∧ batchWidth≥4; fallback a offset-aware scalar en otros casos (no-island invariant) | INVARIANT | P0 |
+| N20.45.3 | packedDispatch_B1_collapse: B=1 preserva equivalencia con single-vector (packed no dispara por batchWidth<4) | PRESERVATION | P0 |
+| N20.45.5 | TRZK-batch B=16 beats TRZK-loop B=16 por ≥50% + TRZK-batch ≤ P3-batch floor | PERFORMANCE | P0 |
+| N20.5.2 | lowerNTTFromPlanBatch_B1_collapse: B=1 exactamente equivalente al single-vector path | EQUIVALENCE | P0 |
+| N20.5.3 | lowerNTTFromPlanBatch_correct: ∀ B > 0 batch output correcto elemento por elemento | SOUNDNESS | P0 |
+| N20.5.4 | Firewall _aux lemmas (stride indexing + bitrev strided) DOCUMENTADAS con TODO Phase 2 + referencia CLAUDE.md § Batch Roadmap Phase 2 | INVARIANT | P0 |
+| N20.6.3 | Differential fuzz batch: 100% match TRZK-batch vs P3-batch element-wise para ≥1000 inputs random (N ∈ {2^8, 2^10, 2^14}, B ∈ {4, 8, 16}) | SOUNDNESS | P0 |
+| N20.6.6 | Gate H8 preservado: TRZK arm-neon single-vector N=2^18 mean ≤ 820 μs post-batch infra (no regresión vs v3.20.a) | PRESERVATION | P0 |
 
 > **Nota**: Propiedades en lenguaje natural (intención de diseño).
 > Los stubs ejecutables están en BENCHMARKS.md § Formal Properties.
 
 #### Bloques
 
-- [ ] **Lazy + Prefetch**: N312.7, N312.8, N312.9, N312.10, N312.11
+- [x] **v3.19 cleanup debt (eliminar #![allow] band-aids)**: N20.0.1 — closed 2026-04-20
+- [x] **v3.20.a — SIMD legacy → DFT standard migration + Gate H8**: N20.a.1, N20.a.2, N20.a.3 — closed 2026-04-20
+- [x] **Foundations (NTTPlan.batchWidth + Trust Boundary docs)**: N20.1.1, N20.1.2 — closed 2026-04-20
+- [x] **MixedNodeOp Extensions (3 constructores + 4 intrinsics + 15 lemmas)**: N20.2.1, N20.2.2, N20.2.3 — closed 2026-04-20
+- [ ] **MemLayout + SIMDEmitter (nuevo módulo + packed butterfly kernel)**: N20.3.1, N20.3.2, N20.3.3
+- [ ] **Bitrev final optimization + batch-aware integration (Gate H8 closure)**: N20.35.1, N20.35.2, N20.35.3
+- [ ] **Outer Loop Wiring (lowerNTTFromPlanBatch + emitCFromPlanBatch)**: N20.4.1, N20.4.2, N20.4.3, N20.4.4, N20.4.5
+- [ ] **Packed Kernel Integral Wiring (offset-aware + transpose + dispatch + amortization gate)**: N20.45.1, N20.45.2, N20.45.3, N20.45.4, N20.45.5
+- [ ] **Correctness Proofs Phase 1 (bridge theorem + firewall _aux con sorry)**: N20.5.1, N20.5.2, N20.5.3, N20.5.4, N20.5.5
+- [ ] **Tests + Bench + Docs (benchmark_batch.py + fuzzer + ARCHITECTURE update)**: N20.6.1, N20.6.2, N20.6.3, N20.6.4, N20.6.5, N20.6.6
 
 ---
 

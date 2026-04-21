@@ -174,6 +174,59 @@ def planTotalCost (plan : Plan) (hw : HardwareCost)
     (cache : CacheConfig := .default) : Nat :=
   planTotalCostWith plan hw cache reductionCostForHW
 
+/-! ## Batch cost model (v3.20.b B4 N20.4.4) -/
+
+/-- v3.20.b B4 N20.4.4: batch-width multiplier for cost scaling.
+    Returns `plan.batchWidth` — the number of independent polynomials the
+    emitted code processes per invocation. At `batchWidth=1` this is the
+    identity factor; at `batchWidth=B` it scales the single-vector plan
+    cost linearly.
+
+    Used by `planTotalCostBatch` to report the honest per-invocation cost
+    of a batch-emitted plan under the Phase 1 additive bridge
+    (`TRZK_batch = B × TRZK_single`; §14.13.3). -/
+def batchWidthFactor (plan : Plan) : Nat := plan.batchWidth
+
+/-- v3.20.b B4 N20.4.4: total cost of a plan executed in batch mode.
+
+    **Formula (Phase 1 additive bridge per §14.13.3)**: `planTotalCost plan hw
+    cache × plan.batchWidth`. Each of the `B` polynomials runs the single-
+    vector NTT independently (no shared state, no cross-poly fusion in Phase
+    1). Total arithmetic + reduction + cache cost scales linearly in B.
+
+    **B=1 collapse**: when `plan.batchWidth = 1`, this reduces exactly to
+    `planTotalCost` — same behavior as pre-v3.20.b planners. This is the
+    pre-condition for Gate B4 (`--batch-width 16` within ±5% of the linear
+    model): the BENCHMARK measures `B_time / single_time` and compares to
+    `plan.batchWidth` = B; the cost model here is the theoretical reference.
+
+    **Phase 2 extension** (v3.20.c or later): when packed SIMD batch kernels
+    ship (e.g., `emitPackedButterflyNeonDIT_C` wired via B4+ outer loop),
+    replace this formula with a per-stage check that picks the packed cost
+    (~W × single-lane cost / 4 for WIDTH=4) when `plan.batchWidth ≥ 4` and
+    the stage is applicable. The structure here (multiplicative factor) is
+    a placeholder that future optimizers override. -/
+def planTotalCostBatch (plan : Plan) (hw : HardwareCost)
+    (cache : CacheConfig := .default) : Nat :=
+  planTotalCost plan hw cache * batchWidthFactor plan
+
+/-- v3.20.b B4 N20.4.4 non-vacuity: `planTotalCostBatch` collapses to
+    `planTotalCost` when `batchWidth = 1` — the pre-condition for
+    backward-compat with pre-v3.20.b cost-based plan selection. -/
+example (plan : Plan) (hw : HardwareCost) (cache : CacheConfig)
+    (h : plan.batchWidth = 1) :
+    planTotalCostBatch plan hw cache = planTotalCost plan hw cache := by
+  simp [planTotalCostBatch, batchWidthFactor, h]
+
+/-- v3.20.b B4 N20.4.4 non-vacuity: `planTotalCostBatch` scales linearly with
+    `batchWidth` — the additive bridge formula makes batch B polynomials
+    cost exactly `B × single_plan_cost`, matching the Gate B4 linear model
+    target. Witness for batchWidth=16. -/
+example (plan : Plan) (hw : HardwareCost) (cache : CacheConfig)
+    (h : plan.batchWidth = 16) :
+    planTotalCostBatch plan hw cache = planTotalCost plan hw cache * 16 := by
+  simp [planTotalCostBatch, batchWidthFactor, h]
+
 /-- v3.10.0 T7: Select cheapest plan with parametric cost function. -/
 def selectPlanWith (candidates : Array Plan) (hw : HardwareCost)
     (cache : CacheConfig := .default)

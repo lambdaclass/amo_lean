@@ -91,6 +91,13 @@ where
       s!"harvey_reduce_avx2({exprToAVX2 a varName}, _mm256_set1_epi32({p}))"
     | .conditionalSubE a p =>
       s!"cond_sub_avx2({exprToAVX2 a varName}, _mm256_set1_epi32({p}))"
+    -- v3.20.b B2 (§14.13.2) — SIMD pack ops are NEON-specific. AVX2 equivalents
+    -- will land in v3.21 x86 enablement (§15). For now emit a placeholder that
+    -- makes compilation fail loudly if this path is exercised — AVX2 users
+    -- should not be routed through packed*Neon constructors.
+    | .packedLoadNeonE _              => "/* AVX2: packedLoadNeon not yet supported (v3.21 §15) */"
+    | .packedStoreNeonE _ _           => "/* AVX2: packedStoreNeon not yet supported (v3.21 §15) */"
+    | .packedButterflyNeonDITE _ _ _  => "/* AVX2: packedButterflyNeonDIT not yet supported (v3.21 §15) */"
 
   exprToNEON (e : MixedExpr) (varName : Nat → String) : String :=
     match e with
@@ -127,6 +134,16 @@ where
       s!"harvey_reduce_neon({exprToNEON a varName}, vdupq_n_u32({p}))"
     | .conditionalSubE a p =>
       s!"cond_sub_neon({exprToNEON a varName}, vdupq_n_u32({p}))"
+    -- v3.20.b B2 (§14.13.2) — NEON-native pack ops. Real emission for B3 will
+    -- go through SIMDEmitter.lean's `emitPackedButterflyNeonDIT_C` which uses
+    -- Stmt.call for the packed kernel; this `exprToNEON` path is not how B2/B3
+    -- emit (it's for the generic MixedExpr→SIMD-C helper, not the verified
+    -- pipeline). Emit human-readable placeholders that compile as expressions
+    -- to not break callers.
+    | .packedLoadNeonE addr            => s!"vld1q_s32((int32_t*){exprToNEON addr varName})"
+    | .packedStoreNeonE values _addr   => exprToNEON values varName
+    | .packedButterflyNeonDITE a b _tw =>
+      s!"vshrq_n_u32(vaddq_u32({exprToNEON a varName}, {exprToNEON b varName}), 1)"
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 3: SIMD function emission

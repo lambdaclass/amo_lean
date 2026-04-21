@@ -86,6 +86,14 @@ def tempCount : MixedExpr → Nat
   | .barrettReduceE a _ _ => tempCount a
   | .harveyReduceE a _ => tempCount a
   | .conditionalSubE a _ => tempCount a
+  -- v3.20.b B2 (§14.13.2) — SIMD pack ops. Load/store are single-child pass-through
+  -- (one temp for the address/value). Butterfly has 3 children: during its
+  -- evaluation, two subtree results must be held while the third computes →
+  -- classical max-+1 rule extended to 3-way.
+  | .packedLoadNeonE addr              => tempCount addr
+  | .packedStoreNeonE values _addr     => tempCount values
+  | .packedButterflyNeonDITE a b tw    =>
+    max (max (tempCount a + 2) (tempCount b + 2)) (tempCount tw + 2)
 
 /-! ## Expression-level operation cost (recursive) -/
 
@@ -114,6 +122,11 @@ def exprOpCost (hw : HardwareCost) : MixedExpr → Nat
   | .barrettReduceE a _ _ => barrettCost hw + exprOpCost hw a
   | .harveyReduceE a _ => harveyCost hw + exprOpCost hw a
   | .conditionalSubE a _ => hw.condSub + exprOpCost hw a
+  -- v3.20.b B2 (§14.13.2) — matches mixedOpCost in CostModelDef.lean.
+  | .packedLoadNeonE addr              => hw.add + exprOpCost hw addr
+  | .packedStoreNeonE values _addr     => hw.add + exprOpCost hw values
+  | .packedButterflyNeonDITE a b _tw   =>
+    hw.mul32 + hw.add + exprOpCost hw a + exprOpCost hw b
 
 /-! ## Spill penalty and enhanced cost -/
 

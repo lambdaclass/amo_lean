@@ -30,6 +30,7 @@ def generate_program(
     verified_simd: bool = False,
     rust_simd: bool = False,
     use_standard: bool = True,  # v3.17.0 N317.8: aligned with generator default
+    bitrev_fusion: bool = False,  # v3.20.b B3.5 N20.35.2: fuse bitrev into first stage
 ) -> GeneratedProgram:
     """Invoke emit_code.lean to generate raw C/Rust source code."""
     cmd = [
@@ -43,6 +44,8 @@ def generate_program(
         cmd.append("--rust-simd")
     if use_standard:
         cmd.append("--use-standard")
+    if bitrev_fusion:
+        cmd.append("--bitrev-fusion")
     result = subprocess.run(
         cmd,
         capture_output=True,

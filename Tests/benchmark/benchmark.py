@@ -55,6 +55,8 @@ def main():
                         help="Standard DFT validator (default since v3.17.0, matches Plonky3)")
     parser.add_argument("--use-legacy", dest="use_standard", action="store_false",
                         help="Legacy ref_dit validator (pre-v3.15.0 path). Only useful for archaeology.")
+    parser.add_argument("--bitrev-fusion", action="store_true",
+                        help="v3.20.b B3.5 bitrev fusion (C arm-neon, skips preamble call).")
     args = parser.parse_args()
 
     # Resolve paths
@@ -111,6 +113,7 @@ def main():
                             verified_simd=args.verified_simd,
                             rust_simd=args.rust_simd,
                             use_standard=args.use_standard,
+                            bitrev_fusion=args.bitrev_fusion,
                         )
                         print("OK")
                     except LeanGenerationError as e:

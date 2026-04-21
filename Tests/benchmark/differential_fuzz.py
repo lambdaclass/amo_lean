@@ -238,15 +238,114 @@ def fuzz_one(lib, project_root: Path, field_name: str, log_n: int,
         return True, "2-way PASS", {}  # shouldn't reach
 
 
+def _batch_mode_run(project_root: Path, fields: list, sizes: list,
+                     batch_widths: list, iters: int, seed: int) -> int:
+    """v3.20.b B6.2 — batch mode: differentially fuzz TRZK-batch (from
+    emit_batch_code.lean, B4 loop-wrapping path) vs B independent
+    single-vector invocations (via `{field}_ntt_batch_single`, emitted
+    in the SAME C binary). Same-C-binary comparison avoids cross-language
+    variance; tests the offset arithmetic in `batchOffsetAssign` +
+    outer for-loop semantics in `lowerNTTFromPlanBatch`.
+
+    Target: iters/iters PASS across (field × size × width) combos.
+    Fails only on offset arithmetic bugs or outer loop termination issues.
+    """
+    import math, ctypes
+    rng = random.Random(seed)
+    total, passed = 0, 0
+    print(f"[B6.2 batch] seed={seed} iters={iters}/combo")
+    with tempfile.TemporaryDirectory(prefix="trzk_fuzz_batch_") as tmp:
+        tmpd = Path(tmp)
+        for field_name in fields:
+            p = get_field(field_name).p
+            elem_type = "uint64_t" if field_name == "goldilocks" else "int32_t"
+            ctype_elem = ctypes.c_uint64 if field_name == "goldilocks" else ctypes.c_int32
+            for log_n in sizes:
+                n = 1 << log_n
+                tw_count = log_n * (n // 2)
+                for B in batch_widths:
+                    combo_tag = f"{field_name} N=2^{log_n} B={B}"
+                    # Emit + compile batch C with a tiny harness that
+                    # exposes run_batch(data, tw, B) and run_single(data, tw)
+                    # entry points from the emitted C.
+                    batch_c = tmpd / f"batch_{field_name}_{log_n}_{B}.c"
+                    # emit with includes prepended
+                    emit_cmd = ["lake", "env", "lean", "--run",
+                                str(project_root / "Tests/benchmark/emit_batch_code.lean"),
+                                field_name, str(log_n), str(B)]
+                    result = subprocess.run(emit_cmd, cwd=str(project_root),
+                                            capture_output=True, text=True, timeout=180)
+                    if result.returncode != 0:
+                        print(f"  [FAIL-emit] {combo_tag}: {result.stderr[:200]}")
+                        continue
+                    batch_c.write_text(
+                        "#include <stdint.h>\n#include <stddef.h>\n" + result.stdout)
+                    # Compile to shared library
+                    so_path = tmpd / f"batch_{field_name}_{log_n}_{B}.so"
+                    cc_cmd = ["cc", "-O3", "-mcpu=apple-m1", "-shared", "-fPIC",
+                              "-o", str(so_path), str(batch_c)]
+                    cc_result = subprocess.run(cc_cmd, capture_output=True, text=True, timeout=120)
+                    if cc_result.returncode != 0:
+                        print(f"  [FAIL-compile] {combo_tag}: {cc_result.stderr[:200]}")
+                        continue
+                    lib = ctypes.CDLL(str(so_path))
+                    batch_fn = getattr(lib, f"{field_name}_ntt_batch")
+                    single_fn = getattr(lib, f"{field_name}_ntt_batch_single")
+                    batch_fn.restype = None
+                    single_fn.restype = None
+                    batch_fn.argtypes = [ctypes.POINTER(ctype_elem),
+                                         ctypes.POINTER(ctype_elem), ctypes.c_size_t]
+                    single_fn.argtypes = [ctypes.POINTER(ctype_elem),
+                                          ctypes.POINTER(ctype_elem)]
+                    # Shared twiddle table (deterministic per combo)
+                    TwArr = ctype_elem * tw_count
+                    tw_seed_rng = random.Random(seed ^ (log_n << 8) ^ B)
+                    tw_arr = TwArr(*[tw_seed_rng.randrange(p) for _ in range(tw_count)])
+                    combo_pass = 0
+                    DataArr = ctype_elem * (B * n)
+                    SingleArr = ctype_elem * n
+                    for i in range(iters):
+                        # Random batch input
+                        input_vals = [rng.randrange(p) for _ in range(B * n)]
+                        batch_data = DataArr(*input_vals)
+                        batch_fn(batch_data, tw_arr, B)
+                        # Reference: B independent single-vector calls
+                        ok = True
+                        mismatch_idx = -1
+                        for b_idx in range(B):
+                            single_data = SingleArr(*input_vals[b_idx * n:(b_idx + 1) * n])
+                            single_fn(single_data, tw_arr)
+                            for j in range(n):
+                                bv = int(batch_data[b_idx * n + j]) & ((1 << (64 if field_name == "goldilocks" else 32)) - 1)
+                                sv = int(single_data[j]) & ((1 << (64 if field_name == "goldilocks" else 32)) - 1)
+                                if bv != sv:
+                                    ok = False
+                                    mismatch_idx = b_idx * n + j
+                                    break
+                            if not ok:
+                                break
+                        total += 1
+                        if ok:
+                            passed += 1
+                            combo_pass += 1
+                        else:
+                            if total - passed <= 3:
+                                print(f"  [MISMATCH] {combo_tag} iter={i} idx={mismatch_idx}")
+                    print(f"  {combo_tag}: {combo_pass}/{iters} PASS")
+    print(f"\n[B6.2 batch] TOTAL: {passed}/{total} PASS ({passed*100/max(total,1):.2f}%)")
+    return 0 if passed == total else 1
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="TRZK Differential Fuzzing (v3.18.0)",
+        description="TRZK Differential Fuzzing (v3.18.0 + v3.20.b batch mode)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="Modes:\n  fast   100 random + edges (~30-60s)\n"
                "  medium 1000 random + edges (~3min)\n"
-               "  full   10000 random + edges (~10-30min)")
+               "  full   10000 random + edges (~10-30min)\n"
+               "  batch  v3.20.b B6.2 — batch vs B×single, same C binary")
     parser.add_argument("--mode", default="fast",
-                        choices=["fast", "medium", "full"])
+                        choices=["fast", "medium", "full", "batch"])
     parser.add_argument("--fields", default="goldilocks,babybear")
     parser.add_argument("--sizes", default="3,6,8,10,14",
                         help="Comma-separated log2(N). Default: 3,6,8,10,14")
@@ -257,7 +356,32 @@ def main():
                         help="Stop on first failure")
     parser.add_argument("--save-failures", default="/tmp/trzk_fuzz_failures",
                         help="Directory for counterexample dumps")
+    parser.add_argument("--batch-width", default="4,16",
+                        help="(batch mode) comma-separated batch widths")
+    parser.add_argument("--iters", type=int, default=1000,
+                        help="(batch mode) iterations per (field × size × width)")
     args = parser.parse_args()
+
+    # v3.20.b B6.2 — batch mode dispatch
+    if args.mode == "batch":
+        script_dir = Path(__file__).resolve().parent
+        project_root = script_dir.parent.parent
+        fields = [f.strip() for f in args.fields.split(",") if f.strip() == "babybear"]
+        if not fields:
+            fields = ["babybear"]  # batch mode BabyBear-only in Phase 1
+        sizes = [int(s.strip()) for s in args.sizes.split(",")
+                 if int(s.strip()) >= 3]  # min N=8 for meaningful batch
+        widths = [int(w.strip()) for w in args.batch_width.split(",")]
+        seed = args.seed if args.seed is not None else random.randrange(2**32)
+        print(f"=== TRZK Differential Fuzz v3.20.b B6.2 (batch mode) ===")
+        print(f"Seed:     {seed}")
+        print(f"Fields:   {fields}")
+        print(f"Sizes:    {sizes}")
+        print(f"Widths:   {widths}")
+        print(f"Iters:    {args.iters}/combo")
+        print()
+        return _batch_mode_run(project_root, fields, sizes, widths,
+                               args.iters, seed)
 
     n_random = {"fast": 100, "medium": 1000, "full": 10000}[args.mode]
     seed = args.seed if args.seed is not None else random.randrange(2**32)

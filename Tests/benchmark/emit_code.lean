@@ -33,8 +33,12 @@ def main (args : List String) : IO Unit := do
   let rustSIMD := args.contains "--rust-simd"
   -- v3.15.0 B5: default standard DFT. --use-legacy reverts to ref_dit.
   let useStandard := !args.contains "--use-legacy"
+  -- v3.20.b B3.5 N20.35.2: bitrev fusion (skip bit_reverse_permute preamble +
+  -- route first-executed stage through bitrev-fused hs1 kernel).
+  let bitrevFusion := args.contains "--bitrev-fusion"
   let args' := args.filter fun a =>
-    a != "--verified-simd" && a != "--rust-simd" && a != "--use-standard" && a != "--use-legacy"
+    a != "--verified-simd" && a != "--rust-simd" && a != "--use-standard" &&
+    a != "--use-legacy" && a != "--bitrev-fusion"
   match args' with
   | [field, logNStr, lang, hw] =>
     let some fc := getField field
@@ -46,7 +50,7 @@ def main (args : List String) : IO Unit := do
     let code := if lang == "rust" then
       genOptimizedBenchRust_ultra fc logN iters hwCost rustSIMD useStandard
     else
-      genOptimizedBenchC_ultra fc logN iters hwCost verifiedSIMD rustSIMD useStandard
+      genOptimizedBenchC_ultra fc logN iters hwCost verifiedSIMD rustSIMD useStandard bitrevFusion
     IO.println code
   | _ =>
     IO.eprintln "Usage: emit_code <field> <logN> <lang> <hardware> [flags]"
@@ -57,3 +61,4 @@ def main (args : List String) : IO Unit := do
     IO.eprintln "  --verified-simd: C verified SIMD (v3.7.0)"
     IO.eprintln "  --rust-simd: Rust verified SIMD (v3.8.0)"
     IO.eprintln "  --use-standard: v3.15.0 standard DFT (bitrev + DIT small→large)"
+    IO.eprintln "  --bitrev-fusion: v3.20.b B3.5 bitrev fusion (C arm-neon)"

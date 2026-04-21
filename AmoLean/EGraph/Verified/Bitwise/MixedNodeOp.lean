@@ -90,6 +90,32 @@ inductive MixedNodeOp where
       discovery (F3) when boundK ≤ 2 guarantees input < 2p.
       Semantics: if v a >= p then v a - p else v a -/
   | conditionalSub : EClassId → Nat → MixedNodeOp
+  -- ═══ Batch SIMD constructors (v3.20.b B2, §14.13.2 Gap 2) ═══
+  /-- Packed NEON load: read a WIDTH=4 `int32x4_t` vector from memory at addr.
+      Emits `vld1q_s32(addr)` via SIMDStmtToC `load4_s32` intrinsic (existing).
+      Denotational semantics on Nat (evalMixedOp): returns `v addr` — the
+      lane-vector is modeled as a single Nat value in the e-graph layer; the
+      WIDTH=4 structure is emitter-level, not semantic-level. See §14.13.4
+      Trust Boundary (CLAUDE.md + §14.13.4) for the untrusted semantics of
+      the underlying hardware intrinsic. -/
+  | packedLoadNeon : EClassId → MixedNodeOp
+  /-- Packed NEON store: write a WIDTH=4 `int32x4_t` vector `values` to memory
+      at `addr`. Emits `vst1q_s32(addr, values)` via `store4_s32` intrinsic.
+      Denotational semantics: returns `v values` (no stored side-effect at the
+      Nat evaluation layer — this is a backend construct, semantics-free at
+      the e-graph level; structural compat only). -/
+  | packedStoreNeon : EClassId → EClassId → MixedNodeOp
+  /-- Packed NEON DIT butterfly (WIDTH=4): given pointers `a_addr`, `b_addr`,
+      `tw_addr`, performs one 4-lane DIT butterfly and writes results back
+      to `a_addr`/`b_addr`. Emits via a per-field packed kernel (e.g.
+      `bb_packedBut_dit_batch` for BabyBear) that internally uses the NEON
+      intrinsics set. Cost model: `mixedLocalCost = 4` (work-equivalent to
+      4 scalar butterflies). Denotational semantics (simplified for e-graph
+      compat): `(v a_addr + v b_addr) / 2` — a structural placeholder;
+      real vectorized butterfly semantics live in the emitted hardware code
+      and are NOT verified at the Nat layer (intrinsics trust boundary per
+      §14.13.4). -/
+  | packedButterflyNeonDIT : EClassId → EClassId → EClassId → MixedNodeOp
   deriving Repr, DecidableEq
 
 instance : BEq MixedNodeOp := instBEqOfDecidableEq
@@ -122,6 +148,10 @@ instance : Inhabited MixedNodeOp := ⟨.constGate 0⟩
   | .barrettReduce a _ _ => [a]
   | .harveyReduce a _  => [a]
   | .conditionalSub a _ => [a]
+  -- v3.20.b B2 (§14.13.2)
+  | .packedLoadNeon addr               => [addr]
+  | .packedStoreNeon values addr       => [values, addr]
+  | .packedButterflyNeonDIT a b tw     => [a, b, tw]
 
 /-- Apply a function to all e-class children. -/
 @[simp] def mixedMapChildren (f : EClassId → EClassId) : MixedNodeOp → MixedNodeOp
@@ -147,6 +177,10 @@ instance : Inhabited MixedNodeOp := ⟨.constGate 0⟩
   | .barrettReduce a p m => .barrettReduce (f a) p m
   | .harveyReduce a p  => .harveyReduce (f a) p
   | .conditionalSub a p => .conditionalSub (f a) p
+  -- v3.20.b B2 (§14.13.2)
+  | .packedLoadNeon addr           => .packedLoadNeon (f addr)
+  | .packedStoreNeon values addr   => .packedStoreNeon (f values) (f addr)
+  | .packedButterflyNeonDIT a b tw => .packedButterflyNeonDIT (f a) (f b) (f tw)
 
 /-- Positionally replace children with new e-class IDs. -/
 @[simp] def mixedReplaceChildren (op : MixedNodeOp) (ids : List EClassId) : MixedNodeOp :=
@@ -169,11 +203,22 @@ instance : Inhabited MixedNodeOp := ⟨.constGate 0⟩
   | .barrettReduce _ p m, a :: _   => .barrettReduce a p m
   | .harveyReduce _ p, a :: _      => .harveyReduce a p
   | .conditionalSub _ p, a :: _   => .conditionalSub a p
+  -- v3.20.b B2 (§14.13.2)
+  | .packedLoadNeon _, addr :: _                      => .packedLoadNeon addr
+  | .packedStoreNeon _ _, values :: addr :: _         => .packedStoreNeon values addr
+  | .packedButterflyNeonDIT _ _ _, a :: b :: tw :: _  => .packedButterflyNeonDIT a b tw
   | op, _                           => op
 
-/-- Cost model: mul = 1, all others = 0. Extensible for hardware-specific models. -/
+/-- Cost model: mul = 1, all others = 0. Extensible for hardware-specific models.
+    v3.20.b B2 (§14.13.2): `packedButterflyNeonDIT = 4` (work-equivalent to 4
+    scalar butterflies processed in parallel via NEON WIDTH=4). Loads/stores
+    stay at 0 (they're memory ops amortized). This makes the e-graph cost
+    competitive: scalar 4-butterfly sequence costs 4 × 1 = 4, packed costs 4
+    — neutral. Discovery-level rewrite rules can prefer packed for cache
+    reasons without over-weighting cost. -/
 def mixedLocalCost : MixedNodeOp → Nat
   | .mulGate _ _ => 1
+  | .packedButterflyNeonDIT _ _ _ => 4
   | _            => 0
 
 /-- Simplicity rank for tiebreaking at equal cost (lower = simpler). -/
@@ -200,6 +245,10 @@ def mixedSimplicity : MixedNodeOp → Nat
   | .harveyReduce _ _ => 19
   | .montyReduce _ _ _ => 20
   | .barrettReduce _ _ _ => 21
+  -- v3.20.b B2 (§14.13.2) — SIMD pack ops (highest simplicity ranks, last tiebreak)
+  | .packedLoadNeon _ => 22
+  | .packedStoreNeon _ _ => 23
+  | .packedButterflyNeonDIT _ _ _ => 24
 
 /-! ## List length helpers -/
 
@@ -212,6 +261,14 @@ private theorem list_length_one {α : Type} {l : List α} (h : l.length = 1) :
     ∃ x, l = [x] := by
   match l, h with
   | [x], _ => exact ⟨x, rfl⟩
+
+/-- v3.20.b B2 (§14.13.2): 3-child helper for the NodeOps instance on
+    `packedButterflyNeonDIT` (3 children: a_addr, b_addr, tw_addr). Mirrors
+    the pattern of `list_length_two` / `list_length_one`. -/
+private theorem list_length_three {α : Type} {l : List α} (h : l.length = 3) :
+    ∃ x y z, l = [x, y, z] := by
+  match l, h with
+  | [x, y, z], _ => exact ⟨x, y, z, rfl⟩
 
 /-! ## NodeOps Instance -/
 
@@ -246,6 +303,13 @@ instance : NodeOps MixedNodeOp where
     | barrettReduce a p m => simp at hlen; obtain ⟨x, rfl⟩ := list_length_one hlen; rfl
     | harveyReduce a p => simp at hlen; obtain ⟨x, rfl⟩ := list_length_one hlen; rfl
     | conditionalSub a p => simp at hlen; obtain ⟨x, rfl⟩ := list_length_one hlen; rfl
+    -- v3.20.b B2 (§14.13.2)
+    | packedLoadNeon addr =>
+      simp at hlen; obtain ⟨x, rfl⟩ := list_length_one hlen; rfl
+    | packedStoreNeon values addr =>
+      simp at hlen; obtain ⟨x, y, rfl⟩ := list_length_two hlen; rfl
+    | packedButterflyNeonDIT a b tw =>
+      simp at hlen; obtain ⟨x, y, z, rfl⟩ := list_length_three hlen; rfl
   replaceChildren_sameShape op ids hlen := by
     cases op with
     | constGate _ => simp at hlen; subst hlen; rfl
@@ -270,6 +334,13 @@ instance : NodeOps MixedNodeOp where
     | barrettReduce a p m => simp at hlen; obtain ⟨x, rfl⟩ := list_length_one hlen; rfl
     | harveyReduce a p => simp at hlen; obtain ⟨x, rfl⟩ := list_length_one hlen; rfl
     | conditionalSub a p => simp at hlen; obtain ⟨x, rfl⟩ := list_length_one hlen; rfl
+    -- v3.20.b B2 (§14.13.2)
+    | packedLoadNeon addr =>
+      simp at hlen; obtain ⟨x, rfl⟩ := list_length_one hlen; rfl
+    | packedStoreNeon values addr =>
+      simp at hlen; obtain ⟨x, y, rfl⟩ := list_length_two hlen; rfl
+    | packedButterflyNeonDIT a b tw =>
+      simp at hlen; obtain ⟨x, y, z, rfl⟩ := list_length_three hlen; rfl
 
 /-! ## Semantics: Evaluation on Nat -/
 
@@ -328,6 +399,23 @@ abbrev MixedEnv := CircuitEnv Nat
     -- Conditional subtract: if x >= p then x - p else x.
     -- For input in [0, 2p), equivalent to x % p. Simpler than Harvey (1 branch).
     if v a ≥ p then v a - p else v a
+  -- v3.20.b B2 (§14.13.2) — SIMD pack ops with simplified Nat semantics.
+  -- These are structural placeholders at the e-graph level: the real WIDTH=4
+  -- NEON semantics live in the emitted hardware code (trust boundary per
+  -- §14.13.4). The simplified semantics keep NodeOps/NodeSemantics instances
+  -- sound by being functional on children values.
+  | .packedLoadNeon addr =>
+    -- Load: return the value at addr (Nat model: memory-as-function read).
+    v addr
+  | .packedStoreNeon values _addr =>
+    -- Store: returns the stored value (no side-effect in Nat eval layer).
+    v values
+  | .packedButterflyNeonDIT a b _tw =>
+    -- Simplified DIT butterfly: average of the two lane-vectors. This is
+    -- NOT the real packed NTT butterfly — it's a placeholder that makes the
+    -- constructor functional on its children. The real semantics (4 lanes,
+    -- REDC, Solinas fold, Harvey) are emitter-level and untrusted.
+    (v a + v b) / 2
 
 /-! ## NodeSemantics Instance -/
 
@@ -415,6 +503,19 @@ instance : NodeSemantics MixedNodeOp MixedEnv Nat where
       simp only [evalMixedOp]
       have h0 := h a (by simp [NodeOps.children, mixedChildren])
       rw [h0]
+    -- v3.20.b B2 (§14.13.2) — SIMD pack ops extensionality
+    | packedLoadNeon addr =>
+      simp only [evalMixedOp]
+      exact h addr (by simp [NodeOps.children, mixedChildren])
+    | packedStoreNeon values addr =>
+      simp only [evalMixedOp]
+      exact h values (by simp [NodeOps.children, mixedChildren])
+    | packedButterflyNeonDIT a b tw =>
+      simp only [evalMixedOp]
+      congr 1
+      congr 1
+      · exact h a (by simp [NodeOps.children, mixedChildren])
+      · exact h b (by simp [NodeOps.children, mixedChildren])
 
 /-! ## Embedding: CircuitNodeOp → MixedNodeOp -/
 
@@ -476,7 +577,13 @@ def isBitwise : MixedNodeOp → Bool
   | .subGate _ _    => false  -- subtraction is algebraic, not bitwise
   | _               => false
 
-/-- Returns true if the operation is algebraic (mirrors CircuitNodeOp). -/
+/-- Returns true if the operation is algebraic (mirrors CircuitNodeOp).
+    v3.20.b B2 (§14.13.2): SIMD pack ops are classified algebraic — at the
+    Nat evaluation layer `evalMixedOp` produces a Nat via arithmetic over
+    children values (load returns child, store returns stored value, butterfly
+    averages). No bitwise primitives (shifts/masks) are used in their semantics.
+    This keeps the `algebraic_or_bitwise` theorem (every op is at least one)
+    trivially satisfied for the new constructors. -/
 def isAlgebraic : MixedNodeOp → Bool
   | .constGate _  => true
   | .witness _    => true
@@ -494,6 +601,10 @@ def isAlgebraic : MixedNodeOp → Bool
   | .barrettReduce _ _ _ => true
   | .harveyReduce _ _ => true
   | .conditionalSub _ _ => true
+  -- v3.20.b B2 (§14.13.2)
+  | .packedLoadNeon _              => true
+  | .packedStoreNeon _ _           => true
+  | .packedButterflyNeonDIT _ _ _  => true
   | _                 => false
 
 /-- Returns true if the operation requires u32→u64 widening in SIMD context.
@@ -507,6 +618,12 @@ def needsWidening : MixedNodeOp → Bool
   | .harveyReduce _ _    => false -- Harvey: conditional subs, u32 only
   | .conditionalSub _ _  => false -- Conditional sub: compare + sub, no widening
   | .mulGate _ _         => true  -- u32 × u32 = u64 (before reduction)
+  -- v3.20.b B2 (§14.13.2) — packed butterfly: 4-lane u32 × u32 = u64 via vmull_u32
+  -- widening, then Solinas fold on u32 narrow. Load/store don't widen themselves
+  -- (the widening happens inside the kernel, not the ops themselves).
+  | .packedButterflyNeonDIT _ _ _  => true
+  | .packedLoadNeon _              => false
+  | .packedStoreNeon _ _           => false
   | _                    => false
 
 /-- Every MixedNodeOp is either algebraic or bitwise. -/

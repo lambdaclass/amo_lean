@@ -133,6 +133,19 @@ def addMixedExpr (g : EGraph MixedNodeOp) (expr : MixedExpr)
   | .conditionalSubE a p =>
     let (aId, g1) := addMixedExpr g a
     g1.add ⟨.conditionalSub aId p⟩
+  -- v3.20.b B2 (§14.13.2) — SIMD pack op e-graph insertion.
+  | .packedLoadNeonE addr =>
+    let (addrId, g1) := addMixedExpr g addr
+    g1.add ⟨.packedLoadNeon addrId⟩
+  | .packedStoreNeonE values addr =>
+    let (valuesId, g1) := addMixedExpr g values
+    let (addrId, g2) := addMixedExpr g1 addr
+    g2.add ⟨.packedStoreNeon valuesId addrId⟩
+  | .packedButterflyNeonDITE a b tw =>
+    let (aId, g1) := addMixedExpr g a
+    let (bId, g2) := addMixedExpr g1 b
+    let (twId, g3) := addMixedExpr g2 tw
+    g3.add ⟨.packedButterflyNeonDIT aId bId twId⟩
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 4: Convenience — build from scratch

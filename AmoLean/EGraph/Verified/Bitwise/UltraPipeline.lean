@@ -132,6 +132,14 @@ structure UltraConfig where
   -- When false: legacy pipeline (emitCFromPlanVerified). Set false for rollback.
   -- v3.15.0 B5: default true (cutover). Legacy accessible via false.
   useStandardDFT : Bool := true
+  -- v3.20.b B3.5 N20.35.2: bitrev fusion into first-executed stage.
+  -- When true: emitSIMDNTTC skips `bit_reverse_permute(...)` preamble call and
+  -- routes first-executed stage through bitrev-fused hs1 kernel. Currently only
+  -- wires B=1 single-poly path (Gate H8 target); B≥4 packed path requires B4.
+  -- Eliminates one full memory pass on stage 0; ~250-300μs savings estimated
+  -- for N=2^18 BabyBear (per §14.11.a addendum 2026-04-20). Default false —
+  -- backward compatibility preserved for non-fusion callers.
+  useBitrevFusion : Bool := false
   deriving Repr
 
 def UltraConfig.scalar : UltraConfig := { hw := arm_cortex_a76, targetColor := 1 }
@@ -273,7 +281,7 @@ def ultraPipeline (g : MixedEGraph)
       if hasR2 then base.withILP 2 else base
     else base
   let code := if cfg.hw.isSimd && cfg.k ≤ 32 then
-    emitSIMDNTTC plan simdTarget cfg.k cfg.c cfg.mu funcName cfg.useSqdmulh cfg.useVerifiedSIMD cfg.profiled
+    emitSIMDNTTC plan simdTarget cfg.k cfg.c cfg.mu funcName cfg.useSqdmulh cfg.useVerifiedSIMD cfg.profiled cfg.useBitrevFusion
   else if cfg.useStandardDFT then
     emitCFromPlanStandard stdPlan cfg.k cfg.c cfg.mu funcName
   else
