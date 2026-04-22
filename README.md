@@ -3,32 +3,13 @@
 [![Lean 4](https://img.shields.io/badge/Lean-4.26.0-blue.svg)](https://leanprover.github.io/lean4/doc/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-## What is TRZK?
+## What is TruthResearch ZK?
 
-**TRZK** (Truth Research ZK) is a verified optimizing compiler that transforms mathematical specifications written in Lean 4 into optimized C and Rust code with formal correctness guarantees. It targets cryptographic primitives used in STARK provers and zkVMs.
+**TruthResearch ZK (TRZK)** is a verified optimizing compiler that transforms mathematical specifications written in Lean 4 into optimized C/Rust code with **formal correctness guarantees**. It targets cryptographic primitives used in STARK provers and zkVMs.
 
 The core idea: **write your mathematical specification once in Lean 4, and get optimized C or Rust code that is correct by construction** — every optimization step is backed by a formally proven theorem. This eliminates the traditional tradeoff between performance and correctness in cryptographic implementations.
 
-TRZK currently optimizes NTT (Number Theoretic Transform) implementations across multiple finite fields (BabyBear, KoalaBear, Mersenne31, Goldilocks) with support for scalar and SIMD (NEON, AVX2) targets. Work has begun on extending the compiler to additional cryptographic primitives: polynomial evaluation, FRI fold, and matrix multiplication.
-
-## Ecosystem & Comparisons
-
-TRZK occupies a unique position: it combines **equality saturation optimization** with **formal verification** in a single tool. Most existing projects do one or the other.
-
-| Project | Approach | Proof Assistant | Verification Scope | Codegen Target |
-|---------|----------|-----------------|---------------------|----------------|
-| **TRZK** | Two-level e-graph optimization + verified codegen | Lean 4 | Full pipeline (spec → IR → code) | C, Rust |
-| [fiat-crypto](https://github.com/mit-plv/fiat-crypto) | Synthesis from field specs | Coq | Field arithmetic | C, Rust, Go, Java |
-| [Jasmin](https://github.com/jasmin-lang/jasmin) | Verified assembly compiler | Coq (EasyCrypt) | Compiler correctness | x86 assembly |
-| [CryptoLine](https://github.com/fmlab-iis/cryptoline) | Algebraic program verification | External (SMT) | Post-hoc verification | N/A (verifier only) |
-| [hacspec](https://github.com/hacspec/hacspec-v2) | Executable specification language | F\*/Coq | Spec extraction | Rust |
-| [SPIRAL](https://www.spiral.net/) | Autotuning + formal rewrite rules | Custom (GAP) | Transform correctness | C, CUDA, FPGA |
-
-**What makes TRZK different:**
-- **Two-level e-graph architecture**: an algorithm-level e-graph explores DFT factorizations (radix-2, radix-4, mixed) while a bit-level e-graph optimizes the arithmetic of each butterfly — they communicate via a cross-e-graph cost protocol to find the globally optimal implementation
-- **Automatic search**: given a field and a target hardware, TRZK generates multiple plan candidates and selects the best one using a hardware-aware cost model — new optimizations become candidates automatically
-- **Verified codegen**: optimized expressions are lowered through a formally verified path (MixedExpr → TrustLean Stmt → C/Rust), not through string emission
-- **Single tool**: optimization, verification, and code generation in one pipeline
+TRZK covers the key building blocks of modern proof systems: NTT (Number Theoretic Transform), FRI (Fast Reed-Solomon IOP), field arithmetic (Goldilocks, BabyBear, KoalaBear, Mersenne31), Poseidon2 hashing, and a verified e-graph optimization engine with automatic bound-aware discovery.
 
 ## How It Works
 
@@ -52,31 +33,29 @@ User Input: field + size + hardware target
   (correct by construction)
 ```
 
-The compiler automatically decides per-stage reduction strategies (Solinas fold, Montgomery REDC, Harvey, conditional subtract), radix selection, and instruction interleaving based on the cost model for the target hardware.
+### Formal Optimization Strategy
 
-## Features
+TRZK uses **equality saturation** via e-graphs to find optimal formal equivalent forms of mathematical expressions. Unlike hand-tuned optimizers, every rewrite rule in our e-graph is a formally proven theorem in Lean 4. The process:
 
-- **Verified e-graph optimization engine** — Equality saturation with formally proven rewrite rules; extraction preserves semantics
-- **Two-level e-graph architecture** — Algorithm-level (DFT factorizations) and bit-level (arithmetic expressions) e-graphs with cross-level cost queries
-- **Hardware-aware cost model** — Per-operation cycle costs for ARM Cortex-A76, x86 Skylake, RISC-V, NEON SIMD, AVX2 SIMD, with register pressure modeling
-- **NTT optimization** — Radix-2, radix-4, and mixed strategies with per-stage reduction selection via e-graph
-- **Multiple finite fields** — BabyBear, KoalaBear, Mersenne31, Goldilocks with field-specific reduction strategies
-- **Verified codegen pipeline** — MixedExpr → TrustLean.Stmt → C/Rust with formal soundness proofs
-- **SIMD code generation** — NEON (4-lane) and AVX2 (8-lane) verified butterfly emission via `Stmt.call`
-- **FRI protocol infrastructure** — Specification, verification, and codegen foundations for FRI fold
-- **Poseidon2 hash** — BN254 specification with test vectors
-- **Plonky3 compatibility** — Generated code produces output compatible with Plonky3's NTT
+1. **Encode** the mathematical specification as an e-graph
+2. **Saturate** by applying all verified rewrite rules until a fixed point
+3. **Extract** the optimal form using a cost model
+4. **Lower** through AlgebraicSemantics (Sigma-SPL IR) to C/Rust code
 
-## Quick Start
+This architecture is **portable and modular**: adding a new primitive means writing a Lean specification and lowering rules — the optimization engine and code generator are reusable across all primitives.
+
+## Usage
+
+### Quick Start
 
 ```bash
 # Clone and build
-git clone https://github.com/lambdaclass/truth_research_zk.git
-cd truth_research_zk
+git clone https://github.com/lambdaclass/truth-research-zk.git
+cd truth-research-zk
 lake build
 ```
 
-### Compiler Driver
+### Generating Optimized NTT Code
 
 The `trzk` compiler generates optimized C or Rust from a primitive specification:
 
@@ -124,7 +103,7 @@ See the `examples/` directory and [DEMO_WALKTHROUGH.md](docs/DEMO_WALKTHROUGH.md
 ### Integration Tests
 
 ```bash
-./integration_tests/run.sh
+lake env lean --run Tests/benchmark/emit_code.lean babybear 14 c arm-scalar > babybear_ntt.c
 ```
 
 This compiles a DFT₄ spec to C, builds it, and verifies the output against reference test vectors.

@@ -58,11 +58,13 @@ def selectReductionForBound (boundK : Nat) (hwIsSimd : Bool) (arrayIsLarge : Boo
     `serialContext` adds branch penalties for serial patterns (FRI fold, dot product).
     For NTT butterflies (data-parallel), pass `serialContext := false` (default). -/
 def costAwareReductionForBound (hw : HardwareCost) (boundK p : Nat)
-    (serialContext : Bool := false) : ReductionChoice :=
+    (serialContext : Bool := false) (wordBits : Nat := 64) : ReductionChoice :=
   -- Feasibility: Harvey needs boundK ≤ 2.
   -- Montgomery EXCLUDED: REDC gives x*R⁻¹ mod p, only correct for products (tw*b),
   -- NOT for sums/diffs. All callers use this for per-stage sum/diff reduction.
   let candidates : List (Nat × ReductionChoice) :=
+    -- v3.12.0 D: lazy (0 cost) when safe — always wins if feasible
+    (if lazyReductionSafe boundK p wordBits then [(0, .lazy)] else []) ++
     (if boundK ≤ 2 then [(mixedOpCost hw (.harveyReduce 0 p), .harvey)] else []) ++
     [(mixedOpCost hw (.reduceGate 0 p), .solinasFold)]
   -- Branch penalties only in serial context (FRI fold, dot product — NOT NTT)
@@ -91,7 +93,7 @@ def reductionCostForHW (hw : HardwareCost) (red : ReductionChoice) : Nat :=
   | .solinasFold => mixedOpCost hw (.reduceGate 0 0)
   | .montgomery => mixedOpCost hw (.montyReduce 0 0 0)
   | .harvey => mixedOpCost hw (.harveyReduce 0 0)
-  | .lazy => mixedOpCost hw (.reduceGate 0 0)  -- codegen does Solinas fold
+  | .lazy => 0  -- v3.12.0 D: NO reduction emitted → cost = 0
 
 /-- Instruction profile for modelling execution cost on dual-pipe ARM NEON.
     Calibrated empirically in B35-2 (bench_redc_isolated.c).
@@ -116,6 +118,26 @@ def redcProfile_vmull : InstructionProfile :=
     V0-only: sqdmulh×2 + mul×1 = 3 instructions. -/
 def redcProfile_sqdmulh : InstructionProfile :=
   { v0OnlyInstructions := 3, dualIssueInstructions := 4 }
+
+-- ══════════════════════════════════════════════════════════════════
+-- Goldilocks profiles (v3.9.0 B39-4: bench_goldi_isolated.c)
+-- ══════════════════════════════════════════════════════════════════
+
+/-- Goldilocks fold_halves profile (measured: 5.89 ns/call on Apple Silicon).
+    V0-only: 0 instructions (compiler rewrites hl*0xFFFFFFFF as (hl<<32)-hl).
+    This is the variant used by lowerGoldilocksProductReduce. -/
+def goldilocksProfile_halves : InstructionProfile :=
+  { v0OnlyInstructions := 0, dualIssueInstructions := 11 }
+
+/-- Goldilocks fold_mul profile (measured: 6.43 ns/call on Apple Silicon).
+    V0-only: umulh×1 = 1 instruction. Compiler optimizes fold_shiftsub to identical asm. -/
+def goldilocksProfile_mul : InstructionProfile :=
+  { v0OnlyInstructions := 1, dualIssueInstructions := 9 }
+
+/-- Goldilocks NEON Karatsuba profile (measured: 3.60 ns/call on Apple Silicon, 2 lanes).
+    V0-only: umull×3 = 3 instructions. Processes 2 elements per call. -/
+def goldilocksProfile_karatsuba : InstructionProfile :=
+  { v0OnlyInstructions := 3, dualIssueInstructions := 12 }
 
 /-- Butterfly REDC cost (product reduction, always Montgomery subtraction variant).
     Used by Plan.totalCost to include the REDC in butterfly cost (previously omitted). -/
@@ -274,14 +296,14 @@ example : reductionCostForHW arm_neon_simd .solinasFold = 14 := by native_decide
 example : reductionCostForHW arm_neon_simd .montgomery = 7 := by native_decide
 /-- reductionCostForHW: ARM NEON Harvey costs 3 (cheapest for SIMD). -/
 example : reductionCostForHW arm_neon_simd .harvey = 3 := by native_decide
-/-- reductionCostForHW: lazy cost = Solinas cost (matching codegen). -/
-example : reductionCostForHW arm_neon_simd .lazy = reductionCostForHW arm_neon_simd .solinasFold := by native_decide
+/-- reductionCostForHW: lazy cost = 0 (no reduction emitted, v3.12.0 D). -/
+example : reductionCostForHW arm_neon_simd .lazy = 0 := by native_decide
 /-- reductionCostForHW: ARM scalar Solinas costs 6. -/
 example : reductionCostForHW arm_cortex_a76 .solinasFold = 6 := by native_decide
-/-- costAwareReductionForBound: NEON with tight bounds picks Harvey (cheapest at 3 ops). -/
-example : costAwareReductionForBound arm_neon_simd 2 2013265921 = .harvey := by native_decide
-/-- costAwareReductionForBound: NEON with loose bounds picks Solinas (Montgomery excluded — REDC only valid for products). -/
-example : costAwareReductionForBound arm_neon_simd 5 2013265921 = .solinasFold := by native_decide
+/-- costAwareReductionForBound: v3.12.0 D — lazy wins when safe (0 cost). -/
+example : costAwareReductionForBound arm_neon_simd 2 2013265921 = .lazy := by native_decide
+/-- costAwareReductionForBound: lazy still wins with loose bounds for BabyBear (safe in u64). -/
+example : costAwareReductionForBound arm_neon_simd 5 2013265921 = .lazy := by native_decide
 
 end SmokeTests
 

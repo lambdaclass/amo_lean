@@ -71,7 +71,7 @@ structure NTTStage where
   inputBoundK : Nat           -- bound factor of inputs to this stage
   outputBoundK : Nat          -- bound factor of outputs (after reduction)
   ilpFactor : Nat := 1        -- v3.5.0: independent butterflies per loop iteration (1 or 2)
-  deriving Repr, Inhabited
+  deriving Repr, BEq, Inhabited
 
 /-- Memory access ordering for the NTT. -/
 inductive NTTOrdering where
@@ -86,7 +86,7 @@ structure Plan where
   field : Nat                 -- prime p
   size : Nat                  -- N (power of 2)
   ordering : NTTOrdering := .standard
-  deriving Repr, Inhabited
+  deriving Repr, BEq, Inhabited
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 2: Plan Construction
@@ -135,15 +135,18 @@ private def buildBoundAwareStages (numStages p : Nat) (hw : Option HardwareCost)
     (acc : List NTTStage) : List NTTStage :=
   if stage ≥ numStages then acc.reverse
   else
-    let canLazy := lazyReductionSafe (currentK + 1) p
     let mustReduce := stage ≥ numStages - 2
-    let red := match hw with
-      | some hwCost =>
-        -- Cost-aware: pick cheapest reduction for current bounds
-        costAwareReductionForBound hwCost (currentK + 1) p
+    let red := if mustReduce then
+      -- v3.12.0 D: Last 2 stages ALWAYS reduce (output must be < 2p for wellFormed)
+      match hw with
+      | some hwCost => costAwareReductionForBound hwCost (currentK + 1) p (wordBits := 0)
+        -- wordBits=0 makes lazyReductionSafe return false → lazy excluded
+      | none => selectReductionForBound (currentK + 1) false arrayIsLarge
+    else match hw with
+      | some hwCost => costAwareReductionForBound hwCost (currentK + 1) p
       | none =>
-        -- Heuristic fallback (no hw info)
-        if canLazy && !mustReduce then .lazy
+        let canLazy := lazyReductionSafe (currentK + 1) p
+        if canLazy then .lazy
         else selectReductionForBound (currentK + 1) false arrayIsLarge
     let outputK := stageBoundFactor currentK red
     let stg : NTTStage :=
@@ -171,12 +174,16 @@ private def buildMixedRadixStages (totalLevels p : Nat)
     let remaining := totalLevels - level
     let useR4 := remaining ≥ 4 && level * 2 < totalLevels
     let radix := if useR4 then RadixChoice.r4 else RadixChoice.r2
-    let canLazy := lazyReductionSafe (currentK + 1) p
     let mustReduce := remaining ≤ 2
-    let red := match hw with
+    let red := if mustReduce then
+      match hw with
+      | some hwCost => costAwareReductionForBound hwCost (currentK + 1) p (wordBits := 0)
+      | none => selectReductionForBound (currentK + 1) false arrayIsLarge
+    else match hw with
       | some hwCost => costAwareReductionForBound hwCost (currentK + 1) p
       | none =>
-        if canLazy && !mustReduce then ReductionChoice.lazy
+        let canLazy := lazyReductionSafe (currentK + 1) p
+        if canLazy then ReductionChoice.lazy
         else selectReductionForBound (currentK + 1) false arrayIsLarge
     let outputK := stageBoundFactor currentK red
     let stg : NTTStage :=
@@ -237,26 +244,29 @@ theorem stageSimdEligible_scalar (n : Nat) (radix : RadixChoice) (level : Nat)
     effective cost is divided by (simdLanes - 1) — conservative estimate.
     ILP discount: when ilpFactor > 1 on SIMD, V1 absorbs add/sub of butterfly A
     while V0 does REDC of butterfly B → ~25% discount (calibrated in B35-4).
-    Level tracking mirrors normalizePlan: R2 consumes 1 level, R4 consumes 2. -/
-def Plan.totalCost (plan : Plan) (hw : HardwareCost) : Nat :=
+    Level tracking mirrors normalizePlan: R2 consumes 1 level, R4 consumes 2.
+    v3.10.0 T7: Refactored into totalCostWith (parametric costFn) + totalCost (static wrapper).
+    lazy_eq_solinas_cost uses reductionCostForHW DIRECTLY — NOT affected by this refactoring. -/
+def Plan.totalCostWith (plan : Plan) (hw : HardwareCost)
+    (costFn : HardwareCost → ReductionChoice → Nat) : Nat :=
   let (cost, _) := plan.stages.foldl (fun (acc : Nat × Nat) stage =>
     let (total, level) := acc
     let bfs := match stage.radix with | .r2 => plan.size / 2 | .r4 => plan.size / 4
     let bfCost := butterflyCost stage.radix hw
-    let redCost := reductionCostForHW hw stage.reduction
+    let redCost := costFn hw stage.reduction
     let rawStageCost := bfs * (bfCost + 2 * redCost)
     let eligible := stageSimdEligibleAtLevel plan.size stage.radix level hw
     let simdDivisor := if eligible then Nat.max 2 (hw.simdLanes - 1) else 1
     let afterSimd := rawStageCost / simdDivisor
-    -- ILP discount: calibrated in B35-4 to ~0%.
-    -- The compiler (clang -O2) already does software pipelining: loads of iteration N+1
-    -- overlap with stores of iteration N. ilpFactor=2 provides no additional gain.
-    -- Keep the field for future targets where compiler doesn't auto-interleave.
-    let withIlp := afterSimd  -- no discount (compiler handles scheduling)
+    let withIlp := afterSimd
     let levelsConsumed := match stage.radix with | .r2 => 1 | .r4 => 2
     (total + withIlp, level + levelsConsumed)
   ) (0, 0)
   cost
+
+/-- Backward-compatible wrapper: uses static reductionCostForHW. -/
+def Plan.totalCost (plan : Plan) (hw : HardwareCost) : Nat :=
+  Plan.totalCostWith plan hw reductionCostForHW
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 4: Plan Validation
@@ -298,9 +308,7 @@ theorem mkUniformPlan_numStages (p n : Nat) (red : ReductionChoice) :
 /-- Bound-aware plan produces a plan (operational check via native_decide). -/
 example : (mkBoundAwarePlan 2013265921 1024).numStages = 10 := by native_decide
 
-/-- Lazy cost = Solinas cost in hw-aware model (codegen does Solinas fold). -/
-theorem lazy_eq_solinas_cost (hw : HardwareCost) :
-    reductionCostForHW hw .lazy = reductionCostForHW hw .solinasFold := rfl
+-- v3.12.0 D: lazy_eq_solinas_cost DELETED — lazy now costs 0 (no reduction emitted)
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 6: Smoke Tests

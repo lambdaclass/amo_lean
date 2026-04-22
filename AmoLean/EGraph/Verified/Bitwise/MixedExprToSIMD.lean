@@ -89,6 +89,8 @@ where
       s!"barrett_reduce_avx2({exprToAVX2 a varName}, _mm256_set1_epi32({p}), _mm256_set1_epi32({m}))"
     | .harveyReduceE a p =>
       s!"harvey_reduce_avx2({exprToAVX2 a varName}, _mm256_set1_epi32({p}))"
+    | .conditionalSubE a p =>
+      s!"cond_sub_avx2({exprToAVX2 a varName}, _mm256_set1_epi32({p}))"
 
   exprToNEON (e : MixedExpr) (varName : Nat → String) : String :=
     match e with
@@ -123,6 +125,8 @@ where
       s!"barrett_reduce_neon({exprToNEON a varName}, vdupq_n_u32({p}), vdupq_n_u32({m}))"
     | .harveyReduceE a p =>
       s!"harvey_reduce_neon({exprToNEON a varName}, vdupq_n_u32({p}))"
+    | .conditionalSubE a p =>
+      s!"cond_sub_neon({exprToNEON a varName}, vdupq_n_u32({p}))"
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 3: SIMD function emission

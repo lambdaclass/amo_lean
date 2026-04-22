@@ -20,6 +20,27 @@ Tests/poseidon_c/build/
 Tests/poseidon_fuzz/target/
 Cargo.lock
 
+# Research & design documents (local only, not for remote)
+research/
+TRZK_filosofico.md
+TRZK_filosofico2.md
+TRZK_rust_fix.md
+TRZK_rust_fix_v2.md
+TRZK_rust_insights.md
+TRZK_goldi_idea.md
+TRZK_goldigraphs_idea.md
+TRZK_spiral_idea.md
+insights_v3.9.0.md
+
+# Compiled benchmark binaries
+Tests/benchmark/bench_per_stage
+Tests/benchmark/bench_redc_isolated
+verification/plonky3/benchmark_babybear
+verification/plonky3/benchmark_koalabear
+
+# Archived DAGs (local planning artifacts)
+dag.3.*.json
+
 # Editor files
 *.swp
 *.swo

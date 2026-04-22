@@ -27,6 +27,7 @@ import AmoLean.EGraph.Verified.Bitwise.VerifiedPlanCodeGen
 import AmoLean.EGraph.Verified.Bitwise.VerifiedSIMDCodeGen
 import AmoLean.Bridge.VerifiedPipeline
 import AmoLean.EGraph.Verified.Bitwise.UltraPipeline
+import AmoLean.EGraph.Verified.Bitwise.Discovery.OracleAdapter
 
 set_option autoImplicit false
 
@@ -56,8 +57,11 @@ open MixedRunner
    mkSolinasFoldSeed mkCanonicalInput)
 open AmoLean.EGraph.Verified.Bitwise.PlanSelection (selectBestPlan CacheConfig)
 -- NTTPlanCodeGen/UnifiedCodeGen removed: replaced by VerifiedPlanCodeGen (Plan D Phase 2)
-open AmoLean.EGraph.Verified.Bitwise.ReductionAlternativeRules (reductionAlternativeRules)
-open AmoLean.EGraph.Verified.Bitwise.CrossRelNTT (nttStageBoundAnalysis NTTBoundConfig lazyReductionSavings)
+open AmoLean.EGraph.Verified.Bitwise.ReductionAlternativeRules (reductionAlternativeRules boundAwareReductionRules)
+open AmoLean.EGraph.Verified.Bitwise.CrossRelNTT (nttStageBoundAnalysis NTTBoundConfig lazyReductionSavings
+  reductionCostForHW)
+open AmoLean.EGraph.Verified.Bitwise.BoundProp (ReductionChoice)
+open AmoLean.EGraph.Verified.Bitwise.Discovery (exprCostHW)
 open AmoLean.EGraph.Verified.Bitwise.BoundIntegration (mkFullNTTSeedGraph)
 -- ReductionChoice now used internally by VerifiedPlanCodeGen
 open AmoLean.EGraph.Verified.Bitwise.VerifiedPlanCodeGen (emitCFromPlanVerified emitRustFromPlanVerified)
@@ -120,6 +124,17 @@ def goldilocksConfig : FieldConfig :=
     elemType := "uint64_t", wideType := "__uint128_t",
     muNat := 0, solinas := some goldilocks_solinas }
 
+/-- v3.11.0 F3: Stark252 field config. p = 2^251 + 17*2^192 + 1.
+    NO field-specific rules. NO hardcoded optimizations. The e-graph with
+    bound-aware discovery (conditionalSub via F2+F3) should find the optimal
+    reduction AUTOMATICALLY for any field where boundK ≤ 2. -/
+def stark252Config : FieldConfig :=
+  { name := "Stark252", pNat := 2^251 + 17 * 2^192 + 1,
+    pLit := "0", cNat := 0, cLit := "0", muLit := "0",
+    k := 252, b := 0, genLit := "3",
+    elemType := "uint256_t", wideType := "uint512_t",
+    muNat := 0, solinas := none }
+
 /-- All supported fields. -/
 def allFields : List FieldConfig :=
   [babybearConfig, koalabearConfig, mersenne31Config, goldilocksConfig]
@@ -168,6 +183,57 @@ def optimizeReduction (fc : FieldConfig) (hw : HardwareCost)
   | none =>
     { seedExpr := seed, optimizedExpr := seed, improved := false,
       strategyName := "Fallback (extraction failed)" }
+
+-- ══════════════════════════════════════════════════════════════════
+-- Section 2b: Dynamic Cost Channel (v3.9.0 N39.8)
+-- ══════════════════════════════════════════════════════════════════
+
+/-- Compare static vs dynamic reduction costs for a field.
+    Runs optimizeReduction (3-phase saturation + extraction) to get the
+    dynamic cost from the e-graph, then compares with the static cost
+    from reductionCostForHW. This is a DIAGNOSTIC — does not change the pipeline.
+    Prerequisite: shift-subtract + Karatsuba rules must be in the e-graph (B3a/B3b). -/
+def compareStaticDynamic (fc : FieldConfig) (hw : HardwareCost) : String :=
+  let staticCost := reductionCostForHW hw .solinasFold
+  let result := optimizeReduction fc hw
+  let dynCost := exprCostHW
+    hw result.optimizedExpr
+  let diff := (Int.ofNat dynCost) - (Int.ofNat staticCost)
+  s!"{fc.name}: Static={staticCost} Dynamic={dynCost} Diff={diff} Strategy={result.strategyName}"
+
+/-- Dynamic reduction cost from e-graph optimization.
+    Runs optimizeReduction for the field, extracts the cost of the optimized expression.
+    Opt-in alternative to the static reductionCostForHW.
+    With FALLBACK: for known fields (BabyBear, KoalaBear, Mersenne31),
+    falls back to static when the difference exceeds 5 cycles (P99 threshold).
+    Goldilocks and future fields trust the dynamic cost without fallback.
+    v3.10.1: Refactored into computeDynamicCost (once) + mkCachedDynamicCostFn (reuse).
+
+    computeDynamicCost: runs 3-phase saturation ONCE for a field.
+    mkCachedDynamicCostFn: creates a costFn from cached result (no saturation).
+    reductionCostForHW_dynamic: convenience wrapper (slow, calls saturation). -/
+def computeDynamicCost (hw : HardwareCost) (fc : FieldConfig) : Nat :=
+  let result := optimizeReduction fc hw
+  exprCostHW hw result.optimizedExpr
+
+/-- Create a cached cost function from a pre-computed dynamic cost.
+    Does NOT call optimizeReduction — uses the cached value.
+    Fallback for known fields when diff > 5 cycles. -/
+def mkCachedDynamicCostFn (hw : HardwareCost) (fc : FieldConfig) (cachedDynCost : Nat)
+    : HardwareCost → ReductionChoice → Nat :=
+  fun hw' red =>
+    let staticCost := reductionCostForHW hw' red
+    let knownField := fc.name == "BabyBear" || fc.name == "KoalaBear" || fc.name == "Mersenne31"
+    let diff := if cachedDynCost > staticCost then cachedDynCost - staticCost
+                else staticCost - cachedDynCost
+    if knownField && diff > 5 then staticCost
+    else cachedDynCost
+
+/-- Dynamic reduction cost (SLOW — calls optimizeReduction every time).
+    Use mkCachedDynamicCostFn for repeated calls. -/
+def reductionCostForHW_dynamic (hw : HardwareCost) (fc : FieldConfig)
+    (red : ReductionChoice) : Nat :=
+  (mkCachedDynamicCostFn hw fc (computeDynamicCost hw fc)) hw red
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 3: Code Emission (Steps 2-6)
@@ -420,14 +486,25 @@ def genOptimizedBenchC (fc : FieldConfig) (logN iters : Nat)
 
 open AmoLean.EGraph.Verified.Bitwise.UltraPipeline (ultraPipeline UltraConfig)
 
-/-- Build UltraConfig from FieldConfig + HardwareCost. -/
+/-- Build UltraConfig from FieldConfig + HardwareCost.
+    For k > 32 (Goldilocks): disable SIMD features (sqdmulh, verifiedSIMD) since
+    the NEON butterfly uses 32-bit intrinsics. Falls back to scalar verified path. -/
 private def fieldConfigToUltraConfig (fc : FieldConfig) (hw : HardwareCost) : UltraConfig :=
   { hw := hw
     k := fc.k
     c := fc.cNat
     mu := fc.muNat
-    targetColor := if hw.isSimd then 2 else 1
-    useSqdmulh := hw.isSimd }
+    targetColor := if hw.isSimd && fc.k ≤ 32 then 2 else 1
+    useSqdmulh := hw.isSimd && fc.k ≤ 32
+    -- v3.10.1 AC-1: Dynamic cost infrastructure is READY but NOT activated by default.
+    -- Reason: optimizeReduction (3-phase saturation) adds ~60s+ to code generation
+    -- when run in the Lean interpreter (lake env lean --run). The static cost for
+    -- Goldilocks (fold_halves = 0 V0) was validated by calibration B2 and is optimal.
+    -- The dynamic cost would CONFIRM the static, not improve it.
+    -- To activate: set useDynamicCost := true, but requires compiled binary (not interpreter).
+    useDynamicCost := false
+    -- v3.12.0 A.2: Goldilocks uses uint64_t (8 bytes), not uint32_t (4 bytes)
+    cacheConfig := { CacheConfig.default with elementSize := if fc.k > 32 then 8 else 4 } }
 
 /-- Generate NTT C code using the Ultra pipeline (all phases + verified codegen).
     Uses the full Ultra pipeline: Ruler discovery → bound-aware saturation
@@ -446,8 +523,14 @@ def optimizedNTTC_ultra (fc : FieldConfig) (hw : HardwareCost) (logN iters : Nat
   -- Fase Per-Stage v3.3.0: seed e-graph with NTT chain + pass stage class IDs
   let (seedGraph, stageIds) := mkFullNTTSeedGraph fc.pNat logN
   let seedRules := reductionAlternativeRules fc.pNat
+  -- v3.10.1 AC-1: compute dynamic cost ONCE (3-phase saturation), then cache.
+  -- Without caching: 10 candidates × 14 stages × saturation = 140 saturations → timeout.
+  let costFn := if ucfg.useDynamicCost then
+      let dynCost := computeDynamicCost ucfg.hw fc  -- ONE saturation
+      mkCachedDynamicCostFn ucfg.hw fc dynCost      -- cached for all candidates
+    else reductionCostForHW
   let (nttBody, nttBodyRust, report) := ultraPipeline seedGraph seedRules fc.pNat n ucfg
-    s!"{fc.name.toLower}_ntt_ultra" (some stageIds)
+    s!"{fc.name.toLower}_ntt_ultra" (some stageIds) costFn
   -- Generate P3 reference for comparison
   let p3Bf := genP3ButterflyC fc
   let p3Loop := genNTTLoopC "p3_bf" logN
@@ -956,8 +1039,11 @@ def scheduleComparison (fc : FieldConfig) (logN : Nat) (hw : HardwareCost) :
   let (seedGraph, stageIds) := mkFullNTTSeedGraph fc.pNat logN
   let state := mkNTTState seedGraph
   let factory := mkFieldFactory fc.pNat
+  -- v3.11.0 F3: pass bound-aware rules so conditionalSub can be discovered
+  let boundRules := boundAwareReductionRules fc.pNat
   let state' := AmoLean.EGraph.Verified.Bitwise.MultiRel.saturate [] []
-    factory AmoLean.EGraph.Verified.Bitwise.MultiRel.Config.default state
+    factory AmoLean.EGraph.Verified.Bitwise.MultiRel.Config.default
+    (boundRules := boundRules) state
   let dynamicSched := extractScheduleFromState state' logN fc.pNat hw.isSimd
     isLarge (some hw) (some stageIds)
   let diffs := staticSched.zip dynamicSched |>.filter fun ((_, sr, _), (_, dr, _)) => sr != dr
@@ -1104,5 +1190,25 @@ def runPipelineReport : IO Unit := do
   IO.println "══════════════════════════════════════════════════════════"
   IO.println ""
   IO.println (emitPlanBasedNTTC babybearConfig 10 arm_cortex_a76)
+
+-- ══════════════════════════════════════════════════════════════════
+-- v3.11.0 F3: Vision test — bound-aware rule + conditionalSub
+-- ══════════════════════════════════════════════════════════════════
+
+/-- F3 smoke: patReduceToConditionalSub creates a valid rewrite rule.
+    The rule's sideCondCheck defaults to false (blocked by design). -/
+example : (ReductionAlternativeRules.patReduceToConditionalSub 7).name =
+    "pat_reduce_to_condSub_7" := rfl
+
+/-- F3 smoke: boundAwareReductionRules produces exactly 1 rule per field. -/
+example : (ReductionAlternativeRules.boundAwareReductionRules 7).length = 1 := rfl
+
+/-- F3 smoke: Stark252 config is well-formed (no field-specific rules needed). -/
+example : stark252Config.name = "Stark252" := rfl
+example : stark252Config.k = 252 := rfl
+
+/-- F3 smoke: conditionalSub evaluates correctly (the constructor F2 added). -/
+example : evalMixedOp (.conditionalSub 0 7) ⟨id, id, id⟩ (fun | 0 => 10 | _ => 0) = 3 := rfl
+example : evalMixedOp (.conditionalSub 0 7) ⟨id, id, id⟩ (fun | 0 => 5 | _ => 0) = 5 := rfl
 
 end AmoLean.EGraph.Verified.Bitwise.OptimizedNTTPipeline

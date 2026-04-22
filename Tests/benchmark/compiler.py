@@ -13,9 +13,15 @@ class CompileResult:
     error: str = ""
 
 
-def compile_c(source: Path, output: Path, hardware: str = "arm-scalar") -> CompileResult:
+def compile_c(source: Path, output: Path, hardware: str = "arm-scalar",
+              field_k: int = 31) -> CompileResult:
     """Compile C source with cc -O2. Adds NEON/AVX2 flags as needed."""
     flags = ["-O2", "-lm"]
+    # Suppress unsigned literal warnings only for 64-bit fields (Goldilocks)
+    # where p > INT64_MAX. Don't hide for 32-bit fields where such warnings
+    # would indicate a real bug.
+    if field_k > 32:
+        flags.append("-Wno-implicitly-unsigned-literal")
     arch = platform.machine()
     if hardware == "arm-neon":
         if arch not in ("arm64", "aarch64"):

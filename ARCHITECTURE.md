@@ -1,313 +1,175 @@
 # TRZK: Architecture
 
-## Next Version: 3.8.0
+## Next Version: 3.11.0
 
-### Verified Rust SIMD NTT v3.8.0
+### Bound-aware Discovery Engine v3.11.0
 
-**Contents**: Emit Rust NEON NTT from the same verified Stmt IR that produces C NEON.
-Reuses v3.7.0 butterflies (Stmt.call sequences) + NeonIntrinsic ADT. New: `simdStmtToRust`
-emitter (Rust `core::arch::aarch64` intrinsics in `unsafe` blocks), Rust helpers, and
-`emitSIMDNTTRust` pipeline. Enables apple-to-apple benchmark vs Plonky3 monty-31.
+**Contents**: Transform TRZK from hardcoded optimizations to automatic discovery platform.
+Add `conditionalSub` constructor to MixedNodeOp, connect bounds to sideCondCheck in
+e-graph saturation, extend NTTStrategy with twoStepGoldilocks.
 
-**Design**: Extend, don't duplicate. ARM NEON intrinsics have identical names in C and Rust.
-The only differences: `unsafe { }` wrapping, tuple struct decomposition (`.0/.1` vs `.val[0]`),
-raw pointer setup (`as_ptr().add(i)` vs `&data[i]`), and variable declarations
-(`let mut nv0: int32x4_t` vs `int32x4_t nv0`). See TRZK_rust_insights.md §5-6.
+**Vision**: The e-graph discovers optimizations like AC-6 (conditional subtract for
+bounded inputs) AUTOMATICALLY for any field, without per-field `if k > 32` hardcoding.
+Test: add Stark252 field with ZERO field-specific rules → e-graph discovers optimal reduction.
 
-**Key reuse from v3.7.0** (zero modification):
-- `sqdmulhButterflyStmt`, `hs2ButterflyStmt`, `hs1ButterflyStmt` — Stmt-pure, backend-agnostic
-- `NeonIntrinsic` ADT (21 constructors), `isVoid`, `fromCName`, `neonCall`/`neonCallVoid`
-- `countCalls`, `collectCallNames`, `allCallsKnown` — structural verification infra
-- All 12 theorems in `VerifiedSIMDButterflyProofs.lean` — apply to Rust path too (same Stmt)
+**5 Phases**:
+- F5 (1d): Emisión reduce128 — uint64_t temps post-split instead of __uint128_t (~20 LOC, ~15% speedup)
+- F1 (1d): Bound-aware codegen — pass stage.outputBoundK to butterfly, dispatch by bounds (DONE)
+- F4 (0.5d, parallel): twoStepGoldilocks in NTTStrategy (~15 LOC, very low risk) (DONE)
+- F2 (3-4d): conditionalSub in MixedNodeOp (~300 LOC mechanical, 23rd constructor)
+- F3 (1d): Bound-aware sideCondCheck — boundAwareEqStep in tieredStep (~40 LOC)
 
-**New components**:
-- `NeonIntrinsic.toRustCall` — wraps `toCName` in `unsafe { }`
-- `simdStmtToRust` — Rust SIMD emitter (gemelo de `simdStmtToC`)
-- `neonTempDeclsRust`, `deinterleaveHelperRust`, `interleaveStoreHelperRust`
-- `emitStageRust`, `emitSIMDNTTRust` — Rust pipeline (gemelo de C pipeline)
-- `UltraConfig.rustSIMD` flag + benchmark wiring
+**Key infrastructure verified by 3 audit agents**:
+- sideCondCheck IS wired in saturation (MixedSaturation.lean:32-35), NOT dead code
+- soundness proofs already handle sideCondCheck (MixedEMatchSoundness.lean:1713)
+- buildBoundLookup exists (BoundPropagation.lean:72) for reading bounds from DAG
+- tieredStep runs relStep BEFORE new layer (bounds are fresh)
 
-**Lessons applied**: L-730 (audit wiring — no string bypass), L-728 (fuel-free Stmt chains),
-L-309 (Rust idioms: `as usize`, unsafe blocks, raw pointers).
-
-**Files**:
-- `AmoLean/Bridge/SIMDStmtToC.lean` (MODIFY — add toRustCall + simdStmtToRust)
-- `AmoLean/EGraph/Verified/Bitwise/SIMDEmitter.lean` (MODIFY — add Rust helpers + emitSIMDNTTRust)
-- `AmoLean/EGraph/Verified/Bitwise/UltraPipeline.lean` (MODIFY — rustSIMD flag)
-- `AmoLean/EGraph/Verified/Bitwise/OptimizedNTTPipeline.lean` (MODIFY — Rust SIMD wiring)
-- `Tests/benchmark/emit_code.lean` (MODIFY — --rust-simd flag)
-- `Tests/benchmark/lean_driver.py` (MODIFY — rust_simd param)
-- `Tests/benchmark/benchmark.py` (MODIFY — --rust-simd flag)
-
-#### DAG (3.8.0)
+#### DAG (3.11.0)
 
 | Nodo | Tipo | Deps | Status |
 |------|------|------|--------|
-| N38.1 toRustCall + simdStmtToRust emitter | FUND | — | pending |
-| N38.2 Rust SIMD helpers + temp declarations | FUND | — | pending |
-| N38.3 emitSIMDNTTRust — full Rust SIMD NTT generator | CRIT | N38.1, N38.2 | done |
-| N38.4 Pipeline integration (rustSIMD flag + wiring) | CRIT | N38.3 | done |
-| N38.5 Validation + benchmark vs Plonky3 | HOJA | N38.4 | done |
+| N311.6 F5: Emisión reduce128 (uint64_t post-split temps) | FUND | — | pending |
+| N311.1 F1: Bound-aware codegen (boundK parameter) | FUND | — | done |
+| N311.2 F4: twoStepGoldilocks NTTStrategy | PAR | — | done |
+| N311.3 F2: conditionalSub in MixedNodeOp (~300 LOC) | CRIT | N311.1 | pending |
+| N311.4 F3: boundAwareEqStep + reduceToConditionalSub | CRIT | N311.3 | pending |
+| N311.5 Test: Stark252 automatic discovery (no hardcode) | HOJA | N311.4 | pending |
 
-#### Formal Properties (3.8.0)
+#### Formal Properties (3.11.0)
 
 | Nodo | Propiedad | Tipo | Prioridad |
 |------|-----------|------|-----------|
-| N38.1 | simdStmtToRust produces non-empty output for all 3 butterflies | INVARIANT | P0 |
-| N38.1 | simdStmtToRust delegates non-call Stmt to stmtToRust | EQUIVALENCE | P0 |
-| N38.1 | toRustCall wraps every intrinsic in unsafe block | INVARIANT | P0 |
-| N38.3 | emitSIMDNTTRust produces compilable Rust for BabyBear 2^14 | INVARIANT | P0 |
-| N38.4 | benchmark.py --rust-simd --validation-only PASS (end-to-end chain) | SOUNDNESS | P0 |
-| N38.5 | Rust SIMD output validates against Python NTT reference (performance run) | SOUNDNESS | P0 |
-| N38.5 | Performance within ±10% of C SIMD verified path | OPTIMIZATION | P1 |
-| N38.5 | Plonky3 monty-31 direct comparison with concrete μs numbers | OPTIMIZATION | P0 |
-
-> **Trust boundary**: Identical to v3.7.0. `evalStmt(.call) = none`. The 12 structural
-> theorems from v3.7.0 apply unchanged — the Stmt is the same, only the emitter differs.
-> Rust intrinsic semantics are trusted (ARM-specified, same as C).
+| N311.1 | boundK=0 produces identical codegen to v3.10.1 | PRESERVATION | P0 |
+| N311.1 | boundK≤2 activates conditionalSub for ANY field | SOUNDNESS | P0 |
+| N311.3 | evalMixedOp(.conditionalSub a p) = if v a >= p then v a - p else v a | SOUNDNESS | P0 |
+| N311.3 | mixed_extractable_sound handles conditionalSub arm | SOUNDNESS | P0 |
+| N311.4 | boundAwareEqStep discovers conditionalSub when boundK ≤ 2 | SOUNDNESS | P0 |
+| N311.5 | Stark252 discovered automatically without field-specific rules | SOUNDNESS | P0 |
 
 #### Bloques
 
-- [ ] **Bloque 0 — Rust Emitter (N38.1 + N38.2)**: Add `toRustCall` + `simdStmtToRust` to SIMDStmtToC.lean. Add Rust helpers + temp decls to SIMDEmitter.lean. Gate: `lake build` + smoke tests with butterfly → Rust string.
-- [ ] **Bloque 1 — Rust NTT Generator (N38.3)**: Create `emitStageRust` + `emitSIMDNTTRust` in SIMDEmitter.lean. Gate: generates complete Rust NTT function for BabyBear 2^14.
-- [ ] **Bloque 2 — Pipeline + Benchmark (N38.4 + N38.5)**: Wire rustSIMD flag end-to-end. N38.4 gate: `benchmark.py --rust-simd --validation-only --fields babybear --sizes 14` PASS (full chain). N38.5 gate: performance benchmark + Plonky3 direct comparison with concrete numbers.
-
-#### Bloque 0 Detail — Rust Emitter (N38.1 + N38.2)
-
-**N38.1: toRustCall + simdStmtToRust** (SIMDStmtToC.lean, ~60 líneas nuevas)
-
-Infraestructura reutilizada (0 cambios):
-- `NeonIntrinsic` inductive (line 35-64) — 21 constructors
-- `toCName` (line 68-89) — used by toRustCall internally
-- `isVoid` (line 92-94) — shared for void detection
-- `fromCName` (line 119-141) — shared for reverse lookup
-- `neonCall`/`neonCallVoid` (line 103-110) — Stmt builders unchanged
-
-Infraestructura nueva:
-```lean
-/-- Map NeonIntrinsic to Rust unsafe call expression. Same names as C (ARM NEON
-    intrinsics are identical in core::arch::aarch64), wrapped in unsafe. -/
-def NeonIntrinsic.toRustCall (intr : NeonIntrinsic) (argsStr : String) : String :=
-  s!"unsafe \{ {intr.toCName}({argsStr}) }"
-```
-
-```lean
-/-- Emit Stmt to Rust with NEON intrinsic handling.
-    Gemelo of simdStmtToC. Differences:
-    - Void: "unsafe { fname(args) };" (no result)
-    - Value: "result = unsafe { fname(args) };" (with result)
-    - Delegation: stmtToRust (not stmtToC) for non-call Stmt
-    - joinCode reused as-is -/
-def simdStmtToRust (level : Nat) : Stmt → String
-```
-
-Smoke tests: 5+ examples covering value-returning, void, addrOf, delegation, butterfly output.
-
-**N38.2: Rust helpers + temp declarations** (SIMDEmitter.lean, ~50 líneas nuevas)
-
-Infraestructura reutilizada:
-- `deinterleaveHelperC` (line 546-554) — template for Rust version
-- `interleaveStoreHelperC` (line 560-569) — template for Rust version
-- `neonTempDecls` (line 575-580) — template for Rust version
-
-Infraestructura nueva:
-```lean
-def deinterleaveHelperRust : String  -- uses .0/.1 tuple access (not .val[0])
-def interleaveStoreHelperRust : String  -- uses int32x4x2_t(a, b) tuple constructor
-def neonTempDeclsRust (numSigned numUnsigned numHalf : Nat) : String
-  -- "let mut nv0: int32x4_t; ..." (MaybeUninit::uninit().assume_init() for each)
-```
-
-Gate: `lake build SIMDEmitter` + helpers produce non-empty compilable Rust fragments.
-
-#### Bloque 1 Detail — Rust NTT Generator (N38.3)
-
-**N38.3: emitStageRust + emitSIMDNTTRust** (SIMDEmitter.lean, ~120 líneas nuevas)
-
-Infraestructura reutilizada:
-- `emitStageC` dispatch structure (line 393-460) — template for Rust dispatch
-- `emitSIMDNTTC` orchestrator (line 594-698) — template for Rust orchestrator
-- `sqdmulhButterflyStmt` / `hs2ButterflyStmt` / `hs1ButterflyStmt` — IDENTICAL Stmts
-- `simdStmtToRust` (from N38.1) — emitter
-
-Infraestructura nueva:
-```lean
-/-- Emit one NTT stage as Rust code. Dispatches by halfSize:
-    ≥4 → sqdmulhButterflyStmt via simdStmtToRust
-    =2 → hs2ButterflyStmt via simdStmtToRust
-    =1 → hs1ButterflyStmt via simdStmtToRust
-    Pointer setup: data.as_mut_ptr().add(offset) for raw ptrs. -/
-private def emitStageRust (stage : NTTStage) ... : String
-
-/-- Emit complete Rust SIMD NTT function.
-    Structure: use statement + helpers + fn sig + temp decls + const broadcasts + stages.
-    Output: unsafe fn with #[cfg(target_arch = "aarch64")]. -/
-def emitSIMDNTTRust (plan : Plan) (target : SIMDTarget) (k c mu : Nat)
-    (funcName : String) (useSqdmulh : Bool) : String
-```
-
-Key Rust-specific differences from C in emitStageRust:
-- Pointer setup: `let a_ptr = data.as_mut_ptr().add(idx);` (not `int32_t* a_ptr = &data[idx];`)
-- Const broadcast: `unsafe { vdupq_n_u32(p) }` (not `vdupq_n_u32(p)`)
-- Loop syntax: `for grp in 0..{numGroups} {` (not `for (size_t grp = 0; ...)`)
-- Variable init: `let mut nv0: int32x4_t = unsafe { vdupq_n_s32(0) };` (Rust requires init)
-
-Gate: `emitSIMDNTTRust` produces non-empty Rust for BabyBear 2^14 plan.
-
-#### Bloque 2 Detail — Pipeline + Benchmark (N38.4 + N38.5)
-
-**N38.4: Pipeline wiring** (~30 líneas across 5 files)
-
-| Archivo | Cambio | Líneas |
-|---------|--------|--------|
-| `UltraPipeline.lean:112` | Add `rustSIMD : Bool := false` to UltraConfig | +1 |
-| `UltraPipeline.lean:180` | When rustSIMD, call emitSIMDNTTRust instead of emitSIMDNTTC | +3 |
-| `OptimizedNTTPipeline.lean:437` | Add rustSIMD param to optimizedNTTC_ultra | +2 |
-| `OptimizedNTTPipeline.lean:557` | Add rustSIMD to genOptimizedBenchRust_ultra_simd | +5 |
-| `Tests/benchmark/emit_code.lean:30-55` | Add --rust-simd arg, call Rust SIMD path | +8 |
-| `Tests/benchmark/lean_driver.py:22-36` | Pass rust_simd flag to Lean | +3 |
-| `Tests/benchmark/benchmark.py:36-45` | Add --rust-simd CLI flag | +3 |
-
-Gate: `benchmark.py --rust-simd --validation-only --fields babybear --sizes 14` **PASS**.
-This requires the ENTIRE chain to be connected end-to-end:
-benchmark.py → lean_driver.py → emit_code.lean → ultraPipeline → emitSIMDNTTRust →
-.rs file → rustc → execution → numerical validation against Python NTT reference.
-`lake build` alone is NOT sufficient — the gate is runtime correctness.
-
-**N38.5: Validation + Benchmark vs Plonky3** (~1 día)
-
-1. Performance benchmark:
-   `benchmark.py --rust-simd --fields babybear --sizes 14` (full run, not --validation-only)
-2. Compare times:
-   - Rust SIMD verified (new) vs C SIMD verified (v3.7.0)
-   - Performance delta must be within ±10%
-3. **Plonky3 direct comparison** (mandatory, not optional):
-   - Build `Tests/benchmark/bench_plonky3_comparison/` with `p3-baby-bear`, `p3-ntt`, `p3-monty-31`
-   - Run `criterion` benchmark for BabyBear NTT on same N, same hardware
-   - Report: our Rust SIMD verified vs Plonky3 monty-31 real (μs + % difference)
-
-Gate: `benchmark.py --rust-simd --fields babybear --sizes 14` **PASS** (validation + performance)
-+ Plonky3 comparison report with concrete numbers.
+- [ ] **BF1+BF4 — Codegen bounds + NTTStrategy (F1 + F4, parallel)**: F1: Add boundK param to lowerDIFButterflyByReduction, dispatch by bounds. F4: Add .twoStepGoldilocks to NTTStrategy. Gate: validation PASS + conditionalSub activates for bounded inputs.
+- [ ] **BF2 — conditionalSub constructor (F2)**: CRIT. Add 23rd MixedNodeOp constructor. ~300 LOC mechanical across 9+ files. Gate: lake build 0 errors, 0 new sorry, benchmark validation PASS.
+- [ ] **BF3 — Bound-aware discovery (F3 + Stark252 test)**: CRIT. boundAwareEqStep in tieredStep + reduceToConditionalSub rule + Stark252 automatic discovery test. Gate: e-graph discovers conditionalSub for bounded inputs.
 
 ---
 
-### v3.7.0 Planning Detail (Option D: Stmt.call + simdStmtToC)
+## Current Version: 3.10.1 (COMPLETE)
 
-**Contents**: Route NEON butterflies through TrustLean.Stmt IR using Stmt.call constructor + AmoLean wrapper for void/struct intrinsics. TrustLean expanded with `LowLevelExpr.addrOf` (commit 5d42bae) for pointer emission. Includes cleanup: FRIFoldPlan Montgomery fix + reductionCost migration.
 
-**Design**: Option D — chosen after 6 adversarial debates evaluating Options A/A'/B/C/D/D'. See TRZK_filosofico.md §v3.7.0 for full analysis. Post-Block-1 audit identified `&` emission gap resolved via TrustLean expansion + decision to use Approach A (all butterflies via Stmt, including hs2).
+### Phase A: Emission optimization + cache fixes
+
+**Contents**: F5c butterfly Stmt.call closes loop overhead gap. CacheConfig fix + level-aware model improve plan accuracy. Benchmark Rust vs Plonky3.
 
 **Files**:
-- `AmoLean/Bridge/SIMDStmtToC.lean` (NEW — NeonIntrinsic ADT + simdStmtToC wrapper)
-- `AmoLean/EGraph/Verified/Bitwise/VerifiedSIMDButterfly.lean` (NEW — butterflies as Stmt)
-- `AmoLean/EGraph/Verified/Bitwise/VerifiedSIMDButterflyProofs.lean` (NEW — structural theorems)
-- `AmoLean/EGraph/Verified/Bitwise/SIMDEmitter.lean` (dispatch + NEON decls + helper)
-- `AmoLean/EGraph/Verified/Bitwise/FRIFoldPlan.lean` (C1: Montgomery fix)
-- `AmoLean/EGraph/Verified/Bitwise/CrossRelNTT.lean` (C2: reductionCost migration)
-- `AmoLean/EGraph/Verified/Bitwise/PrimitivesIntegration.lean` (C2: reductionCost migration)
+- `AmoLean/EGraph/Verified/Bitwise/NTTPlanSelection.lean`
+- `AmoLean/EGraph/Verified/Bitwise/VerifiedPlanCodeGen.lean`
 
-#### Post-Block-1 Audit Decisions (2026-04-08)
-
-1. **`&` issue resolved**: `LowLevelExpr.addrOf` added to TrustLean (commit 5d42bae). `exprToC (.addrOf v)` emits `"&" ++ varNameToC v`. TRZK dependency updated to consume this. Use `.addrOf` for deinterleaveLoad output pointer args.
-
-2. **Approach A for hs2**: ALL butterflies (sqdmulh, hs1, hs2) go through verified Stmt path. No legacy string-emission exceptions. Requires extending NeonIntrinsic ADT with ~6 constructors for 2-lane ops + `sub_s32`.
-
-3. **`sub_s32` as insurance**: Added to ADT regardless of whether unsigned-only restructuring works. Allows fallback to proven signed subtract if needed.
-
-4. **`neonTempDecls` needs `int32x2_t`**: hs2 uses 2-lane intrinsics. Add `int32x2_t nh0, nh1, ...;` declarations alongside existing `nv*` and `nu*`.
-
-5. **`voidIntrinsicNames` sync risk**: Replace string-list lookup with `fromCName : String → Option NeonIntrinsic` reverse map + `isVoid` query. Single source of truth.
-
-6. **`deinterleaveLoad` docstring**: Fix "each constructor maps to one ARM NEON intrinsic" — deinterleaveLoad maps to a custom C helper, not a hardware intrinsic.
-
-#### DAG (3.7.0)
+#### DAG (3.12.0)
 
 | Nodo | Tipo | Deps | Status |
 |------|------|------|--------|
-| C1 Fix FRIFoldPlan Montgomery bug | FIX | — | done |
-| C2 Migrate reductionCost callers to reductionCostForHW | CLEANUP | — | done |
-| N37.1 NeonIntrinsic ADT + simdStmtToC wrapper | FUND | — | done |
-| N37.2 Deinterleave helper function (vld2q decomposition) | FUND | — | done |
-| N37.3 NEON temp variable declarations in emitSIMDNTTC | FUND | — | done |
-| N37.4 Rewrite all NEON butterflies as Stmt.call sequences | CRIT | N37.1, N37.2, N37.3 | done |
-| N37.5 Connect verified SIMD path to emitStageC pipeline | CRIT | N37.4 | done |
-| N37.6 Structural verification theorems + trust boundary doc | CRIT | N37.5 | done |
-| N37.7 Benchmark regression check (±3% vs v3.6.0) | HOJA | N37.5 | done |
+| N312.1 A.2: CacheConfig fix (l1DataSize, elementSize, l2MissCycles) | HOJA | — | pending |
+| N312.2 A.4: Cache model level-aware with data-reuse | PAR | N312.1 | pending |
+| N312.3 A.1: F5c butterfly Stmt.call + loop uint64_t | CRIT | — | pending |
+| N312.4 A.5: Benchmark Rust vs Plonky3 Rust | HOJA | N312.3 | pending |
 
-#### Formal Properties (3.7.0)
+#### Formal Properties (3.12.0)
 
 | Nodo | Propiedad | Tipo | Prioridad |
 |------|-----------|------|-----------|
-| N37.4 | Butterflies produce valid Stmt sequences (all calls use NeonIntrinsic names) | INVARIANT | P0 |
-| N37.6 | sqdmulh butterfly has 17 operations (structural count) | EQUIVALENCE | P0 |
-| N37.6 | All calls in butterfly use known NEON intrinsics (exhaustive check) | INVARIANT | P0 |
-| N37.6 | Data flow pattern matches scalar butterfly (prod→reduce→sum→diff→harvey) | EQUIVALENCE | P1 |
-| C1 | FRIFoldPlan never returns Montgomery for sums | SOUNDNESS | P0 |
-
-> **Nota**: Trust boundary: `evalStmt(.call) = none`. NEON intrinsics are trusted
-> external calls, same as `stmtToC` is trusted for scalar emission.
-> Structural proofs verify the ALGORITHM is correct; intrinsic semantics are TRUSTED.
-
-#### Bloques
-
-- [x] **Bloque 0 — Cleanup (C1 + C2)**: C1 FRIFoldPlan Montgomery fix, C2 reductionCost migration. DONE.
-- [x] **Bloque 1 — Foundation (N37.1 + N37.2 + N37.3)**: NeonIntrinsic ADT, deinterleave helper, NEON temp decls. DONE. Post-audit: TrustLean expanded with `LowLevelExpr.addrOf` (commit 5d42bae). Approach A decided for hs2.
-- [ ] **Bloque 2 — Butterflies as Stmt (N37.4)**: Rewrite sqdmulh, hs1, hs2 butterflies as Stmt.call sequences. PRE-REQUISITES before butterfly rewrite: (1) extend NeonIntrinsic ADT with `sub_s32` + 2-lane ops for hs2 (`load2_s32`, `store2_s32`, `combine_s32`, `get_low_s32`, `get_high_s32`), (2) add `fromCName` reverse map replacing `voidIntrinsicNames`, (3) extend `neonTempDecls` with `int32x2_t nh*` variables, (4) use `.addrOf` for `deinterleaveLoad` output pointer args. See TRZK_filosofico.md §Post-Block-1 Audit.
-- [ ] **Bloque 3 — Pipeline Integration (N37.5)**: Add useVerifiedSIMD dispatch to emitStageC.
-- [ ] **Bloque 4 — Verification + Benchmark (N37.6 + N37.7)**: Structural theorems + regression check.
-
----
-
-## Current Version: 3.7.0 (COMPLETE)
-
-
-### Verified SIMD Codegen v3.7.0 (Option D: Stmt.call + simdStmtToC)
-
-**Contents**: Route NEON butterflies through TrustLean.Stmt IR using Stmt.call constructor + AmoLean wrapper. TrustLean expanded with `LowLevelExpr.addrOf` (commit 5d42bae). Includes cleanup: FRIFoldPlan Montgomery fix + reductionCost migration. All 9 DAG nodes done. 12 theorems, 0 sorry. Benchmark: verified path +3.9% vs legacy.
-
-**Files**:
-- `AmoLean/EGraph/Verified/Bitwise/FRIFoldPlan.lean`
-- `AmoLean/EGraph/Verified/Bitwise/CrossRelNTT.lean`
-- `AmoLean/EGraph/Verified/Bitwise/PrimitivesIntegration.lean`
-- `AmoLean/EGraph/Verified/Bitwise/CrossEGraphProtocol.lean`
-- `AmoLean/Bridge/SIMDStmtToC.lean`
-- `AmoLean/EGraph/Verified/Bitwise/SIMDEmitter.lean`
-- `AmoLean/EGraph/Verified/Bitwise/VerifiedSIMDButterfly.lean`
-- `AmoLean/EGraph/Verified/Bitwise/VerifiedSIMDButterflyProofs.lean`
-- `Tests/benchmark/`
-
-#### DAG (3.7.0)
-
-| Nodo | Tipo | Deps | Status |
-|------|------|------|--------|
-| C1 Fix FRIFoldPlan Montgomery bug | PAR | — | done |
-| C2 Migrate reductionCost callers to reductionCostForHW | PAR | — | done |
-| N37.1 NeonIntrinsic ADT + simdStmtToC wrapper | FUND | — | done |
-| N37.2 Deinterleave helper function | FUND | — | done |
-| N37.3 NEON temp variable declarations | FUND | — | done |
-| N37.4 Rewrite NEON butterflies as Stmt.call sequences | CRIT | N37.1, N37.2, N37.3 | done |
-| N37.5 Connect verified SIMD path to emitStageC | CRIT | N37.4 | done |
-| N37.6 Structural verification theorems | CRIT | N37.5 | done |
-| N37.7 Benchmark regression check | HOJA | N37.5 | done |
-
-#### Formal Properties (3.7.0)
-
-| Nodo | Propiedad | Tipo | Prioridad |
-|------|-----------|------|-----------|
-| N37.4 | Butterflies produce valid Stmt (all calls use NeonIntrinsic names) | INVARIANT | P0 |
-| N37.6 | sqdmulh butterfly has 17 operations | EQUIVALENCE | P0 |
-| C1 | FRIFoldPlan never returns Montgomery for sums | SOUNDNESS | P0 |
+| N312.1 | CacheConfig l1DataSize=131072 for Apple M-series | PRESERVATION | P0 |
+| N312.2 | planCacheCost(R4_plan) < planCacheCost(R2_plan) for N>2^14 | OPTIMIZATION | P1 |
+| N312.3 | goldi_butterfly emits uint64_t-only function body | SOUNDNESS | P0 |
+| N312.3 | F5c output numerically identical to non-F5c for same input | EQUIVALENCE | P0 |
 
 > **Nota**: Propiedades en lenguaje natural (intención de diseño).
 > Los stubs ejecutables están en BENCHMARKS.md § Formal Properties.
 
 #### Bloques
 
-- [x] **Bloque 0 — Cleanup**: C1, C2. DONE.
-- [x] **Bloque 1 — Foundation**: N37.1, N37.2, N37.3. DONE. TrustLean expanded (addrOf). Approach A for hs2.
-- [ ] **Bloque 2 — Butterflies as Stmt**: N37.4. Pre-reqs: extend ADT + fromCName + neonTempDecls int32x2_t.
-- [ ] **Bloque 3 — Pipeline Integration**: N37.5.
-- [ ] **Bloque 4 — Verification + Benchmark**: N37.6, N37.7.
+- [ ] **Emission + Cache**: N312.1, N312.2, N312.3, N312.4
+
+### Phase B: Discovery wiring via selectBestPlanExplored
+
+**Contents**: Connect existing Discovery pipeline to plan competition. selectBestPlanExplored already does oracle→explore→Plan with theorems for 3 fields. Just push as candidate.
+
+**Files**:
+- `AmoLean/EGraph/Verified/Bitwise/UltraPipeline.lean`
+
+#### DAG (3.12.0)
+
+| Nodo | Tipo | Deps | Status |
+|------|------|------|--------|
+| N312.5 B.1: selectBestPlanExplored as plan candidate | PAR | N312.2 | pending |
+
+#### Formal Properties (3.12.0)
+
+| Nodo | Propiedad | Tipo | Prioridad |
+|------|-----------|------|-----------|
+| N312.5 | Discovery plan competes in selectPlanWith with full cost model | SOUNDNESS | P0 |
+
+> **Nota**: Propiedades en lenguaje natural (intención de diseño).
+> Los stubs ejecutables están en BENCHMARKS.md § Formal Properties.
+
+#### Bloques
+
+- [ ] **Discovery wiring**: N312.5
+
+### Phase C: NTT trick runtime branch
+
+**Contents**: Exploit Goldilocks omega_64=8: twiddles that are powers-of-2 use shift instead of multiply. Runtime popcnt branch in goldi_butterfly.
+
+**Files**:
+- `AmoLean/EGraph/Verified/Bitwise/VerifiedPlanCodeGen.lean`
+
+#### DAG (3.12.0)
+
+| Nodo | Tipo | Deps | Status |
+|------|------|------|--------|
+| N312.6 C.1: NTT trick runtime popcnt branch | PAR | N312.3 | pending |
+
+#### Bloques
+
+- [ ] **NTT trick**: N312.6
+
+### Phase D: Lazy reduction REAL + prefetch
+
+**Contents**: Fix lazy's 3-layer fiction: safety gate u128, cost model lazy=0, codegen skip reduction. Add software prefetch for early stages.
+
+**Files**:
+- `AmoLean/EGraph/Verified/Bitwise/BoundPropagation.lean`
+- `AmoLean/EGraph/Verified/Bitwise/CrossRelNTT.lean`
+- `AmoLean/EGraph/Verified/Bitwise/VerifiedPlanCodeGen.lean`
+- `AmoLean/EGraph/Verified/Bitwise/NTTPlan.lean`
+- `AmoLean/EGraph/Verified/Bitwise/BoundIntegration.lean`
+- `AmoLean/EGraph/Verified/Bitwise/Discovery/MatPlanExtraction.lean`
+
+#### DAG (3.12.0)
+
+| Nodo | Tipo | Deps | Status |
+|------|------|------|--------|
+| N312.7 D.1: lazyReductionSafe parametrize wordBits | FUND | — | pending |
+| N312.8 D.2+D.3: Cost model lazy=0 + codegen skip reduction | CRIT | N312.7 | pending |
+| N312.9 D.4: wordBits propagation to callers | PAR | N312.7 | pending |
+| N312.10 D.5: Proofs for lazy passthrough | HOJA | N312.8 | pending |
+| N312.11 D.6: Software prefetch for early stages | HOJA | — | pending |
+
+#### Formal Properties (3.12.0)
+
+| Nodo | Propiedad | Tipo | Prioridad |
+|------|-----------|------|-----------|
+| N312.7 | lazyReductionSafe(1, goldiP, 128) = true | SOUNDNESS | P0 |
+| N312.8 | lowerReductionChoice .lazy emits passthrough (no Solinas fold) | EQUIVALENCE | P0 |
+| N312.8 | reductionCostForHW .lazy = 0 (not Solinas cost) | OPTIMIZATION | P0 |
+
+> **Nota**: Propiedades en lenguaje natural (intención de diseño).
+> Los stubs ejecutables están en BENCHMARKS.md § Formal Properties.
+
+#### Bloques
+
+- [ ] **Lazy + Prefetch**: N312.7, N312.8, N312.9, N312.10, N312.11
 
 ---
 

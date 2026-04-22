@@ -87,6 +87,7 @@ structure Config where
   relFreq : Nat := 5
   crossFreq : Nat := 10
   colorFreq : Nat := 5
+  boundAwareFreq : Nat := 5  -- v3.11.0 F3: frequency for bound-aware rewrite step
   matchFuel : Nat := 50
   rebuildFuel : Nat := 10
   deriving Repr, Inhabited
@@ -160,7 +161,7 @@ def findReductionPairs (g : MixedEGraph) (_rule : MixedColoredSoundRule) :
   let implClasses := g.classes.toList.filterMap fun (cid, eclass) =>
     let hasImpl := eclass.nodes.any fun node =>
       match node.op with
-      | .montyReduce _ _ _ | .barrettReduce _ _ _ | .harveyReduce _ _ => true
+      | .montyReduce _ _ _ | .barrettReduce _ _ _ | .harveyReduce _ _ | .conditionalSub _ _ => true
       | _ => false
     if hasImpl then some cid else none
   -- Pair each reduce with each impl (the e-graph resolves which pairs are valid)
@@ -197,16 +198,64 @@ theorem coloredStep_preserves_relEntries (rules : List MixedColoredSoundRule) (s
 -- Section 5: Single Tiered Saturation Loop
 -- ══════════════════════════════════════════════════════════════════
 
-/-- One iteration of tiered saturation. ALL FOUR steps are real.
-    Layer 1 (eq) → Layer 2 (colored) → Layer 3 (relational) → Cross-layer. -/
+/-- Local bound lookup (avoids circular import with BoundPropagation).
+    Mirrors BoundPropagation.buildBoundLookup: scans DAG sentinel edges. -/
+private def sentinelBase : Nat := 1000000
+private def decodeBF (sentinel : EClassId) : Option Nat :=
+  if sentinel ≥ sentinelBase then some (sentinel - sentinelBase) else none
+private def buildBoundLookupLocal (dag : DirectedRelGraph) : EClassId → Option Nat :=
+  fun classId =>
+    dag.successors classId |>.foldl (fun best dst =>
+      match decodeBF dst with
+      | some k => match best with
+        | some bestK => if k < bestK then some k else some bestK
+        | none => some k
+      | none => best
+    ) none
+
+/-- v3.11.0 F3: Bound-aware rewrite step. Applies rules gated by bound predicates.
+    Reads CURRENT bounds from relation DAG, then overrides sideCondCheck closures
+    to check boundK ≤ 2 for the matched e-class. Runs AFTER relStep so bounds are fresh.
+
+    Key design: rules start with `sideCondCheck := some fun _ _ => false` (blocked).
+    This function replaces the check with one that queries buildBoundLookup. -/
+def boundAwareEqStep (boundRules : List (MixedEMatch.RewriteRule MixedNodeOp))
+    (cfg : Config) (s : State) : State :=
+  if boundRules.isEmpty then s else
+  -- Read bounds from the CURRENT DAG (relEntries[0] = bound relation)
+  let boundLookup :=
+    if h : 0 < s.relEntries.size
+    then buildBoundLookupLocal s.relEntries[0].dag
+    else fun _ => none
+  -- Override sideCondCheck to query actual bounds
+  let rules := boundRules.map fun rule =>
+    { rule with
+      sideCondCheck := some fun g subst =>
+        -- subst maps patVar 0 → matched classId
+        match subst.get? 0 with
+        | some classId =>
+          let canonId := AmoLean.EGraph.VerifiedExtraction.UnionFind.root g.unionFind classId
+          match boundLookup canonId with
+          | some k => k > 0 && k ≤ 2  -- boundK ≤ 2 → input < 2p → conditionalSub safe
+          | none => false  -- no bound info → don't fire
+        | none => false }
+  let g' := MixedSaturation.applyRulesF cfg.matchFuel s.baseGraph rules
+  let g'' := MixedSaturation.rebuildF g' cfg.rebuildFuel
+  { s with baseGraph := g'' }
+
+/-- One iteration of tiered saturation. ALL FIVE steps are real.
+    Layer 1 (eq) → Layer 2 (colored) → Layer 3 (relational) → Cross-layer → Bound-aware. -/
 def tieredStep (rules : List (MixedEMatch.RewriteRule MixedNodeOp))
     (coloredRules : List MixedColoredSoundRule)
     (factory : BoundRuleFactory) (cfg : Config)
+    (boundRules : List (MixedEMatch.RewriteRule MixedNodeOp) := [])
     (iter : Nat) (s : State) : State :=
   let s := if iter % cfg.eqFreq == 0 then eqStep rules cfg s else s
   let s := if iter % cfg.colorFreq == 0 then coloredStep coloredRules s else s
   let s := if iter % cfg.relFreq == 0 then relStep factory s else s
   let s := if iter % cfg.crossFreq == 0 then crossStep cfg s else s
+  let s := if iter % cfg.boundAwareFreq == 0
+    then boundAwareEqStep boundRules cfg s else s
   s
 
 private def iterateN {α : Type} (f : Nat → α → α) : Nat → α → α
@@ -215,11 +264,14 @@ private def iterateN {α : Type} (f : Nat → α → α) : Nat → α → α
 
 /-- THE single saturation function. No alternatives, no stubs.
     - `factory = (fun _ => [])` → equality-only saturation (backward compat)
-    - `factory = mkBabyBearFactory` → bound-aware NTT saturation -/
+    - `factory = mkBabyBearFactory` → bound-aware NTT saturation
+    - `boundRules = []` → no bound-aware rewrites (backward compat, F3 default) -/
 def saturate (rules : List (MixedEMatch.RewriteRule MixedNodeOp))
     (coloredRules : List MixedColoredSoundRule := [])
-    (factory : BoundRuleFactory) (cfg : Config) (s : State) : State :=
-  iterateN (tieredStep rules coloredRules factory cfg) cfg.totalFuel s
+    (factory : BoundRuleFactory) (cfg : Config)
+    (boundRules : List (MixedEMatch.RewriteRule MixedNodeOp) := [])
+    (s : State) : State :=
+  iterateN (tieredStep rules coloredRules factory cfg boundRules) cfg.totalFuel s
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 6: Backward Compatibility
@@ -248,8 +300,9 @@ theorem relStep_null_preserves (s : State) :
 
 /-- saturate with 0 fuel is identity (for any factory). -/
 theorem saturate_zero_fuel (rules : List (MixedEMatch.RewriteRule MixedNodeOp))
-    (coloredRules : List MixedColoredSoundRule) (factory : BoundRuleFactory) (s : State) :
-    saturate rules coloredRules factory { Config.default with totalFuel := 0 } s = s := rfl
+    (coloredRules : List MixedColoredSoundRule) (factory : BoundRuleFactory) (s : State)
+    (boundRules : List (MixedEMatch.RewriteRule MixedNodeOp) := []) :
+    saturate rules coloredRules factory { Config.default with totalFuel := 0 } boundRules s = s := rfl
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 7: Theorems connecting to DirectedRelSpec
@@ -364,7 +417,7 @@ example : (State.empty.addRelation "bounds").numRelations = 1 := by
   simp [State.addRelation, State.numRelations, State.empty, Array.size_push]
 
 /-- saturate with null factory and 0 fuel is identity. -/
-example : saturate [] [] nullFactory { Config.default with totalFuel := 0 }
+example : saturate [] [] nullFactory { Config.default with totalFuel := 0 } []
     State.empty = State.empty := rfl
 
 /-- relStep with null factory is identity. -/

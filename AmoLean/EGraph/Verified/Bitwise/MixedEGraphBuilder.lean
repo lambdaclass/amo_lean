@@ -130,6 +130,9 @@ def addMixedExpr (g : EGraph MixedNodeOp) (expr : MixedExpr)
   | .harveyReduceE a p =>
     let (aId, g1) := addMixedExpr g a
     g1.add ⟨.harveyReduce aId p⟩
+  | .conditionalSubE a p =>
+    let (aId, g1) := addMixedExpr g a
+    g1.add ⟨.conditionalSub aId p⟩
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 4: Convenience — build from scratch

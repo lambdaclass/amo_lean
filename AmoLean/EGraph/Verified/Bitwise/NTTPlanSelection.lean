@@ -28,6 +28,7 @@ open AmoLean.EGraph.Verified.Bitwise.NTTPlan (Plan NTTStage RadixChoice StageDir
 open AmoLean.EGraph.Verified.Bitwise.BoundProp (ReductionChoice)
 open AmoLean.EGraph.Verified.Bitwise.Butterfly4 (radix4TotalMuls radix2TotalMuls)
 open AmoLean.EGraph.Verified.Bitwise (HardwareCost arm_cortex_a76 arm_neon_simd)
+open AmoLean.EGraph.Verified.Bitwise.CrossRelNTT (reductionCostForHW)
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 1: Cache Model
@@ -35,11 +36,11 @@ open AmoLean.EGraph.Verified.Bitwise (HardwareCost arm_cortex_a76 arm_neon_simd)
 
 /-- Hardware cache configuration. -/
 structure CacheConfig where
-  l1DataSize : Nat := 32768    -- 32KB L1 data cache (typical ARM/x86)
+  l1DataSize : Nat := 131072   -- 128KB L1 data cache (Apple M1/M2/M3 per-core)
   lineSize : Nat := 64         -- 64-byte cache line
-  elementSize : Nat := 4       -- 4 bytes per u32 element
+  elementSize : Nat := 4       -- 4 bytes per u32 element (override to 8 for uint64_t fields)
   l1MissCycles : Nat := 4      -- L1 miss penalty (cycles)
-  l2MissCycles : Nat := 12     -- L2 miss penalty
+  l2MissCycles : Nat := 16     -- L2 miss penalty (Apple M1: 16 cycles, not 12)
   deriving Repr, Inhabited
 
 def CacheConfig.default : CacheConfig := {}
@@ -62,12 +63,23 @@ def stageCacheMisses (n : Nat) (stageIdx : Nat) (cache : CacheConfig) : Nat :=
     let missRate := (strideBytes - cache.l1DataSize) / cache.l1DataSize
     butterfliesPerStage * missRate
 
-/-- Total cache cost for an NTT plan (sum of per-stage miss penalties). -/
+/-- Total cache cost for an NTT plan (level-aware with data-reuse).
+    R4 stages cover 2 NTT levels in 1 pass: the butterfly loads 4 elements
+    (a,b,c,d) and processes both levels before storing. The second level
+    reuses data already in L1/registers from the first level's load.
+    R2 stages cover 1 level each, with a full array sweep between levels
+    that evicts L1 for large N (data >> L1). -/
 def planCacheCost (plan : Plan) (cache : CacheConfig := .default) : Nat :=
-  plan.stages.foldl (fun acc stage =>
-    let misses := stageCacheMisses plan.size stage.stageIdx cache
-    acc + misses * cache.l1MissCycles
-  ) 0
+  let (cost, _) := plan.stages.foldl (fun (acc, level) stage =>
+    let levelsConsumed := match stage.radix with | .r2 => 1 | .r4 => 2
+    -- First level of the stage always pays full cache misses
+    let firstLevelMisses := stageCacheMisses plan.size level cache
+    -- For R4: second level reuses data loaded by first level (same butterfly call)
+    -- For R2: only 1 level, no second level
+    let totalMisses := firstLevelMisses  -- second level of R4 is free (data reuse)
+    (acc + totalMisses * cache.l1MissCycles, level + levelsConsumed)
+  ) (0, 0)
+  cost
 
 /-- Bowers ordering reduces cache misses by processing data linearly.
     Approximate savings: 30-50% fewer misses for large N. -/
@@ -105,32 +117,48 @@ def generateCandidates (p n : Nat) (hw : HardwareCost)
      mkMixedRadixPlan p n (some hw) arrayIsLarge
   ]
   -- 10. R2 Harvey + ilpFactor=2 (dual-butterfly interleaving for NEON)
+  -- v3.10.0 TD: also add ILP2 for Goldilocks scalar (k > 32)
+  -- where mul latency = 3 cycles and -O2 doesn't auto-interleave
+  let withILP := baseCandidates.push
+    ((mkBoundAwarePlan p n (some hw) arrayIsLarge).withILP 2)
   if hw.isSimd then
-    baseCandidates.push ((mkUniformPlan p n .r2 .harvey).withILP 2)
-  else baseCandidates
+    withILP.push ((mkUniformPlan p n .r2 .harvey).withILP 2)
+  else withILP
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 3: Plan Selection
 -- ══════════════════════════════════════════════════════════════════
 
+/-- v3.10.0 T7: Parametrized total cost — accepts costFn for dynamic channel. -/
+def planTotalCostWith (plan : Plan) (hw : HardwareCost)
+    (cache : CacheConfig := .default)
+    (costFn : HardwareCost → ReductionChoice → Nat := reductionCostForHW) : Nat :=
+  Plan.totalCostWith plan hw costFn + bowersAdjustment plan cache
+
 /-- Total cost of a plan: arithmetic + reduction + cache.
     Uses hardware-aware cost model (SINGLE SOURCE OF TRUTH). -/
 def planTotalCost (plan : Plan) (hw : HardwareCost)
     (cache : CacheConfig := .default) : Nat :=
-  plan.totalCost hw + bowersAdjustment plan cache
+  planTotalCostWith plan hw cache reductionCostForHW
+
+/-- v3.10.0 T7: Select cheapest plan with parametric cost function. -/
+def selectPlanWith (candidates : Array Plan) (hw : HardwareCost)
+    (cache : CacheConfig := .default)
+    (costFn : HardwareCost → ReductionChoice → Nat := reductionCostForHW) : Option Plan :=
+  if h : candidates.size == 0 then none
+  else
+    let first := candidates[0]!
+    some (candidates.foldl (fun best plan =>
+      let bestCost := planTotalCostWith best hw cache costFn
+      let planCost := planTotalCostWith plan hw cache costFn
+      if planCost < bestCost then plan else best
+    ) first)
 
 /-- Select the cheapest plan from a list of candidates.
     Returns the plan with lowest total cost using hardware-aware model. -/
 def selectPlan (candidates : Array Plan) (hw : HardwareCost)
     (cache : CacheConfig := .default) : Option Plan :=
-  if h : candidates.size == 0 then none
-  else
-    let first := candidates[0]!
-    some (candidates.foldl (fun best plan =>
-      let bestCost := planTotalCost best hw cache
-      let planCost := planTotalCost plan hw cache
-      if planCost < bestCost then plan else best
-    ) first)
+  selectPlanWith candidates hw cache reductionCostForHW
 
 /-- Top-level: select the best NTT plan for a field + hardware.
     Computes arrayIsLarge from n vs cacheThreshold automatically. -/
@@ -146,9 +174,9 @@ def selectBestPlan (p n : Nat) (hw : HardwareCost)
 -- Section 4: Theorems
 -- ══════════════════════════════════════════════════════════════════
 
-/-- generateCandidates produces 9 candidates for scalar, 10 for SIMD (+ILP variant). -/
-example : (generateCandidates 2013265921 1024 arm_cortex_a76).size = 9 := by native_decide
-example : (generateCandidates 2013265921 1024 arm_neon_simd).size = 10 := by native_decide
+/-- generateCandidates: 10 for scalar (+ILP2), 11 for SIMD (+ILP2 + NEON ILP). -/
+example : (generateCandidates 2013265921 1024 arm_cortex_a76).size = 10 := by native_decide
+example : (generateCandidates 2013265921 1024 arm_neon_simd).size = 11 := by native_decide
 
 /-- selectBestPlan returns a well-formed plan for BabyBear N=1024. -/
 example : (selectBestPlan 2013265921 1024 arm_cortex_a76).wellFormed = true := by native_decide
@@ -169,13 +197,13 @@ example : stageCacheMisses 1024 0 .default = 0 := by native_decide
 section SmokeTests
 
 /-- 8 candidates for BabyBear N=1024. -/
-example : (generateCandidates 2013265921 1024 arm_cortex_a76).size = 9 := rfl
+example : (generateCandidates 2013265921 1024 arm_cortex_a76).size = 10 := rfl
 
 /-- selectBestPlan returns a plan (doesn't crash). -/
 example : (selectBestPlan 2013265921 1024 arm_cortex_a76).numStages > 0 := by native_decide
 
-/-- Bound-aware plan with hw uses Harvey (not lazy). -/
-example : (mkBoundAwarePlan 2013265921 1024 (some arm_neon_simd)).lazyStages = 0 := by native_decide
+/-- v3.12.0 D: Bound-aware plan with hw now uses lazy (cost=0, safe for BabyBear u64). -/
+example : (mkBoundAwarePlan 2013265921 1024 (some arm_neon_simd)).lazyStages > 0 := by native_decide
 
 /-- Cache cost for early stages is 0. -/
 example : stageCacheMisses 1024 0 .default = 0 := by native_decide

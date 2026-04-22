@@ -198,6 +198,8 @@ def mixedOpCost (hw : HardwareCost) : MixedNodeOp → Nat
       -- Barrett: 6 ops + u64 penalty (SIMD + cache)
   | .harveyReduce _ _    => hw.sub + hw.sub + hw.add
       -- Harvey: 3 ops, u32 conditional subs → no widening
+  | .conditionalSub _ _  => hw.condSub
+      -- Conditional subtract: 1 compare + 1 sub (selected when boundK ≤ 2)
 
 /-! ## Combined mul+add cost (branch-aware selection)
 

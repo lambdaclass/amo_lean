@@ -110,6 +110,7 @@ def lowerOp (op : MixedNodeOp) (v : EClassId → LowLevelExpr) : LowLevelExpr :=
   | .montyReduce a _p _mu => v a  -- in Trust-Lean IR, defer to backend
   | .barrettReduce a _p _m => v a
   | .harveyReduce a _p => v a
+  | .conditionalSub a _p => v a  -- lowered to lowerConditionalSub in codegen
 
 -- ══════════════════════════════════════════════════════════════════
 -- Section 3: CodeGenerable instance for MixedNodeOp
@@ -368,6 +369,8 @@ def harveyReduceSpec (x : Int) (p : Nat) : Int :=
   else x - 2 * (p : Int)
 
 /-- Lower Harvey conditional subtraction to Trust-Lean Stmt.
+    if x < 2p then (if x < p then result := x else result := x - p)
+    else result := x - 2p
     if x < 2p then (if x < p then result := x else result := x - p)
     else result := x - 2p
     Mirrors the structure of `lowerSolinasFold` for consistency. -/

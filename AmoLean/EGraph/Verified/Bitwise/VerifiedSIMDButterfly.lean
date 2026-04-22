@@ -278,4 +278,95 @@ example : countCalls (hs2ButterflyStmt dg0 dg1 tg0 tg1 mg0 mg1 testPVecS testPVe
 
 end SmokeTests
 
+-- ══════════════════════════════════════════════════════════════════
+-- Section 7: Goldilocks SIMD Butterfly (v3.9.0 N39.9)
+-- ══════════════════════════════════════════════════════════════════
+
+/-- Goldilocks butterfly as Stmt.call sequence (2-lane uint64x2_t).
+    Processes 2 elements per call. Uses Karatsuba decomposition:
+    w*b where w,b ∈ GF(p), p = 2^64 - 2^32 + 1.
+
+    Algorithm (φ = 2^32):
+    1. Split w and b into 32-bit halves via narrow
+    2. 3 widening multiplies (Karatsuba): p0=w0·b0, p2=w1·b1, p1=(w0+w1)·(b0+b1)
+    3. Recombine + Goldilocks fold (shift-subtract)
+    4. DIT sum/diff with conditional subtraction
+
+    Parameters:
+    - a, b: pointers to uint64_t data (2 elements each)
+    - tw: pointer to uint64_t twiddle (2 elements)
+    - pVec: uint64x2_t broadcast of p
+
+    Note: This is a STRUCTURAL template. The actual fold + normalization
+    uses scalar ops after the NEON multiply. Full SIMD fold would need
+    128-bit NEON reduction which is complex and low-benefit (only 2 lanes).
+
+    For v3.9.0: just the 3 widening multiplies + split/recombine as Stmt.
+    The fold and DIT sum/diff are handled by scalar code (mixed NEON+scalar). -/
+def goldilocksButterfly4Stmt (a b tw pVec : VarName) : Stmt :=
+  -- Phase 1: Load 2-lane vectors (3 ops)
+  let s_la  := neonCall .load2_u64  (mkVar "nv" 0) [.varRef a]     -- va = load(a)
+  let s_lb  := neonCall .load2_u64  (mkVar "nv" 1) [.varRef b]     -- vb = load(b)
+  let s_ltw := neonCall .load2_u64  (mkVar "nv" 2) [.varRef tw]    -- vw = load(tw)
+  -- Phase 2: Split into 32-bit halves (4 ops)
+  let s_w0 := neonCall .narrow_low32  (mkVar "nv" 3) [ref "nv" 2]  -- w0 = low32(w)
+  let s_w1 := neonCall .narrow_high32 (mkVar "nv" 4) [ref "nv" 2]  -- w1 = high32(w)
+  let s_b0 := neonCall .narrow_low32  (mkVar "nv" 5) [ref "nv" 1]  -- b0 = low32(b)
+  let s_b1 := neonCall .narrow_high32 (mkVar "nv" 6) [ref "nv" 1]  -- b1 = high32(b)
+  -- Phase 3: Karatsuba — 3 widening multiplies (3 ops, all V0)
+  let s_p0 := neonCall .widening_mul32 (mkVar "nv" 7) [ref "nv" 3, ref "nv" 5]   -- p0 = w0·b0
+  let s_p2 := neonCall .widening_mul32 (mkVar "nv" 8) [ref "nv" 4, ref "nv" 6]   -- p2 = w1·b1
+  -- (w0+w1) and (b0+b1) use 32-bit add before widening mul
+  let s_w01 := neonCall .add_u32 (mkVar "nv" 9)  [ref "nv" 3, ref "nv" 4]  -- w0+w1
+  let s_b01 := neonCall .add_u32 (mkVar "nv" 10) [ref "nv" 5, ref "nv" 6]  -- b0+b1
+  let s_p1  := neonCall .widening_mul32 (mkVar "nv" 11) [ref "nv" 9, ref "nv" 10] -- p1=(w0+w1)(b0+b1)
+  -- Phase 4: Recombine — mid = p1 - p0, result = (p0 + p - p2) + (mid << 32)
+  -- These use 64-bit NEON ops on uint64x2_t
+  let s_mid  := neonCall .sub_u64 (mkVar "nv" 12) [ref "nv" 11, ref "nv" 7]  -- mid = p1-p0
+  let s_p0pp := neonCall .add_u64 (mkVar "nv" 13) [ref "nv" 7, .varRef pVec] -- p0+p (avoid underflow)
+  let s_lo   := neonCall .sub_u64 (mkVar "nv" 14) [ref "nv" 13, ref "nv" 8]  -- lo = p0+p-p2
+  -- Note: (mid << 32) would need a shift intrinsic not in our ADT. For structural
+  -- template purposes, we store mid and lo for scalar post-processing.
+  -- Phase 5: Store intermediate results (2 ops, void) — scalar code does fold + DIT
+  let s_sta := neonCallVoid .store2_u64 [.varRef a, ref "nv" 14]  -- store lo_part
+  let s_stb := neonCallVoid .store2_u64 [.varRef b, ref "nv" 12]  -- store mid
+  seqAll [s_la, s_lb, s_ltw, s_w0, s_w1, s_b0, s_b1,
+          s_p0, s_p2, s_w01, s_b01, s_p1,
+          s_mid, s_p0pp, s_lo, s_sta, s_stb]
+
+-- ══════════════════════════════════════════════════════════════════
+-- Section 8: Goldilocks + fromCName Roundtrip Tests (v3.9.0)
+-- ══════════════════════════════════════════════════════════════════
+
+section GoldilocksTests
+
+/-- fromCName roundtrip for all 7 new NeonIntrinsics. -/
+example : NeonIntrinsic.fromCName "vaddq_u64" = some .add_u64 := rfl
+example : NeonIntrinsic.fromCName "vsubq_u64" = some .sub_u64 := rfl
+example : NeonIntrinsic.fromCName "vld1q_u64" = some .load2_u64 := rfl
+example : NeonIntrinsic.fromCName "vst1q_u64" = some .store2_u64 := rfl
+example : NeonIntrinsic.fromCName "vmull_u32" = some .widening_mul32 := rfl
+example : NeonIntrinsic.fromCName "vshrn_n_u64" = some .narrow_high32 := rfl
+example : NeonIntrinsic.fromCName "vmovn_u64" = some .narrow_low32 := rfl
+
+/-- toCName → fromCName roundtrip for all 7 new intrinsics. -/
+example : NeonIntrinsic.fromCName NeonIntrinsic.add_u64.toCName = some .add_u64 := rfl
+example : NeonIntrinsic.fromCName NeonIntrinsic.store2_u64.toCName = some .store2_u64 := rfl
+example : NeonIntrinsic.fromCName NeonIntrinsic.widening_mul32.toCName = some .widening_mul32 := rfl
+
+/-- store2_u64 is void (stores don't return values). -/
+example : NeonIntrinsic.store2_u64.isVoid = true := rfl
+
+/-- Goldilocks butterfly uses only known intrinsics. -/
+example : allCallsKnown (goldilocksButterfly4Stmt
+    (VarName.user "a") (VarName.user "b")
+    (VarName.user "tw") (VarName.user "p_vec")) = true := rfl
+
+/-- Goldilocks butterfly produces 17 calls (3 load + 4 split + 5 multiply + 3 recombine + 2 store). -/
+example : countCalls (goldilocksButterfly4Stmt
+    (VarName.user "a") (VarName.user "b")
+    (VarName.user "tw") (VarName.user "p_vec")) = 17 := rfl
+
+end GoldilocksTests
+
 end AmoLean.EGraph.Verified.Bitwise.VerifiedSIMDButterfly
