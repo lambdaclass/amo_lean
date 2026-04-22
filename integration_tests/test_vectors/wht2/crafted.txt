@@ -1,0 +1,25 @@
+# DFT_2 (Walsh-Hadamard Transform) test vectors
+# Format: input : expected output
+# WHT_2 = [[1,1],[1,-1]]
+
+# Zero
+0 0 : 0 0
+
+# Standard basis
+1 0 : 1 1
+0 1 : 1 -1
+
+# Symmetry / antisymmetry
+1 1 : 2 0
+1 -1 : 0 2
+-1 1 : 0 -2
+-1 -1 : -2 0
+
+# Larger values
+100 0 : 100 100
+0 100 : 100 -100
+50 -50 : 0 100
+-100 100 : 0 -200
+
+# Involution check (WHT_2 @ WHT_2 = 2 I, so applying twice scales by 2)
+7 3 : 10 4
