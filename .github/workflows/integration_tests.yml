@@ -8,8 +8,13 @@ on:
 
 jobs:
   integration-tests:
-    name: DFT_4 Integration Tests
+    name: DFT_${{ matrix.size }} Integration Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        size: [2, 4]
 
     steps:
     - name: Checkout repository
@@ -39,11 +44,11 @@ jobs:
     - name: Install clang
       run: sudo apt-get update && sudo apt-get install -y clang
 
-    - name: Generate C from DFT_4 spec via trzk
-      run: .lake/build/bin/trzk integration_tests/dft4_spec.lean --target c --name dft4 --output integration_tests/dft4_spec.c
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
 
-    - name: Compile generated C with test harness
-      run: clang -O2 -o integration_tests/dft4 integration_tests/dft4_spec.c integration_tests/harness_4.c
+    - name: Run DFT_${{ matrix.size }} integration test (fixed vectors)
+      run: bash integration_tests/run.sh --size ${{ matrix.size }}
 
-    - name: Verify C binary against test vectors
-      run: python3 integration_tests/verify_dft4.py --binary integration_tests/dft4 integration_tests/test_vectors.txt
+    - name: Run DFT_${{ matrix.size }} integration test (fuzz 100k)
+      run: bash integration_tests/run.sh --size ${{ matrix.size }} --fuzz -n 100000
