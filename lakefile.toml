@@ -12,3 +12,7 @@ name = "TRZK"
 [[lean_lib]]
 name = "Tests"
 globs = ["Tests"]
+
+[[lean_exe]]
+name = "trzk"
+root = "Compile"
