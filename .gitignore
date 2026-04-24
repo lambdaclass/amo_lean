@@ -1,0 +1,8 @@
+.lake/
+/build/
+**/artifacts/*
+!**/artifacts/.gitkeep
+*.swp
+.DS_Store
+research/
+dag*.json

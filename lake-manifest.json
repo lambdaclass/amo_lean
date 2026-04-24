@@ -1,0 +1,15 @@
+{"version": "1.1.0",
+ "packagesDir": ".lake/packages",
+ "packages":
+ [{"url": "https://github.com/lambdaclass/truth_research.git",
+   "type": "git",
+   "subDir": null,
+   "scope": "",
+   "rev": "0439a647fa08fffe7ac445aa92f25ae47dc10d7b",
+   "name": "optisat",
+   "manifestFile": "lake-manifest.json",
+   "inputRev": "0439a647fa08fffe7ac445aa92f25ae47dc10d7b",
+   "inherited": false,
+   "configFile": "lakefile.toml"}],
+ "name": "trzk",
+ "lakeDir": ".lake"}

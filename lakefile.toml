@@ -1,0 +1,14 @@
+name = "trzk"
+defaultTargets = ["TRZK", "Tests"]
+
+[[require]]
+name = "optisat"
+git = "https://github.com/lambdaclass/truth_research.git"
+rev = "0439a647fa08fffe7ac445aa92f25ae47dc10d7b"
+
+[[lean_lib]]
+name = "TRZK"
+
+[[lean_lib]]
+name = "Tests"
+globs = ["Tests"]
