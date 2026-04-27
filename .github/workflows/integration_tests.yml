@@ -1,0 +1,50 @@
+name: Integration Tests
+
+on:
+  push:
+    branches: [main, fresh_start]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    name: arith_spec_${{ matrix.size }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        size: [1]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install elan
+        run: |
+          curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> $GITHUB_PATH
+
+      - name: Cache Lake build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.elan
+            .lake
+          key: ${{ runner.os }}-lake-${{ hashFiles('lean-toolchain', 'lakefile.toml', 'lake-manifest.json') }}
+          restore-keys: |
+            ${{ runner.os }}-lake-
+
+      - name: Fetch Mathlib cache (no-op if Mathlib is not a dep)
+        run: lake exe cache get || true
+
+      - name: Build trzk CLI
+        run: lake build trzk
+
+      - name: Crafted vectors
+        run: bash integration_tests/run.sh --size ${{ matrix.size }}
+
+      - name: Fuzz (100k)
+        run: bash integration_tests/run.sh --size ${{ matrix.size }} --fuzz -n 100000

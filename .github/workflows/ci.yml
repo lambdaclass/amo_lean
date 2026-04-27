@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [main, fresh_start]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Strict --wfail / --iofail are disabled because optisat
+      # (LambdaSat.CompletenessSpec) currently emits unused-section-variable
+      # warnings we don't control. Re-enable once upstream is warning-clean.
+      - uses: leanprover/lean-action@v1
+        with:
+          build: true
+          test: true
+          lint: true
+
+      - name: Fetch Mathlib cache (no-op if Mathlib is not a dep)
+        run: lake exe cache get || true
+
+      - name: Build trzk CLI
+        run: lake build trzk
