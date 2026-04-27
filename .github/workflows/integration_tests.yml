@@ -2,7 +2,7 @@ name: Integration Tests
 
 on:
   push:
-    branches: [main, fresh_start]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -39,9 +39,6 @@ jobs:
 
       - name: Fetch Mathlib cache (no-op if Mathlib is not a dep)
         run: lake exe cache get || true
-
-      - name: Build trzk CLI
-        run: lake build trzk
 
       - name: Crafted vectors
         run: bash integration_tests/run.sh --size ${{ matrix.size }}

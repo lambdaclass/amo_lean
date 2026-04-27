@@ -1,5 +1,5 @@
 name = "trzk"
-defaultTargets = ["TRZK", "Tests"]
+defaultTargets = ["TRZK", "Tests", "trzk"]
 
 [[require]]
 name = "optisat"

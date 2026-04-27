@@ -49,8 +49,10 @@ VECTORS_DIR="$SCRIPT_DIR/test_vectors/arith_${N}"
 
 echo "=== Integration Test: arith_spec_${N} via trzk ==="
 
-# 1. Build trzk unconditionally (cheap when up-to-date).
-(cd "$PROJECT_ROOT" && lake build trzk)
+# 1. Build unconditionally (cheap when up-to-date). `lake build` resolves to
+# defaultTargets (TRZK, Tests, trzk); we need the TRZK lib oleans on disk
+# because the trzk runner re-elaborates a temp file via `lake env lean --run`.
+(cd "$PROJECT_ROOT" && lake build)
 
 # 2. Generate Rust from spec.
 echo "Generating Rust from arith_spec_${N}.lean..."
