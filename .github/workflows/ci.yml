@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, fresh_start]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -21,14 +21,17 @@ jobs:
       # Strict --wfail / --iofail are disabled because optisat
       # (LambdaSat.CompletenessSpec) currently emits unused-section-variable
       # warnings we don't control. Re-enable once upstream is warning-clean.
+      #
+      # `use-mathlib-cache: auto` (default) makes lean-action run
+      # `lake exe cache get` BEFORE `lake build` whenever Mathlib is detected
+      # as a dependency, so we don't need an explicit step.
+      # `test: false` because we don't expose a `lake test` runner; tests are
+      # `#guard`s in the `Tests` lean_lib, which is in `defaultTargets`, so
+      # `lake build` already elaborates them and any failure breaks the build.
+      # `lint: false` because we don't have a lint driver. Re-enable once we
+      # plug in a Mathlib-style linter.
       - uses: leanprover/lean-action@v1
         with:
           build: true
-          test: true
-          lint: true
-
-      - name: Fetch Mathlib cache (no-op if Mathlib is not a dep)
-        run: lake exe cache get || true
-
-      - name: Build trzk CLI
-        run: lake build trzk
+          test: false
+          lint: false

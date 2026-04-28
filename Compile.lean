@@ -117,7 +117,8 @@ def main (args : List String) : IO UInt32 := do
 
   if result.exitCode != 0 then
     IO.eprintln "Compilation failed:"
-    IO.eprintln result.stderr
+    IO.eprintln s!"--- stderr ---\n{result.stderr}"
+    IO.eprintln s!"--- stdout ---\n{result.stdout}"
     return 1
 
   IO.println s!"Generated: {outputPath}"
