@@ -13,7 +13,7 @@ fn main() {
         .map(|s| s.parse::<isize>().expect("argv must be isize"))
         .collect();
 
-    // arith_spec_1 takes 1 input.
+    // arith_spec_add takes 1 input.
     let y = match xs.as_slice() {
         [x0] => arith_spec(*x0),
         _ => {
