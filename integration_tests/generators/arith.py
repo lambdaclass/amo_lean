@@ -13,12 +13,14 @@ import itertools
 import random
 import sys
 
-# arity per op. Future ops (shr, sar) add rows here.
+# arity per op. Future ops (sar) add rows here.
+# Note: `shr` arity is 1 because the spec reduces to `x0` after saturation.
 ARITY = {
     "add0": 1,
     "mul": 2,
     "idiv1": 1,
     "shl": 2,
+    "shr": 1,
 }
 
 I64_MIN = -(2**63)
@@ -67,6 +69,9 @@ def reference(op: str, xs: list[int]) -> int:
     if op == "shl":
         # arith_spec_shl: y = x0.unbounded_shl(x1 as u32).
         return _unbounded_shl_isize(xs[0], xs[1])
+    if op == "shr":
+        # arith_spec_shr: y = x0 >> 0 = x0.
+        return xs[0]
     raise ValueError(f"unknown op: {op}")
 
 
@@ -84,6 +89,7 @@ def main() -> int:
         "mul": (-(2**40), 2**40 - 1),
         "idiv1": (-(2**62), 2**62 - 1),
         "shl": (-(2**62), 2**62 - 1),
+        "shr": (-(2**62), 2**62 - 1),
     }
     lo, hi = lo_hi[args.op]
     it = range(args.count) if args.count is not None else itertools.count()

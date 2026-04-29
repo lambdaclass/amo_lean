@@ -26,6 +26,10 @@ partial def embed (g : EGraph ArithOp) : ArithExpr → (EClassId × EGraph Arith
     let (ia, g1) := embed g a
     let (ib, g2) := embed g1 b
     g2.add ⟨.shl ia ib⟩
+  | .shr a b =>
+    let (ia, g1) := embed g a
+    let (ib, g2) := embed g1 b
+    g2.add ⟨.shr ia ib⟩
 
 /-- End-to-end optimization: embed → saturate → extract lowest-cost form.
     Fuel constants (50, 10, 50) are sized for v0 with a single rule; revisit
