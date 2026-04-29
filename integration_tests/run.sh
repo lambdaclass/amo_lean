@@ -7,7 +7,7 @@ set -euo pipefail
 # Usage: ./integration_tests/run.sh --op OP [--fuzz] [-n COUNT]
 # (run from project root)
 
-OPS=(add0 mul)
+OPS=(add0 mul idiv1)
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -57,11 +57,12 @@ echo "=== Integration Test: arith_spec_${OP} via trzk ==="
 echo "Generating Rust from arith_spec_${OP}.lean..."
 "$TRZK" "$SPEC" --name "arith_spec" --output "$GEN_RS"
 
-# Arity per op. Future ops (idiv, shifts) add rows here. The harness selects
+# Arity per op. Future ops (shifts) add rows here. The harness selects
 # its call signature via `--cfg arity="N"`, so this must be set before rustc.
 case "$OP" in
     add0) ARITY=1 ;;
     mul) ARITY=2 ;;
+    idiv1) ARITY=1 ;;
     *) echo "Internal error: no arity registered for op '$OP'" >&2; exit 2 ;;
 esac
 

@@ -11,6 +11,7 @@ inductive ArithOp where
   | var   : Nat → ArithOp
   | add   : EClassId → EClassId → ArithOp
   | mul   : EClassId → EClassId → ArithOp
+  | idiv  : EClassId → EClassId → ArithOp
   deriving Repr, Inhabited, DecidableEq
 
 instance : BEq ArithOp where
@@ -18,10 +19,11 @@ instance : BEq ArithOp where
 
 instance : Hashable ArithOp where
   hash
-    | .const n => mixHash 1 (hash n)
-    | .var i   => mixHash 2 (hash i)
-    | .add l r => mixHash 3 (mixHash (hash l) (hash r))
-    | .mul l r => mixHash 4 (mixHash (hash l) (hash r))
+    | .const n  => mixHash 1 (hash n)
+    | .var i    => mixHash 2 (hash i)
+    | .add l r  => mixHash 3 (mixHash (hash l) (hash r))
+    | .mul l r  => mixHash 4 (mixHash (hash l) (hash r))
+    | .idiv l r => mixHash 5 (mixHash (hash l) (hash r))
 
 instance : LawfulBEq ArithOp where
   eq_of_beq {a b} h := by simp [BEq.beq] at h; exact h
@@ -33,28 +35,35 @@ instance : LawfulHashable ArithOp where
 
 instance : NodeOps ArithOp where
   children
-    | .const _ => []
-    | .var _   => []
-    | .add l r => [l, r]
-    | .mul l r => [l, r]
+    | .const _  => []
+    | .var _    => []
+    | .add l r  => [l, r]
+    | .mul l r  => [l, r]
+    | .idiv l r => [l, r]
   mapChildren f
-    | .const n => .const n
-    | .var i   => .var i
-    | .add l r => .add (f l) (f r)
-    | .mul l r => .mul (f l) (f r)
+    | .const n  => .const n
+    | .var i    => .var i
+    | .add l r  => .add (f l) (f r)
+    | .mul l r  => .mul (f l) (f r)
+    | .idiv l r => .idiv (f l) (f r)
   replaceChildren op cs :=
     match op, cs with
-    | .add _ _, [l, r] => .add l r
-    | .mul _ _, [l, r] => .mul l r
+    | .add _ _,  [l, r] => .add l r
+    | .mul _ _,  [l, r] => .mul l r
+    | .idiv _ _, [l, r] => .idiv l r
     | op, _ => op
   localCost _ := 1
   mapChildren_children f op := by cases op <;> simp
   mapChildren_id op := by cases op <;> simp
   replaceChildren_children op ids hlen := by
     cases op with
-    | const _ => simp at hlen; simp [hlen]
-    | var _   => simp at hlen; simp [hlen]
-    | add _ _ =>
+    | const _  => simp at hlen; simp [hlen]
+    | var _    => simp at hlen; simp [hlen]
+    | add _ _  =>
+      simp at hlen
+      match ids, hlen with
+      | [_, _], _ => simp
+    | idiv _ _ =>
       simp at hlen
       match ids, hlen with
       | [_, _], _ => simp
@@ -64,9 +73,13 @@ instance : NodeOps ArithOp where
       | [_, _], _ => simp
   replaceChildren_sameShape op ids hlen := by
     cases op with
-    | const _ => simp at hlen; simp
-    | var _   => simp at hlen; simp
-    | add _ _ =>
+    | const _  => simp at hlen; simp
+    | var _    => simp at hlen; simp
+    | add _ _  =>
+      simp at hlen
+      match ids, hlen with
+      | [_, _], _ => simp
+    | idiv _ _ =>
       simp at hlen
       match ids, hlen with
       | [_, _], _ => simp
@@ -78,10 +91,11 @@ instance : NodeOps ArithOp where
 instance : Extractable ArithOp ArithExpr where
   reconstruct op childExprs :=
     match op, childExprs with
-    | .const n, []     => some (.const n)
-    | .var i,   []     => some (.var i)
-    | .add _ _, [l, r] => some (.add l r)
-    | .mul _ _, [l, r] => some (.mul l r)
-    | _, _             => none
+    | .const n,  []     => some (.const n)
+    | .var i,    []     => some (.var i)
+    | .add _ _,  [l, r] => some (.add l r)
+    | .mul _ _,  [l, r] => some (.mul l r)
+    | .idiv _ _, [l, r] => some (.idiv l r)
+    | _, _              => none
 
 end TRZK
