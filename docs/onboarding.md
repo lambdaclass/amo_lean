@@ -27,10 +27,12 @@ Any failing `#guard` breaks the build. Test modules live in `Tests/`:
 ```bash
 ./integration_tests/run.sh --op add0                  # crafted vectors
 ./integration_tests/run.sh --op add0 --fuzz -n 1000   # random fuzz
+./integration_tests/run.sh --op mul                   # mul: y = (x0 * 1) * x1 → x0 * x1
 ```
 
-The script builds `trzk`, compiles `arith_spec_add0.lean` to Rust, links the
-harness, and pipes test vectors to the verifier.
+The script builds `trzk`, compiles `arith_spec_${OP}.lean` to Rust, links the
+harness (selecting its arity via `--cfg arity="N"`), and pipes test vectors to
+the verifier. Registered ops live in `OPS=(...)` in `run.sh`.
 
 ## Add a new spec
 
@@ -49,10 +51,10 @@ Edit `TRZK/Rule.lean` only. The shape is:
 ```lean
 def myRule : RewriteRule ArithOp where
   name := "my_rule"
-  lhs := .node (.add 0 0) [.patVar 0, .patVar 0]   -- x + x
-  rhs := .node (.add 0 0) [.node (.const 2) [], .patVar 0]  -- 2 * x (if mul existed)
+  lhs := .node (.add 0 0) [.patVar 0, .patVar 0]                -- x + x
+  rhs := .node (.mul 0 0) [.node (.const 2) [], .patVar 0]      -- 2 * x
 
-def allRules : List (RewriteRule ArithOp) := [addZeroRight, myRule]
+def allRules : List (RewriteRule ArithOp) := [addZeroRight, mulOneRight, myRule]
 ```
 
 No edits to `Pipeline.lean`, `ArithOp.lean`, or `Emit.lean` are needed.

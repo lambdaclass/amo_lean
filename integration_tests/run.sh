@@ -7,7 +7,7 @@ set -euo pipefail
 # Usage: ./integration_tests/run.sh --op OP [--fuzz] [-n COUNT]
 # (run from project root)
 
-OPS=(add0)
+OPS=(add0 mul)
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -57,15 +57,20 @@ echo "=== Integration Test: arith_spec_${OP} via trzk ==="
 echo "Generating Rust from arith_spec_${OP}.lean..."
 "$TRZK" "$SPEC" --name "arith_spec" --output "$GEN_RS"
 
-# 3. Compile harness (which #[path]s the generated file).
-echo "Compiling..."
-rustc -O --edition 2024 "$SCRIPT_DIR/harness.rs" -o "$BIN"
-
-# Arity per op. Future ops (mul, idiv, shifts) add rows here.
+# Arity per op. Future ops (idiv, shifts) add rows here. The harness selects
+# its call signature via `--cfg arity="N"`, so this must be set before rustc.
 case "$OP" in
     add0) ARITY=1 ;;
+    mul) ARITY=2 ;;
     *) echo "Internal error: no arity registered for op '$OP'" >&2; exit 2 ;;
 esac
+
+# 3. Compile harness (which #[path]s the generated file).
+echo "Compiling..."
+rustc -O --edition 2024 \
+    --check-cfg 'cfg(arity, values("1", "2"))' \
+    --cfg "arity=\"${ARITY}\"" \
+    "$SCRIPT_DIR/harness.rs" -o "$BIN"
 
 # 4. Verify.
 RESULT=0
