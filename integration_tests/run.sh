@@ -7,7 +7,7 @@ set -euo pipefail
 # Usage: ./integration_tests/run.sh --op OP [--fuzz] [-n COUNT]
 # (run from project root)
 
-OPS=(add)
+OPS=(add0)
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -63,7 +63,7 @@ rustc -O --edition 2024 "$SCRIPT_DIR/harness.rs" -o "$BIN"
 
 # Arity per op. Future ops (mul, idiv, shifts) add rows here.
 case "$OP" in
-    add) ARITY=1 ;;
+    add0) ARITY=1 ;;
     *) echo "Internal error: no arity registered for op '$OP'" >&2; exit 2 ;;
 esac
 

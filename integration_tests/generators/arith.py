@@ -5,7 +5,7 @@ Emits `x0 [x1 ...] : y` per line. The reference output `y` is computed in
 Python to match the spec being exercised. Unseeded by default (the checked-in
 vectors are frozen artifacts).
 
-    ./arith.py --op add [-n COUNT]
+    ./arith.py --op add0 [-n COUNT]
 """
 
 import argparse
@@ -15,13 +15,13 @@ import sys
 
 # arity per op. Future ops (mul, idiv, shl, shr, sar) add rows here.
 ARITY = {
-    "add": 1,
+    "add0": 1,
 }
 
 
 def reference(op: str, xs: list[int]) -> int:
-    if op == "add":
-        # arith_spec_add: y = x0 + 0 = x0.
+    if op == "add0":
+        # arith_spec_add0: y = x0 + 0 = x0.
         return xs[0]
     raise ValueError(f"unknown op: {op}")
 

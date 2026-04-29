@@ -7,8 +7,8 @@ Format per line:
     <x0> [x1 ...] : <y0>
 
 Usage:
-    cat test_vectors/arith_add/*.txt | python3 verify_arith.py --binary ./arith_add --arity 1
-    ./generators/arith.py --op add | python3 verify_arith.py --binary ./arith_add --arity 1 --fuzz
+    cat test_vectors/arith_add0/*.txt | python3 verify_arith.py --binary ./arith_add0 --arity 1
+    ./generators/arith.py --op add0 | python3 verify_arith.py --binary ./arith_add0 --arity 1 --fuzz
 
 Fuzz mode: exit non-zero on the first mismatch.
 """

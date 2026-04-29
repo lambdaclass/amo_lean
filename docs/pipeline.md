@@ -4,7 +4,7 @@ Four stages, each independently replaceable.
 
 ## 1. Parse — Lean
 
-The user writes a spec file such as `integration_tests/arith_spec_add.lean`:
+The user writes a spec file such as `integration_tests/arith_spec_add0.lean`:
 
 ```lean
 open TRZK (ArithExpr)

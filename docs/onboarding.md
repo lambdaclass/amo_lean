@@ -25,11 +25,11 @@ Any failing `#guard` breaks the build. Test modules live in `Tests/`:
 ## Run the integration test
 
 ```bash
-./integration_tests/run.sh --op add                  # crafted vectors
-./integration_tests/run.sh --op add --fuzz -n 1000   # random fuzz
+./integration_tests/run.sh --op add0                  # crafted vectors
+./integration_tests/run.sh --op add0 --fuzz -n 1000   # random fuzz
 ```
 
-The script builds `trzk`, compiles `arith_spec_add.lean` to Rust, links the
+The script builds `trzk`, compiles `arith_spec_add0.lean` to Rust, links the
 harness, and pipes test vectors to the verifier.
 
 ## Add a new spec
