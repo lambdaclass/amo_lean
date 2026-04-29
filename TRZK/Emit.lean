@@ -14,6 +14,7 @@ private def collectVarsList : ArithExpr → List Nat → List Nat
   | .const _, acc => acc
   | .var i,   acc => insertSortedDedup i acc
   | .add a b, acc => collectVarsList b (collectVarsList a acc)
+  | .mul a b, acc => collectVarsList b (collectVarsList a acc)
 
 /-- Variables used in `e`, sorted ascending, deduplicated. -/
 def collectVars (e : ArithExpr) : Array Nat :=
@@ -25,6 +26,7 @@ def emitExpr : ArithExpr → String
     if n < 0 then s!"(-{-n}isize)" else s!"{n}isize"
   | .var i   => s!"x{i}"
   | .add a b => s!"({emitExpr a} + {emitExpr b})"
+  | .mul a b => s!"({emitExpr a} * {emitExpr b})"
 
 /-- Emit a full Rust function: `pub fn <name>(x0: isize, ...) -> isize { <body> }`.
     When the body is a bare variable or literal, no outer parens; otherwise use

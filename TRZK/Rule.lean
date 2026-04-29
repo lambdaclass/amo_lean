@@ -10,7 +10,13 @@ def addZeroRight : RewriteRule ArithOp where
   lhs := .node (.add 0 0) [.patVar 0, .node (.const 0) []]
   rhs := .patVar 0
 
+/-- Right-identity of `Mul`: `e * 1 → e`. -/
+def mulOneRight : RewriteRule ArithOp where
+  name := "mul_one_right"
+  lhs := .node (.mul 0 0) [.patVar 0, .node (.const 1) []]
+  rhs := .patVar 0
+
 /-- Registry of active rewrite rules. Adding a rule is a one-line change here. -/
-def allRules : List (RewriteRule ArithOp) := [addZeroRight]
+def allRules : List (RewriteRule ArithOp) := [addZeroRight, mulOneRight]
 
 end TRZK
