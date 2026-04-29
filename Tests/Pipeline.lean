@@ -17,3 +17,10 @@ open TRZK
 #guard optimize (.mul (.var 0) (.const 7)) == some (.mul (.var 0) (.const 7))
 #guard optimize (.mul (.add (.var 0) (.const 0)) (.const 1)) == some (.var 0)
 #guard optimize (.mul (.var 0) (.var 1)) == some (.mul (.var 0) (.var 1))
+
+#guard optimize (.idiv (.var 0) (.const 1)) == some (.var 0)
+#guard optimize (.idiv (.var 5) (.const 1)) == some (.var 5)
+#guard optimize (.idiv (.const 1) (.var 0)) == some (.idiv (.const 1) (.var 0))
+#guard optimize (.idiv (.idiv (.var 0) (.const 1)) (.const 1)) == some (.var 0)
+#guard optimize (.idiv (.var 0) (.const 2)) == some (.idiv (.var 0) (.const 2))
+#guard optimize (.idiv (.add (.var 0) (.const 0)) (.const 1)) == some (.var 0)
