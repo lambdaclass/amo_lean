@@ -4,7 +4,7 @@ Four stages, each independently replaceable.
 
 ## 1. Parse — Lean
 
-The user writes a spec file such as `integration_tests/arith_spec_1.lean`:
+The user writes a spec file such as `integration_tests/arith_spec_add0.lean`:
 
 ```lean
 open TRZK (ArithExpr)
@@ -56,7 +56,7 @@ The bridge between our world and optisat's lives entirely in
 
 1. `lake build trzk`
 2. `trzk <spec> --output <scriptdir>/generated.rs`
-3. `rustc -O --edition 2024 harness.rs -o /tmp/arith_${N}`
+3. `rustc -O --edition 2024 harness.rs -o /tmp/arith_${OP}`
 4. Pipe crafted vectors (or a generator for `--fuzz`) into
    `verify_arith.py --binary ... --arity N`.
 

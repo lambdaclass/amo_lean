@@ -1,4 +1,4 @@
-# Crafted vectors for arith_spec_1 (y = x0).
+# Crafted vectors for arith_spec_add (y = x0).
 0 : 0
 1 : 1
 -1 : -1

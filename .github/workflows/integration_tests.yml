@@ -11,13 +11,13 @@ permissions:
 
 jobs:
   integration:
-    name: arith_spec_${{ matrix.size }}
+    name: arith_spec_${{ matrix.op }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        size: [1]
+        op: [add0]
 
     steps:
       - uses: actions/checkout@v4
@@ -41,7 +41,7 @@ jobs:
         run: lake exe cache get || true
 
       - name: Crafted vectors
-        run: bash integration_tests/run.sh --size ${{ matrix.size }}
+        run: bash integration_tests/run.sh --op ${{ matrix.op }}
 
       - name: Fuzz (100k)
-        run: bash integration_tests/run.sh --size ${{ matrix.size }} --fuzz -n 100000
+        run: bash integration_tests/run.sh --op ${{ matrix.op }} --fuzz -n 100000

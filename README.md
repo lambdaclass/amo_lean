@@ -42,8 +42,8 @@ cat /tmp/out.rs
 # → pub fn arith_spec(x0: isize) -> isize { x0 }
 
 # Run the integration test
-./integration_tests/run.sh --size 1
-./integration_tests/run.sh --size 1 --fuzz -n 1000
+./integration_tests/run.sh --op add0
+./integration_tests/run.sh --op add0 --fuzz -n 1000
 ```
 
 ## Pipeline
