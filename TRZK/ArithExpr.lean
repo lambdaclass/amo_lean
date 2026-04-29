@@ -7,6 +7,7 @@ inductive ArithExpr where
   | add   : ArithExpr → ArithExpr → ArithExpr
   | mul   : ArithExpr → ArithExpr → ArithExpr
   | idiv  : ArithExpr → ArithExpr → ArithExpr
+  | shl   : ArithExpr → ArithExpr → ArithExpr
   deriving Repr, BEq, Inhabited, DecidableEq
 
 /-- Number of AST nodes. -/
@@ -16,5 +17,6 @@ def ArithExpr.size : ArithExpr → Nat
   | .add a b  => 1 + a.size + b.size
   | .mul a b  => 1 + a.size + b.size
   | .idiv a b => 1 + a.size + b.size
+  | .shl a b  => 1 + a.size + b.size
 
 end TRZK

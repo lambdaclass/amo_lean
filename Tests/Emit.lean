@@ -22,3 +22,7 @@ open TRZK
 #guard emitFunction "arith_spec" (.idiv (.var 0) (.var 1)) == "pub fn arith_spec(x0: isize, x1: isize) -> isize { (x0 / x1) }"
 #guard emitFunction "arith_spec" (.idiv (.var 0) (.const 1)) == "pub fn arith_spec(x0: isize) -> isize { (x0 / 1isize) }"
 #guard emitFunction "arith_spec" (.idiv (.var 0) (.const (-2))) == "pub fn arith_spec(x0: isize) -> isize { (x0 / (-2isize)) }"
+
+#guard collectVars (.shl (.var 0) (.var 1)) == #[0, 1]
+#guard emitFunction "arith_spec" (.shl (.var 0) (.const 0)) == "pub fn arith_spec(x0: isize) -> isize { x0.unbounded_shl(0isize as u32) }"
+#guard emitFunction "arith_spec" (.shl (.var 0) (.var 1)) == "pub fn arith_spec(x0: isize, x1: isize) -> isize { x0.unbounded_shl(x1 as u32) }"

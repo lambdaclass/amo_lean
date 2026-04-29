@@ -12,6 +12,7 @@ inductive ArithOp where
   | add   : EClassId → EClassId → ArithOp
   | mul   : EClassId → EClassId → ArithOp
   | idiv  : EClassId → EClassId → ArithOp
+  | shl   : EClassId → EClassId → ArithOp
   deriving Repr, Inhabited, DecidableEq
 
 instance : BEq ArithOp where
@@ -24,6 +25,7 @@ instance : Hashable ArithOp where
     | .add l r  => mixHash 3 (mixHash (hash l) (hash r))
     | .mul l r  => mixHash 4 (mixHash (hash l) (hash r))
     | .idiv l r => mixHash 5 (mixHash (hash l) (hash r))
+    | .shl l r  => mixHash 6 (mixHash (hash l) (hash r))
 
 instance : LawfulBEq ArithOp where
   eq_of_beq {a b} h := by simp [BEq.beq] at h; exact h
@@ -40,17 +42,20 @@ instance : NodeOps ArithOp where
     | .add l r  => [l, r]
     | .mul l r  => [l, r]
     | .idiv l r => [l, r]
+    | .shl l r  => [l, r]
   mapChildren f
     | .const n  => .const n
     | .var i    => .var i
     | .add l r  => .add (f l) (f r)
     | .mul l r  => .mul (f l) (f r)
     | .idiv l r => .idiv (f l) (f r)
+    | .shl l r  => .shl (f l) (f r)
   replaceChildren op cs :=
     match op, cs with
     | .add _ _,  [l, r] => .add l r
     | .mul _ _,  [l, r] => .mul l r
     | .idiv _ _, [l, r] => .idiv l r
+    | .shl _ _,  [l, r] => .shl l r
     | op, _ => op
   localCost _ := 1
   mapChildren_children f op := by cases op <;> simp
@@ -71,6 +76,10 @@ instance : NodeOps ArithOp where
       simp at hlen
       match ids, hlen with
       | [_, _], _ => simp
+    | shl _ _ =>
+      simp at hlen
+      match ids, hlen with
+      | [_, _], _ => simp
   replaceChildren_sameShape op ids hlen := by
     cases op with
     | const _  => simp at hlen; simp
@@ -87,6 +96,10 @@ instance : NodeOps ArithOp where
       simp at hlen
       match ids, hlen with
       | [_, _], _ => simp
+    | shl _ _ =>
+      simp at hlen
+      match ids, hlen with
+      | [_, _], _ => simp
 
 instance : Extractable ArithOp ArithExpr where
   reconstruct op childExprs :=
@@ -96,6 +109,7 @@ instance : Extractable ArithOp ArithExpr where
     | .add _ _,  [l, r] => some (.add l r)
     | .mul _ _,  [l, r] => some (.mul l r)
     | .idiv _ _, [l, r] => some (.idiv l r)
+    | .shl _ _,  [l, r] => some (.shl l r)
     | _, _              => none
 
 end TRZK

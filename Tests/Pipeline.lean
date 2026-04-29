@@ -24,3 +24,8 @@ open TRZK
 #guard optimize (.idiv (.idiv (.var 0) (.const 1)) (.const 1)) == some (.var 0)
 #guard optimize (.idiv (.var 0) (.const 2)) == some (.idiv (.var 0) (.const 2))
 #guard optimize (.idiv (.add (.var 0) (.const 0)) (.const 1)) == some (.var 0)
+
+#guard optimize (.shl (.var 0) (.const 0)) == some (.var 0)
+#guard optimize (.shl (.var 5) (.const 0)) == some (.var 5)
+#guard optimize (.shl (.shl (.var 0) (.const 0)) (.const 0)) == some (.var 0)
+#guard optimize (.shl (.var 0) (.const 3)) == some (.shl (.var 0) (.const 3))
