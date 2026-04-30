@@ -18,6 +18,7 @@ import sys
 ARITY = {
     "add0": 1,
     "mul": 2,
+    "mul0": 1,
     "idiv1": 1,
     "shl": 2,
     "shr": 1,
@@ -63,6 +64,10 @@ def reference(op: str, xs: list[int]) -> int:
     if op == "mul":
         # arith_spec_mul: y = (x0 * 1) * x1 → x0 * x1, with i64 wrapping.
         return _wrap_i64(xs[0] * xs[1])
+    if op == "mul0":
+        # arith_spec_mul0: y = x0 * 0 = 0. The optimizer eliminates x0; the
+        # generated function preserves arity 1 (input is unused).
+        return 0
     if op == "idiv1":
         # arith_spec_idiv1: y = x0 / 1 = x0. Divisor is baked into the spec.
         return xs[0]
@@ -87,6 +92,7 @@ def main() -> int:
     lo_hi = {
         "add0": (-(2**62), 2**62 - 1),
         "mul": (-(2**40), 2**40 - 1),
+        "mul0": (-(2**62), 2**62 - 1),
         "idiv1": (-(2**62), 2**62 - 1),
         "shl": (-(2**62), 2**62 - 1),
         "shr": (-(2**62), 2**62 - 1),

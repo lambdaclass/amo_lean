@@ -1,0 +1,11 @@
+# Crafted vectors for arith_spec_mul0 (y = x0 * 0 = 0).
+# Arity stays at 1 even though x0 is unused after optimization.
+0 : 0
+1 : 0
+-1 : 0
+2 : 0
+-2 : 0
+9223372036854775807 : 0
+-9223372036854775808 : 0
+4611686018427387904 : 0
+-4611686018427387904 : 0
