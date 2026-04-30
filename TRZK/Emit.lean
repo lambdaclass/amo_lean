@@ -17,12 +17,15 @@ private def collectVarsList : ArithExpr → List Nat → List Nat
   | .mul a b,  acc => collectVarsList b (collectVarsList a acc)
   | .idiv a b, acc => collectVarsList b (collectVarsList a acc)
   | .shl a b,  acc => collectVarsList b (collectVarsList a acc)
+  | .shr a b,  acc => collectVarsList b (collectVarsList a acc)
 
 /-- Variables used in `e`, sorted ascending, deduplicated. -/
 def collectVars (e : ArithExpr) : Array Nat :=
   (collectVarsList e []).toArray
 
-/-- Emit a Rust `isize` expression. Negative literals are parenthesized. -/
+/-- Emit a Rust `isize` expression. Negative literals are parenthesized.
+    `shr` is logical right shift; emitted via `usize::unbounded_shr`, which is
+    total over any `u32` count (out-of-range counts produce 0). -/
 def emitExpr : ArithExpr → String
   | .const n =>
     if n < 0 then s!"(-{-n}isize)" else s!"{n}isize"
@@ -31,6 +34,7 @@ def emitExpr : ArithExpr → String
   | .mul a b  => s!"({emitExpr a} * {emitExpr b})"
   | .idiv a b => s!"({emitExpr a} / {emitExpr b})"
   | .shl a b  => s!"{emitExpr a}.unbounded_shl({emitExpr b} as u32)"
+  | .shr a b  => s!"(({emitExpr a} as usize).unbounded_shr({emitExpr b} as u32) as isize)"
 
 /-- Emit a full Rust function: `pub fn <name>(x0: isize, ...) -> isize { <body> }`.
     When the body is a bare variable or literal, no outer parens; otherwise use

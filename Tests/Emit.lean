@@ -26,3 +26,7 @@ open TRZK
 #guard collectVars (.shl (.var 0) (.var 1)) == #[0, 1]
 #guard emitFunction "arith_spec" (.shl (.var 0) (.const 0)) == "pub fn arith_spec(x0: isize) -> isize { x0.unbounded_shl(0isize as u32) }"
 #guard emitFunction "arith_spec" (.shl (.var 0) (.var 1)) == "pub fn arith_spec(x0: isize, x1: isize) -> isize { x0.unbounded_shl(x1 as u32) }"
+
+#guard collectVars (.shr (.var 1) (.var 0)) == #[0, 1]
+#guard emitFunction "arith_spec" (.shr (.var 0) (.const 0)) == "pub fn arith_spec(x0: isize) -> isize { ((x0 as usize).unbounded_shr(0isize as u32) as isize) }"
+#guard emitFunction "arith_spec" (.shr (.var 0) (.var 1)) == "pub fn arith_spec(x0: isize, x1: isize) -> isize { ((x0 as usize).unbounded_shr(x1 as u32) as isize) }"
