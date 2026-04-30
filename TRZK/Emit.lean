@@ -2,26 +2,20 @@ import TRZK.ArithExpr
 
 namespace TRZK
 
-/-- Insert `n` into a sorted-deduped list. -/
-private def insertSortedDedup : Nat → List Nat → List Nat
-  | n, []      => [n]
-  | n, x :: xs =>
-    if n < x then n :: x :: xs
-    else if n == x then x :: xs
-    else x :: insertSortedDedup n xs
+private def usedVarsAux (arity : Nat) : ArithExpr → Array Bool → Array Bool
+  | .const _,  used => used
+  | .var i,    used => if i < arity then used.set! i true else used
+  | .add a b,  used => usedVarsAux arity b (usedVarsAux arity a used)
+  | .mul a b,  used => usedVarsAux arity b (usedVarsAux arity a used)
+  | .idiv a b, used => usedVarsAux arity b (usedVarsAux arity a used)
+  | .shl a b,  used => usedVarsAux arity b (usedVarsAux arity a used)
+  | .shr a b,  used => usedVarsAux arity b (usedVarsAux arity a used)
 
-private def collectVarsList : ArithExpr → List Nat → List Nat
-  | .const _,  acc => acc
-  | .var i,    acc => insertSortedDedup i acc
-  | .add a b,  acc => collectVarsList b (collectVarsList a acc)
-  | .mul a b,  acc => collectVarsList b (collectVarsList a acc)
-  | .idiv a b, acc => collectVarsList b (collectVarsList a acc)
-  | .shl a b,  acc => collectVarsList b (collectVarsList a acc)
-  | .shr a b,  acc => collectVarsList b (collectVarsList a acc)
-
-/-- Variables used in `e`, sorted ascending, deduplicated. -/
-def collectVars (e : ArithExpr) : Array Nat :=
-  (collectVarsList e []).toArray
+/-- Boolean array of length `arity`: `used[i]` is true iff `e` references
+    `var i`. Vars with index ≥ arity are silently ignored (defensive: the
+    contract is that callers pass `arity ≥ e.inputArity`). -/
+def ArithExpr.usedVars (arity : Nat) (e : ArithExpr) : Array Bool :=
+  usedVarsAux arity e (Array.replicate arity false)
 
 /-- Emit a Rust `isize` expression. Negative literals are parenthesized.
     `shr` is logical right shift; emitted via `usize::unbounded_shr`, which is
@@ -36,12 +30,16 @@ def emitExpr : ArithExpr → String
   | .shl a b  => s!"{emitExpr a}.unbounded_shl({emitExpr b} as u32)"
   | .shr a b  => s!"(({emitExpr a} as usize).unbounded_shr({emitExpr b} as u32) as isize)"
 
-/-- Emit a full Rust function: `pub fn <name>(x0: isize, ...) -> isize { <body> }`.
-    When the body is a bare variable or literal, no outer parens; otherwise use
-    the expression's natural formatting. Zero-variable functions take no args. -/
-def emitFunction (name : String) (e : ArithExpr) : String :=
-  let vars := collectVars e
-  let args := String.intercalate ", " (vars.toList.map (fun i => s!"x{i}: isize"))
+/-- Emit a full Rust function with a fixed positional arity: parameters are
+    `x0..x(arity-1)` regardless of which survive optimization. Params not
+    referenced by `e` get a leading `_` to silence Rust's unused-arg lint.
+    Callers should pass the *pre-optimization* arity so the signature stays
+    stable when rules eliminate variable references. -/
+def emitFunction (name : String) (arity : Nat) (e : ArithExpr) : String :=
+  let used := e.usedVars arity
+  let params := (List.range arity).map fun i =>
+    if used.getD i false then s!"x{i}: isize" else s!"_x{i}: isize"
+  let args := String.intercalate ", " params
   let body := emitExpr e
   s!"pub fn {name}({args}) -> isize \{ {body} }"
 

@@ -7,7 +7,7 @@ set -euo pipefail
 # Usage: ./integration_tests/run.sh --op OP [--fuzz] [-n COUNT]
 # (run from project root)
 
-OPS=(add0 mul idiv1 shl shr)
+OPS=(add0 mul mul0 idiv1 shl shr)
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -64,6 +64,7 @@ echo "Generating Rust from arith_spec_${OP}.lean..."
 case "$OP" in
     add0) ARITY=1 ;;
     mul) ARITY=2 ;;
+    mul0) ARITY=1 ;;
     idiv1) ARITY=1 ;;
     shl) ARITY=2 ;;
     shr) ARITY=1 ;;

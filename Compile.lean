@@ -51,13 +51,14 @@ open TRZK
 def main : IO Unit := do
   IO.FS.createDirAll \"{artifactsDir}\"
   IO.FS.writeFile \"{artifactsDir}/{baseName}.pre.txt\" (toString (repr spec))
+  let arity := spec.inputArity
   match optimize spec with
   | none =>
     IO.eprintln \"optimize returned none\"
     IO.Process.exit 1
   | some post =>
     IO.FS.writeFile \"{artifactsDir}/{baseName}.post.txt\" (toString (repr post))
-    let code := emitFunction \"{funcName}\" post
+    let code := emitFunction \"{funcName}\" arity post
     IO.FS.writeFile \"{outputPath}\" code
 "
 

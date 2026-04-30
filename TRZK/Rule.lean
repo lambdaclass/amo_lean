@@ -16,6 +16,13 @@ def mulOneRight : RewriteRule ArithOp where
   lhs := .node (.mul 0 0) [.patVar 0, .node (.const 1) []]
   rhs := .patVar 0
 
+/-- Right-zero of `Mul`: `e * 0 → 0`. The optimized form drops `e` entirely;
+    callers must preserve the original input arity through codegen. -/
+def mulZeroRight : RewriteRule ArithOp where
+  name := "mul_zero_right"
+  lhs := .node (.mul 0 0) [.patVar 0, .node (.const 0) []]
+  rhs := .node (.const 0) []
+
 /-- Right-identity of `IDiv`: `e / 1 → e`. -/
 def idivOneRight : RewriteRule ArithOp where
   name := "idiv_one_right"
@@ -36,6 +43,6 @@ def shrZeroRight : RewriteRule ArithOp where
 
 /-- Registry of active rewrite rules. Adding a rule is a one-line change here. -/
 def allRules : List (RewriteRule ArithOp) :=
-  [addZeroRight, mulOneRight, idivOneRight, shlZeroRight, shrZeroRight]
+  [addZeroRight, mulOneRight, mulZeroRight, idivOneRight, shlZeroRight, shrZeroRight]
 
 end TRZK
