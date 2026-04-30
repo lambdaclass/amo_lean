@@ -13,15 +13,20 @@ import itertools
 import random
 import sys
 
-# arity per op. Future ops (shl, shr, sar) add rows here.
+# arity per op. Future ops (shr, sar) add rows here.
 ARITY = {
     "add0": 1,
     "mul": 2,
     "idiv1": 1,
+    "shl": 2,
 }
 
 I64_MIN = -(2**63)
 I64_MOD = 2**64
+
+ISIZE_BITS = 64
+ISIZE_MIN = -(2 ** (ISIZE_BITS - 1))
+ISIZE_MAX = (2 ** (ISIZE_BITS - 1)) - 1
 
 
 def _wrap_i64(v: int) -> int:
@@ -29,6 +34,24 @@ def _wrap_i64(v: int) -> int:
     if v >= 2**63:
         v -= I64_MOD
     return v
+
+
+def _to_signed(n: int, bits: int) -> int:
+    mask = (1 << bits) - 1
+    n &= mask
+    if n & (1 << (bits - 1)):
+        n -= 1 << bits
+    return n
+
+
+def _unbounded_shl_isize(a: int, b: int) -> int:
+    # Rust: isize::unbounded_shl(self, rhs: u32). The shift count comes from
+    # `<isize> as u32`, i.e. wrap modulo 2^32. If the wrapped count is >= BITS
+    # the result is 0; otherwise it's `(a << count)` truncated to isize.
+    count = b & 0xFFFFFFFF
+    if count >= ISIZE_BITS:
+        return 0
+    return _to_signed(a << count, ISIZE_BITS)
 
 
 def reference(op: str, xs: list[int]) -> int:
@@ -41,6 +64,9 @@ def reference(op: str, xs: list[int]) -> int:
     if op == "idiv1":
         # arith_spec_idiv1: y = x0 / 1 = x0. Divisor is baked into the spec.
         return xs[0]
+    if op == "shl":
+        # arith_spec_shl: y = x0.unbounded_shl(x1 as u32).
+        return _unbounded_shl_isize(xs[0], xs[1])
     raise ValueError(f"unknown op: {op}")
 
 
@@ -57,12 +83,21 @@ def main() -> int:
         "add0": (-(2**62), 2**62 - 1),
         "mul": (-(2**40), 2**40 - 1),
         "idiv1": (-(2**62), 2**62 - 1),
+        "shl": (-(2**62), 2**62 - 1),
     }
     lo, hi = lo_hi[args.op]
     it = range(args.count) if args.count is not None else itertools.count()
     try:
         for _ in it:
             xs = [random.randint(lo, hi) for _ in range(arity)]
+            if args.op == "shl":
+                # Bias the shift count: small in-range values exercise the real
+                # shift, the rest cover the saturating-to-0 branch.
+                xs[1] = (
+                    random.randint(0, ISIZE_BITS - 1)
+                    if random.random() < 0.7
+                    else xs[1]
+                )
             y = reference(args.op, xs)
             print(" ".join(str(v) for v in xs) + " : " + str(y), flush=True)
     except BrokenPipeError:

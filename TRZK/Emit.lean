@@ -16,6 +16,7 @@ private def collectVarsList : ArithExpr → List Nat → List Nat
   | .add a b,  acc => collectVarsList b (collectVarsList a acc)
   | .mul a b,  acc => collectVarsList b (collectVarsList a acc)
   | .idiv a b, acc => collectVarsList b (collectVarsList a acc)
+  | .shl a b,  acc => collectVarsList b (collectVarsList a acc)
 
 /-- Variables used in `e`, sorted ascending, deduplicated. -/
 def collectVars (e : ArithExpr) : Array Nat :=
@@ -29,6 +30,7 @@ def emitExpr : ArithExpr → String
   | .add a b  => s!"({emitExpr a} + {emitExpr b})"
   | .mul a b  => s!"({emitExpr a} * {emitExpr b})"
   | .idiv a b => s!"({emitExpr a} / {emitExpr b})"
+  | .shl a b  => s!"{emitExpr a}.unbounded_shl({emitExpr b} as u32)"
 
 /-- Emit a full Rust function: `pub fn <name>(x0: isize, ...) -> isize { <body> }`.
     When the body is a bare variable or literal, no outer parens; otherwise use

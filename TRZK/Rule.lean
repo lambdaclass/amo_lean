@@ -22,7 +22,13 @@ def idivOneRight : RewriteRule ArithOp where
   lhs := .node (.idiv 0 0) [.patVar 0, .node (.const 1) []]
   rhs := .patVar 0
 
+/-- Shift-by-zero is identity: `e << 0 → e`. -/
+def shlZeroRight : RewriteRule ArithOp where
+  name := "shl_zero_right"
+  lhs := .node (.shl 0 0) [.patVar 0, .node (.const 0) []]
+  rhs := .patVar 0
+
 /-- Registry of active rewrite rules. Adding a rule is a one-line change here. -/
-def allRules : List (RewriteRule ArithOp) := [addZeroRight, mulOneRight, idivOneRight]
+def allRules : List (RewriteRule ArithOp) := [addZeroRight, mulOneRight, idivOneRight, shlZeroRight]
 
 end TRZK

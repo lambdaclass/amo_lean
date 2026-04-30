@@ -17,3 +17,7 @@ open TRZK
 #guard (ArithExpr.mul (.var 0) (.var 1)) != (.add (.var 0) (.var 1))
 #guard (ArithExpr.idiv (.var 0) (.const 1)) != (.idiv (.const 1) (.var 0))
 #guard (ArithExpr.idiv (.var 0) (.const 1)) != (.add (.var 0) (.const 1))
+
+#guard ArithExpr.size (.shl (.var 0) (.const 0)) == 3
+#guard ArithExpr.size (.shl (.add (.var 0) (.var 1)) (.const 2)) == 5
+#guard (ArithExpr.shl (.var 0) (.const 0)) != (.add (.var 0) (.const 0))
